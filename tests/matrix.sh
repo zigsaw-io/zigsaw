@@ -134,6 +134,15 @@ expect ok ok "runs a script file" run $NODE a.js
 expect ok ok "fs.realpathSync" run $NODE -e 'require("fs").realpathSync(".")'
 expect ok ok "fetch over https" run $NODE -e 'fetch("https://example.com").then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))'
 expect ok ok "npm install" run --command=npm $NODE install --no-audit --no-fund is-number
+# The recipe points npm's global prefix at ${data}\npm and puts it on PATH.
+npm_global() {
+    run --command=npm $NODE install -g --no-audit --no-fund semver@7 &&
+        run --command=npm $NODE ls -g | grep -q semver &&
+        [ -f "$ZIGSAW_HOME\\data\\$NODE\\npm\\node_modules\\semver\\package.json" ]
+}
+expect ok ok "npm install -g into data dir" npm_global
+global_bin() { [ "$(run --command=cmd $NODE /c semver 1.2.3 | tr -d '\r')" = 1.2.3 ]; }
+expect ok ok "global package's command on PATH" global_bin
 
 tool python
 echo 'print("hi")' >"$work\\python\\soft\\a.py"

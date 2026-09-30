@@ -5,9 +5,11 @@
 //!   <root>\deploy\<hex>\          unpacked app tree, one per manifest digest
 //!   <root>\data\<id>\             per-app writable state, kept across runs
 //!   <root>\grants\<id>.txt        host paths whose ACLs name the app's AppContainer
+//!   <root>\overrides\<id>.json    run options saved for the app (see override.zig)
 //!   <root>\bin\                   command shims for exported commands (see exports.zig)
 //!   <root>\cache\downloads\<hex>  fetched build sources, by sha256
 //!   <root>\tmp\                   staging area
+//!   <root>\lock                   see "Locks" below
 //!
 //! <root> is %ZIGSAW_HOME% if set, otherwise %LOCALAPPDATA%\zigsaw.
 
@@ -21,13 +23,14 @@ const oci = @import("oci.zig");
 const layer = @import("layer.zig");
 const Context = @import("Context.zig");
 const fail = Context.fail;
+const note = Context.note;
 
 io: Io,
 root: []const u8,
 /// Report step timings, as `zigsaw -v` asks for.
 verbose: bool = false,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "bin", "cache\\downloads", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "overrides", "bin", "cache\\downloads", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|
@@ -62,6 +65,98 @@ pub fn tmpPath(s: Store, arena: Allocator, prefix: []const u8) ![]u8 {
     s.io.random(&random);
     const name = try std.fmt.allocPrint(arena, "{s}-{s}", .{ prefix, &std.fmt.bytesToHex(random, .lower) });
     return s.path(arena, &.{ "tmp", name });
+}
+
+/// A data directory for one `--ephemeral` run, under tmp\. It is locked as in
+/// use, so `prune` leaves it alone until the run ends.
+pub const RunDir = struct {
+    path: []const u8,
+    lock: Lock,
+
+    /// Deletes the directory and its lock.
+    pub fn delete(d: RunDir, s: Store, arena: Allocator) void {
+        Io.Dir.cwd().deleteTree(s.io, d.path) catch {};
+        d.lock.release(s.io);
+        Io.Dir.cwd().deleteFile(s.io, lockPathFor(arena, d.path) catch return) catch {};
+    }
+};
+
+pub fn makeRunDir(s: Store, arena: Allocator) !RunDir {
+    const dir = try s.tmpPath(arena, "run");
+    // The lock first: a run directory without a lock is a leftover to `prune`.
+    const in_use = try openLock(s.io, try lockPathFor(arena, dir), .exclusive, .wait);
+    try Io.Dir.cwd().createDirPath(s.io, dir);
+    return .{ .path = dir, .lock = in_use };
+}
+
+/// Moves `p` into tmp\ and deletes it there. Moving is atomic, so what was at
+/// `p` is either all there or gone. If deleting fails part-way (a file in it
+/// is open elsewhere), the rest stays in tmp\ for `prune`.
+fn discard(s: Store, arena: Allocator, p: []const u8) !void {
+    const trash = try s.tmpPath(arena, "trash");
+    try Io.Dir.rename(.cwd(), p, .cwd(), trash, s.io);
+    Io.Dir.cwd().deleteTree(s.io, trash) catch |err|
+        note("warning: couldn't delete all of {s} ({t}); `zigsaw prune` will retry", .{ trash, err });
+}
+
+// ---------------------------------------------------------------------------
+// Locks
+//
+// Advisory file locks let zigsaw processes share a store safely:
+// - <root>\lock is held shared by every command that changes the store or
+//   reads blobs, and exclusively by `prune`. Prune deletes what no app refers to, so it must
+//   not run while a build or pull has blobs whose ref isn't written yet.
+//   `run` holds it only while it prepares the app, not while the app runs.
+// - deploy\<hex>.lock is held shared by each run of that deployment, for as
+//   long as the app runs. A deployment is only deleted under an exclusive
+//   lock, so never while in use.
+// - tmp\run-<hex>.lock is held by an --ephemeral run for its data directory.
+//
+// Locks end when zigsaw exits, however it exits.
+
+pub const Lock = struct {
+    file: Io.File,
+
+    pub fn release(l: Lock, io: Io) void {
+        l.file.close(io);
+    }
+};
+
+const Wait = enum { wait, no_wait };
+
+/// Opens (creating if needed) and locks the lock file at `p`. With `.no_wait`,
+/// fails with `error.WouldBlock` if another process holds a conflicting lock.
+fn openLock(io: Io, p: []const u8, mode: Io.File.Lock, wait: Wait) !Lock {
+    const file = try Io.Dir.cwd().createFile(io, p, .{ .truncate = false, .lock = mode, .lock_nonblocking = wait == .no_wait });
+    return .{ .file = file };
+}
+
+/// Locks `p` without waiting; null if another process holds a conflicting lock.
+fn tryLock(io: Io, p: []const u8, mode: Io.File.Lock) !?Lock {
+    return openLock(io, p, mode, .no_wait) catch |err| switch (err) {
+        error.WouldBlock => null,
+        else => |e| e,
+    };
+}
+
+pub fn lockPathFor(arena: Allocator, p: []const u8) ![]u8 {
+    return std.fmt.allocPrint(arena, "{s}.lock", .{p});
+}
+
+/// Takes the store lock, saying so if it has to wait for another zigsaw.
+pub fn lock(s: Store, arena: Allocator, mode: Io.File.Lock) !Lock {
+    const p = try s.path(arena, &.{"lock"});
+    if (try tryLock(s.io, p, mode)) |l| return l;
+    note("waiting for another zigsaw command to finish...", .{});
+    return openLock(s.io, p, mode, .wait);
+}
+
+/// Whether the lock file at `p`, if there is one, is held by a running zigsaw.
+pub fn isLocked(io: Io, p: []const u8) !bool {
+    if (!try exists(io, p)) return false;
+    const l = try tryLock(io, p, .exclusive) orelse return true;
+    l.release(io);
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,9 +276,12 @@ pub const Image = struct {
     config: oci.AppConfig,
     /// Absolute path of the unpacked, shared, read-only app tree.
     deploy_dir: []const u8,
+    /// Marks the deployment as in use until released, or until zigsaw exits.
+    in_use: Lock,
 };
 
-/// Loads an installed app, unpacking it first if its deployment is missing.
+/// Loads an installed app to run it: locks its deployment as in use, and
+/// unpacks it first if it's missing.
 pub fn loadImage(s: Store, arena: Allocator, id: []const u8) !Image {
     const ref = try s.readRef(arena, id) orelse
         return fail("{s} is not installed (see `zigsaw list`)", .{id});
@@ -195,11 +293,15 @@ pub fn loadImage(s: Store, arena: Allocator, id: []const u8) !Image {
     const config = try std.json.parseFromSliceLeaky(oci.AppConfig, arena, try s.readBlob(arena, manifest.config.digest), .{
         .ignore_unknown_fields = true,
     });
+    // Lock before deploying: if the deployment is being deleted, this waits,
+    // and `deploy` then unpacks it again.
+    const in_use = try openLock(s.io, try lockPathFor(arena, try s.deployPath(arena, ref.manifest)), .shared, .wait);
     return .{
         .ref = ref,
         .manifest = manifest,
         .config = config,
         .deploy_dir = try s.deploy(arena, ref.manifest, manifest),
+        .in_use = in_use,
     };
 }
 
@@ -208,11 +310,45 @@ pub fn deployPath(s: Store, arena: Allocator, manifest_digest: []const u8) ![]u8
     return s.path(arena, &.{ "deploy", hex });
 }
 
-pub fn deleteDeployment(s: Store, arena: Allocator, manifest_digest: []const u8) !void {
+pub const Deletion = enum {
+    deleted,
+    /// A run is using it, or a file in it is open.
+    in_use,
+};
+
+/// Deletes a deployment, unless it is in use. A deployment that doesn't exist
+/// counts as deleted.
+pub fn deleteDeployment(s: Store, arena: Allocator, manifest_digest: []const u8) !Deletion {
     const dest = try s.deployPath(arena, manifest_digest);
-    if (!try exists(s.io, dest)) return;
+    if (!try exists(s.io, dest)) return .deleted;
+    // The lock file stays: a run may be waiting on it, and `prune` removes it
+    // once no deployment goes with it.
+    const exclusive = try tryLock(s.io, try lockPathFor(arena, dest), .exclusive) orelse return .in_use;
+    defer exclusive.release(s.io);
     try acl.unprotect(arena, dest);
-    try Io.Dir.cwd().deleteTree(s.io, dest);
+    s.discard(arena, dest) catch |err| switch (err) {
+        // Windows refuses to move a directory while a file in it is open.
+        error.AccessDenied => {
+            try acl.protect(arena, dest);
+            return .in_use;
+        },
+        else => |e| return e,
+    };
+    return .deleted;
+}
+
+/// Whether a run is using a deployment.
+pub fn deploymentInUse(s: Store, arena: Allocator, manifest_digest: []const u8) !bool {
+    return isLocked(s.io, try lockPathFor(arena, try s.deployPath(arena, manifest_digest)));
+}
+
+/// Deletes the deployment of a manifest no installed app points at any more.
+/// Deployments are shared by apps built from identical inputs.
+pub fn deleteDeploymentIfUnused(s: Store, arena: Allocator, manifest_digest: []const u8) !?Deletion {
+    for (try s.listRefs(arena)) |ref| {
+        if (std.mem.eql(u8, ref.manifest, manifest_digest)) return null;
+    }
+    return try s.deleteDeployment(arena, manifest_digest);
 }
 
 /// Unpacks an image's layers as its deployment, unless that already exists.
@@ -286,6 +422,29 @@ pub fn exists(io: Io, p: []const u8) !bool {
         else => |e| return e,
     };
     return true;
+}
+
+test "locks: shared locks coexist, an exclusive one excludes" {
+    const io = std.testing.io;
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const p = try std.fs.path.join(arena, &.{ try tmp.dir.realPathFileAlloc(io, ".", arena), "x.lock" });
+
+    try std.testing.expect(!try isLocked(io, p));
+    const run_a = try openLock(io, p, .shared, .no_wait);
+    const run_b = try openLock(io, p, .shared, .no_wait);
+    try std.testing.expect(try isLocked(io, p));
+    try std.testing.expectEqual(null, try tryLock(io, p, .exclusive));
+    run_a.release(io);
+    try std.testing.expect(try isLocked(io, p));
+    run_b.release(io);
+    const exclusive = (try tryLock(io, p, .exclusive)).?;
+    try std.testing.expectEqual(null, try tryLock(io, p, .shared));
+    exclusive.release(io);
+    try std.testing.expect(!try isLocked(io, p));
 }
 
 pub const FileHash = struct {

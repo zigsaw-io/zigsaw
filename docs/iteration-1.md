@@ -10,7 +10,7 @@ rights. **It can.** In the default `soft` sandbox, busybox, ripgrep, Git, Node
 with npm, Python and the zig toolchain all work. Each gets a hermetic
 environment, its own persistent data directory, and read-only app files. An
 enforcing sandbox built on AppContainers works only for self-contained tools;
-the [iteration 1 findings](findings-iteration-1.md) explain why.
+the [iteration 1 findings](findings.md) explain why.
 
 Zigsaw can now:
 

@@ -1,0 +1,7 @@
+# The recipes scripts/publish.sh publishes and tests/published.sh checks,
+# relative to recipes/. zig.json isn't published.
+busybox.json
+ripgrep.json
+mingit.json
+node.json
+python.json

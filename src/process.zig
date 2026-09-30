@@ -113,6 +113,12 @@ pub fn spawn(arena: Allocator, spec: SpawnSpec) !u32 {
         startup.StartupInfo.hStdError = std_handles[2];
     }
 
+    // The app shares our console, so it receives Ctrl+C too and decides what
+    // to do; we keep waiting so we can report its exit code. Set before the
+    // app starts, so an early Ctrl+C can't end us (and, through the job, the
+    // app) first. A handler function isn't inherited, unlike ignoring Ctrl+C.
+    _ = win32.SetConsoleCtrlHandler(&ignoreCtrlC, win32.TRUE);
+
     var info: win32.PROCESS_INFORMATION = undefined;
     if (win32.CreateProcessW(
         try win32.wide(arena, spec.exe),
@@ -128,10 +134,6 @@ pub fn spawn(arena: Allocator, spec: SpawnSpec) !u32 {
     ) == 0) return win32.lastErrorFail("CreateProcessW");
     _ = win32.CloseHandle(info.hThread);
     defer _ = win32.CloseHandle(info.hProcess);
-
-    // The app shares our console, so it receives Ctrl+C too and decides what
-    // to do; we keep waiting so we can report its exit code.
-    _ = win32.SetConsoleCtrlHandler(&ignoreCtrlC, win32.TRUE);
 
     if (win32.WaitForSingleObject(info.hProcess, win32.INFINITE) != win32.WAIT_OBJECT_0)
         return win32.lastErrorFail("WaitForSingleObject");

@@ -1,6 +1,10 @@
 //! `zigsaw pull` and `zigsaw push`: installing apps from OCI registries and
 //! publishing them there. An image's manifest travels byte for byte, so its
 //! digest is the same everywhere.
+//!
+//! An image can be named in full, `<registry>/<repository>[:tag][@digest]`,
+//! or by app id alone, `<app-id>[:tag][@digest]`, for the image of that app in
+//! the default registry: `org.nodejs.node` is ghcr.io/zigsaw-io/org.nodejs.node.
 
 const std = @import("std");
 const Context = @import("Context.zig");
@@ -11,57 +15,119 @@ const oci = @import("oci.zig");
 const fail = Context.fail;
 const note = Context.note;
 
-pub fn pull(ctx: *Context, ref_text: []const u8) !void {
+/// Where images named by app id live, unless ZIGSAW_REGISTRY says otherwise.
+pub const default_registry = "ghcr.io/zigsaw-io";
+pub const registry_var = "ZIGSAW_REGISTRY";
+
+/// An image as the user named it, resolved to a full reference.
+const Target = struct {
+    /// The full reference, as refs record it.
+    text: []const u8,
+    ref: Registry.Reference,
+    /// The app id it was named by, which the image must provide.
+    app_id: ?[]const u8,
+};
+
+fn resolve(ctx: *Context, text: []const u8) !Target {
+    const registry = ctx.env.get(registry_var) orelse default_registry;
+    const short = expandShort(ctx.arena, registry, text) catch
+        return fail("\"{s}\" isn't an app id, or an image reference like ghcr.io/owner/app:tag", .{text});
+    const full = if (short) |s| s.text else text;
+    const ref = Registry.Reference.parse(full) catch return if (short != null)
+        fail("{s} (from {s}) isn't a valid image reference; check {s}", .{ full, text, registry_var })
+    else
+        fail("\"{s}\" isn't an image reference like ghcr.io/owner/app:tag or localhost:5000/app@sha256:...", .{text});
+    return .{ .text = full, .ref = ref, .app_id = if (short) |s| s.app_id else null };
+}
+
+const Short = struct { text: []const u8, app_id: []const u8 };
+
+/// Expands `<app-id>[:tag][@digest]` into `<registry>/<app id,
+/// lowercased>[:tag][@digest]`. Null for a full reference, which has a '/'.
+fn expandShort(arena: std.mem.Allocator, registry: []const u8, text: []const u8) error{ InvalidId, OutOfMemory }!?Short {
+    if (std.mem.indexOfScalar(u8, text, '/') != null) return null;
+    const id_end = std.mem.indexOfAny(u8, text, ":@") orelse text.len;
+    const id = text[0..id_end];
+    if (!oci.isValidId(id)) return error.InvalidId;
+    return .{
+        .text = try std.fmt.allocPrint(arena, "{s}/{s}{s}", .{
+            std.mem.trimEnd(u8, registry, "/"), try std.ascii.allocLowerString(arena, id), text[id_end..],
+        }),
+        .app_id = id,
+    };
+}
+
+pub const FetchOptions = struct {
+    /// The manifest digest already installed: if the image still has it,
+    /// `fetch` returns null without downloading any blob.
+    unless: ?[]const u8 = null,
+};
+
+/// Downloads an image into the store, ready to install. `zigsaw pull` is this
+/// followed by `install.install`.
+pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?install.Image {
     const arena = ctx.arena;
-    const ref = try parseReference(ref_text);
+    const target = try resolve(ctx, image_text);
+    const ref = target.ref;
     var registry: Registry = undefined;
     try registry.init(ctx, ref, "pull");
     defer registry.deinit();
 
-    var start = ctx.now();
+    const start = ctx.now();
     const fetched = try registry.fetchManifest();
     ctx.timed(start, "fetch manifest", .{});
     if (ref.digest) |want| if (!std.mem.eql(u8, want, fetched.digest))
         return fail("{f} returned a manifest with digest {s}", .{ ref, fetched.digest });
+    if (opts.unless) |installed| if (std.mem.eql(u8, installed, fetched.digest)) return null;
     const manifest = try parseManifest(arena, ref, fetched.bytes);
 
-    // The config first: it has to be a zigsaw app before any layer is worth downloading.
-    for ([_][]const oci.Descriptor{ &.{manifest.config}, manifest.layers }) |descs| {
-        for (descs) |desc| {
-            const hex = oci.digestHex(desc.digest) orelse return fail("{f}: malformed digest {s}", .{ ref, desc.digest });
-            if (try Store.exists(ctx.io, try ctx.store.blobPath(arena, hex))) continue;
-            if (desc.size > 1 << 20) note("downloading {s} ({d} bytes)", .{ desc.digest, desc.size });
-            start = ctx.now();
-            const tmp = try ctx.store.tmpPath(arena, "pull");
-            const hash = try registry.downloadBlob(desc, tmp);
-            _ = try ctx.store.putBlobFile(arena, tmp, hash, desc.mediaType);
-            ctx.timed(start, "download {s}", .{desc.digest});
-        }
-    }
-    const manifest_desc = try ctx.store.putBlob(arena, fetched.bytes, oci.media_type.manifest);
-
+    // The config first: the image has to be a zigsaw app, and the one asked
+    // for, before any layer is worth downloading.
+    try downloadBlob(ctx, &registry, manifest.config);
     const config = std.json.parseFromSliceLeaky(oci.AppConfig, arena, try ctx.store.readBlob(arena, manifest.config.digest), .{
         .ignore_unknown_fields = true,
     }) catch return fail("{f}: its app config can't be read", .{ref});
-    try oci.validateConfig(try std.fmt.allocPrint(arena, "{f}", .{ref}), config);
+    try oci.validateConfig(target.text, config);
+    if (target.app_id) |id| if (!std.ascii.eqlIgnoreCase(id, config.id))
+        return fail("{f} holds {s}, not {s}", .{ ref, config.id, id });
 
-    try install.install(ctx, .{
+    for (manifest.layers) |desc| try downloadBlob(ctx, &registry, desc);
+    const manifest_desc = try ctx.store.putBlob(arena, fetched.bytes, oci.media_type.manifest);
+    return .{
         .manifest_digest = manifest_desc.digest,
         .manifest = manifest,
         .config = config,
-        .source = ref_text,
-    });
+        .source = target.text,
+    };
 }
 
-pub fn push(ctx: *Context, id: []const u8, ref_text: []const u8) !void {
+/// Downloads a blob into the store, unless it's there already.
+fn downloadBlob(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !void {
     const arena = ctx.arena;
-    var ref = try parseReference(ref_text);
-    if (ref.digest != null) return fail("push to a tag, not a digest: {s}", .{ref_text});
+    const hex = oci.digestHex(desc.digest) orelse return fail("{f}: malformed digest {s}", .{ registry.ref, desc.digest });
+    if (try Store.exists(ctx.io, try ctx.store.blobPath(arena, hex))) return;
+    if (desc.size > 1 << 20) note("downloading {s} ({d} bytes)", .{ desc.digest, desc.size });
+    const start = ctx.now();
+    const tmp = try ctx.store.tmpPath(arena, "pull");
+    const hash = try registry.downloadBlob(desc, tmp);
+    _ = try ctx.store.putBlobFile(arena, tmp, hash, desc.mediaType);
+    ctx.timed(start, "download {s}", .{desc.digest});
+}
+
+/// Publishes an installed app. Without an image, it goes to its own image in
+/// the default registry. The tag defaults to the app's version.
+pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8) !void {
+    const arena = ctx.arena;
     const installed = try ctx.store.readRef(arena, id) orelse return fail("{s} is not installed", .{id});
+    const target = try resolve(ctx, image_text orelse id);
+    var ref = target.ref;
+    if (target.app_id) |named| if (!std.ascii.eqlIgnoreCase(named, id))
+        return fail("{s} is the image of {s}; push {s} to its own, or give a full image reference", .{ image_text.?, named, id });
+    if (ref.digest != null) return fail("push to a tag, not a digest: {s}", .{target.text});
     ref.tag = ref.tag orelse if (Registry.Reference.isValidTag(installed.version))
         installed.version
     else
-        return fail("{s}'s version \"{s}\" can't be a tag; add one: {s}:<tag>", .{ id, installed.version, ref_text });
+        return fail("{s}'s version \"{s}\" can't be a tag; add one: {s}:<tag>", .{ id, installed.version, target.text });
 
     const manifest_bytes = try ctx.store.readBlob(arena, installed.manifest);
     const manifest = try std.json.parseFromSliceLeaky(oci.Manifest, arena, manifest_bytes, .{ .ignore_unknown_fields = true });
@@ -84,9 +150,19 @@ pub fn push(ctx: *Context, id: []const u8, ref_text: []const u8) !void {
     note("pushed {s} {s} to {f}\n  manifest {s}", .{ id, installed.version, ref, installed.manifest });
 }
 
-fn parseReference(text: []const u8) !Registry.Reference {
-    return Registry.Reference.parse(text) catch
-        fail("\"{s}\" isn't an image reference like ghcr.io/owner/app:tag or localhost:5000/app@sha256:...", .{text});
+test expandShort {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const mingit = (try expandShort(arena, default_registry, "org.git_scm.MinGit:2.56.0.windows.1")).?;
+    try std.testing.expectEqualStrings("ghcr.io/zigsaw-io/org.git_scm.mingit:2.56.0.windows.1", mingit.text);
+    try std.testing.expectEqualStrings("org.git_scm.MinGit", mingit.app_id);
+    try std.testing.expectEqualStrings("localhost:5000/test/org.nodejs.node", (try expandShort(arena, "localhost:5000/test/", "org.nodejs.node")).?.text);
+    try std.testing.expectEqualStrings("r.io/net.frippery.busybox@sha256:ab", (try expandShort(arena, "r.io", "net.frippery.busybox@sha256:ab")).?.text);
+    try std.testing.expectEqual(null, try expandShort(arena, default_registry, "ghcr.io/owner/app:1"));
+    try std.testing.expectError(error.InvalidId, expandShort(arena, default_registry, "has space:1"));
+    try std.testing.expectError(error.InvalidId, expandShort(arena, default_registry, ":latest"));
 }
 
 /// Parses a fetched manifest, and checks it is a single zigsaw image zigsaw

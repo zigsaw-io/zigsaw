@@ -2,6 +2,8 @@
   "id": "org.nodejs.node",
   "version": "24.21.0",
   "command": "node.exe",
+  "path": [".", "${data}\\npm"],
+  "env": { "NPM_CONFIG_PREFIX": "${data}\\npm" },
   "permissions": { "network": true, "filesystem": ["cwd"] },
   "exports": {
     "node": { "command": "node.exe" },

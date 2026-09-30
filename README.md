@@ -6,9 +6,10 @@ Think Flatpak for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
-Status: [iteration 1](docs/iteration-1.md) is complete. Zigsaw builds,
-installs, runs, shares through registries, and exposes the commands of
-command-line apps. Git, Node, Python and the zig toolchain are tested.
+Status: [iteration 2](docs/iteration-2.md) is complete. Zigsaw builds,
+installs, runs, updates and cleans up command-line apps, shares them through
+registries, and puts their commands on PATH. Published apps install by id.
+Git, Node, Python and the zig toolchain are tested.
 
 ## Quick start
 
@@ -16,9 +17,13 @@ Requires Zig 0.16.
 
 ```powershell
 zig build
-.\zig-out\bin\zigsaw.exe build recipes\node.json
+.\zig-out\bin\zigsaw.exe pull org.nodejs.node
 .\zig-out\bin\zigsaw.exe run org.nodejs.node -e "console.log(process.version)"
 ```
+
+`pull org.nodejs.node` installs the published image of Node (see
+[Published apps](#published-apps)). `zigsaw build recipes\node.json` builds
+the same image, with the same digest, from its recipe.
 
 Installing an app also puts its commands (here `node`, `npm` and `npx`) in
 `%LOCALAPPDATA%\zigsaw\bin`. Add that directory to your PATH, and they run
@@ -36,23 +41,55 @@ an installed Node), that one wins. `where node` shows which is found first.
 ```
 zigsaw build <recipe.json>             build an app from a recipe, install it and its commands
 zigsaw pull <image>                    install an app and its commands from a registry
-zigsaw push <app-id> <image>           publish an installed app to a registry
+zigsaw push <app-id> [<image>]         publish an installed app to a registry
 zigsaw run [options] <app-id> [args]   run an installed app
 zigsaw list                            list installed apps and their commands
+zigsaw update [<app-id>...]            rebuild or re-pull apps from where they came from
 zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
+zigsaw prune [--dry-run] [--downloads] [--data]
+                                       delete what no installed app needs
 ```
+
+## Published apps
+
+The recipes in [recipes/](recipes/), except zig's, are published as images in
+`ghcr.io/zigsaw-io`, tagged with their version and `latest`, so these install
+with `zigsaw pull <id>`:
+
+| App | Id | Version | Commands |
+|---|---|---|---|
+| BusyBox | `net.frippery.busybox` | FRP-6075-g169694ebd | `busybox` |
+| ripgrep | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
+| Git (MinGit) | `org.git_scm.MinGit` | 2.56.0.windows.1 | `git` |
+| Node.js | `org.nodejs.node` | 24.21.0 | `node`, `npm`, `npx` |
+| Python | `org.python.python` | 3.14.7 | `python` |
+
+Each image has the same digest as a local build of its recipe.
+[`scripts/publish.sh`](scripts/publish.sh) publishes the recipes listed in
+[`scripts/published-recipes.txt`](scripts/published-recipes.txt), and
+[`tests/published.sh`](tests/published.sh) checks what's published.
 
 ## Sharing apps through registries
 
 zigsaw images are standard OCI images, so any OCI registry can hold them:
 ghcr.io, Docker Hub, a self-hosted zot or distribution. An image is named
-`<registry>/<repository>[:tag][@digest]`:
+`<registry>/<repository>[:tag][@digest]`, or just by app id for the app's
+image in the default registry:
 
 ```powershell
+zigsaw pull org.nodejs.node                           # ghcr.io/zigsaw-io/org.nodejs.node:latest
+zigsaw pull org.nodejs.node:24.21.0                   # a version
 zigsaw push org.nodejs.node ghcr.io/you/node          # tagged 24.21.0, the app's version
 zigsaw pull ghcr.io/you/node:24.21.0                  # on another machine
-zigsaw pull ghcr.io/you/node@sha256:7b9280e4...       # exactly this build
+zigsaw pull ghcr.io/you/node@sha256:f25237a3...       # exactly this build
 ```
+
+An app id stands for `<default registry>/<app id in lower case>`, and the
+image must hold that app. The default registry is `ghcr.io/zigsaw-io`; set
+`ZIGSAW_REGISTRY` to use another, such as your own:
+`ZIGSAW_REGISTRY=ghcr.io/you`. Then `zigsaw push <app-id>` publishes an app to
+its image there. Installed apps remember the full reference they came from,
+so `zigsaw update` keeps using it.
 
 The manifest travels byte for byte, so an image has the same digest in every
 store and registry. `pull` downloads only blobs the store doesn't have, checks
@@ -66,6 +103,29 @@ private images, needs credentials in `ZIGSAW_REGISTRY_USERNAME` and
 token with the `write:packages` scope. Registries on `localhost` are reached
 over plain HTTP; all others over HTTPS.
 
+## Updating and cleaning up
+
+`zigsaw update` brings every installed app, or the ones named, up to date
+with where it came from. An app built from a recipe is rebuilt from that
+recipe file, so editing the recipe and running `update` installs the new
+version. An app pulled by tag is pulled again if the tag now points at a
+different image; only the manifest is fetched when it doesn't. An app pulled
+by digest is pinned and left alone.
+
+Installing a new version deletes the files of the one it replaces, unless
+that version is still running. `zigsaw prune` deletes everything else no
+installed app needs: the blobs of old versions, files kept because they were
+running, and whatever an interrupted build left in `tmp\`. `--dry-run` shows
+what it would delete. Cached downloads are kept for rebuilds unless you add
+`--downloads`, and the data of uninstalled apps is kept unless you add
+`--data`.
+
+Nothing a running app uses is deleted, and zigsaw commands can run at the same
+time: a run locks the files it uses, and `prune` waits for builds and pulls
+to finish.
+
+## Running apps
+
 `run` options go before the app id, as with `flatpak run`:
 
 | Option | Effect |
@@ -77,6 +137,25 @@ over plain HTTP; all others over HTTPS.
 | `--env=NAME=VALUE` | Set an environment variable |
 | `--ephemeral` | Use a fresh data directory, deleted after the run |
 | `-v`, `--verbose` | Print the resolved command, environment and grants |
+
+### Changing an app's options
+
+`zigsaw override` saves run options for an app, and every run of it gets them,
+including runs through its commands on PATH. It takes the same options as
+`run`, except `--command`:
+
+```powershell
+zigsaw override --sandbox=appcontainer com.github.BurntSushi.ripgrep   # rg is always sandboxed
+zigsaw override --filesystem=D:\src org.nodejs.node                    # node can use D:\src
+zigsaw override --show org.nodejs.node                                 # what's saved
+zigsaw override --reset org.nodejs.node                                # remove them all
+```
+
+New options are added to the ones already saved; a filesystem path or
+variable given again replaces its earlier setting. Options given to `run`
+still win for that run. Overrides are kept when an app is updated, rebuilt or
+removed, and `zigsaw rm --delete-data` deletes them with the app's data.
+`zigsaw list` shows them.
 
 ## Recipes
 
@@ -108,9 +187,8 @@ same image digest.
 
 `exports` names the commands an app puts on PATH. Without it, the app exports
 its command under its file name (`busybox` above); `"exports": {}` exports
-nothing. An export can pass arguments before the caller's, with `${app}` for
-the app's directory. That's how Node's recipe runs npm without its `.cmd`
-wrapper:
+nothing. An export can pass arguments before the caller's. That's how Node's
+recipe runs npm without its `.cmd` wrapper:
 
 ```json
 "exports": {
@@ -121,6 +199,17 @@ wrapper:
 
 If another installed app already exports a name, the build skips it with a
 warning.
+
+`env` values, `path` entries and export arguments can use two placeholders:
+`${app}` for the app's directory, and `${data}` for its data directory (the
+fresh one, in an `--ephemeral` run). They're expanded each time the app runs,
+so the image is the same on every machine. Node's recipe uses them to keep
+global npm packages in its data directory, and their commands on its PATH:
+
+```json
+"path": [".", "${data}\\npm"],
+"env": { "NPM_CONFIG_PREFIX": "${data}\\npm" }
+```
 
 ## How it works
 
@@ -143,8 +232,11 @@ refs\<id>.json         installed app -> manifest digest
 deploy\<hex>\          unpacked app tree, shared by all runs
 data\<id>\             per-app writable state, kept across runs
 grants\<id>.txt        host paths granted to the app's AppContainer
+overrides\<id>.json    run options saved with `zigsaw override`
 bin\<name>.exe         command shims, with a <name>.shim file saying what each runs
 cache\downloads\<hex>  fetched sources, by sha256
+tmp\                   staging area, and the data of --ephemeral runs
+lock, *.lock           lock files that let zigsaw commands run side by side
 ```
 
 **Command shims** are copies of the small `zigsaw-shim.exe` that is installed
@@ -162,13 +254,19 @@ process tree when the run ends. Deployed app files deny writes and deletes to
 the user, so no run, and nothing else running as you, can change an installed
 app.
 
+The app shares the terminal, so Ctrl+C and Ctrl+Break reach it just as when
+it runs alone, also through a shim. zigsaw waits for it and passes on its
+exit code. Closing the terminal gives the app the usual time to clean up.
+Whatever the app leaves running then ends with the run, even processes it
+started detached.
+
 **`--sandbox=appcontainer`** also runs the app under a per-app AppContainer
 identity (`zigsaw.<id>`). It can then read and write only its data directory,
 read its own app files, and use the host paths and network it was granted.
 Host grants are ACL entries on those paths; `zigsaw rm` removes them again.
 It suits self-contained tools such as busybox and ripgrep. Git, Node scripts,
 npm and zig fail under it, because Windows doesn't let AppContainers resolve
-real paths; see [the iteration 1 findings](docs/findings-iteration-1.md).
+real paths; see [findings](docs/findings.md).
 
 ## Testing
 
@@ -176,7 +274,10 @@ real paths; see [the iteration 1 findings](docs/findings-iteration-1.md).
 zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through both sandboxes (Git Bash, network)
 bash tests/shims.sh     # command shims end to end
-bash tests/registry.sh  # push and pull through a local registry (see the script's header)
+bash tests/store.sh     # update, prune, and what they keep while apps run
+bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
+bash tests/registry.sh  # push, pull and update through a local registry (see the script's header)
+bash tests/published.sh # the published images: anonymous pulls, digests, redirects
 ```
 
 The scripts build the recipes they need from [recipes/](recipes/) into
@@ -189,20 +290,22 @@ tests need a local registry such as [zot](https://zotregistry.dev) on
 
 - Batch files (`.cmd`/`.bat`) can't be the command yet; run them through
   `--command=cmd <app> /c ...`, or export the program they wrap, as Node's
-  recipe does for npm.
-- Global package installs, like `npm install -g`, fail, because they write into
-  the read-only app directory.
-- Shims can't pass zigsaw options such as `--sandbox`; they always run the
-  app's defaults.
+  recipe does for npm. The commands of global npm packages are batch files,
+  so `npm install -g typescript` works, but `tsc` runs as
+  `zigsaw run --command=cmd org.nodejs.node /c tsc`.
+- Under `--sandbox=appcontainer`, access granted to a host path lasts until
+  the app is removed, even after the permission or override that granted it
+  is gone.
 - Apps that locate folders with `SHGetKnownFolderPath` instead of environment
   variables would bypass the data-directory redirect. None of the tested tools
   do.
 - Installing an app with many files is limited by Defender scanning each new
   file: about 16 s for zig's 19.5k files, 3 s for Node.
 - The registry isn't isolated.
-- Old blobs are never garbage-collected, and a crashed build can leave files
-  in `tmp\`.
-- Registry credentials come only from environment variables, and
-  multi-platform image indexes aren't supported.
+- Registry credentials come only from environment variables, and are offered
+  to every registry. With a ghcr.io token set, pulls from Docker Hub fail,
+  and the token goes to Docker Hub's token service. Unset them when you
+  aren't pushing.
+- Multi-platform image indexes aren't supported.
 
-[docs/iteration-1.md](docs/iteration-1.md) lists what hasn't been tested yet.
+[docs/iteration-2.md](docs/iteration-2.md) lists what hasn't been tested yet.

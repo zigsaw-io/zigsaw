@@ -71,6 +71,41 @@ check "a digest that doesn't match is refused" fails zb pull "$repo/busybox@sha2
 check "a missing tag is reported" missing_tag
 check "the pulled app's commands are installed" test -f "$store_b\\bin\\busybox.exe"
 
+# `update` follows the tag an app was pulled by, and leaves a digest alone.
+za push net.frippery.busybox "$repo/busybox:latest" >/dev/null 2>&1
+zb pull "$repo/busybox:latest" >/dev/null 2>&1
+update_up_to_date() { zb update net.frippery.busybox 2>&1 | grep -q 'up to date'; }
+update_moved_tag() {
+    sed 's/"version": "[^"]*"/"version": "reg-2"/' "$root/recipes/busybox.json" >"$work\\busybox-2.json" &&
+        za build "$work\\busybox-2.json" >/dev/null 2>&1 &&
+        za push net.frippery.busybox "$repo/busybox:latest" >/dev/null 2>&1 &&
+        zb update net.frippery.busybox >/dev/null 2>&1 &&
+        zb list | grep -q '^net.frippery.busybox  *reg-2 '
+}
+update_pinned() { zb pull "$repo/busybox@$full_digest" >/dev/null 2>&1 && zb update net.frippery.busybox 2>&1 | grep -q pinned; }
+check "update: an unmoved tag is up to date" update_up_to_date
+check "update: a moved tag is pulled again" update_moved_tag
+check "update: an app pulled by digest is pinned" update_pinned
+# Back to the recipe's version, which the checks below push and pull.
+za build "$root/recipes/busybox.json" >/dev/null 2>&1
+
+# App ids name images in the default registry, here the test registry.
+sza() { ZIGSAW_REGISTRY="$repo" ZIGSAW_HOME="$store_a" "$zigsaw" "$@"; }
+szb() { ZIGSAW_REGISTRY="$repo" ZIGSAW_HOME="$store_b" "$zigsaw" "$@"; }
+check "push by app id" sza push net.frippery.busybox
+short_pull() {
+    szb pull net.frippery.busybox:FRP-6075-g169694ebd >/dev/null 2>&1 &&
+        grep -q "\"source\": \"$repo/net.frippery.busybox:FRP-6075-g169694ebd\"" "$store_b\\refs\\net.frippery.busybox.json"
+}
+check "pull by app id; the ref records the full reference" short_pull
+check "pull by app id defaults to :latest" sh -c "ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_a' \"\$0\" push net.frippery.busybox net.frippery.busybox:latest && ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_b' \"\$0\" pull net.frippery.busybox" "$zigsaw"
+other_app_image() {
+    za push net.frippery.busybox "$repo/org.example.other:1" >/dev/null 2>&1 &&
+        szb pull org.example.other:1 2>&1 | grep -q 'holds net.frippery.busybox, not org.example.other'
+}
+check "pull by app id refuses an image of another app" other_app_image
+check "push by app id refuses another app's image" sh -c "ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_a' \"\$0\" push net.frippery.busybox org.example.other:2 2>&1 | grep -q 'is the image of org.example.other'" "$zigsaw"
+
 # A large app: its 100 MB layer streams both ways.
 za build "$root\\recipes\\node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
 check "push node (100 MB layer)" za push org.nodejs.node "$repo/node"
@@ -100,6 +135,7 @@ fi
 # Installed apps are protected against deletion, so remove them through zigsaw.
 for store in "$work\a" "$work\b" "$work\c"; do
     for id in net.frippery.busybox org.nodejs.node; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
+    ZIGSAW_HOME="$store" "$zigsaw" prune >/dev/null 2>&1
 done
 rm -rf "$work"
 echo

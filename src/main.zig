@@ -6,8 +6,13 @@ const acl = @import("acl.zig");
 const appcontainer = @import("appcontainer.zig");
 const builder = @import("builder.zig");
 const exports = @import("exports.zig");
+const install = @import("install.zig");
+const oci = @import("oci.zig");
+const override = @import("override.zig");
+const prune = @import("prune.zig");
 const remote = @import("remote.zig");
 const runtime = @import("run.zig");
+const update = @import("update.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -18,17 +23,25 @@ const usage =
     \\commands:
     \\  build <recipe.json>             build an app from a recipe, install it and its commands
     \\  pull <image>                    install an app and its commands from a registry
-    \\  push <app-id> <image>           publish an installed app to a registry
+    \\  push <app-id> [<image>]         publish an installed app to a registry
     \\  run [options] <app-id> [args]   run an installed app
     \\  list                            list installed apps and their commands
+    \\  override [options] <app-id>     save run options that every run of the app gets;
+    \\                                  --show shows them, --reset removes them
+    \\  update [<app-id>...]            rebuild or re-pull apps from where they came from
     \\  rm [--delete-data] <app-id>     uninstall an app and its commands
+    \\  prune [--dry-run] [--downloads] [--data]
+    \\                                  delete what no installed app needs; also cached
+    \\                                  downloads, and the data of uninstalled apps
     \\
-    \\An image is <registry>/<repository>[:tag][@digest], e.g. ghcr.io/owner/node:24.21.0.
-    \\push tags with the app's version unless given a tag. Registry credentials, needed
-    \\to push and for private images, come from ZIGSAW_REGISTRY_USERNAME and
-    \\ZIGSAW_REGISTRY_PASSWORD.
+    \\An image is <registry>/<repository>[:tag][@digest], e.g. ghcr.io/owner/node:24.21.0,
+    \\or <app-id>[:tag][@digest] for the app's image in the default registry, e.g.
+    \\org.nodejs.node for ghcr.io/zigsaw-io/org.nodejs.node. ZIGSAW_REGISTRY changes the
+    \\default registry. push goes to the app's image there unless given one, and tags
+    \\with the app's version unless given a tag. Registry credentials, needed to push and
+    \\for private images, come from ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD.
     \\
-    \\run options:
+    \\run options (override takes them too, except --command):
     \\  --command=<name>                run one of the app's exported commands, or another
     \\                                  executable from the app or System32
     \\  --sandbox=soft|appcontainer     soft (default) shapes the environment; appcontainer
@@ -80,19 +93,24 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
 
     ctx.store = try .open(ctx.io, ctx.arena, ctx.env);
     ctx.store.verbose = ctx.verbose;
+    // Commands hold the store lock shared, and prune exclusively; see Store.zig.
+    // `run` takes it itself, and `list` only reads.
     if (std.mem.eql(u8, command, "build")) {
         if (rest.len != 1) return usageError();
-        try builder.build(ctx, rest[0]);
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try install.install(ctx, try builder.build(ctx, rest[0]));
         return 0;
     }
     if (std.mem.eql(u8, command, "pull")) {
         if (rest.len != 1) return usageError();
-        try remote.pull(ctx, rest[0]);
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try install.install(ctx, (try remote.fetch(ctx, rest[0], .{})).?);
         return 0;
     }
     if (std.mem.eql(u8, command, "push")) {
-        if (rest.len != 2) return usageError();
-        try remote.push(ctx, rest[0], rest[1]);
+        if (rest.len != 1 and rest.len != 2) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try remote.push(ctx, rest[0], if (rest.len == 2) rest[1] else null);
         return 0;
     }
     if (std.mem.eql(u8, command, "run")) return runtime.run(ctx, try parseRunOptions(ctx, rest));
@@ -100,6 +118,16 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         if (rest.len != 0) return usageError();
         try list(ctx);
         return 0;
+    }
+    if (std.mem.eql(u8, command, "override")) {
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try overrideApp(ctx, rest);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "update")) {
+        for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        return update.update(ctx, @ptrCast(rest));
     }
     if (std.mem.eql(u8, command, "rm")) {
         var delete_data = false;
@@ -111,7 +139,23 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
                 id = arg;
             } else return usageError();
         }
+        _ = try ctx.store.lock(ctx.arena, .shared);
         try remove(ctx, id orelse return usageError(), delete_data);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "prune")) {
+        var opts: prune.Options = .{};
+        for (rest) |arg| {
+            if (isFlag(arg, "dry-run")) {
+                opts.dry_run = true;
+            } else if (isFlag(arg, "downloads")) {
+                opts.downloads = true;
+            } else if (isFlag(arg, "data")) {
+                opts.data = true;
+            } else return usageError();
+        }
+        _ = try ctx.store.lock(ctx.arena, .exclusive);
+        try prune.prune(ctx, opts);
         return 0;
     }
     return usageError();
@@ -127,64 +171,146 @@ fn isFlag(arg: []const u8, name: []const u8) bool {
     return arg.len == name.len + 2 and std.mem.startsWith(u8, arg, "--") and std.mem.eql(u8, arg[2..], name);
 }
 
+/// A "--name=value" option. "--name value" works too, except for flags,
+/// which never take a value.
+const Option = struct {
+    name: []const u8,
+    value: ?[]const u8,
+
+    /// Reads the option at `args[i.*]`, moving `i` past a separate value.
+    fn read(args: []const [:0]const u8, i: *usize, flags: []const []const u8) !Option {
+        const arg = args[i.*];
+        const eq = std.mem.indexOfScalar(u8, arg, '=');
+        const name = arg[2 .. eq orelse arg.len];
+        if (eq) |e| return .{ .name = name, .value = arg[e + 1 ..] };
+        for (flags) |flag| if (std.mem.eql(u8, name, flag)) return .{ .name = name, .value = null };
+        i.* += 1;
+        if (i.* == args.len) return fail("--{s} needs a value", .{name});
+        return .{ .name = name, .value = args[i.*] };
+    }
+};
+
+/// Collects the run options that `run` and `override` share.
+const SettingsParser = struct {
+    settings: override.Settings = .{},
+    filesystem: std.ArrayList([]const u8) = .empty,
+    env: std.ArrayList([]const u8) = .empty,
+
+    const flags = [_][]const u8{"ephemeral"};
+
+    /// Applies `opt`, or returns false if it isn't one of these options.
+    fn apply(p: *SettingsParser, arena: std.mem.Allocator, opt: Option) !bool {
+        const name = opt.name;
+        if (std.mem.eql(u8, name, "ephemeral")) {
+            if (opt.value != null) return fail("--ephemeral takes no value", .{});
+            p.settings.ephemeral = true;
+            return true;
+        }
+        const value = opt.value orelse return false;
+        if (std.mem.eql(u8, name, "sandbox")) {
+            p.settings.sandbox = std.meta.stringToEnum(override.Sandbox, value) orelse
+                return fail("--sandbox must be soft or appcontainer", .{});
+        } else if (std.mem.eql(u8, name, "filesystem")) {
+            if (oci.parseFsGrant(value) == null)
+                return fail("--filesystem must be cwd or an absolute path, optionally with :ro; got \"{s}\"", .{value});
+            try p.filesystem.append(arena, value);
+        } else if (std.mem.eql(u8, name, "share") or std.mem.eql(u8, name, "unshare")) {
+            if (!std.mem.eql(u8, value, "network")) return fail("--{s} only supports network", .{name});
+            p.settings.network = std.mem.eql(u8, name, "share");
+        } else if (std.mem.eql(u8, name, "env")) {
+            if (std.mem.indexOfScalar(u8, value, '=') == null) return fail("--env expects NAME=VALUE, got \"{s}\"", .{value});
+            try p.env.append(arena, value);
+        } else return false;
+        return true;
+    }
+
+    fn finish(p: *const SettingsParser) override.Settings {
+        var s = p.settings;
+        s.filesystem = p.filesystem.items;
+        s.env = p.env.items;
+        return s;
+    }
+};
+
 /// Options go before the app id, like `flatpak run`; everything after the id
 /// belongs to the app. "--" also ends zigsaw's options.
 fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
-    const arena = ctx.arena;
     var opts: runtime.Options = .{ .id = undefined };
-    var filesystem: std.ArrayList([]const u8) = .empty;
-    var env: std.ArrayList([]const u8) = .empty;
-
+    var settings: SettingsParser = .{};
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
-        const arg = args[i];
-        if (std.mem.eql(u8, arg, "--")) {
+        if (std.mem.eql(u8, args[i], "--")) {
             i += 1;
             break;
         }
-        if (!std.mem.startsWith(u8, arg, "--")) break;
-
-        // Accept both "--name=value" and "--name value".
-        const eq = std.mem.indexOfScalar(u8, arg, '=');
-        const name = arg[2 .. eq orelse arg.len];
-        if (std.mem.eql(u8, name, "ephemeral") and eq == null) {
-            opts.ephemeral = true;
-            continue;
-        }
-        if (std.mem.eql(u8, name, "verbose") and eq == null) {
+        if (!std.mem.startsWith(u8, args[i], "--")) break;
+        const opt = try Option.read(args, &i, &(SettingsParser.flags ++ [_][]const u8{"verbose"}));
+        if (std.mem.eql(u8, opt.name, "verbose") and opt.value == null) {
             ctx.verbose = true;
             ctx.store.verbose = true;
-            continue;
-        }
-        const value = if (eq) |e| arg[e + 1 ..] else blk: {
-            i += 1;
-            if (i == args.len) return fail("--{s} needs a value", .{name});
-            break :blk args[i];
-        };
-
-        if (std.mem.eql(u8, name, "command")) {
-            opts.command = value;
-        } else if (std.mem.eql(u8, name, "sandbox")) {
-            opts.sandbox = std.meta.stringToEnum(runtime.Sandbox, value) orelse
-                return fail("--sandbox must be soft or appcontainer", .{});
-        } else if (std.mem.eql(u8, name, "filesystem")) {
-            try filesystem.append(arena, value);
-        } else if (std.mem.eql(u8, name, "share") or std.mem.eql(u8, name, "unshare")) {
-            if (!std.mem.eql(u8, value, "network")) return fail("--{s} only supports network", .{name});
-            opts.network = std.mem.eql(u8, name, "share");
-        } else if (std.mem.eql(u8, name, "env")) {
-            try env.append(arena, value);
-        } else {
-            return fail("unknown run option --{s}", .{name});
+        } else if (std.mem.eql(u8, opt.name, "command") and opt.value != null) {
+            opts.command = opt.value;
+        } else if (!try settings.apply(ctx.arena, opt)) {
+            return fail("unknown run option --{s}", .{opt.name});
         }
     }
     if (i == args.len) return usageError();
 
     opts.id = args[i];
     opts.args = @ptrCast(args[i + 1 ..]);
-    opts.filesystem = filesystem.items;
-    opts.env = env.items;
+    opts.settings = settings.finish();
     return opts;
+}
+
+/// `zigsaw override [options] <app-id>`: saves run options that every run of
+/// the app gets. New options are added to the saved ones; `--reset` removes
+/// them all. Without options, or with `--show`, prints what's saved.
+fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
+    const arena = ctx.arena;
+    var settings: SettingsParser = .{};
+    var id: ?[]const u8 = null;
+    var reset = false;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (!std.mem.startsWith(u8, args[i], "--")) {
+            if (id != null) return usageError();
+            id = args[i];
+            continue;
+        }
+        const opt = try Option.read(args, &i, &(SettingsParser.flags ++ [_][]const u8{ "show", "reset" }));
+        if (opt.value == null and std.mem.eql(u8, opt.name, "reset")) {
+            reset = true;
+        } else if (opt.value == null and std.mem.eql(u8, opt.name, "show")) {
+            // Showing is what happens anyway.
+        } else if (!try settings.apply(arena, opt)) {
+            return fail("--{s} can't be saved as an override", .{opt.name});
+        }
+    }
+    const app = id orelse return usageError();
+    const new = settings.finish();
+
+    if (reset) {
+        if (!new.isEmpty()) return fail("--reset removes all of {s}'s overrides; add new ones separately", .{app});
+        try override.delete(ctx.store, arena, app);
+        note("{s} has no overrides now", .{app});
+        return;
+    }
+    const saved = try override.load(ctx.store, arena, app);
+    if (new.isEmpty()) {
+        if (saved.isEmpty()) {
+            note("{s} has no overrides", .{app});
+            return;
+        }
+        var buf: [4096]u8 = undefined;
+        var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+        try stdout.interface.print("{f}\n", .{saved});
+        try stdout.interface.flush();
+        return;
+    }
+    if (try ctx.store.readRef(arena, app) == null) return fail("{s} is not installed", .{app});
+    const merged = try override.Settings.merge(arena, saved, new);
+    try override.save(ctx.store, arena, app, merged);
+    note("{s} now runs with {f}", .{ app, merged });
 }
 
 fn list(ctx: *Context) !void {
@@ -192,14 +318,16 @@ fn list(ctx: *Context) !void {
     const refs = try ctx.store.listRefs(arena);
     const shims = try exports.list(ctx);
     var buf: [4096]u8 = undefined;
-    var stdout = Io.File.stdout().writer(ctx.io, &buf);
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;
     try w.print("{s:<32} {s:<20} {s:<20} {s}\n", .{ "ID", "VERSION", "MANIFEST", "EXPORTS" });
     for (refs) |ref| {
-        const short = ref.manifest[0..@min(ref.manifest.len, "sha256:".len + 12)];
         var names: std.ArrayList([]const u8) = .empty;
         for (shims) |s| if (std.mem.eql(u8, s.sidecar.app, ref.id)) try names.append(arena, s.name);
-        try w.print("{s:<32} {s:<20} {s:<20} {s}\n", .{ ref.id, ref.version, short, try std.mem.join(arena, ", ", names.items) });
+        try w.print("{s:<32} {s:<20} {s:<20} {s}", .{ ref.id, ref.version, oci.shortDigest(ref.manifest), try std.mem.join(arena, ", ", names.items) });
+        const saved = try override.load(ctx.store, arena, ref.id);
+        if (!saved.isEmpty()) try w.print("  (override {f})", .{saved});
+        try w.writeByte('\n');
     }
     try w.flush();
 }
@@ -231,13 +359,12 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     try appcontainer.deleteProfile(arena, id);
 
     try store.deleteRef(arena, id);
-    // The deployment can be shared with another app built from identical inputs.
-    var shared = false;
-    for (try store.listRefs(arena)) |other| {
-        if (std.mem.eql(u8, other.manifest, ref.manifest)) shared = true;
+    if (try store.deleteDeploymentIfUnused(arena, ref.manifest)) |deletion| if (deletion == .in_use)
+        note("kept {s}'s files, which are still in use; `zigsaw prune` removes them later", .{id});
+    if (delete_data) {
+        try Io.Dir.cwd().deleteTree(io, try store.path(arena, &.{ "data", id }));
+        try override.delete(store, arena, id);
     }
-    if (!shared) try store.deleteDeployment(arena, ref.manifest);
-    if (delete_data) try Io.Dir.cwd().deleteTree(io, try store.path(arena, &.{ "data", id }));
 
     note("removed {s} {s}{s}", .{ id, ref.version, if (delete_data) " and its data" else "" });
 }
@@ -246,11 +373,15 @@ test {
     _ = @import("builder.zig");
     _ = @import("exports.zig");
     _ = @import("oci.zig");
+    _ = @import("override.zig");
     _ = @import("process.zig");
+    _ = @import("prune.zig");
     _ = @import("recipe.zig");
     _ = @import("Registry.zig");
+    _ = @import("remote.zig");
     _ = @import("layer.zig");
     _ = @import("run.zig");
     _ = @import("Sidecar.zig");
+    _ = @import("Store.zig");
     _ = @import("zipfile.zig");
 }

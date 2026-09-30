@@ -42,10 +42,60 @@ pub const Permissions = struct {
 pub const Export = struct {
     /// Executable to run, relative to the app root.
     command: []const u8,
-    /// Arguments placed before the caller's. "${app}" expands to the app's
-    /// directory, e.g. to run a script that ships with the app.
+    /// Arguments placed before the caller's. They may use placeholders, e.g.
+    /// "${app}" to run a script that ships with the app.
     args: []const []const u8 = &.{},
 };
+
+/// What placeholders in a config stand for. They are expanded when the app
+/// runs, so images stay the same on every machine:
+///   ${app}   the app's (read-only) directory
+///   ${data}  the app's data directory, or the fresh one of an --ephemeral run
+pub const Placeholders = struct {
+    app: []const u8,
+    data: []const u8,
+
+    const names = [_][]const u8{ "${app}", "${data}" };
+
+    /// Replaces the placeholders in `template`. Any other text, including
+    /// other "${...}", is kept as is.
+    pub fn expand(p: Placeholders, arena: std.mem.Allocator, template: []const u8) ![]u8 {
+        const values = [names.len][]const u8{ p.app, p.data };
+        var out: std.ArrayList(u8) = .empty;
+        var i: usize = 0;
+        next: while (i < template.len) {
+            for (names, values) |name, value| if (std.mem.startsWith(u8, template[i..], name)) {
+                try out.appendSlice(arena, value);
+                i += name.len;
+                continue :next;
+            };
+            try out.append(arena, template[i]);
+            i += 1;
+        }
+        return out.items;
+    }
+
+    /// The part of a path entry after a leading placeholder, or null if it
+    /// doesn't start with one.
+    fn afterPrefix(entry: []const u8) ?[]const u8 {
+        for (names) |name| if (std.mem.startsWith(u8, entry, name)) return entry[name.len..];
+        return null;
+    }
+};
+
+/// Whether a PATH entry starts with a placeholder, and so is an absolute path
+/// once expanded, rather than relative to the app root.
+pub fn isPlaceholderPath(entry: []const u8) bool {
+    return Placeholders.afterPrefix(entry) != null;
+}
+
+/// A PATH entry: a relative path inside the app, or a placeholder optionally
+/// followed by a relative path inside it.
+pub fn isValidPathEntry(entry: []const u8) bool {
+    const rest = Placeholders.afterPrefix(entry) orelse return isSafeRelPath(entry);
+    if (rest.len == 0) return true;
+    return (rest[0] == '\\' or rest[0] == '/') and isSafeRelPath(rest[1..]);
+}
 
 /// The config blob of an image.
 pub const AppConfig = struct {
@@ -53,8 +103,10 @@ pub const AppConfig = struct {
     version: []const u8,
     /// Executable to run, relative to the app root.
     command: []const u8,
-    /// Directories, relative to the app root, put on PATH ahead of the system directories.
+    /// Directories put on PATH ahead of the system directories: relative to
+    /// the app root, or starting with a placeholder, e.g. "${data}\\npm".
     path: []const []const u8 = &.{"."},
+    /// Values may use placeholders.
     env: std.json.ArrayHashMap([]const u8) = .{},
     permissions: Permissions = .{},
     /// Commands the app provides, by name.
@@ -74,6 +126,11 @@ pub fn digestHex(digest: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, digest, prefix)) return null;
     const hex = digest[prefix.len..];
     return if (isSha256Hex(hex)) hex else null;
+}
+
+/// "sha256:" and the first 12 hex digits, enough to tell images apart.
+pub fn shortDigest(digest: []const u8) []const u8 {
+    return digest[0..@min(digest.len, "sha256:".len + 12)];
 }
 
 pub fn isSha256Hex(s: []const u8) bool {
@@ -106,8 +163,8 @@ pub fn validateConfig(what: []const u8, c: AppConfig) error{Failed}!void {
         return fail("{s}: version must not be empty", .{what});
     if (!isSafeRelPath(c.command))
         return fail("{s}: command \"{s}\" must be a relative path inside the app", .{ what, c.command });
-    for (c.path) |p| if (!isSafeRelPath(p))
-        return fail("{s}: path entry \"{s}\" must be a relative path inside the app", .{ what, p });
+    for (c.path) |p| if (!isValidPathEntry(p))
+        return fail("{s}: path entry \"{s}\" must be a relative path inside the app, or start with ${{app}} or ${{data}}", .{ what, p });
     for (c.permissions.filesystem) |spec| if (parseFsGrant(spec) == null)
         return fail("{s}: filesystem permission \"{s}\" must be \"cwd\" or an absolute path, optionally with \":ro\"", .{ what, spec });
     var it = c.exports.map.iterator();
@@ -206,6 +263,31 @@ test isSafeRelPath {
     try std.testing.expect(!isSafeRelPath("C:\\Windows"));
     try std.testing.expect(!isSafeRelPath("/etc"));
     try std.testing.expect(!isSafeRelPath("file.txt:stream"));
+}
+
+test "Placeholders.expand" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const p: Placeholders = .{ .app = "C:\\z\\deploy\\ab", .data = "C:\\z\\data\\x" };
+    try std.testing.expectEqualStrings("C:\\z\\data\\x\\npm", try p.expand(arena, "${data}\\npm"));
+    try std.testing.expectEqualStrings("C:\\z\\deploy\\ab;C:\\z\\data\\x", try p.expand(arena, "${app};${data}"));
+    try std.testing.expectEqualStrings("${HOME} $ ${app", try p.expand(arena, "${HOME} $ ${app"));
+    try std.testing.expectEqualStrings("", try p.expand(arena, ""));
+}
+
+test isValidPathEntry {
+    try std.testing.expect(isValidPathEntry("."));
+    try std.testing.expect(isValidPathEntry("bin"));
+    try std.testing.expect(isValidPathEntry("${data}"));
+    try std.testing.expect(isValidPathEntry("${data}\\npm"));
+    try std.testing.expect(isValidPathEntry("${app}/tools/bin"));
+    try std.testing.expect(!isValidPathEntry("${data}npm"));
+    try std.testing.expect(!isValidPathEntry("${data}\\..\\other"));
+    try std.testing.expect(!isValidPathEntry("${data}\\"));
+    try std.testing.expect(!isValidPathEntry("C:\\Windows"));
+    try std.testing.expect(isPlaceholderPath("${data}\\npm"));
+    try std.testing.expect(!isPlaceholderPath("npm"));
 }
 
 test parseFsGrant {

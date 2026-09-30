@@ -21,11 +21,10 @@ const appcontainer = @import("appcontainer.zig");
 const oci = @import("oci.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const override = @import("override.zig");
 const process = @import("process.zig");
 const fail = Context.fail;
 const note = Context.note;
-
-pub const Sandbox = enum { soft, appcontainer };
 
 pub const Options = struct {
     id: []const u8,
@@ -33,15 +32,8 @@ pub const Options = struct {
     /// Runs this executable instead of the app's command. Looked up in the
     /// app's PATH directories, then in System32.
     command: ?[]const u8 = null,
-    sandbox: Sandbox = .soft,
-    /// Uses a fresh data directory that is deleted after the run.
-    ephemeral: bool = false,
-    /// Filesystem permissions granted on top of the app's own.
-    filesystem: []const []const u8 = &.{},
-    /// Overrides the app's network permission.
-    network: ?bool = null,
-    /// Extra "NAME=VALUE" environment variables, applied last.
-    env: []const []const u8 = &.{},
+    /// From the command line. They go over the app's saved overrides.
+    settings: override.Settings = .{},
 };
 
 /// Host variables passed through unchanged. Everything else from the host
@@ -57,13 +49,21 @@ const passthrough_env = [_][]const u8{
 pub fn run(ctx: *Context, opts: Options) !u32 {
     const io = ctx.io;
     const arena = ctx.arena;
+    // Held while preparing the run, not while the app runs. The deployment
+    // and any ephemeral data directory stay locked as in use until the end.
+    // (On errors, zigsaw exits and that releases every lock.)
+    const store_lock = try ctx.store.lock(arena, .shared);
     const image = try ctx.store.loadImage(arena, opts.id);
     const cfg = image.config;
 
-    // Effective permissions: the app's own plus command-line grants.
-    const network = opts.network orelse cfg.permissions.network;
+    // Effective settings: the command line over the app's overrides, over the
+    // app's own permissions.
+    const saved = try override.load(ctx.store, arena, cfg.id);
+    const settings = try override.Settings.merge(arena, saved, opts.settings);
+    const sandbox = settings.sandbox orelse .soft;
+    const network = settings.network orelse cfg.permissions.network;
     var grants: std.ArrayList(oci.FsGrant) = .empty;
-    for ([_][]const []const u8{ cfg.permissions.filesystem, opts.filesystem }) |specs| {
+    for ([_][]const []const u8{ cfg.permissions.filesystem, settings.filesystem }) |specs| {
         for (specs) |spec| try grants.append(arena, oci.parseFsGrant(spec) orelse
             return fail("invalid filesystem permission \"{s}\"", .{spec}));
     }
@@ -73,11 +73,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     }
 
     // Per-app writable state, laid out like a Windows user profile.
-    const data_dir = if (opts.ephemeral)
-        try ctx.store.makeTmpDir(arena, "run")
-    else
-        try ctx.store.path(arena, &.{ "data", cfg.id });
-    defer if (opts.ephemeral) Io.Dir.cwd().deleteTree(io, data_dir) catch {};
+    const run_dir: ?Store.RunDir = if (settings.ephemeral orelse false) try ctx.store.makeRunDir(arena) else null;
+    defer if (run_dir) |d| d.delete(ctx.store, arena);
+    store_lock.release(io);
+    const data_dir = if (run_dir) |d| d.path else try ctx.store.path(arena, &.{ "data", cfg.id });
     const profile: Profile = try .init(arena, data_dir);
     for ([_][]const u8{ profile.roaming, profile.temp }) |dir| try Io.Dir.cwd().createDirPath(io, dir);
 
@@ -85,22 +84,25 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const cwd = if (cwd_granted) host_cwd else profile.home;
 
     const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
-    const app_path = try appPathDirs(arena, image.deploy_dir, cfg.path);
-    const command = try resolveCommand(io, arena, image.deploy_dir, cfg, opts.command, app_path, system_root);
+    const placeholders: oci.Placeholders = .{ .app = image.deploy_dir, .data = data_dir };
+    const app_path = try appPathDirs(arena, placeholders, cfg.path);
+    const command = try resolveCommand(io, arena, placeholders, cfg, opts.command, app_path, system_root);
     const exe = command.exe;
     const command_line = try process.buildCommandLine(arena, exe, try std.mem.concat(arena, []const u8, &.{ command.args, opts.args }));
     const env = try buildEnv(arena, ctx.env, .{
         .id = cfg.id,
         .profile = profile,
+        .placeholders = placeholders,
         .app_path = app_path,
         .system_root = system_root,
         .app_env = cfg.env,
-        .overrides = opts.env,
+        .extra = settings.env,
     });
 
     if (ctx.verbose) {
         note("app      {s} {s} ({s})", .{ cfg.id, cfg.version, image.ref.manifest });
-        note("sandbox  {t}, network {s}", .{ opts.sandbox, if (network) "on" else "off" });
+        if (!saved.isEmpty()) note("override {f}", .{saved});
+        note("sandbox  {t}, network {s}", .{ sandbox, if (network) "on" else "off" });
         note("exe      {s}", .{exe});
         note("cmdline  {s}", .{command_line});
         note("cwd      {s}", .{cwd});
@@ -108,7 +110,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     }
 
     var security: ?win32.SECURITY_CAPABILITIES = null;
-    switch (opts.sandbox) {
+    switch (sandbox) {
         .soft => if (ctx.verbose) {
             for (grants.items) |g| if (g.path) |p|
                 note("note: soft sandbox doesn't enforce filesystem permissions; {s} is as reachable as any other path", .{p});
@@ -203,10 +205,13 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
 // ---------------------------------------------------------------------------
 // Command resolution and command lines
 
-fn appPathDirs(arena: Allocator, deploy_dir: []const u8, entries: []const []const u8) ![]const []const u8 {
+fn appPathDirs(arena: Allocator, placeholders: oci.Placeholders, entries: []const []const u8) ![]const []const u8 {
+    const deploy_dir = placeholders.app;
     var dirs: std.ArrayList([]const u8) = .empty;
     for (entries) |entry| {
-        const dir = if (std.mem.eql(u8, entry, "."))
+        const dir = if (oci.isPlaceholderPath(entry))
+            try placeholders.expand(arena, entry)
+        else if (std.mem.eql(u8, entry, "."))
             try arena.dupe(u8, deploy_dir)
         else
             try std.fs.path.join(arena, &.{ deploy_dir, entry });
@@ -227,21 +232,20 @@ const Command = struct {
 fn resolveCommand(
     io: Io,
     arena: Allocator,
-    deploy_dir: []const u8,
+    placeholders: oci.Placeholders,
     config: oci.AppConfig,
-    override: ?[]const u8,
+    requested: ?[]const u8,
     app_path: []const []const u8,
     system_root: []const u8,
 ) !Command {
-    const name = override orelse return .{ .exe = try appFile(arena, deploy_dir, config.command) };
+    const deploy_dir = placeholders.app;
+    const name = requested orelse return .{ .exe = try appFile(arena, deploy_dir, config.command) };
 
     var exported = config.exports.map.iterator();
     while (exported.next()) |e| {
         if (!std.ascii.eqlIgnoreCase(e.key_ptr.*, name)) continue;
         const args = try arena.alloc([]const u8, e.value_ptr.args.len);
-        for (args, e.value_ptr.args) |*arg, template| {
-            arg.* = try std.mem.replaceOwned(u8, arena, template, "${app}", deploy_dir);
-        }
+        for (args, e.value_ptr.args) |*arg, template| arg.* = try placeholders.expand(arena, template);
         return .{ .exe = try appFile(arena, deploy_dir, e.value_ptr.command), .args = args };
     }
 
@@ -295,10 +299,13 @@ const EnvVar = struct { name: []const u8, value: []const u8 };
 const EnvSpec = struct {
     id: []const u8,
     profile: Profile,
+    /// For the app's own variables; `extra` is used as given.
+    placeholders: oci.Placeholders,
     app_path: []const []const u8,
     system_root: []const u8,
     app_env: std.json.ArrayHashMap([]const u8),
-    overrides: []const []const u8,
+    /// "NAME=VALUE" from --env and overrides, set last.
+    extra: []const []const u8,
 };
 
 fn buildEnv(arena: Allocator, host: *const std.process.Environ.Map, spec: EnvSpec) !std.ArrayList(EnvVar) {
@@ -326,8 +333,8 @@ fn buildEnv(arena: Allocator, host: *const std.process.Environ.Map, spec: EnvSpe
     try setEnv(arena, &env, "ZIGSAW_ID", spec.id);
 
     var it = spec.app_env.map.iterator();
-    while (it.next()) |kv| try setEnv(arena, &env, kv.key_ptr.*, kv.value_ptr.*);
-    for (spec.overrides) |assignment| {
+    while (it.next()) |kv| try setEnv(arena, &env, kv.key_ptr.*, try spec.placeholders.expand(arena, kv.value_ptr.*));
+    for (spec.extra) |assignment| {
         const eq = std.mem.indexOfScalar(u8, assignment, '=') orelse
             return fail("--env expects NAME=VALUE, got \"{s}\"", .{assignment});
         try setEnv(arena, &env, assignment[0..eq], assignment[eq + 1 ..]);

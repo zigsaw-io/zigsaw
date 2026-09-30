@@ -1,5 +1,5 @@
-//! `zigsaw build`: assembles an app tree from a recipe's sources, packs it into
-//! an image in the local store, and installs it.
+//! `zigsaw build`: assembles an app tree from a recipe's sources and packs it
+//! into an image in the local store, ready to install.
 //!
 //! Sources are never unpacked to disk. The builder indexes the files each
 //! source contributes, then streams them from the downloaded files and zip
@@ -21,7 +21,7 @@ const zipfile = @import("zipfile.zig");
 const fail = Context.fail;
 const note = Context.note;
 
-pub fn build(ctx: *Context, recipe_path: []const u8) !void {
+pub fn build(ctx: *Context, recipe_path: []const u8) !install.Image {
     const io = ctx.io;
     const arena = ctx.arena;
 
@@ -66,17 +66,17 @@ pub fn build(ctx: *Context, recipe_path: []const u8) !void {
     try annotations.map.put(arena, "org.opencontainers.image.version", r.version);
     const manifest: oci.Manifest = .{
         .config = config_desc,
-        .layers = &.{layer_desc},
+        .layers = try arena.dupe(oci.Descriptor, &.{layer_desc}),
         .annotations = annotations,
     };
     const manifest_desc = try ctx.store.putBlob(arena, try oci.toJson(arena, manifest), oci.media_type.manifest);
 
-    try install.install(ctx, .{
+    return .{
         .manifest_digest = manifest_desc.digest,
         .manifest = manifest,
         .config = config,
         .source = try Io.Dir.cwd().realPathFileAlloc(io, recipe_path, arena),
-    });
+    };
 }
 
 /// Adds the paths a source contributes to `tree`. `file` holds its bytes.

@@ -273,7 +273,10 @@ fn follow(r: *Registry, req: Request, authorization: ?[]const u8) !Response {
         if (redirects == 5) return fail("{s}: too many redirects", .{req.url});
         const location = res.location orelse return fail("{s}: redirect without a location", .{current.url});
         current.url = try resolveUrl(r.ctx.arena, current.url, location);
-        if (!std.ascii.eqlIgnoreCase(authority(current.url), authority(req.url))) auth = null;
+        if (!std.ascii.eqlIgnoreCase(authority(current.url), authority(req.url))) {
+            auth = null;
+            if (r.ctx.verbose) Context.note("  redirected to {s}, without the registry token", .{authority(current.url)});
+        }
     }
 }
 
@@ -426,8 +429,11 @@ fn basicCredentials(r: *Registry) !?[]const u8 {
 }
 
 fn failNeedsLogin(r: *Registry) error{Failed} {
-    return fail("{f} needs credentials for {s}: set {s} and {s} (for ghcr.io, a GitHub token with the right package scopes)", .{
-        r.ref, r.actions, username_var, password_var,
+    // Registries answer a pull of a missing image the same way as a private
+    // one, so as not to reveal which exist.
+    const maybe_missing = if (std.mem.eql(u8, r.actions, "pull")) " doesn't exist, or" else "";
+    return fail("{f}{s} needs credentials for {s}: set {s} and {s} (for ghcr.io, a GitHub token with the right package scopes)", .{
+        r.ref, maybe_missing, r.actions, username_var, password_var,
     });
 }
 

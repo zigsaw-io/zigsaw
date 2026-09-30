@@ -40,6 +40,22 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run zigsaw");
     run_step.dependOn(&run_cmd.step);
 
+    // A driver for testing console events (Ctrl+C, closing the console); see
+    // tests/ctrlc.sh. Installed under zig-out\test, away from zigsaw.exe.
+    const ctrlc_mod = b.createModule(.{
+        .root_source_file = b.path("tests/ctrlc.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    ctrlc_mod.addImport("win32", b.createModule(.{
+        .root_source_file = b.path("src/win32.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    const ctrlc = b.addExecutable(.{ .name = "zigsaw-ctrlc", .root_module = ctrlc_mod });
+    const ctrlc_step = b.step("ctrlc-driver", "Build the console-event test driver used by tests/ctrlc.sh");
+    ctrlc_step.dependOn(&b.addInstallArtifact(ctrlc, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = exe_mod })).step);
     const shim_test_mod = b.createModule(.{
