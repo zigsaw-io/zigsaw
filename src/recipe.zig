@@ -48,9 +48,18 @@ pub const Recipe = struct {
     path: []const []const u8 = &.{"."},
     env: std.json.ArrayHashMap([]const u8) = .{},
     permissions: oci.Permissions = .{},
+    /// Commands to put on PATH. Without this, the app exports its command
+    /// under its file name (e.g. "rg" for rg.exe); `{}` exports nothing.
+    exports: ?std.json.ArrayHashMap(oci.Export) = null,
     sources: []const Source,
 
-    pub fn appConfig(r: Recipe) oci.AppConfig {
+    pub fn appConfig(r: Recipe, arena: std.mem.Allocator) !oci.AppConfig {
+        var exports: std.json.ArrayHashMap(oci.Export) = .{};
+        if (r.exports) |e| {
+            exports = e;
+        } else {
+            try exports.map.put(arena, oci.commandStem(r.command), .{ .command = r.command });
+        }
         return .{
             .id = r.id,
             .version = r.version,
@@ -58,6 +67,7 @@ pub const Recipe = struct {
             .path = r.path,
             .env = r.env,
             .permissions = r.permissions,
+            .exports = exports,
         };
     }
 };
@@ -70,25 +80,16 @@ pub fn parse(arena: std.mem.Allocator, file_name: []const u8, bytes: []const u8)
     const r = std.json.parseFromTokenSourceLeaky(Recipe, arena, &scanner, .{}) catch |err| {
         return fail("{s}:{d}:{d}: {t}", .{ file_name, diagnostics.getLine(), diagnostics.getColumn(), err });
     };
-    try validate(file_name, r);
+    // The same checks an image pulled from a registry gets.
+    try oci.validateConfig(file_name, try r.appConfig(arena));
+    try validateSources(file_name, r.sources);
     return r;
 }
 
-fn validate(file_name: []const u8, r: Recipe) error{Failed}!void {
-    if (!oci.isValidId(r.id))
-        return fail("{s}: id \"{s}\" must be 1-57 characters of letters, digits, '.', '-', '_'", .{ file_name, r.id });
-    if (r.version.len == 0)
-        return fail("{s}: version must not be empty", .{file_name});
-    if (!oci.isSafeRelPath(r.command))
-        return fail("{s}: command \"{s}\" must be a relative path inside the app", .{ file_name, r.command });
-    for (r.path) |p| if (!oci.isSafeRelPath(p))
-        return fail("{s}: path entry \"{s}\" must be a relative path inside the app", .{ file_name, p });
-    for (r.permissions.filesystem) |spec| if (oci.parseFsGrant(spec) == null)
-        return fail("{s}: filesystem permission \"{s}\" must be \"cwd\" or an absolute path, optionally with \":ro\"", .{ file_name, spec });
-    if (r.sources.len == 0)
+fn validateSources(file_name: []const u8, sources: []const Source) error{Failed}!void {
+    if (sources.len == 0)
         return fail("{s}: at least one source is required", .{file_name});
-
-    for (r.sources, 1..) |s, n| {
+    for (sources, 1..) |s, n| {
         if ((s.url == null) == (s.path == null))
             return fail("{s}: source {d} needs exactly one of \"url\" or \"path\"", .{ file_name, n });
         if (s.sha256) |h| if (!oci.isSha256Hex(h))
@@ -117,6 +118,10 @@ test "parse minimal recipe" {
     try std.testing.expectEqual(Source.Kind.file, r.sources[0].kind());
     try std.testing.expectEqualStrings("bb.exe", r.sources[0].fileName());
     try std.testing.expectEqual(false, r.permissions.network);
+
+    const cfg = try r.appConfig(arena_state.allocator());
+    try std.testing.expectEqual(1, cfg.exports.map.count());
+    try std.testing.expectEqualStrings("busybox.exe", cfg.exports.map.get("busybox").?.command);
 }
 
 test "zip kind is inferred" {

@@ -5,6 +5,7 @@
 //!   <root>\deploy\<hex>\          unpacked app tree, one per manifest digest
 //!   <root>\data\<id>\             per-app writable state, kept across runs
 //!   <root>\grants\<id>.txt        host paths whose ACLs name the app's AppContainer
+//!   <root>\bin\                   command shims for exported commands (see exports.zig)
 //!   <root>\cache\downloads\<hex>  fetched build sources, by sha256
 //!   <root>\tmp\                   staging area
 //!
@@ -15,6 +16,7 @@ const Store = @This();
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const acl = @import("acl.zig");
 const oci = @import("oci.zig");
 const layer = @import("layer.zig");
 const Context = @import("Context.zig");
@@ -22,8 +24,10 @@ const fail = Context.fail;
 
 io: Io,
 root: []const u8,
+/// Report step timings, as `zigsaw -v` asks for.
+verbose: bool = false,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "cache\\downloads", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "bin", "cache\\downloads", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|
@@ -85,9 +89,9 @@ pub fn putBlob(s: Store, arena: Allocator, bytes: []const u8, media_type: []cons
     };
 }
 
-/// Moves the file at `src` into the blob store and returns its descriptor.
-pub fn putBlobFile(s: Store, arena: Allocator, src: []const u8, media_type: []const u8) !oci.Descriptor {
-    const hash = try sha256File(s.io, src);
+/// Moves the file at `src`, whose contents hash to `hash`, into the blob
+/// store and returns its descriptor.
+pub fn putBlobFile(s: Store, arena: Allocator, src: []const u8, hash: FileHash, media_type: []const u8) !oci.Descriptor {
     const dest = try s.blobPath(arena, &hash.hex);
     if (try exists(s.io, dest)) {
         try Io.Dir.cwd().deleteFile(s.io, src);
@@ -122,6 +126,8 @@ pub const Ref = struct {
     id: []const u8,
     version: []const u8,
     manifest: []const u8,
+    /// Where the installed image came from: a recipe path or a registry reference.
+    source: ?[]const u8 = null,
 };
 
 fn refPath(s: Store, arena: Allocator, id: []const u8) ![]u8 {
@@ -193,7 +199,7 @@ pub fn loadImage(s: Store, arena: Allocator, id: []const u8) !Image {
         .ref = ref,
         .manifest = manifest,
         .config = config,
-        .deploy_dir = try s.ensureDeployed(arena, ref.manifest, manifest),
+        .deploy_dir = try s.deploy(arena, ref.manifest, manifest),
     };
 }
 
@@ -202,33 +208,38 @@ pub fn deployPath(s: Store, arena: Allocator, manifest_digest: []const u8) ![]u8
     return s.path(arena, &.{ "deploy", hex });
 }
 
-/// Moves an already-assembled app tree into place as the deployment of
-/// `manifest_digest`. If that deployment exists, it has the same contents, so
-/// `tree` is discarded instead.
-pub fn adoptDeployment(s: Store, arena: Allocator, manifest_digest: []const u8, tree: []const u8) ![]u8 {
+pub fn deleteDeployment(s: Store, arena: Allocator, manifest_digest: []const u8) !void {
     const dest = try s.deployPath(arena, manifest_digest);
-    if (try exists(s.io, dest)) {
-        try Io.Dir.cwd().deleteTree(s.io, tree);
-    } else {
-        try Io.Dir.rename(.cwd(), tree, .cwd(), dest, s.io);
-    }
-    return dest;
+    if (!try exists(s.io, dest)) return;
+    try acl.unprotect(arena, dest);
+    try Io.Dir.cwd().deleteTree(s.io, dest);
 }
 
-fn ensureDeployed(s: Store, arena: Allocator, manifest_digest: []const u8, manifest: oci.Manifest) ![]u8 {
+/// Unpacks an image's layers as its deployment, unless that already exists.
+/// Deployments are shared by every run, so they are protected from changes.
+pub fn deploy(s: Store, arena: Allocator, manifest_digest: []const u8, manifest: oci.Manifest) ![]u8 {
     const dest = try s.deployPath(arena, manifest_digest);
-    if (try exists(s.io, dest)) return dest;
+    if (try exists(s.io, dest)) {
+        // Cheap when already protected; covers deployments made before protection existed.
+        try acl.protect(arena, dest);
+        return dest;
+    }
 
     const work = try s.makeTmpDir(arena, "deploy");
     defer Io.Dir.cwd().deleteTree(s.io, work) catch {};
     const tree = try std.fs.path.join(arena, &.{ work, "app" });
+    var start = Io.Timestamp.now(s.io, .awake);
     for (manifest.layers) |desc| {
         if (!std.mem.eql(u8, desc.mediaType, oci.media_type.layer_tar))
             return fail("layer type {s} is not supported", .{desc.mediaType});
         const hex = oci.digestHex(desc.digest) orelse return fail("malformed digest \"{s}\"", .{desc.digest});
-        try layer.extract(s.io, try s.blobPath(arena, hex), tree);
+        try layer.extract(s.io, arena, try s.blobPath(arena, hex), tree);
     }
+    Context.reportTime(s.io, s.verbose, start, "  unpack layers", .{});
     try Io.Dir.rename(.cwd(), tree, .cwd(), dest, s.io);
+    start = Io.Timestamp.now(s.io, .awake);
+    try acl.protect(arena, dest);
+    Context.reportTime(s.io, s.verbose, start, "  protect", .{});
     return dest;
 }
 

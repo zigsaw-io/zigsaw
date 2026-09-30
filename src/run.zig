@@ -16,10 +16,12 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const win32 = @import("win32.zig");
+const acl = @import("acl.zig");
 const appcontainer = @import("appcontainer.zig");
 const oci = @import("oci.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const process = @import("process.zig");
 const fail = Context.fail;
 const note = Context.note;
 
@@ -84,8 +86,9 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
 
     const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
     const app_path = try appPathDirs(arena, image.deploy_dir, cfg.path);
-    const exe = try resolveCommand(io, arena, image.deploy_dir, cfg.command, opts.command, app_path, system_root);
-    const command_line = try buildCommandLine(arena, exe, opts.args);
+    const command = try resolveCommand(io, arena, image.deploy_dir, cfg, opts.command, app_path, system_root);
+    const exe = command.exe;
+    const command_line = try process.buildCommandLine(arena, exe, try std.mem.concat(arena, []const u8, &.{ command.args, opts.args }));
     const env = try buildEnv(arena, ctx.env, .{
         .id = cfg.id,
         .profile = profile,
@@ -119,7 +122,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         }),
     }
 
-    return spawn(arena, .{
+    return process.spawn(arena, .{
         .exe = exe,
         .command_line = command_line,
         .env_block = try encodeEnvBlock(arena, env.items),
@@ -161,7 +164,7 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     const arena = ctx.arena;
     const profile = try appcontainer.Profile.ensure(arena, id);
 
-    const Grant = struct { path: []const u8, access: appcontainer.Access, host: bool };
+    const Grant = struct { path: []const u8, access: acl.Access, host: bool };
     var wanted: std.ArrayList(Grant) = .empty;
     try wanted.append(arena, .{ .path = setup.deploy_dir, .access = .read_execute, .host = false });
     try wanted.append(arena, .{ .path = setup.data_dir, .access = .full, .host = false });
@@ -176,7 +179,7 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
         // them even if a later step fails.
         if (w.host) try ctx.store.recordGrant(arena, id, w.path);
         const start = Io.Timestamp.now(ctx.io, .awake);
-        const changed = try appcontainer.grant(arena, w.path, profile.sid, w.access);
+        const changed = try acl.grant(arena, w.path, profile.sid, w.access);
         if (changed and (w.host or ctx.verbose)) {
             note("granted {s} {t} access to {s} ({d} ms)", .{
                 profile.name, w.access, w.path, start.untilNow(ctx.io, .awake).toMilliseconds(),
@@ -213,27 +216,47 @@ fn appPathDirs(arena: Allocator, deploy_dir: []const u8, entries: []const []cons
     return dirs.items;
 }
 
+const Command = struct {
+    exe: []const u8,
+    /// Arguments that go before the caller's.
+    args: []const []const u8 = &.{},
+};
+
+/// What to run: the app's command, or with `--command`, one of the app's
+/// exports or an executable from the app or System32.
 fn resolveCommand(
     io: Io,
     arena: Allocator,
     deploy_dir: []const u8,
-    app_command: []const u8,
+    config: oci.AppConfig,
     override: ?[]const u8,
     app_path: []const []const u8,
     system_root: []const u8,
-) ![]const u8 {
-    const name = override orelse {
-        const exe = try std.fs.path.join(arena, &.{ deploy_dir, app_command });
-        std.mem.replaceScalar(u8, exe, '/', '\\');
-        return exe;
-    };
-    const resolved = try findCommand(io, arena, deploy_dir, name, app_path, system_root) orelse
-        return fail("command \"{s}\" not found in the app or in System32", .{name});
+) !Command {
+    const name = override orelse return .{ .exe = try appFile(arena, deploy_dir, config.command) };
 
+    var exported = config.exports.map.iterator();
+    while (exported.next()) |e| {
+        if (!std.ascii.eqlIgnoreCase(e.key_ptr.*, name)) continue;
+        const args = try arena.alloc([]const u8, e.value_ptr.args.len);
+        for (args, e.value_ptr.args) |*arg, template| {
+            arg.* = try std.mem.replaceOwned(u8, arena, template, "${app}", deploy_dir);
+        }
+        return .{ .exe = try appFile(arena, deploy_dir, e.value_ptr.command), .args = args };
+    }
+
+    const resolved = try findCommand(io, arena, deploy_dir, name, app_path, system_root) orelse
+        return fail("command \"{s}\" is not an export of the app, or an executable in it or in System32", .{name});
     const ext = std.fs.path.extension(resolved);
     if (std.ascii.eqlIgnoreCase(ext, ".bat") or std.ascii.eqlIgnoreCase(ext, ".cmd"))
         return fail("{s} is a batch file, which zigsaw can't start directly yet; run it through cmd instead: --command=cmd <app> /c {s} ...", .{ resolved, name });
-    return resolved;
+    return .{ .exe = resolved };
+}
+
+fn appFile(arena: Allocator, deploy_dir: []const u8, rel: []const u8) ![]u8 {
+    const p = try std.fs.path.join(arena, &.{ deploy_dir, rel });
+    std.mem.replaceScalar(u8, p, '/', '\\');
+    return p;
 }
 
 fn findCommand(
@@ -262,45 +285,6 @@ fn findCommand(
         if (try Store.exists(io, p)) return p;
     };
     return null;
-}
-
-/// Quotes arguments the way the Microsoft C runtime (and CommandLineToArgvW)
-/// parses them back.
-fn buildCommandLine(arena: Allocator, exe: []const u8, args: []const []const u8) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    try appendQuoted(arena, &out, exe);
-    for (args) |arg| {
-        try out.append(arena, ' ');
-        try appendQuoted(arena, &out, arg);
-    }
-    return out.items;
-}
-
-fn appendQuoted(arena: Allocator, out: *std.ArrayList(u8), arg: []const u8) !void {
-    if (arg.len > 0 and std.mem.indexOfAny(u8, arg, " \t\n\x0b\"") == null) {
-        return out.appendSlice(arena, arg);
-    }
-    try out.append(arena, '"');
-    var backslashes: usize = 0;
-    for (arg) |c| {
-        switch (c) {
-            '\\' => backslashes += 1,
-            '"' => {
-                // Backslashes before a quote are escapes, and so is the quote.
-                try out.appendNTimes(arena, '\\', backslashes * 2 + 1);
-                try out.append(arena, '"');
-                backslashes = 0;
-            },
-            else => {
-                try out.appendNTimes(arena, '\\', backslashes);
-                try out.append(arena, c);
-                backslashes = 0;
-            },
-        }
-    }
-    // Backslashes before the closing quote must be doubled.
-    try out.appendNTimes(arena, '\\', backslashes * 2);
-    try out.append(arena, '"');
 }
 
 // ---------------------------------------------------------------------------
@@ -378,120 +362,6 @@ fn encodeEnvBlock(arena: Allocator, vars: []EnvVar) ![]u16 {
     }
     try block.append(arena, 0);
     return block.items;
-}
-
-// ---------------------------------------------------------------------------
-// Process creation
-
-const SpawnSpec = struct {
-    exe: []const u8,
-    command_line: []const u8,
-    env_block: []const u16,
-    cwd: []const u8,
-    security: ?*const win32.SECURITY_CAPABILITIES,
-};
-
-fn spawn(arena: Allocator, spec: SpawnSpec) !u32 {
-    const job = win32.CreateJobObjectW(null, null) orelse return win32.lastErrorFail("CreateJobObjectW");
-    defer _ = win32.CloseHandle(job);
-    var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
-    limits.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (win32.SetInformationJobObject(job, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits))) == 0)
-        return win32.lastErrorFail("SetInformationJobObject");
-
-    // Hand the app our stdio handles and nothing else.
-    var std_handles: [3]?win32.HANDLE = .{ null, null, null };
-    var inherit: [3]win32.HANDLE = undefined;
-    var inherit_count: usize = 0;
-    for ([_]win32.DWORD{ win32.STD_INPUT_HANDLE, win32.STD_OUTPUT_HANDLE, win32.STD_ERROR_HANDLE }, 0..) |which, i| {
-        const h = win32.GetStdHandle(which) orelse continue;
-        if (h == win32.INVALID_HANDLE_VALUE) continue;
-        if (win32.SetHandleInformation(h, win32.HANDLE_FLAG_INHERIT, win32.HANDLE_FLAG_INHERIT) == 0) continue;
-        std_handles[i] = h;
-        if (std.mem.indexOfScalar(win32.HANDLE, inherit[0..inherit_count], h) == null) {
-            inherit[inherit_count] = h;
-            inherit_count += 1;
-        }
-    }
-
-    const attr_count: win32.DWORD = 1 + @as(win32.DWORD, @intFromBool(inherit_count > 0)) + @intFromBool(spec.security != null);
-    var attr_size: usize = 0;
-    _ = win32.InitializeProcThreadAttributeList(null, attr_count, 0, &attr_size);
-    const attrs = try arena.alignedAlloc(u8, .of(usize), attr_size);
-    if (win32.InitializeProcThreadAttributeList(attrs.ptr, attr_count, 0, &attr_size) == 0)
-        return win32.lastErrorFail("InitializeProcThreadAttributeList");
-    defer win32.DeleteProcThreadAttributeList(attrs.ptr);
-
-    // Assigning the job at creation means no child process can start outside it.
-    const jobs = [1]win32.HANDLE{job};
-    if (win32.UpdateProcThreadAttribute(attrs.ptr, 0, win32.PROC_THREAD_ATTRIBUTE_JOB_LIST, &jobs, @sizeOf(win32.HANDLE), null, null) == 0)
-        return win32.lastErrorFail("UpdateProcThreadAttribute(JOB_LIST)");
-    if (inherit_count > 0) {
-        if (win32.UpdateProcThreadAttribute(attrs.ptr, 0, win32.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &inherit, inherit_count * @sizeOf(win32.HANDLE), null, null) == 0)
-            return win32.lastErrorFail("UpdateProcThreadAttribute(HANDLE_LIST)");
-    }
-    if (spec.security) |security| {
-        if (win32.UpdateProcThreadAttribute(attrs.ptr, 0, win32.PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, security, @sizeOf(win32.SECURITY_CAPABILITIES), null, null) == 0)
-            return win32.lastErrorFail("UpdateProcThreadAttribute(SECURITY_CAPABILITIES)");
-    }
-
-    var startup: win32.STARTUPINFOEXW = .{
-        .StartupInfo = .{ .cb = @sizeOf(win32.STARTUPINFOEXW) },
-        .lpAttributeList = attrs.ptr,
-    };
-    if (inherit_count > 0) {
-        startup.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
-        startup.StartupInfo.hStdInput = std_handles[0];
-        startup.StartupInfo.hStdOutput = std_handles[1];
-        startup.StartupInfo.hStdError = std_handles[2];
-    }
-
-    var info: win32.PROCESS_INFORMATION = undefined;
-    if (win32.CreateProcessW(
-        try win32.wide(arena, spec.exe),
-        try win32.wide(arena, spec.command_line),
-        null,
-        null,
-        @intFromBool(inherit_count > 0),
-        win32.EXTENDED_STARTUPINFO_PRESENT | win32.CREATE_UNICODE_ENVIRONMENT,
-        spec.env_block.ptr,
-        try win32.wide(arena, spec.cwd),
-        &startup.StartupInfo,
-        &info,
-    ) == 0) return win32.lastErrorFail("CreateProcessW");
-    _ = win32.CloseHandle(info.hThread);
-    defer _ = win32.CloseHandle(info.hProcess);
-
-    // The app shares our console, so it receives Ctrl+C too and decides what
-    // to do; we keep waiting so we can report its exit code.
-    _ = win32.SetConsoleCtrlHandler(&ignoreCtrlC, win32.TRUE);
-
-    if (win32.WaitForSingleObject(info.hProcess, win32.INFINITE) != win32.WAIT_OBJECT_0)
-        return win32.lastErrorFail("WaitForSingleObject");
-    var code: win32.DWORD = 0;
-    if (win32.GetExitCodeProcess(info.hProcess, &code) == 0)
-        return win32.lastErrorFail("GetExitCodeProcess");
-    return code;
-}
-
-fn ignoreCtrlC(event: win32.DWORD) callconv(.winapi) win32.BOOL {
-    return if (event == win32.CTRL_C_EVENT or event == win32.CTRL_BREAK_EVENT) win32.TRUE else win32.FALSE;
-}
-
-test buildCommandLine {
-    const cases = [_]struct { args: []const []const u8, want: []const u8 }{
-        .{ .args = &.{"plain"}, .want = "C:\\app\\x.exe plain" },
-        .{ .args = &.{"two words"}, .want = "C:\\app\\x.exe \"two words\"" },
-        .{ .args = &.{""}, .want = "C:\\app\\x.exe \"\"" },
-        .{ .args = &.{"say \"hi\""}, .want = "C:\\app\\x.exe \"say \\\"hi\\\"\"" },
-        .{ .args = &.{"C:\\dir with space\\"}, .want = "C:\\app\\x.exe \"C:\\dir with space\\\\\"" },
-        .{ .args = &.{"a\\\\b"}, .want = "C:\\app\\x.exe a\\\\b" },
-    };
-    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena_state.deinit();
-    for (cases) |c| {
-        try std.testing.expectEqualStrings(c.want, try buildCommandLine(arena_state.allocator(), "C:\\app\\x.exe", c.args));
-    }
 }
 
 test encodeEnvBlock {

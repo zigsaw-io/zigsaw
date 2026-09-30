@@ -5,95 +5,172 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const Context = @import("Context.zig");
-const fail = Context.fail;
+const oci = @import("oci.zig");
 
-/// Writes the tree at `root_path` as a tar file at `out_path`.
-pub fn write(io: Io, arena: Allocator, root_path: []const u8, out_path: []const u8) !void {
-    var root = try Io.Dir.cwd().openDir(io, root_path, .{ .iterate = true });
-    defer root.close(io);
+/// Writes layer entries with canonical metadata. Callers must add entries in
+/// sorted path order, parents before children; with the fixed metadata, that
+/// makes the output depend only on the tree.
+pub const Writer = struct {
+    tar: std.tar.Writer,
 
-    const Entry = struct {
-        path: []const u8,
-        is_dir: bool,
-
-        fn lessThan(_: void, a: @This(), b: @This()) bool {
-            return std.mem.lessThan(u8, a.path, b.path);
-        }
-    };
-    var entries: std.ArrayList(Entry) = .empty;
-    var walker = try root.walk(arena);
-    defer walker.deinit();
-    while (try walker.next(io)) |e| {
-        const p = try arena.dupe(u8, e.path);
-        std.mem.replaceScalar(u8, p, '\\', '/');
-        switch (e.kind) {
-            .directory => try entries.append(arena, .{ .path = p, .is_dir = true }),
-            .file => try entries.append(arena, .{ .path = p, .is_dir = false }),
-            else => return fail("{s}: only regular files and directories are supported in an app tree", .{p}),
-        }
+    pub fn init(out: *Io.Writer) Writer {
+        return .{ .tar = .{ .underlying_writer = out } };
     }
-    std.mem.sort(Entry, entries.items, {}, Entry.lessThan);
 
-    var out = try Io.Dir.cwd().createFile(io, out_path, .{});
-    defer out.close(io);
-    var out_buf: [64 * 1024]u8 = undefined;
-    var out_writer = out.writer(io, &out_buf);
-    var tar: std.tar.Writer = .{ .underlying_writer = &out_writer.interface };
-
-    var read_buf: [64 * 1024]u8 = undefined;
-    for (entries.items) |e| {
-        if (e.is_dir) {
-            try tar.writeDir(e.path, .{ .mode = 0o755 });
-            continue;
-        }
-        var file = try root.openFile(io, e.path, .{});
-        defer file.close(io);
-        var reader = file.reader(io, &read_buf);
-        try tar.writeFile(e.path, &reader, 0);
+    /// `path` is '/'-separated and relative.
+    pub fn addDir(w: *Writer, path: []const u8) !void {
+        try w.tar.writeDir(path, .{ .mode = 0o755 });
     }
-    // Zig's reader doesn't need the end-of-archive blocks, but other tar readers expect them.
-    try tar.finishPedantically();
-    try out_writer.interface.flush();
-}
+
+    /// Streams exactly `size` bytes from `content` into the layer.
+    pub fn addFile(w: *Writer, path: []const u8, size: u64, content: *Io.Reader) !void {
+        try w.tar.writeFileStream(path, size, content, .{});
+    }
+
+    /// Zig's tar reader doesn't need the end-of-archive blocks, but other
+    /// readers expect them.
+    pub fn finish(w: *Writer) !void {
+        try w.tar.finishPedantically();
+    }
+};
 
 /// Extracts the tar file at `tar_path` into `dest_path`, creating it if needed.
-pub fn extract(io: Io, tar_path: []const u8, dest_path: []const u8) !void {
+///
+/// One pass creates the directories and notes where each file's bytes are;
+/// then several workers create the files in parallel. Creating a file is slow
+/// on Windows, where Defender scans each one, and that time overlaps well.
+pub fn extract(io: Io, arena: Allocator, tar_path: []const u8, dest_path: []const u8) !void {
     try Io.Dir.cwd().createDirPath(io, dest_path);
     var dest = try Io.Dir.cwd().openDir(io, dest_path, .{});
     defer dest.close(io);
+
+    const files = try indexAndCreateDirs(io, arena, tar_path, dest);
+    if (files.len == 0) return;
+
+    const cpus = std.Thread.getCpuCount() catch 4;
+    const workers = try arena.alloc(ExtractWorker, @min(files.len, cpus, max_extract_workers));
+    var next: std.atomic.Value(usize) = .init(0);
+    for (workers) |*w| w.* = .{
+        .io = io,
+        .tar_path = tar_path,
+        .dest = dest,
+        .files = files,
+        .next = &next,
+        .read_buf = try arena.alloc(u8, 64 * 1024),
+        .write_buf = try arena.alloc(u8, 64 * 1024),
+    };
+
+    var group: Io.Group = .init;
+    for (workers) |*w| group.concurrent(io, ExtractWorker.run, .{w}) catch w.run();
+    group.await(io) catch |err| return err;
+    for (workers) |w| if (w.err) |err| return err;
+}
+
+/// Measured on zig's 19.5k files: 1 worker 14 s, 4 workers 8 s, and no real
+/// gain beyond that, since Defender's scanning becomes the bottleneck.
+const max_extract_workers = 4;
+
+const FileEntry = struct {
+    /// '/'-separated, relative to the destination.
+    name: []const u8,
+    /// Where the file's bytes start in the tar.
+    offset: u64,
+    size: u64,
+};
+
+fn indexAndCreateDirs(io: Io, arena: Allocator, tar_path: []const u8, dest: Io.Dir) ![]const FileEntry {
     var file = try Io.Dir.cwd().openFile(io, tar_path, .{});
     defer file.close(io);
     var buf: [64 * 1024]u8 = undefined;
     var reader = file.reader(io, &buf);
-    try std.tar.extract(io, dest, &reader.interface, .{ .mode_mode = .ignore });
+    var name_buf: [Io.Dir.max_path_bytes]u8 = undefined;
+    var link_buf: [Io.Dir.max_path_bytes]u8 = undefined;
+    var it: std.tar.Iterator = .init(&reader.interface, .{ .file_name_buffer = &name_buf, .link_name_buffer = &link_buf });
+
+    var files: std.ArrayList(FileEntry) = .empty;
+    var dirs: std.StringHashMapUnmanaged(void) = .empty;
+    while (try it.next()) |entry| {
+        const name = std.mem.trimEnd(u8, entry.name, "/");
+        if (!oci.isSafeRelPath(name)) return error.TarBadPath;
+        switch (entry.kind) {
+            .directory => try createDirOnce(io, arena, dest, &dirs, name),
+            .file => {
+                if (std.fs.path.dirnamePosix(name)) |parent| try createDirOnce(io, arena, dest, &dirs, parent);
+                // The iterator skips the file's bytes on the next call; the
+                // workers read them later from this offset.
+                try files.append(arena, .{ .name = try arena.dupe(u8, name), .offset = reader.logicalPos(), .size = entry.size });
+            },
+            .sym_link => return error.TarSymlinkUnsupported,
+        }
+    }
+    return files.items;
 }
 
-test "layers are deterministic and round-trip" {
+fn createDirOnce(io: Io, arena: Allocator, dest: Io.Dir, created: *std.StringHashMapUnmanaged(void), name: []const u8) !void {
+    const gop = try created.getOrPut(arena, name);
+    if (gop.found_existing) return;
+    gop.key_ptr.* = try arena.dupe(u8, name);
+    try dest.createDirPath(io, name);
+}
+
+const ExtractWorker = struct {
+    io: Io,
+    tar_path: []const u8,
+    dest: Io.Dir,
+    files: []const FileEntry,
+    /// Index of the next file to take, shared by all workers.
+    next: *std.atomic.Value(usize),
+    read_buf: []u8,
+    write_buf: []u8,
+    err: ?anyerror = null,
+
+    fn run(w: *ExtractWorker) void {
+        w.extractFiles() catch |err| {
+            w.err = err;
+            // Make the other workers stop early.
+            _ = w.next.swap(w.files.len, .monotonic);
+        };
+    }
+
+    fn extractFiles(w: *ExtractWorker) !void {
+        const io = w.io;
+        var tar = try Io.Dir.cwd().openFile(io, w.tar_path, .{});
+        defer tar.close(io);
+        var reader = tar.reader(io, w.read_buf);
+        while (true) {
+            const i = w.next.fetchAdd(1, .monotonic);
+            if (i >= w.files.len) return;
+            const entry = w.files[i];
+            try reader.seekTo(entry.offset);
+            var out = try w.dest.createFile(io, entry.name, .{ .exclusive = true });
+            defer out.close(io);
+            var writer = out.writer(io, w.write_buf);
+            try reader.interface.streamExact64(&writer.interface, entry.size);
+            try writer.interface.flush();
+        }
+    }
+};
+
+test "layers round-trip" {
     const io = std.testing.io;
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
+    var out: Io.Writer.Allocating = .init(arena);
+    var w: Writer = .init(&out.writer);
+    try w.addDir("bin");
+    var content: Io.Reader = .fixed("MZ fake");
+    try w.addFile("bin/tool.exe", 7, &content);
+    try w.finish();
+
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "layer.tar", .data = out.written() });
     const base = try tmp.dir.realPathFileAlloc(io, ".", arena);
-
-    const tree = try std.fs.path.join(arena, &.{ base, "tree" });
-    try Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ tree, "bin" }));
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ tree, "bin", "tool.exe" }), .data = "MZ fake" });
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ tree, "README" }), .data = "hi" });
-
-    const a = try std.fs.path.join(arena, &.{ base, "a.tar" });
-    const b = try std.fs.path.join(arena, &.{ base, "b.tar" });
-    try write(io, arena, tree, a);
-    try write(io, arena, tree, b);
-    const a_bytes = try Io.Dir.cwd().readFileAlloc(io, a, arena, .unlimited);
-    const b_bytes = try Io.Dir.cwd().readFileAlloc(io, b, arena, .unlimited);
-    try std.testing.expectEqualSlices(u8, a_bytes, b_bytes);
-
-    const out = try std.fs.path.join(arena, &.{ base, "out" });
-    try extract(io, a, out);
-    const got = try Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ out, "bin", "tool.exe" }), arena, .unlimited);
+    const tar_path = try std.fs.path.join(arena, &.{ base, "layer.tar" });
+    const dest = try std.fs.path.join(arena, &.{ base, "out" });
+    try extract(io, arena, tar_path, dest);
+    const got = try Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ dest, "bin", "tool.exe" }), arena, .unlimited);
     try std.testing.expectEqualStrings("MZ fake", got);
 }

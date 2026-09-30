@@ -1,0 +1,13 @@
+{
+  "id": "org.git_scm.MinGit",
+  "version": "2.56.0.windows.1",
+  "command": "cmd/git.exe",
+  "path": ["cmd"],
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "sources": [
+    {
+      "url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.1/MinGit-2.56.0-64-bit.zip",
+      "sha256": "064b440ff870ed5198527e8f3a92cdf5bd2fd0fedf5e718af95e3fdaddeff718"
+    }
+  ]
+}

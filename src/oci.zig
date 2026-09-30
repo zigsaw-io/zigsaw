@@ -5,6 +5,8 @@
 //! storable in any OCI registry without zigsaw-specific server support.
 
 const std = @import("std");
+const Context = @import("Context.zig");
+const fail = Context.fail;
 
 pub const media_type = struct {
     pub const manifest = "application/vnd.oci.image.manifest.v1+json";
@@ -35,6 +37,16 @@ pub const Permissions = struct {
     filesystem: []const []const u8 = &.{},
 };
 
+/// A command an app provides, which `zigsaw build` puts on the user's PATH as
+/// a shim.
+pub const Export = struct {
+    /// Executable to run, relative to the app root.
+    command: []const u8,
+    /// Arguments placed before the caller's. "${app}" expands to the app's
+    /// directory, e.g. to run a script that ships with the app.
+    args: []const []const u8 = &.{},
+};
+
 /// The config blob of an image.
 pub const AppConfig = struct {
     id: []const u8,
@@ -45,6 +57,8 @@ pub const AppConfig = struct {
     path: []const []const u8 = &.{"."},
     env: std.json.ArrayHashMap([]const u8) = .{},
     permissions: Permissions = .{},
+    /// Commands the app provides, by name.
+    exports: std.json.ArrayHashMap(Export) = .{},
 };
 
 pub fn toJson(gpa: std.mem.Allocator, value: anytype) ![]u8 {
@@ -80,6 +94,49 @@ pub fn isValidId(id: []const u8) bool {
         else => return false,
     };
     return true;
+}
+
+/// Checks what zigsaw relies on in an app config: names that become paths
+/// stay plain, and commands stay inside the app. Configs come from recipes and
+/// from registries, so this runs on both. `what` names the source in messages.
+pub fn validateConfig(what: []const u8, c: AppConfig) error{Failed}!void {
+    if (!isValidId(c.id))
+        return fail("{s}: id \"{s}\" must be 1-57 characters of letters, digits, '.', '-', '_'", .{ what, c.id });
+    if (c.version.len == 0)
+        return fail("{s}: version must not be empty", .{what});
+    if (!isSafeRelPath(c.command))
+        return fail("{s}: command \"{s}\" must be a relative path inside the app", .{ what, c.command });
+    for (c.path) |p| if (!isSafeRelPath(p))
+        return fail("{s}: path entry \"{s}\" must be a relative path inside the app", .{ what, p });
+    for (c.permissions.filesystem) |spec| if (parseFsGrant(spec) == null)
+        return fail("{s}: filesystem permission \"{s}\" must be \"cwd\" or an absolute path, optionally with \":ro\"", .{ what, spec });
+    var it = c.exports.map.iterator();
+    while (it.next()) |e| {
+        if (!isValidExportName(e.key_ptr.*))
+            return fail("{s}: export name \"{s}\" must be letters, digits, '.', '-', '_' (and not zigsaw's own)", .{ what, e.key_ptr.* });
+        if (!isSafeRelPath(e.value_ptr.command))
+            return fail("{s}: export {s} command \"{s}\" must be a relative path inside the app", .{ what, e.key_ptr.*, e.value_ptr.command });
+    }
+}
+
+/// Export names become file names in the shim directory, so they are plain
+/// and can't shadow zigsaw's own executables.
+pub fn isValidExportName(name: []const u8) bool {
+    if (name.len == 0 or name.len > 64 or name[0] == '.') return false;
+    for (name) |c| switch (c) {
+        'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_' => {},
+        else => return false,
+    };
+    for ([_][]const u8{ "zigsaw", "zigsaw-shim" }) |reserved| {
+        if (std.ascii.eqlIgnoreCase(name, reserved)) return false;
+    }
+    return true;
+}
+
+/// The default export name for a command: its file name without extension.
+pub fn commandStem(command: []const u8) []const u8 {
+    const base = command[if (std.mem.lastIndexOfAny(u8, command, "/\\")) |i| i + 1 else 0..];
+    return base[0 .. std.mem.lastIndexOfScalar(u8, base, '.') orelse base.len];
 }
 
 /// A path inside the app tree: relative, no "..", no drive or stream syntax.
@@ -123,6 +180,21 @@ test isValidId {
     try std.testing.expect(!isValidId("has space"));
     try std.testing.expect(!isValidId("a/b"));
     try std.testing.expect(!isValidId("x" ** 58));
+}
+
+test isValidExportName {
+    try std.testing.expect(isValidExportName("node"));
+    try std.testing.expect(isValidExportName("python3.14"));
+    try std.testing.expect(!isValidExportName("Zigsaw"));
+    try std.testing.expect(!isValidExportName("a/b"));
+    try std.testing.expect(!isValidExportName(".hidden"));
+    try std.testing.expect(!isValidExportName(""));
+}
+
+test commandStem {
+    try std.testing.expectEqualStrings("git", commandStem("cmd/git.exe"));
+    try std.testing.expectEqualStrings("rg", commandStem("rg.exe"));
+    try std.testing.expectEqualStrings("tool", commandStem("bin\\tool"));
 }
 
 test isSafeRelPath {

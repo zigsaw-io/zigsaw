@@ -2,8 +2,11 @@ const std = @import("std");
 const Io = std.Io;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const acl = @import("acl.zig");
 const appcontainer = @import("appcontainer.zig");
 const builder = @import("builder.zig");
+const exports = @import("exports.zig");
+const remote = @import("remote.zig");
 const runtime = @import("run.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
@@ -13,13 +16,21 @@ const usage =
     \\usage: zigsaw [-v|--verbose] <command> [options]
     \\
     \\commands:
-    \\  build <recipe.json>             build an app from a recipe and install it
+    \\  build <recipe.json>             build an app from a recipe, install it and its commands
+    \\  pull <image>                    install an app and its commands from a registry
+    \\  push <app-id> <image>           publish an installed app to a registry
     \\  run [options] <app-id> [args]   run an installed app
-    \\  list                            list installed apps
-    \\  rm [--delete-data] <app-id>     uninstall an app
+    \\  list                            list installed apps and their commands
+    \\  rm [--delete-data] <app-id>     uninstall an app and its commands
+    \\
+    \\An image is <registry>/<repository>[:tag][@digest], e.g. ghcr.io/owner/node:24.21.0.
+    \\push tags with the app's version unless given a tag. Registry credentials, needed
+    \\to push and for private images, come from ZIGSAW_REGISTRY_USERNAME and
+    \\ZIGSAW_REGISTRY_PASSWORD.
     \\
     \\run options:
-    \\  --command=<exe>                 run another executable from the app, or from System32
+    \\  --command=<name>                run one of the app's exported commands, or another
+    \\                                  executable from the app or System32
     \\  --sandbox=soft|appcontainer     soft (default) shapes the environment; appcontainer
     \\                                  also enforces the app's permissions
     \\  --filesystem=<cwd|path>[:ro]    grant access to a host location
@@ -68,9 +79,20 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     }
 
     ctx.store = try .open(ctx.io, ctx.arena, ctx.env);
+    ctx.store.verbose = ctx.verbose;
     if (std.mem.eql(u8, command, "build")) {
         if (rest.len != 1) return usageError();
         try builder.build(ctx, rest[0]);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "pull")) {
+        if (rest.len != 1) return usageError();
+        try remote.pull(ctx, rest[0]);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "push")) {
+        if (rest.len != 2) return usageError();
+        try remote.push(ctx, rest[0], rest[1]);
         return 0;
     }
     if (std.mem.eql(u8, command, "run")) return runtime.run(ctx, try parseRunOptions(ctx, rest));
@@ -131,6 +153,7 @@ fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
         }
         if (std.mem.eql(u8, name, "verbose") and eq == null) {
             ctx.verbose = true;
+            ctx.store.verbose = true;
             continue;
         }
         const value = if (eq) |e| arg[e + 1 ..] else blk: {
@@ -165,14 +188,18 @@ fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
 }
 
 fn list(ctx: *Context) !void {
-    const refs = try ctx.store.listRefs(ctx.arena);
+    const arena = ctx.arena;
+    const refs = try ctx.store.listRefs(arena);
+    const shims = try exports.list(ctx);
     var buf: [4096]u8 = undefined;
     var stdout = Io.File.stdout().writer(ctx.io, &buf);
     const w = &stdout.interface;
-    try w.print("{s:<32} {s:<20} {s}\n", .{ "ID", "VERSION", "MANIFEST" });
+    try w.print("{s:<32} {s:<20} {s:<20} {s}\n", .{ "ID", "VERSION", "MANIFEST", "EXPORTS" });
     for (refs) |ref| {
         const short = ref.manifest[0..@min(ref.manifest.len, "sha256:".len + 12)];
-        try w.print("{s:<32} {s:<20} {s}\n", .{ ref.id, ref.version, short });
+        var names: std.ArrayList([]const u8) = .empty;
+        for (shims) |s| if (std.mem.eql(u8, s.sidecar.app, ref.id)) try names.append(arena, s.name);
+        try w.print("{s:<32} {s:<20} {s:<20} {s}\n", .{ ref.id, ref.version, short, try std.mem.join(arena, ", ", names.items) });
     }
     try w.flush();
 }
@@ -183,13 +210,18 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     const store = ctx.store;
     const ref = try store.readRef(arena, id) orelse return fail("{s} is not installed", .{id});
 
+    const removed_exports = try exports.removeAll(ctx, id);
+    if (removed_exports.len > 0) note("removed exports {s}", .{try std.mem.join(arena, ", ", removed_exports)});
+
     // Undo ACL grants on host paths made for the app's AppContainer.
     const host_grants = try store.readGrants(arena, id);
     if (host_grants.len > 0) {
         const profile = try appcontainer.Profile.ensure(arena, id);
         for (host_grants) |p| {
-            appcontainer.revoke(arena, p, profile.sid) catch |err| switch (err) {
-                error.Failed => continue, // Logged; the path may be gone.
+            // A deleted path took its ACL with it.
+            if (!try Store.exists(io, p)) continue;
+            acl.revoke(arena, p, profile.sid) catch |err| switch (err) {
+                error.Failed => continue, // Logged; keep undoing the rest.
                 else => |e| return e,
             };
             note("revoked {s} access to {s}", .{ profile.name, p });
@@ -204,15 +236,21 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     for (try store.listRefs(arena)) |other| {
         if (std.mem.eql(u8, other.manifest, ref.manifest)) shared = true;
     }
-    if (!shared) try Io.Dir.cwd().deleteTree(io, try store.deployPath(arena, ref.manifest));
+    if (!shared) try store.deleteDeployment(arena, ref.manifest);
     if (delete_data) try Io.Dir.cwd().deleteTree(io, try store.path(arena, &.{ "data", id }));
 
     note("removed {s} {s}{s}", .{ id, ref.version, if (delete_data) " and its data" else "" });
 }
 
 test {
+    _ = @import("builder.zig");
+    _ = @import("exports.zig");
     _ = @import("oci.zig");
+    _ = @import("process.zig");
     _ = @import("recipe.zig");
+    _ = @import("Registry.zig");
     _ = @import("layer.zig");
     _ = @import("run.zig");
+    _ = @import("Sidecar.zig");
+    _ = @import("zipfile.zig");
 }

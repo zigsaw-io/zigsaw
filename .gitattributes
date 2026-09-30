@@ -1,0 +1,10 @@
+# Keep LF line endings on checkout, whatever core.autocrlf says: bash can't
+# run scripts with CRLF, and zig fmt writes (and checks for) LF.
+*.sh  text eol=lf
+*.zig text eol=lf
+*.zon text eol=lf
+*.json text eol=lf
+*.md  text eol=lf
+
+# Test fixtures are compared byte for byte.
+src/testdata/** binary

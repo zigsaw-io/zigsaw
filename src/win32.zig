@@ -79,6 +79,23 @@ pub extern "kernel32" fn GetStdHandle(which: DWORD) callconv(.winapi) ?HANDLE;
 pub extern "kernel32" fn SetHandleInformation(h: HANDLE, mask: DWORD, flags: DWORD) callconv(.winapi) BOOL;
 pub extern "kernel32" fn LocalFree(mem: ?*anyopaque) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn ExitProcess(code: u32) callconv(.winapi) noreturn;
+pub extern "kernel32" fn GetCommandLineW() callconv(.winapi) LPWSTR;
+pub const GENERIC_READ: DWORD = 0x80000000;
+pub const FILE_SHARE_READ: DWORD = 0x1;
+pub const OPEN_EXISTING: DWORD = 3;
+pub extern "kernel32" fn CreateFileW(
+    name: LPCWSTR,
+    access: DWORD,
+    share: DWORD,
+    security: ?*anyopaque,
+    disposition: DWORD,
+    flags: DWORD,
+    template: ?HANDLE,
+) callconv(.winapi) HANDLE;
+pub extern "kernel32" fn WriteFile(file: HANDLE, buffer: [*]const u8, to_write: DWORD, written: ?*DWORD, overlapped: ?*anyopaque) callconv(.winapi) BOOL;
+pub extern "kernel32" fn ReadFile(file: HANDLE, buffer: [*]u8, to_read: DWORD, read: ?*DWORD, overlapped: ?*anyopaque) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetModuleFileNameW(module: ?*anyopaque, file_name: [*]u16, size: DWORD) callconv(.winapi) DWORD;
+pub extern "kernel32" fn SetEnvironmentVariableW(name: LPCWSTR, value: ?LPCWSTR) callconv(.winapi) BOOL;
 pub extern "kernel32" fn SetConsoleCtrlHandler(
     handler: ?*const fn (DWORD) callconv(.winapi) BOOL,
     add: BOOL,
@@ -243,6 +260,30 @@ pub const EXPLICIT_ACCESS_W = extern struct {
     Trustee: TRUSTEE_W,
 };
 
+pub const DENY_ACCESS: c_int = 3;
+pub const ACCESS_DENIED_ACE_TYPE: u8 = 1;
+pub const INHERITED_ACE: u8 = 0x10;
+/// FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_DELETE_CHILD |
+/// FILE_WRITE_ATTRIBUTES | DELETE: everything that changes a file or a directory's entries.
+pub const FILE_MODIFY: DWORD = 0x00010156;
+
+pub const TOKEN_QUERY: DWORD = 0x0008;
+pub const TokenUser: c_int = 1;
+pub const TOKEN_USER = extern struct {
+    User: SID_AND_ATTRIBUTES,
+};
+
+pub extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
+pub extern "advapi32" fn OpenProcessToken(process: HANDLE, access: DWORD, token: *?HANDLE) callconv(.winapi) BOOL;
+pub extern "advapi32" fn GetTokenInformation(
+    token: HANDLE,
+    class: c_int,
+    info: ?*anyopaque,
+    length: DWORD,
+    return_length: *DWORD,
+) callconv(.winapi) BOOL;
+pub extern "advapi32" fn DeleteAce(acl: *ACL, index: DWORD) callconv(.winapi) BOOL;
+
 pub extern "advapi32" fn FreeSid(sid: PSID) callconv(.winapi) ?*anyopaque;
 pub extern "advapi32" fn EqualSid(a: PSID, b: PSID) callconv(.winapi) BOOL;
 pub extern "advapi32" fn ConvertStringSidToSidW(string_sid: LPCWSTR, sid: *?PSID) callconv(.winapi) BOOL;
@@ -280,6 +321,14 @@ pub extern "advapi32" fn SetEntriesInAclW(
 /// null-terminated UTF-16 string.
 pub fn wide(gpa: std.mem.Allocator, s: []const u8) ![:0]u16 {
     return std.unicode.wtf8ToWtf16LeAllocZ(gpa, s);
+}
+
+/// The full path of the running executable, as WTF-8.
+pub fn selfExePath(gpa: std.mem.Allocator) ![]u8 {
+    var buf: [32 * 1024]u16 = undefined;
+    const len = GetModuleFileNameW(null, &buf, buf.len);
+    if (len == 0 or len >= buf.len) return lastErrorFail("GetModuleFileNameW");
+    return std.unicode.wtf16LeToWtf8Alloc(gpa, buf[0..len]);
 }
 
 /// Logs the calling thread's last Win32 error and returns `error.Failed`
