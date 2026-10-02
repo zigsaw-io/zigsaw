@@ -87,8 +87,17 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const placeholders: oci.Placeholders = .{ .app = image.deploy_dir, .data = data_dir };
     const app_path = try appPathDirs(arena, placeholders, cfg.path);
     const command = try resolveCommand(io, arena, placeholders, cfg, opts.command, app_path, system_root);
-    const exe = command.exe;
-    const command_line = try process.buildCommandLine(arena, exe, try std.mem.concat(arena, []const u8, &.{ command.args, opts.args }));
+    const args = try std.mem.concat(arena, []const u8, &.{ command.args, opts.args });
+    // Batch files run through cmd.exe; System32's, not ComSpec's.
+    const exe = if (command.batch) try std.fmt.allocPrint(arena, "{s}\\System32\\cmd.exe", .{system_root}) else command.exe;
+    const command_line = if (command.batch)
+        process.buildBatchCommandLine(arena, exe, command.exe, args) catch |err| switch (err) {
+            error.InvalidBatchArgument => return fail("{s} is a batch file, and cmd.exe can't pass it an argument with a line break or a NUL character", .{command.exe}),
+            error.InvalidBatchScript => return fail("{s} can't be run as a batch file", .{command.exe}),
+            error.OutOfMemory => |e| return e,
+        }
+    else
+        try process.buildCommandLine(arena, exe, args);
     const env = try buildEnv(arena, ctx.env, .{
         .id = cfg.id,
         .profile = profile,
@@ -104,6 +113,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         if (!saved.isEmpty()) note("override {f}", .{saved});
         note("sandbox  {t}, network {s}", .{ sandbox, if (network) "on" else "off" });
         note("exe      {s}", .{exe});
+        if (command.batch) note("script   {s}", .{command.exe});
         note("cmdline  {s}", .{command_line});
         note("cwd      {s}", .{cwd});
         for (env.items) |kv| note("env      {s}={s}", .{ kv.name, kv.value });
@@ -222,9 +232,21 @@ fn appPathDirs(arena: Allocator, placeholders: oci.Placeholders, entries: []cons
 }
 
 const Command = struct {
+    /// The executable, or the batch file.
     exe: []const u8,
     /// Arguments that go before the caller's.
     args: []const []const u8 = &.{},
+    /// A .bat or .cmd file, which runs through cmd.exe.
+    batch: bool = false,
+
+    fn init(exe: []const u8, args: []const []const u8) Command {
+        const ext = std.fs.path.extension(exe);
+        return .{
+            .exe = exe,
+            .args = args,
+            .batch = std.ascii.eqlIgnoreCase(ext, ".bat") or std.ascii.eqlIgnoreCase(ext, ".cmd"),
+        };
+    }
 };
 
 /// What to run: the app's command, or with `--command`, one of the app's
@@ -239,22 +261,19 @@ fn resolveCommand(
     system_root: []const u8,
 ) !Command {
     const deploy_dir = placeholders.app;
-    const name = requested orelse return .{ .exe = try appFile(arena, deploy_dir, config.command) };
+    const name = requested orelse return .init(try appFile(arena, deploy_dir, config.command), &.{});
 
     var exported = config.exports.map.iterator();
     while (exported.next()) |e| {
         if (!std.ascii.eqlIgnoreCase(e.key_ptr.*, name)) continue;
         const args = try arena.alloc([]const u8, e.value_ptr.args.len);
         for (args, e.value_ptr.args) |*arg, template| arg.* = try placeholders.expand(arena, template);
-        return .{ .exe = try appFile(arena, deploy_dir, e.value_ptr.command), .args = args };
+        return .init(try appFile(arena, deploy_dir, e.value_ptr.command), args);
     }
 
     const resolved = try findCommand(io, arena, deploy_dir, name, app_path, system_root) orelse
-        return fail("command \"{s}\" is not an export of the app, or an executable in it or in System32", .{name});
-    const ext = std.fs.path.extension(resolved);
-    if (std.ascii.eqlIgnoreCase(ext, ".bat") or std.ascii.eqlIgnoreCase(ext, ".cmd"))
-        return fail("{s} is a batch file, which zigsaw can't start directly yet; run it through cmd instead: --command=cmd <app> /c {s} ...", .{ resolved, name });
-    return .{ .exe = resolved };
+        return fail("command \"{s}\" is not an export of the app, or an executable or batch file in it or in System32", .{name});
+    return .init(resolved, &.{});
 }
 
 fn appFile(arena: Allocator, deploy_dir: []const u8, rel: []const u8) ![]u8 {

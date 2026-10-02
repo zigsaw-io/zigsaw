@@ -64,7 +64,7 @@ fn updateApp(ctx: *Context, ref: Store.Ref) !void {
         return fail("{s}: {s} now provides {s}; build or pull that explicitly", .{ ref.id, source, image.config.id });
     try install.install(ctx, image);
     note("updated {s} {s} -> {s} ({s} -> {s})", .{
-        ref.id,                         ref.version,                              image.config.version,
+        ref.id,                        ref.version,                            image.config.version,
         oci.shortDigest(ref.manifest), oci.shortDigest(image.manifest_digest),
     });
 }

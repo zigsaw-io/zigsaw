@@ -141,8 +141,9 @@ npm_global() {
         [ -f "$ZIGSAW_HOME\\data\\$NODE\\npm\\node_modules\\semver\\package.json" ]
 }
 expect ok ok "npm install -g into data dir" npm_global
-global_bin() { [ "$(run --command=cmd $NODE /c semver 1.2.3 | tr -d '\r')" = 1.2.3 ]; }
-expect ok ok "global package's command on PATH" global_bin
+# Its command is semver.cmd, a batch file in ${data}\npm.
+global_bin() { [ "$(run --command=semver $NODE 1.2.3 | tr -d '\r')" = 1.2.3 ]; }
+expect ok ok "global package's .cmd command" global_bin
 
 tool python
 echo 'print("hi")' >"$work\\python\\soft\\a.py"

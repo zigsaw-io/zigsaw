@@ -56,6 +56,16 @@ pub fn build(b: *std.Build) void {
     const ctrlc_step = b.step("ctrlc-driver", "Build the console-event test driver used by tests/ctrlc.sh");
     ctrlc_step.dependOn(&b.addInstallArtifact(ctrlc, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // Prints its arguments, for checking what reaches a program behind a
+    // batch file; see tests/batch.sh. Also installed under zig-out\test.
+    const argv = b.addExecutable(.{ .name = "zigsaw-argv", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/argv.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const argv_step = b.step("argv-echo", "Build the argument-echo program used by tests/batch.sh");
+    argv_step.dependOn(&b.addInstallArtifact(argv, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = exe_mod })).step);
     const shim_test_mod = b.createModule(.{

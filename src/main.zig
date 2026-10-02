@@ -5,6 +5,7 @@ const Store = @import("Store.zig");
 const acl = @import("acl.zig");
 const appcontainer = @import("appcontainer.zig");
 const builder = @import("builder.zig");
+const credentials = @import("credentials.zig");
 const exports = @import("exports.zig");
 const install = @import("install.zig");
 const oci = @import("oci.zig");
@@ -24,6 +25,9 @@ const usage =
     \\  build <recipe.json>             build an app from a recipe, install it and its commands
     \\  pull <image>                    install an app and its commands from a registry
     \\  push <app-id> [<image>]         publish an installed app to a registry
+    \\  login [--username=<user>] [--password-stdin] <registry>
+    \\                                  check and save a login for a registry
+    \\  logout <registry>               delete a registry's saved login
     \\  run [options] <app-id> [args]   run an installed app
     \\  list                            list installed apps and their commands
     \\  override [options] <app-id>     save run options that every run of the app gets;
@@ -38,12 +42,16 @@ const usage =
     \\or <app-id>[:tag][@digest] for the app's image in the default registry, e.g.
     \\org.nodejs.node for ghcr.io/zigsaw-io/org.nodejs.node. ZIGSAW_REGISTRY changes the
     \\default registry. push goes to the app's image there unless given one, and tags
-    \\with the app's version unless given a tag. Registry credentials, needed to push and
-    \\for private images, come from ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD.
+    \\with the app's version unless given a tag.
+    \\
+    \\Pushing, and pulling private images, needs a login. login saves one per registry in
+    \\Windows Credential Manager; --password-stdin reads the password from stdin. For CI
+    \\and scripts, ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD are used instead,
+    \\but only for the default registry.
     \\
     \\run options (override takes them too, except --command):
     \\  --command=<name>                run one of the app's exported commands, or another
-    \\                                  executable from the app or System32
+    \\                                  executable or batch file from the app or System32
     \\  --sandbox=soft|appcontainer     soft (default) shapes the environment; appcontainer
     \\                                  also enforces the app's permissions
     \\  --filesystem=<cwd|path>[:ro]    grant access to a host location
@@ -88,6 +96,16 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     const rest = args[1..];
     if (std.mem.eql(u8, command, "help") or isFlag(command, "help")) {
         std.debug.print("{s}", .{usage});
+        return 0;
+    }
+    // Logins don't touch the store.
+    if (std.mem.eql(u8, command, "login")) {
+        try credentials.login(ctx, try parseLoginOptions(rest));
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "logout")) {
+        if (rest.len != 1 or std.mem.startsWith(u8, rest[0], "-")) return usageError();
+        try credentials.logout(ctx, rest[0]);
         return 0;
     }
 
@@ -262,6 +280,29 @@ fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
     return opts;
 }
 
+fn parseLoginOptions(args: []const [:0]const u8) !credentials.LoginOptions {
+    var opts: credentials.LoginOptions = .{ .registry = undefined };
+    var registry: ?[]const u8 = null;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (!std.mem.startsWith(u8, args[i], "--")) {
+            if (registry != null) return usageError();
+            registry = args[i];
+            continue;
+        }
+        const opt = try Option.read(args, &i, &.{"password-stdin"});
+        if (std.mem.eql(u8, opt.name, "password-stdin") and opt.value == null) {
+            opts.password_stdin = true;
+        } else if (std.mem.eql(u8, opt.name, "username") and opt.value != null) {
+            opts.username = opt.value;
+        } else {
+            return fail("unknown login option --{s}", .{opt.name});
+        }
+    }
+    opts.registry = registry orelse return usageError();
+    return opts;
+}
+
 /// `zigsaw override [options] <app-id>`: saves run options that every run of
 /// the app gets. New options are added to the saved ones; `--reset` removes
 /// them all. Without options, or with `--show`, prints what's saved.
@@ -371,6 +412,7 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
 
 test {
     _ = @import("builder.zig");
+    _ = @import("credentials.zig");
     _ = @import("exports.zig");
     _ = @import("oci.zig");
     _ = @import("override.zig");

@@ -1,8 +1,9 @@
 //! Test driver for console events. It runs node alone, through `zigsaw run`
 //! and through its shim, each in a pseudoconsole as a terminal hosts console
 //! programs, then presses Ctrl+C, sends Ctrl+Break or closes the console, and
-//! checks what the app and zigsaw do. Built by `zig build ctrlc-driver`, run
-//! by tests/ctrlc.sh.
+//! checks what the app and zigsaw do. It also runs node behind a batch file,
+//! alone and through `zigsaw run`, and answers cmd.exe's "Terminate batch
+//! job (Y/N)?". Built by `zig build ctrlc-driver`, run by tests/ctrlc.sh.
 //!
 //!   zigsaw-ctrlc <zigsaw.exe> <store> <work-dir>   run the checks; org.nodejs.node
 //!                                                  must be installed in <store>
@@ -53,6 +54,10 @@ pub fn main(init: std.process.Init) !void {
         .self = try win32.selfExePath(arena),
         .node = try installedNode(init.io, arena, args[2]),
     };
+    // Batch files run "node", which zigsaw puts on the app's PATH. Run
+    // alone, they find it on ours.
+    const path = try std.fmt.allocPrint(arena, "{s};{s}", .{ std.fs.path.dirname(t.node).?, init.environ_map.get("PATH") orelse "" });
+    _ = win32.SetEnvironmentVariableW(try win32.wide(arena, "PATH"), try win32.wide(arena, path));
     try t.runAll();
     std.debug.print("\n{d} check(s) failed.\n", .{t.failures});
     win32.ExitProcess(@intFromBool(t.failures > 0));
@@ -73,11 +78,24 @@ const script = struct {
     const child = "const c=require('child_process').spawn(process.execPath,['-e','" ++ forever ++
         "'],{stdio:'ignore',detached:true});c.on('spawn',()=>console.log('ready:'+c.pid));";
     const tree = child ++ "process.on('SIGINT',()=>process.exit(3));" ++ forever;
+    /// `tree`, saying when SIGINT arrives.
+    const tree_sigint = child ++ "process.on('SIGINT',()=>{console.log('got-SIGINT');process.exit(3)});" ++ forever;
     /// On close, takes a second to clean up: writes the file named by its argument.
     const close = child ++ "process.on('SIGHUP',()=>setTimeout(()=>{require('fs').writeFileSync(process.argv[1],'x');process.exit(0)},1000));" ++ forever;
 };
 
-const Way = enum { alone, zigsaw_run, shim };
+const Way = enum {
+    alone,
+    zigsaw_run,
+    shim,
+    /// Node started by a batch file, which runs alone or through `zigsaw run --command`.
+    batch_alone,
+    batch_zigsaw_run,
+
+    fn isBatch(way: Way) bool {
+        return way == .batch_alone or way == .batch_zigsaw_run;
+    }
+};
 const Event = enum { ctrl_c, ctrl_break, close };
 
 const Tester = struct {
@@ -125,6 +143,27 @@ const Tester = struct {
             t.checkf("{s}: closing the console ends the run and the child", .{name}, close.code != null and close.child_ended, try close.describe(t.arena));
             t.checkf("{s}: closing the console lets the app clean up first", .{name}, cleaned, "its SIGHUP handler didn't finish");
         }
+
+        // Ctrl+C while a batch file runs node: cmd.exe asks "Terminate batch
+        // job (Y/N)?" once node has exited. Through zigsaw, the same should
+        // happen as alone, and the run should then end the whole tree.
+        const batch_alone = try t.run(.batch_alone, script.tree_sigint, &.{}, .ctrl_c);
+        t.check("batch alone: Ctrl+C reaches node, then cmd.exe asks to terminate the batch job", batch_alone.prompted and batch_alone.has("got-SIGINT") and batch_alone.code != null, try batch_alone.describe(t.arena));
+        t.check("batch alone: answering Y stops the batch file", !batch_alone.has("after-node"), try batch_alone.describe(t.arena));
+        if (batch_alone.child) |c| killIfRunning(c);
+        const batch = try t.run(.batch_zigsaw_run, script.tree_sigint, &.{}, .ctrl_c);
+        t.check("batch via zigsaw run: the same prompt, after node's handler ran", batch.prompted and batch.has("got-SIGINT"), try batch.describe(t.arena));
+        t.checkf("batch via zigsaw run: answering Y stops it, with the same exit code as alone ({?x})", .{batch_alone.code}, !batch.has("after-node") and batch.code != null and batch.code == batch_alone.code, try batch.describe(t.arena));
+        t.check("batch via zigsaw run: the run ends node's detached child", batch.child_ended, try batch.describe(t.arena));
+    }
+
+    /// A batch file in the work directory that runs node with `code`, then
+    /// prints "after-node".
+    fn batchFile(t: *Tester, code: []const u8) ![]const u8 {
+        const p = try std.fmt.allocPrint(t.arena, "{s}\\node-script.cmd", .{t.work});
+        const text = try std.fmt.allocPrint(t.arena, "@node -e \"{s}\"\r\n@echo after-node\r\n", .{code});
+        try std.Io.Dir.cwd().writeFile(t.io, .{ .sub_path = p, .data = text });
+        return p;
     }
 
     const Result = struct {
@@ -134,6 +173,8 @@ const Tester = struct {
         /// The child the app reported, if it started one.
         child: ?HANDLE = null,
         child_ended: bool = false,
+        /// For batch files: cmd.exe asked "Terminate batch job (Y/N)?".
+        prompted: bool = false,
         problem: ?[]const u8 = null,
 
         fn has(r: Result, text: []const u8) bool {
@@ -149,7 +190,8 @@ const Tester = struct {
     };
 
     /// Runs `code` with node the given way, waits until it prints "ready",
-    /// sends `event`, and waits for it to end.
+    /// sends `event`, and waits for it to end. Through a batch file, answers
+    /// Y when cmd.exe asks whether to terminate it.
     fn run(t: *Tester, way: Way, code: []const u8, extra: []const []const u8, event: Event) !Result {
         var line: std.ArrayList(u8) = .empty;
         switch (way) {
@@ -159,9 +201,19 @@ const Tester = struct {
                 try line.appendSlice(t.arena, " run org.nodejs.node");
             },
             .shim => try appendArg(t.arena, &line, try std.fs.path.join(t.arena, &.{ t.store, "bin", "node.exe" })),
+            // Windows runs a batch file given as the program through cmd.exe /c.
+            .batch_alone => try appendArg(t.arena, &line, try t.batchFile(code)),
+            .batch_zigsaw_run => {
+                try appendArg(t.arena, &line, t.zigsaw);
+                try line.appendSlice(t.arena, " run --command=");
+                try appendArg(t.arena, &line, try t.batchFile(code));
+                try line.appendSlice(t.arena, " org.nodejs.node");
+            },
         }
-        try line.appendSlice(t.arena, " -e ");
-        try appendArg(t.arena, &line, code);
+        if (!way.isBatch()) {
+            try line.appendSlice(t.arena, " -e ");
+            try appendArg(t.arena, &line, code);
+        }
         for (extra) |arg| {
             try line.append(t.arena, ' ');
             try appendArg(t.arena, &line, arg);
@@ -183,6 +235,13 @@ const Tester = struct {
                 result.problem = try std.fmt.allocPrint(t.arena, "sending Ctrl+Break: {t}", .{err});
             },
             .close => console.close(),
+        }
+        if (way.isBatch()) {
+            if (console.waitFor("Terminate batch job (Y/N)?", 15_000)) |_| {
+                result.prompted = true;
+                var written: DWORD = 0;
+                _ = win32.WriteFile(console.input, "Y\r", 2, &written, null);
+            }
         }
         result.code = console.exitCode(15_000);
         if (result.code == null) _ = TerminateProcess(console.process, 1);

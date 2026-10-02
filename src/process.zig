@@ -44,6 +44,88 @@ pub fn appendQuoted(arena: Allocator, out: *std.ArrayList(u8), arg: []const u8) 
     try out.append(arena, '"');
 }
 
+/// Builds a command line that runs a batch file through `cmd_exe`, such that
+/// the batch file's %1, %2... and %* get the arguments exactly as given, and
+/// no argument can make cmd.exe run anything else. Modelled on Rust's fix for
+/// CVE-2024-24576 ("BatBadBut"):
+///
+///   "<cmd.exe>" /d /e:ON /v:OFF /c ""<script>" args..."
+///
+/// /d skips the user's AutoRun commands, /v:OFF keeps `!var!` literal, and
+/// /e:ON enables the substring syntax that escaping `%` relies on. cmd.exe
+/// strips the outer pair of quotes after /c and runs the rest.
+pub fn buildBatchCommandLine(
+    arena: Allocator,
+    cmd_exe: []const u8,
+    script: []const u8,
+    args: []const []const u8,
+) error{ OutOfMemory, InvalidBatchScript, InvalidBatchArgument }![]u8 {
+    // Windows file names can't contain '"' or end in '\'.
+    if (script.len == 0 or std.mem.indexOfScalar(u8, script, '"') != null or script[script.len - 1] == '\\')
+        return error.InvalidBatchScript;
+    var out: std.ArrayList(u8) = .empty;
+    try appendQuoted(arena, &out, cmd_exe);
+    try out.appendSlice(arena, " /d /e:ON /v:OFF /c \"\"");
+    for (script) |c| try appendBatchChar(arena, &out, c);
+    try out.append(arena, '"');
+    for (args) |arg| {
+        try out.append(arena, ' ');
+        try appendBatchArg(arena, &out, arg);
+    }
+    try out.append(arena, '"');
+    return out.items;
+}
+
+fn appendBatchArg(arena: Allocator, out: *std.ArrayList(u8), arg: []const u8) !void {
+    // A line break ends the command, whatever the quoting.
+    if (std.mem.indexOfAny(u8, arg, "\r\n\x00") != null) return error.InvalidBatchArgument;
+    // An argument ending in '\' is quoted too, or a batch file's "%~1" would
+    // put its own closing quote after an escaping backslash.
+    const quote = arg.len == 0 or arg[arg.len - 1] == '\\' or needsBatchQuotes(arg);
+    if (quote) try out.append(arena, '"');
+    var backslashes: usize = 0;
+    for (arg) |c| {
+        if (c == '\\') {
+            backslashes += 1;
+        } else {
+            // Inside quotes, '"' becomes '""', which leaves cmd.exe's quoting
+            // as it was and which programs read as one quote; the
+            // backslashes before it are doubled, as they are for programs.
+            if (c == '"') try out.appendNTimes(arena, '\\', backslashes);
+            backslashes = 0;
+        }
+        try appendBatchChar(arena, out, c);
+    }
+    if (quote) {
+        try out.appendNTimes(arena, '\\', backslashes);
+        try out.append(arena, '"');
+    }
+}
+
+/// Appends `c`, doubling '"' and escaping '%'. cmd.exe expands %VAR% even
+/// inside quotes, so each '%' becomes "%%cd:~,%": cmd.exe keeps the first '%',
+/// and the rest is an empty substring of %cd%, which leaves no '%' to pair
+/// with a later one.
+fn appendBatchChar(arena: Allocator, out: *std.ArrayList(u8), c: u8) !void {
+    switch (c) {
+        '"' => try out.appendSlice(arena, "\"\""),
+        '%' => try out.appendSlice(arena, "%%cd:~,%"),
+        else => try out.append(arena, c),
+    }
+}
+
+/// Rather than list what cmd.exe treats specially, quote every argument with
+/// an ASCII character outside a known-safe set, or a control character.
+fn needsBatchQuotes(arg: []const u8) bool {
+    for (arg, 0..) |c, i| switch (c) {
+        'A'...'Z', 'a'...'z', '0'...'9', '#', '$', '*', '+', '-', '.', '/', ':', '?', '@', '\\', '_' => {},
+        // U+0080 to U+009F, the C1 control characters, are C2 80 to C2 9F.
+        0x80...0xff => if (c == 0xc2 and i + 1 < arg.len and arg[i + 1] <= 0x9f) return true,
+        else => return true,
+    };
+    return false;
+}
+
 pub const SpawnSpec = struct {
     exe: []const u8,
     /// WTF-8; see `buildCommandLine`.
@@ -160,5 +242,49 @@ test buildCommandLine {
     defer arena_state.deinit();
     for (cases) |c| {
         try std.testing.expectEqualStrings(c.want, try buildCommandLine(arena_state.allocator(), "C:\\app\\x.exe", c.args));
+    }
+}
+
+test buildBatchCommandLine {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const cmd = "C:\\Windows\\System32\\cmd.exe";
+    const prefix = cmd ++ " /d /e:ON /v:OFF /c \"\"C:\\app\\run.cmd\"";
+
+    const cases = [_]struct { arg: []const u8, want: []const u8 }{
+        .{ .arg = "plain-1.2/x:y@z", .want = "plain-1.2/x:y@z" },
+        .{ .arg = "a\\b", .want = "a\\b" },
+        .{ .arg = "", .want = "\"\"" },
+        .{ .arg = "two words", .want = "\"two words\"" },
+        .{ .arg = "C:\\dir\\", .want = "\"C:\\dir\\\\\"" },
+        .{ .arg = "say \"hi\"", .want = "\"say \"\"hi\"\"\"" },
+        .{ .arg = "a\\\"b", .want = "\"a\\\\\"\"b\"" },
+        .{ .arg = "%PATH%", .want = "\"%%cd:~,%PATH%%cd:~,%\"" },
+        .{ .arg = "!x!", .want = "\"!x!\"" },
+        .{ .arg = "& | < > ^ ( )", .want = "\"& | < > ^ ( )\"" },
+        .{ .arg = "\"&calc&\"", .want = "\"\"\"&calc&\"\"\"" },
+        .{ .arg = "--flag=a,b;c", .want = "\"--flag=a,b;c\"" },
+        .{ .arg = "tab\there", .want = "\"tab\there\"" },
+        // Text beyond ASCII is safe, except for control characters.
+        .{ .arg = "héllo-wörld", .want = "héllo-wörld" },
+        .{ .arg = "next\u{85}line", .want = "\"next\u{85}line\"" },
+    };
+    inline for (cases) |c| {
+        const line = try buildBatchCommandLine(arena, cmd, "C:\\app\\run.cmd", &.{c.arg});
+        try std.testing.expectEqualStrings(prefix ++ " " ++ c.want ++ "\"", line);
+    }
+    try std.testing.expectEqualStrings(prefix ++ " a \"b c\"\"", try buildBatchCommandLine(arena, cmd, "C:\\app\\run.cmd", &.{ "a", "b c" }));
+    try std.testing.expectEqualStrings(prefix ++ "\"", try buildBatchCommandLine(arena, cmd, "C:\\app\\run.cmd", &.{}));
+
+    // A '%' in the script's path is escaped too; a quote or a trailing '\' can't be in one.
+    try std.testing.expectEqualStrings(
+        cmd ++ " /d /e:ON /v:OFF /c \"\"C:\\100%%cd:~,%\\run.cmd\"\"",
+        try buildBatchCommandLine(arena, cmd, "C:\\100%\\run.cmd", &.{}),
+    );
+    try std.testing.expectError(error.InvalidBatchScript, buildBatchCommandLine(arena, cmd, "C:\\a\"b.cmd", &.{}));
+    try std.testing.expectError(error.InvalidBatchScript, buildBatchCommandLine(arena, cmd, "C:\\dir\\", &.{}));
+    for ([_][]const u8{ "a\nb", "a\rb", "a\x00b" }) |bad| {
+        try std.testing.expectError(error.InvalidBatchArgument, buildBatchCommandLine(arena, cmd, "C:\\app\\run.cmd", &.{bad}));
     }
 }

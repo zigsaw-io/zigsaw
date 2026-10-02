@@ -8,3 +8,6 @@
 
 # Test fixtures are compared byte for byte.
 src/testdata/** binary
+
+# Batch files need CRLF line endings: cmd.exe misreads labels without them.
+tests/batch/*.cmd text eol=crlf

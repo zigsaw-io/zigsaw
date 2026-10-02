@@ -101,6 +101,13 @@ pub extern "kernel32" fn SetConsoleCtrlHandler(
     add: BOOL,
 ) callconv(.winapi) BOOL;
 
+pub const ENABLE_PROCESSED_INPUT: DWORD = 0x1;
+pub const ENABLE_LINE_INPUT: DWORD = 0x2;
+pub const ENABLE_ECHO_INPUT: DWORD = 0x4;
+pub extern "kernel32" fn GetConsoleMode(console: HANDLE, mode: *DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn SetConsoleMode(console: HANDLE, mode: DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn ReadConsoleW(console: HANDLE, buffer: [*]u16, to_read: DWORD, read: *DWORD, control: ?*anyopaque) callconv(.winapi) BOOL;
+
 pub extern "kernel32" fn CreateProcessW(
     application_name: ?LPCWSTR,
     command_line: ?LPWSTR,
@@ -313,6 +320,39 @@ pub extern "advapi32" fn SetEntriesInAclW(
     old_acl: ?*ACL,
     new_acl: *?*ACL,
 ) callconv(.winapi) DWORD;
+
+// ---------------------------------------------------------------------------
+// Credential Manager
+
+pub const CRED_TYPE_GENERIC: DWORD = 1;
+pub const CRED_PERSIST_LOCAL_MACHINE: DWORD = 2;
+pub const CRED_MAX_CREDENTIAL_BLOB_SIZE: usize = 5 * 512;
+pub const ERROR_NOT_FOUND: DWORD = 1168;
+
+pub const FILETIME = extern struct {
+    dwLowDateTime: DWORD = 0,
+    dwHighDateTime: DWORD = 0,
+};
+
+pub const CREDENTIALW = extern struct {
+    Flags: DWORD = 0,
+    Type: DWORD,
+    TargetName: LPWSTR,
+    Comment: ?LPWSTR = null,
+    LastWritten: FILETIME = .{},
+    CredentialBlobSize: DWORD = 0,
+    CredentialBlob: ?[*]u8 = null,
+    Persist: DWORD = 0,
+    AttributeCount: DWORD = 0,
+    Attributes: ?*anyopaque = null,
+    TargetAlias: ?LPWSTR = null,
+    UserName: ?LPWSTR = null,
+};
+
+pub extern "advapi32" fn CredReadW(target: LPCWSTR, type: DWORD, flags: DWORD, credential: *?*CREDENTIALW) callconv(.winapi) BOOL;
+pub extern "advapi32" fn CredWriteW(credential: *const CREDENTIALW, flags: DWORD) callconv(.winapi) BOOL;
+pub extern "advapi32" fn CredDeleteW(target: LPCWSTR, type: DWORD, flags: DWORD) callconv(.winapi) BOOL;
+pub extern "advapi32" fn CredFree(buffer: ?*anyopaque) callconv(.winapi) void;
 
 // ---------------------------------------------------------------------------
 // Helpers

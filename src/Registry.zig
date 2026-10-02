@@ -10,27 +10,32 @@ const Allocator = std.mem.Allocator;
 const http = std.http;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const credentials = @import("credentials.zig");
 const oci = @import("oci.zig");
 const fail = Context.fail;
 
 ctx: *Context,
 client: http.Client,
 ref: Reference,
+/// The registry's host as logins are saved for it (see `credentials.normalizeHost`).
+host: []const u8,
 /// What the registry token must allow: "pull", or "pull,push".
 actions: []const u8,
 /// The Authorization header value, once the registry has asked for one.
 authorization: ?[]const u8 = null,
-
-/// Environment variables holding registry credentials, for pushing and for
-/// pulling private images.
-pub const username_var = "ZIGSAW_REGISTRY_USERNAME";
-pub const password_var = "ZIGSAW_REGISTRY_PASSWORD";
+/// The credentials for this registry, once it has asked for them.
+credential: ?credentials.Credential = null,
+looked_up: bool = false,
 
 pub fn init(r: *Registry, ctx: *Context, ref: Reference, actions: []const u8) !void {
     r.* = .{
         .ctx = ctx,
         .client = .{ .allocator = ctx.gpa, .io = ctx.io },
         .ref = ref,
+        .host = credentials.normalizeHost(ctx.arena, ref.host) catch |err| switch (err) {
+            error.InvalidHost => return fail("\"{s}\" isn't a registry host", .{ref.host}),
+            error.OutOfMemory => |e| return e,
+        },
         .actions = actions,
     };
     try r.client.initDefaultProxies(ctx.arena, ctx.env);
@@ -77,13 +82,17 @@ pub const Reference = struct {
         return ref.digest orelse ref.tag orelse "latest";
     }
 
+    /// Whether the registry is on this machine.
+    fn isLocal(ref: Reference) bool {
+        const name = if (std.mem.lastIndexOfScalar(u8, ref.host, ':')) |c| ref.host[0..c] else ref.host;
+        return std.mem.eql(u8, name, "localhost") or std.mem.eql(u8, name, "127.0.0.1") or std.mem.eql(u8, name, "[::1]");
+    }
+
     /// Registries on this machine are spoken to over plain HTTP, as Docker does.
     fn baseUrl(ref: Reference, arena: Allocator) ![]const u8 {
-        const name = if (std.mem.lastIndexOfScalar(u8, ref.host, ':')) |c| ref.host[0..c] else ref.host;
-        const local = std.mem.eql(u8, name, "localhost") or std.mem.eql(u8, name, "127.0.0.1") or std.mem.eql(u8, name, "[::1]");
         // docker.io is the name people use; its API lives elsewhere.
         const api_host = if (std.mem.eql(u8, ref.host, "docker.io")) "registry-1.docker.io" else ref.host;
-        return std.fmt.allocPrint(arena, "{s}://{s}", .{ if (local) "http" else "https", api_host });
+        return std.fmt.allocPrint(arena, "{s}://{s}", .{ if (ref.isLocal()) "http" else "https", api_host });
     }
 
     pub fn format(ref: Reference, w: *Io.Writer) Io.Writer.Error!void {
@@ -93,6 +102,7 @@ pub const Reference = struct {
     }
 
     fn looksLikeHost(s: []const u8) bool {
+        if (!credentials.isValidHost(s)) return false;
         return std.mem.indexOfAny(u8, s, ".:") != null or std.mem.eql(u8, s, "localhost");
     }
 
@@ -381,48 +391,115 @@ fn exchangeUnchecked(r: *Registry, req: Request, authorization: ?[]const u8) !Re
 
 fn authenticate(r: *Registry, challenge_text: []const u8) !void {
     const arena = r.ctx.arena;
-    const challenge = Challenge.parse(challenge_text) orelse
-        return fail("{s} asked for authentication zigsaw doesn't support: {s}", .{ r.ref.host, challenge_text });
-    const basic = try r.basicCredentials();
-
+    const challenge = try r.parseChallenge(challenge_text);
+    const credential = try r.findCredential();
+    const basic = if (credential) |c| try basicAuthorization(arena, c) else null;
     switch (challenge.scheme) {
         .basic => r.authorization = basic orelse return r.failNeedsLogin(),
         .bearer => {
-            const realm = challenge.realm orelse return fail("{s} asked for a token without saying where to get one", .{r.ref.host});
-            var token_url: std.ArrayList(u8) = .empty;
-            try token_url.appendSlice(arena, realm);
-            try token_url.append(arena, if (std.mem.indexOfScalar(u8, realm, '?') == null) '?' else '&');
-            if (challenge.service) |service| {
-                try token_url.appendSlice(arena, "service=");
-                try percentEncode(arena, &token_url, service);
-                try token_url.append(arena, '&');
-            }
-            try token_url.appendSlice(arena, "scope=");
-            try percentEncode(arena, &token_url, try std.fmt.allocPrint(arena, "repository:{s}:{s}", .{ r.ref.repository, r.actions }));
-
-            const res = try r.exchange(.{ .method = .GET, .url = token_url.items }, basic);
-            if (res.status == .unauthorized or res.status == .forbidden) {
-                if (basic == null) return r.failNeedsLogin();
-                return fail("{s} refused the credentials in {s} and {s}", .{ r.ref.host, username_var, password_var });
-            }
-            if (res.status != .ok) return fail("getting a token from {s}: HTTP {d}", .{ realm, @intFromEnum(res.status) });
-            const Token = struct { token: ?[]const u8 = null, access_token: ?[]const u8 = null };
-            const parsed = std.json.parseFromSliceLeaky(Token, arena, res.body, .{ .ignore_unknown_fields = true }) catch
-                return fail("{s} returned a token response zigsaw can't read", .{realm});
-            const token = parsed.token orelse parsed.access_token orelse
-                return fail("{s} returned no token", .{realm});
-            r.authorization = try std.fmt.allocPrint(arena, "Bearer {s}", .{token});
+            const scope = try std.fmt.allocPrint(arena, "repository:{s}:{s}", .{ r.ref.repository, r.actions });
+            r.authorization = try r.fetchToken(challenge, basic, scope) orelse
+                return if (credential) |c| r.failRefused(c) else r.failNeedsLogin();
         },
     }
 }
 
-/// "Basic <base64(user:password)>" from the environment, if set.
-fn basicCredentials(r: *Registry) !?[]const u8 {
-    const user = r.ctx.env.get(username_var) orelse return null;
-    const password = r.ctx.env.get(password_var) orelse return null;
-    const plain = try std.fmt.allocPrint(r.ctx.arena, "{s}:{s}", .{ user, password });
+pub const LoginCheck = enum { accepted, refused, not_asked };
+
+/// Checks credentials for a registry `host` (normalized), as `zigsaw login`
+/// does before saving them: asks for the API root, answers the registry's
+/// challenge with them, and asks again. A token is requested without a
+/// scope, which proves the credentials without naming a repository.
+pub fn checkLogin(ctx: *Context, host: []const u8, credential: credentials.Credential) !LoginCheck {
+    var r: Registry = undefined;
+    try r.init(ctx, .{ .host = host, .repository = "" }, "");
+    defer r.deinit();
+    const root = try r.url("/v2/", .{});
+
+    const res = try r.follow(.{ .method = .GET, .url = root }, null);
+    switch (res.status) {
+        .ok => return .not_asked,
+        .unauthorized => {},
+        else => return fail("{s} answered {s} with HTTP {d}; is it an OCI registry?", .{ host, root, @intFromEnum(res.status) }),
+    }
+    const challenge = try r.parseChallenge(res.www_authenticate orelse
+        return fail("{s} refused {s} without saying how to authenticate", .{ host, root }));
+    const basic = try basicAuthorization(ctx.arena, credential);
+    const authorization = switch (challenge.scheme) {
+        .basic => basic,
+        .bearer => try r.fetchToken(challenge, basic, null) orelse return .refused,
+    };
+    const again = try r.follow(.{ .method = .GET, .url = root }, authorization);
+    return switch (again.status) {
+        .ok => .accepted,
+        .unauthorized, .forbidden => .refused,
+        else => fail("{s} answered {s} with HTTP {d} after authentication", .{ host, root, @intFromEnum(again.status) }),
+    };
+}
+
+fn parseChallenge(r: *Registry, text: []const u8) !Challenge {
+    return Challenge.parse(text) orelse
+        fail("{s} asked for authentication zigsaw doesn't support: {s}", .{ r.ref.host, text });
+}
+
+/// Gets a token from the challenge's realm, with `basic` credentials if
+/// given, and returns the Authorization header that carries it. Null if the
+/// realm refused.
+fn fetchToken(r: *Registry, challenge: Challenge, basic: ?[]const u8, scope: ?[]const u8) !?[]const u8 {
+    const arena = r.ctx.arena;
+    const realm = challenge.realm orelse return fail("{s} asked for a token without saying where to get one", .{r.ref.host});
+    if (basic != null and !mayReceiveCredentials(realm, r.ref.isLocal()))
+        return fail("{s} asked for its credentials to be sent to {s} over plain HTTP; zigsaw won't send them", .{ r.ref.host, realm });
+
+    var token_url: std.ArrayList(u8) = .empty;
+    try token_url.appendSlice(arena, realm);
+    var separator: u8 = if (std.mem.indexOfScalar(u8, realm, '?') == null) '?' else '&';
+    for ([_]struct { []const u8, ?[]const u8 }{ .{ "service", challenge.service }, .{ "scope", scope } }) |param| {
+        const value = param[1] orelse continue;
+        try token_url.print(arena, "{c}{s}=", .{ separator, param[0] });
+        try percentEncode(arena, &token_url, value);
+        separator = '&';
+    }
+
+    const res = try r.exchange(.{ .method = .GET, .url = token_url.items }, basic);
+    if (res.status == .unauthorized or res.status == .forbidden) return null;
+    if (res.status != .ok) return fail("getting a token from {s}: HTTP {d}", .{ realm, @intFromEnum(res.status) });
+    const Token = struct { token: ?[]const u8 = null, access_token: ?[]const u8 = null };
+    const parsed = std.json.parseFromSliceLeaky(Token, arena, res.body, .{ .ignore_unknown_fields = true }) catch
+        return fail("{s} returned a token response zigsaw can't read", .{realm});
+    const token = parsed.token orelse parsed.access_token orelse
+        return fail("{s} returned no token", .{realm});
+    return try std.fmt.allocPrint(arena, "Bearer {s}", .{token});
+}
+
+/// Credentials go to a token service only over HTTPS, unless the registry
+/// itself is on this machine (and so spoken to over plain HTTP anyway).
+fn mayReceiveCredentials(realm: []const u8, registry_is_local: bool) bool {
+    return registry_is_local or std.ascii.startsWithIgnoreCase(realm, "https://");
+}
+
+/// The registry's credentials, looked up the first time they're needed.
+fn findCredential(r: *Registry) !?credentials.Credential {
+    if (r.looked_up) return r.credential;
+    r.credential = try credentials.lookup(r.ctx, r.host);
+    r.looked_up = true;
+    if (r.ctx.verbose) {
+        if (r.credential) |c| {
+            Context.note("  credentials for {s}: {s}, {s}", .{ r.host, c.user, c.origin() });
+        } else if (credentials.envHostOtherThan(r.ctx, r.host)) |other| {
+            Context.note("  no credentials for {s}; {s} and {s} only go to {s}", .{ r.host, credentials.username_var, credentials.password_var, other });
+        } else {
+            Context.note("  no credentials for {s}", .{r.host});
+        }
+    }
+    return r.credential;
+}
+
+/// "Basic <base64(user:password)>".
+fn basicAuthorization(arena: Allocator, c: credentials.Credential) ![]const u8 {
+    const plain = try std.fmt.allocPrint(arena, "{s}:{s}", .{ c.user, c.secret });
     const encoder = std.base64.standard.Encoder;
-    const out = try r.ctx.arena.alloc(u8, "Basic ".len + encoder.calcSize(plain.len));
+    const out = try arena.alloc(u8, "Basic ".len + encoder.calcSize(plain.len));
     @memcpy(out[0.."Basic ".len], "Basic ");
     _ = encoder.encode(out["Basic ".len..], plain);
     return out;
@@ -432,9 +509,26 @@ fn failNeedsLogin(r: *Registry) error{Failed} {
     // Registries answer a pull of a missing image the same way as a private
     // one, so as not to reveal which exist.
     const maybe_missing = if (std.mem.eql(u8, r.actions, "pull")) " doesn't exist, or" else "";
-    return fail("{f}{s} needs credentials for {s}: set {s} and {s} (for ghcr.io, a GitHub token with the right package scopes)", .{
-        r.ref, maybe_missing, r.actions, username_var, password_var,
+    const github = if (std.mem.eql(u8, r.host, "ghcr.io")) " with a GitHub token that has the right package scopes" else "";
+    return fail("{f}{s} needs credentials for {s}: run `zigsaw login {s}`{s}{s}", .{
+        r.ref, maybe_missing, r.actions, r.host, github, r.envNote(),
     });
+}
+
+fn failRefused(r: *Registry, c: credentials.Credential) error{Failed} {
+    return switch (c.source) {
+        .environment => fail("{s} refused the credentials {s}", .{ r.ref.host, c.origin() }),
+        .credential_manager => fail("{s} refused the credentials {s}; run `zigsaw login {s}` again", .{ r.ref.host, c.origin(), r.host }),
+    };
+}
+
+/// When the environment has credentials for another registry, a line saying
+/// so, for messages about missing credentials.
+fn envNote(r: *Registry) []const u8 {
+    const other = credentials.envHostOtherThan(r.ctx, r.host) orelse return "";
+    return std.fmt.allocPrint(r.ctx.arena, "\n  ({s} and {s} only go to {s}, the default registry)", .{
+        credentials.username_var, credentials.password_var, other,
+    }) catch "";
 }
 
 /// A WWW-Authenticate challenge, e.g.
@@ -479,15 +573,14 @@ const Challenge = struct {
 /// Explains a failed request, using the registry's error message if it sent one.
 fn failStatus(r: *Registry, res: Response, what: []const u8) error{Failed} {
     const code = @intFromEnum(res.status);
-    const has_credentials = r.ctx.env.get(username_var) != null and r.ctx.env.get(password_var) != null;
     switch (res.status) {
-        .unauthorized, .forbidden => return if (has_credentials)
-            fail("{s} for {f}: access denied (HTTP {d}); the registry refused the credentials in {s} and {s}, or they don't allow {s}", .{
-                what, r.ref, code, username_var, password_var, r.actions,
+        .unauthorized, .forbidden => return if (r.findCredential() catch null) |c|
+            fail("{s} for {f}: access denied (HTTP {d}); the registry refused the credentials {s}, or they don't allow {s}", .{
+                what, r.ref, code, c.origin(), r.actions,
             })
         else
-            fail("{s} for {f}: access denied (HTTP {d}); for private images and pushing, set {s} and {s}", .{
-                what, r.ref, code, username_var, password_var,
+            fail("{s} for {f}: access denied (HTTP {d}); for private images and pushing, run `zigsaw login {s}`{s}", .{
+                what, r.ref, code, r.host, r.envNote(),
             }),
         .not_found => return fail("{s} for {f}: not found", .{ what, r.ref }),
         else => {},
@@ -522,7 +615,7 @@ test "Reference.parse" {
 
     try std.testing.expectEqualStrings("latest", (try Reference.parse("docker.io/library/alpine")).manifestRef());
 
-    for ([_][]const u8{ "node", "owner/node:1", "ghcr.io/Owner/node", "ghcr.io/owner/node:", "ghcr.io/", "ghcr.io/a//b", "ghcr.io/a@sha256:xyz" }) |bad| {
+    for ([_][]const u8{ "node", "owner/node:1", "ghcr.io/Owner/node", "ghcr.io/owner/node:", "ghcr.io/", "ghcr.io/a//b", "ghcr.io/a@sha256:xyz", "gh%cr.io/a" }) |bad| {
         try std.testing.expectError(error.InvalidReference, Reference.parse(bad));
     }
 }
@@ -534,6 +627,17 @@ test "Reference.baseUrl" {
     try std.testing.expectEqualStrings("https://ghcr.io", try (try Reference.parse("ghcr.io/a/b")).baseUrl(arena));
     try std.testing.expectEqualStrings("http://localhost:5000", try (try Reference.parse("localhost:5000/b")).baseUrl(arena));
     try std.testing.expectEqualStrings("https://registry-1.docker.io", try (try Reference.parse("docker.io/library/alpine")).baseUrl(arena));
+}
+
+test mayReceiveCredentials {
+    try std.testing.expect(mayReceiveCredentials("https://ghcr.io/token", false));
+    try std.testing.expect(mayReceiveCredentials("HTTPS://auth.docker.io/token", false));
+    try std.testing.expect(!mayReceiveCredentials("http://auth.example/token", false));
+    // A registry on this machine is spoken to over HTTP, and so may its token service.
+    try std.testing.expect(mayReceiveCredentials("http://localhost:5002/token", true));
+    try std.testing.expect((try Reference.parse("localhost:5000/a")).isLocal());
+    try std.testing.expect((try Reference.parse("127.0.0.1:5000/a")).isLocal());
+    try std.testing.expect(!(try Reference.parse("localhost.evil.example/a")).isLocal());
 }
 
 test "Challenge.parse" {

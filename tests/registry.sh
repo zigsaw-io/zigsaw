@@ -7,12 +7,14 @@
 # The registry defaults to localhost:5000 and must already be running with no
 # authentication, for example zot (https://zotregistry.dev):
 #   zot serve config.json   # with "http": { "address": "127.0.0.1", "port": "5000" }
-# Also makes read-only anonymous requests to ghcr.io and Docker Hub.
+# Also makes read-only requests to ghcr.io and Docker Hub.
 #
 # To also check registry logins, run a second registry that requires one and
 # set AUTH_REGISTRY (e.g. localhost:5001), AUTH_USER and AUTH_PASSWORD. For zot,
 # add "auth": { "htpasswd": { "path": "htpasswd" } } to its "http" settings,
-# with a bcrypt htpasswd line, e.g. from PHP's password_hash(..., PASSWORD_BCRYPT).
+# with a bcrypt htpasswd line, e.g. from `htpasswd -nB <user>`. The checks
+# save a login for AUTH_REGISTRY in Windows Credential Manager and remove it at
+# the end, so use a registry on localhost.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -112,24 +114,49 @@ check "push node (100 MB layer)" za push org.nodejs.node "$repo/node"
 check "pull node" zb pull "$repo/node:24.21.0"
 check "the pulled node runs" zb run org.nodejs.node -e 'process.exit(0)'
 
-# Real registries, read-only and anonymous: the token flow works.
-check "ghcr.io: anonymous token, container image refused" refused ghcr.io/oras-project/oras:v1.2.0
-check "Docker Hub: anonymous token, container image refused" refused docker.io/library/alpine:3.20
+# Real registries, read-only: the token flow works.
+check "ghcr.io: token, container image refused" refused ghcr.io/oras-project/oras:v1.2.0
+# Credentials in the environment are for the default registry (ghcr.io), so
+# Docker Hub never sees them; if it did, it would refuse these.
+docker_hub() { ZIGSAW_REGISTRY_USERNAME=zigsaw-nobody ZIGSAW_REGISTRY_PASSWORD=wrong refused docker.io/library/alpine:3.20; }
+check "Docker Hub: anonymous token despite credentials for ghcr.io" docker_hub
 
 if [ -n "${AUTH_REGISTRY:-}" ]; then
     auth_repo="$AUTH_REGISTRY/zigsaw-test-$RANDOM/busybox"
-    unset ZIGSAW_REGISTRY_USERNAME ZIGSAW_REGISTRY_PASSWORD
-    with_login() { ZIGSAW_REGISTRY_USERNAME="$AUTH_USER" ZIGSAW_REGISTRY_PASSWORD="$AUTH_PASSWORD" "$@"; }
-    asks_for_login() { za push net.frippery.busybox "$auth_repo" 2>&1 | grep -q 'needs credentials'; }
-    wrong_password() { ZIGSAW_REGISTRY_USERNAME="$AUTH_USER" ZIGSAW_REGISTRY_PASSWORD=wrong za push net.frippery.busybox "$auth_repo" 2>&1 | grep -q 'refused the credentials'; }
+    auth_tag="$auth_repo:FRP-6075-g169694ebd"
+    # Logins are per user, not per store: start and end logged out.
+    za logout "$AUTH_REGISTRY" >/dev/null 2>&1
     # A fresh store, so the pulls below really fetch from the login registry.
     store_c="$work\c"
     zc() { ZIGSAW_HOME="$store_c" "$zigsaw" "$@"; }
-    check "login registry: push without credentials asks for them" asks_for_login
-    check "login registry: a wrong password is refused" wrong_password
-    check "login registry: push with credentials" with_login za push net.frippery.busybox "$auth_repo"
-    check "login registry: pull without credentials fails" fails zc pull "$auth_repo:FRP-6075-g169694ebd"
-    check "login registry: pull with credentials" with_login zc pull "$auth_repo:FRP-6075-g169694ebd"
+    asks_for_login() { "$@" 2>&1 | grep -q "zigsaw login $AUTH_REGISTRY"; }
+    # The right credentials, in the environment: they only go to the default registry.
+    env_login() { ZIGSAW_REGISTRY_USERNAME="$AUTH_USER" ZIGSAW_REGISTRY_PASSWORD="$AUTH_PASSWORD" "$@"; }
+    env_default() { ZIGSAW_REGISTRY="$AUTH_REGISTRY/zigsaw-test" env_login "$@"; }
+    env_refused() {
+        ZIGSAW_REGISTRY="$AUTH_REGISTRY/zigsaw-test" ZIGSAW_REGISTRY_USERNAME="$AUTH_USER" ZIGSAW_REGISTRY_PASSWORD=wrong \
+            za push net.frippery.busybox "$auth_repo" 2>&1 | grep -q 'refused the credentials in ZIGSAW_REGISTRY_USERNAME'
+    }
+    check "login registry: the environment's credentials don't go to another registry" asks_for_login env_login za push net.frippery.busybox "$auth_repo"
+    check "login registry: they go to the default registry" env_default za push net.frippery.busybox "$auth_repo"
+    check "login registry: a wrong password there is refused" env_refused
+    check "login registry: pull without credentials asks for a login" asks_for_login zc pull "$auth_tag"
+
+    # From here on, nothing in the environment applies.
+    no_env() { (unset ZIGSAW_REGISTRY_USERNAME ZIGSAW_REGISTRY_PASSWORD ZIGSAW_REGISTRY && "$@"); }
+    login_refused() { echo wrong | za login --username="$AUTH_USER" --password-stdin "$AUTH_REGISTRY" 2>&1 | grep -q 'refused the credentials; nothing was saved'; }
+    login_saved() { printf '%s\n' "$AUTH_PASSWORD" | za login --username="$AUTH_USER" --password-stdin "$AUTH_REGISTRY"; }
+    login_used() { no_env zc -v pull "$auth_tag" 2>&1 | grep -q "credentials for $AUTH_REGISTRY: $AUTH_USER, saved by .zigsaw login."; }
+    logged_out() { za logout "$AUTH_REGISTRY" 2>&1 | grep -q 'removed the login'; }
+    check "login: a wrong password is refused" login_refused
+    check "login: a refused login isn't saved" asks_for_login no_env za push net.frippery.busybox "$auth_repo"
+    check "login: the right password is saved" login_saved
+    check "login: push with the saved login" no_env za push net.frippery.busybox "$auth_repo"
+    check "login: pull with the saved login" no_env zc pull "$auth_tag"
+    check "login: -v says where the credentials came from" login_used
+    check "logout" logged_out
+    check "logout: pull asks for a login again" asks_for_login no_env zc pull "$auth_tag"
+    za logout "$AUTH_REGISTRY" >/dev/null 2>&1
 fi
 
 # Installed apps are protected against deletion, so remove them through zigsaw.

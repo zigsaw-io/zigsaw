@@ -6,10 +6,12 @@ Think Flatpak for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
-Status: [iteration 2](docs/iteration-2.md) is complete. Zigsaw builds,
+Status: [iteration 3](docs/iteration-3.md) is complete. Zigsaw builds,
 installs, runs, updates and cleans up command-line apps, shares them through
-registries, and puts their commands on PATH. Published apps install by id.
-Git, Node, Python and the zig toolchain are tested.
+registries, and puts their commands on PATH. Published apps install by id,
+and CI checks that their recipes build the same images on a fresh machine.
+Logins are kept per registry, and batch files run as commands. Git, Node,
+Python and the zig toolchain are tested.
 
 ## Quick start
 
@@ -42,6 +44,9 @@ an installed Node), that one wins. `where node` shows which is found first.
 zigsaw build <recipe.json>             build an app from a recipe, install it and its commands
 zigsaw pull <image>                    install an app and its commands from a registry
 zigsaw push <app-id> [<image>]         publish an installed app to a registry
+zigsaw login [--username=<user>] [--password-stdin] <registry>
+                                       check and save a login for a registry
+zigsaw logout <registry>               delete a registry's saved login
 zigsaw run [options] <app-id> [args]   run an installed app
 zigsaw list                            list installed apps and their commands
 zigsaw update [<app-id>...]            rebuild or re-pull apps from where they came from
@@ -64,10 +69,25 @@ with `zigsaw pull <id>`:
 | Node.js | `org.nodejs.node` | 24.21.0 | `node`, `npm`, `npx` |
 | Python | `org.python.python` | 3.14.7 | `python` |
 
-Each image has the same digest as a local build of its recipe.
 [`scripts/publish.sh`](scripts/publish.sh) publishes the recipes listed in
-[`scripts/published-recipes.txt`](scripts/published-recipes.txt), and
-[`tests/published.sh`](tests/published.sh) checks what's published.
+[`scripts/published-recipes.txt`](scripts/published-recipes.txt).
+
+### Reproducibility
+
+Each image has the same digest as a build of its recipe on any machine:
+sources are pinned by SHA-256, and builds write deterministic layers. The
+[Reproduce workflow](.github/workflows/reproduce.yml)
+([runs](https://github.com/zigsaw-io/zigsaw/actions/workflows/reproduce.yml))
+checks this on every push to `main` and every pull request. On a fresh
+Windows runner, it runs the unit tests, builds each published recipe, and
+compares the digest with the image published for the recipe's version
+([`tests/published.sh`](tests/published.sh)).
+
+- A version that isn't published yet is reported, but doesn't fail the run.
+- A different digest for the same version fails it. Either the build isn't
+  reproducible, or the recipe changed without a new version.
+
+The workflow only checks; publishing stays manual.
 
 ## Sharing apps through registries
 
@@ -97,11 +117,30 @@ each one against its digest, and refuses images that aren't zigsaw apps
 (such as Docker container images). Like `build`, it shows what the app is
 allowed to reach before you run it.
 
+Registries on `localhost` are reached over plain HTTP; all others over HTTPS.
+
+### Logging in
+
 Anonymous pulls of public images work without setup. Pushing, and pulling
-private images, needs credentials in `ZIGSAW_REGISTRY_USERNAME` and
-`ZIGSAW_REGISTRY_PASSWORD`. For ghcr.io, that's your GitHub user name and a
-token with the `write:packages` scope. Registries on `localhost` are reached
-over plain HTTP; all others over HTTPS.
+private images, needs a login:
+
+```powershell
+zigsaw login ghcr.io                                          # asks for a user name and password
+$env:TOKEN | zigsaw login --username=you --password-stdin ghcr.io
+zigsaw logout ghcr.io
+```
+
+`login` checks the credentials with the registry, then saves them in Windows
+Credential Manager as `zigsaw:<registry>`, for your Windows user only. A
+login is only ever sent to its own registry. For ghcr.io, the user name is
+your GitHub user name, and the password a token with the `write:packages`
+scope (or `read:packages`, to pull private images).
+
+For CI and scripts, `ZIGSAW_REGISTRY_USERNAME` and `ZIGSAW_REGISTRY_PASSWORD`
+work without a login, but only for the default registry: ghcr.io, or the host
+in `ZIGSAW_REGISTRY`. There they take the place of a saved login. `-v` shows
+which credentials a command uses. zigsaw doesn't send credentials to a token
+service over plain HTTP, unless the registry is on `localhost`.
 
 ## Updating and cleaning up
 
@@ -130,13 +169,32 @@ to finish.
 
 | Option | Effect |
 |---|---|
-| `--command=<name>` | Run one of the app's exported commands, or another executable from the app or System32 (e.g. `--command=cmd`) |
+| `--command=<name>` | Run one of the app's exported commands, or another executable or batch file from the app's PATH or System32 (e.g. `--command=cmd`) |
 | `--sandbox=soft\|appcontainer` | `soft` (default) shapes the environment only; `appcontainer` also enforces permissions |
 | `--filesystem=<cwd\|path>[:ro]` | Grant access to a host location |
 | `--share=network` / `--unshare=network` | Override the app's network permission |
 | `--env=NAME=VALUE` | Set an environment variable |
 | `--ephemeral` | Use a fresh data directory, deleted after the run |
 | `-v`, `--verbose` | Print the resolved command, environment and grants |
+
+### Batch files
+
+An app's command, an export, or a `--command` can be a batch file (`.cmd` or
+`.bat`). zigsaw runs it through System32's `cmd.exe`, and quotes the arguments
+so that the batch file gets each one exactly as given. Characters that
+cmd.exe would act on, such as `&`, `|`, `%` and `^`, can't run a command of
+their own. An argument with a line break can't be passed to a batch file
+safely, so it's refused.
+
+The commands of global npm packages are batch files, so after
+`zigsaw run --command=npm org.nodejs.node install -g typescript`, this runs `tsc`:
+
+```powershell
+zigsaw run --command=tsc org.nodejs.node --version
+```
+
+Ctrl+C behaves as when the batch file runs alone: the program it started gets
+the Ctrl+C, and cmd.exe then asks "Terminate batch job (Y/N)?".
 
 ### Changing an app's options
 
@@ -276,8 +334,9 @@ bash tests/matrix.sh    # runs real tools through both sandboxes (Git Bash, netw
 bash tests/shims.sh     # command shims end to end
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
-bash tests/registry.sh  # push, pull and update through a local registry (see the script's header)
-bash tests/published.sh # the published images: anonymous pulls, digests, redirects
+bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
+bash tests/registry.sh  # push, pull, update and logins through local registries (see the script's header)
+bash tests/published.sh # fresh builds have the published digests; anonymous pulls, latest, redirects
 ```
 
 The scripts build the recipes they need from [recipes/](recipes/) into
@@ -288,11 +347,11 @@ tests need a local registry such as [zot](https://zotregistry.dev) on
 
 ## Known gaps
 
-- Batch files (`.cmd`/`.bat`) can't be the command yet; run them through
-  `--command=cmd <app> /c ...`, or export the program they wrap, as Node's
-  recipe does for npm. The commands of global npm packages are batch files,
-  so `npm install -g typescript` works, but `tsc` runs as
-  `zigsaw run --command=cmd org.nodejs.node /c tsc`.
+- Commands that an app installs while it runs, such as `tsc` from
+  `npm install -g typescript`, run with `zigsaw run --command=tsc org.nodejs.node`,
+  but aren't put on PATH.
+- A batch file that turns on delayed expansion itself
+  (`setlocal EnableDelayedExpansion`) expands `!var!` in its own arguments.
 - Under `--sandbox=appcontainer`, access granted to a host path lasts until
   the app is removed, even after the permission or override that granted it
   is gone.
@@ -302,10 +361,8 @@ tests need a local registry such as [zot](https://zotregistry.dev) on
 - Installing an app with many files is limited by Defender scanning each new
   file: about 16 s for zig's 19.5k files, 3 s for Node.
 - The registry isn't isolated.
-- Registry credentials come only from environment variables, and are offered
-  to every registry. With a ghcr.io token set, pulls from Docker Hub fail,
-  and the token goes to Docker Hub's token service. Unset them when you
-  aren't pushing.
+- zigsaw keeps its own registry logins; it doesn't read Docker's
+  `config.json` or credential helpers.
 - Multi-platform image indexes aren't supported.
 
-[docs/iteration-2.md](docs/iteration-2.md) lists what hasn't been tested yet.
+[docs/iteration-3.md](docs/iteration-3.md) lists what hasn't been tested yet.

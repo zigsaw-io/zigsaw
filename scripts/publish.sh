@@ -5,7 +5,8 @@
 #
 #   scripts/publish.sh [recipe.json...]     (default: those in published-recipes.txt)
 #
-# Needs Git Bash, a built zigsaw (zig build), and credentials in
+# Needs Git Bash, a built zigsaw (zig build), and credentials for the
+# registry: a login saved with `zigsaw login ghcr.io`, or
 # ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD. For ghcr.io, that's a
 # GitHub user and a token with the write:packages scope, and new packages
 # start out private: make each one public in its package settings on GitHub.
