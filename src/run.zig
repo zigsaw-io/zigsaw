@@ -1,9 +1,10 @@
 //! `zigsaw run`: starts an installed app in a clean environment.
 //!
 //! Every run gets:
-//! - an environment built from scratch: PATH is the app's directories plus the
-//!   system directories, and the user profile folders (USERPROFILE, APPDATA,
-//!   LOCALAPPDATA, TEMP) point into the app's data directory;
+//! - an environment built from scratch: PATH is the app's directories, then
+//!   its runtimes', then the system directories; the runtimes' variables and
+//!   then the app's are set; and the user profile folders (USERPROFILE,
+//!   APPDATA, LOCALAPPDATA, TEMP) point into the app's data directory;
 //! - the data directory as its working directory, unless the app has the
 //!   "cwd" filesystem permission;
 //! - a job object, so the whole process tree ends when the run ends.
@@ -21,6 +22,7 @@ const appcontainer = @import("appcontainer.zig");
 const oci = @import("oci.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const environment = @import("environment.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
 const fail = Context.fail;
@@ -34,15 +36,6 @@ pub const Options = struct {
     command: ?[]const u8 = null,
     /// From the command line. They go over the app's saved overrides.
     settings: override.Settings = .{},
-};
-
-/// Host variables passed through unchanged. Everything else from the host
-/// environment is dropped.
-const passthrough_env = [_][]const u8{
-    "SystemRoot",           "windir",                 "SystemDrive",
-    "ComSpec",              "PATHEXT",                "OS",
-    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
-    "PROCESSOR_LEVEL",      "PROCESSOR_REVISION",     "USERNAME",
 };
 
 /// Runs the app and returns its exit code.
@@ -77,16 +70,20 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     defer if (run_dir) |d| d.delete(ctx.store, arena);
     store_lock.release(io);
     const data_dir = if (run_dir) |d| d.path else try ctx.store.path(arena, &.{ "data", cfg.id });
-    const profile: Profile = try .init(arena, data_dir);
+    const profile: environment.Profile = try .init(arena, data_dir);
     for ([_][]const u8{ profile.roaming, profile.temp }) |dir| try Io.Dir.cwd().createDirPath(io, dir);
 
     const host_cwd = try std.process.currentPathAlloc(io, arena);
     const cwd = if (cwd_granted) host_cwd else profile.home;
 
     const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
-    const placeholders: oci.Placeholders = .{ .app = image.deploy_dir, .data = data_dir };
-    const app_path = try appPathDirs(arena, placeholders, cfg.path);
-    const command = try resolveCommand(io, arena, placeholders, cfg, opts.command, app_path, system_root);
+    const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir);
+    const placeholders: oci.Placeholders = .{ .app = image.deploy_dir, .data = data_dir, .runtimes = runtimes.dirs };
+    // The app's directories first, then each runtime's.
+    var app_path: std.ArrayList([]const u8) = .empty;
+    try app_path.appendSlice(arena, try environment.pathDirs(arena, placeholders, cfg.path));
+    for (runtimes.own, cfg.runtimes.map.values()) |p, r| try app_path.appendSlice(arena, try environment.pathDirs(arena, p, r.path));
+    const command = try resolveCommand(io, arena, placeholders, cfg, opts.command, app_path.items, system_root);
     const args = try std.mem.concat(arena, []const u8, &.{ command.args, opts.args });
     // Batch files run through cmd.exe; System32's, not ComSpec's.
     const exe = if (command.batch) try std.fmt.allocPrint(arena, "{s}\\System32\\cmd.exe", .{system_root}) else command.exe;
@@ -98,18 +95,23 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         }
     else
         try process.buildCommandLine(arena, exe, args);
-    const env = try buildEnv(arena, ctx.env, .{
+    // The runtimes' variables first, so the app's win.
+    var app_env: std.ArrayList(environment.Var) = .empty;
+    for (runtimes.own, cfg.runtimes.map.values()) |p, r| try environment.expand(arena, &app_env, p, r.env);
+    try environment.expand(arena, &app_env, placeholders, cfg.env);
+    const env = try environment.build(arena, ctx.env, .{
         .id = cfg.id,
         .profile = profile,
-        .placeholders = placeholders,
-        .app_path = app_path,
+        .path = app_path.items,
         .system_root = system_root,
-        .app_env = cfg.env,
+        .vars = app_env.items,
         .extra = settings.env,
     });
 
     if (ctx.verbose) {
         note("app      {s} {s} ({s})", .{ cfg.id, cfg.version, image.ref.manifest });
+        for (cfg.runtimes.map.keys(), cfg.runtimes.map.values(), image.runtime_dirs) |alias, r, dir|
+            note("runtime  {s}: {s} {s} ({s})", .{ alias, r.id, r.version, dir });
         if (!saved.isEmpty()) note("override {f}", .{saved});
         note("sandbox  {t}, network {s}", .{ sandbox, if (network) "on" else "off" });
         note("exe      {s}", .{exe});
@@ -127,6 +129,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         },
         .appcontainer => security = try setUpAppContainer(ctx, cfg.id, .{
             .deploy_dir = image.deploy_dir,
+            .runtime_dirs = image.runtime_dirs,
             .data_dir = data_dir,
             .host_cwd = host_cwd,
             .grants = grants.items,
@@ -137,35 +140,18 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     return process.spawn(arena, .{
         .exe = exe,
         .command_line = command_line,
-        .env_block = try encodeEnvBlock(arena, env.items),
+        .env_block = try environment.encodeBlock(arena, env.items),
         .cwd = cwd,
         .security = if (security) |*s| s else null,
     });
 }
-
-const Profile = struct {
-    home: []const u8,
-    roaming: []const u8,
-    local: []const u8,
-    temp: []const u8,
-
-    fn init(arena: Allocator, data_dir: []const u8) !Profile {
-        const home = try std.fs.path.join(arena, &.{ data_dir, "home" });
-        const local = try std.fs.path.join(arena, &.{ home, "AppData", "Local" });
-        return .{
-            .home = home,
-            .roaming = try std.fs.path.join(arena, &.{ home, "AppData", "Roaming" }),
-            .local = local,
-            .temp = try std.fs.path.join(arena, &.{ local, "Temp" }),
-        };
-    }
-};
 
 // ---------------------------------------------------------------------------
 // AppContainer
 
 const AppContainerSetup = struct {
     deploy_dir: []const u8,
+    runtime_dirs: []const []const u8,
     data_dir: []const u8,
     host_cwd: []const u8,
     grants: []const oci.FsGrant,
@@ -179,6 +165,7 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     const Grant = struct { path: []const u8, access: acl.Access, host: bool };
     var wanted: std.ArrayList(Grant) = .empty;
     try wanted.append(arena, .{ .path = setup.deploy_dir, .access = .read_execute, .host = false });
+    for (setup.runtime_dirs) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     try wanted.append(arena, .{ .path = setup.data_dir, .access = .full, .host = false });
     for (setup.grants) |g| try wanted.append(arena, .{
         .path = g.path orelse setup.host_cwd,
@@ -215,20 +202,22 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
 // ---------------------------------------------------------------------------
 // Command resolution and command lines
 
-fn appPathDirs(arena: Allocator, placeholders: oci.Placeholders, entries: []const []const u8) ![]const []const u8 {
-    const deploy_dir = placeholders.app;
-    var dirs: std.ArrayList([]const u8) = .empty;
-    for (entries) |entry| {
-        const dir = if (oci.isPlaceholderPath(entry))
-            try placeholders.expand(arena, entry)
-        else if (std.mem.eql(u8, entry, "."))
-            try arena.dupe(u8, deploy_dir)
-        else
-            try std.fs.path.join(arena, &.{ deploy_dir, entry });
-        std.mem.replaceScalar(u8, dir, '/', '\\');
-        try dirs.append(arena, dir);
+const Runtimes = struct {
+    /// Each runtime's directory, by alias, for the app's placeholders.
+    dirs: []const oci.Placeholders.Dir,
+    /// The placeholders of each runtime's own entries: ${app} is the
+    /// runtime's directory, and ${data} the app's data directory.
+    own: []const oci.Placeholders,
+};
+
+fn runtimeDirs(arena: Allocator, cfg: oci.AppConfig, dirs: []const []const u8, data_dir: []const u8) !Runtimes {
+    const named = try arena.alloc(oci.Placeholders.Dir, dirs.len);
+    const own = try arena.alloc(oci.Placeholders, dirs.len);
+    for (cfg.runtimes.map.keys(), dirs, named, own) |alias, dir, *n, *o| {
+        n.* = .{ .alias = alias, .path = dir };
+        o.* = .{ .app = dir, .data = data_dir };
     }
-    return dirs.items;
+    return .{ .dirs = named, .own = own };
 }
 
 const Command = struct {
@@ -261,14 +250,13 @@ fn resolveCommand(
     system_root: []const u8,
 ) !Command {
     const deploy_dir = placeholders.app;
-    const name = requested orelse return .init(try appFile(arena, deploy_dir, config.command), &.{});
+    const name = requested orelse
+        return .init(try commandPath(arena, placeholders, config.command), try expandAll(arena, placeholders, config.args));
 
     var exported = config.exports.map.iterator();
     while (exported.next()) |e| {
         if (!std.ascii.eqlIgnoreCase(e.key_ptr.*, name)) continue;
-        const args = try arena.alloc([]const u8, e.value_ptr.args.len);
-        for (args, e.value_ptr.args) |*arg, template| arg.* = try placeholders.expand(arena, template);
-        return .init(try appFile(arena, deploy_dir, e.value_ptr.command), args);
+        return .init(try commandPath(arena, placeholders, e.value_ptr.command), try expandAll(arena, placeholders, e.value_ptr.args));
     }
 
     const resolved = try findCommand(io, arena, deploy_dir, name, app_path, system_root) orelse
@@ -276,10 +264,21 @@ fn resolveCommand(
     return .init(resolved, &.{});
 }
 
-fn appFile(arena: Allocator, deploy_dir: []const u8, rel: []const u8) ![]u8 {
-    const p = try std.fs.path.join(arena, &.{ deploy_dir, rel });
+/// A config's command: relative to the app's directory, or starting with a
+/// placeholder.
+fn commandPath(arena: Allocator, placeholders: oci.Placeholders, command: []const u8) ![]u8 {
+    const p = if (oci.isPlaceholderPath(command))
+        try placeholders.expand(arena, command)
+    else
+        try std.fs.path.join(arena, &.{ placeholders.app, command });
     std.mem.replaceScalar(u8, p, '/', '\\');
     return p;
+}
+
+fn expandAll(arena: Allocator, placeholders: oci.Placeholders, templates: []const []const u8) ![]const []const u8 {
+    const out = try arena.alloc([]const u8, templates.len);
+    for (out, templates) |*arg, template| arg.* = try placeholders.expand(arena, template);
+    return out;
 }
 
 fn findCommand(
@@ -308,97 +307,4 @@ fn findCommand(
         if (try Store.exists(io, p)) return p;
     };
     return null;
-}
-
-// ---------------------------------------------------------------------------
-// Environment
-
-const EnvVar = struct { name: []const u8, value: []const u8 };
-
-const EnvSpec = struct {
-    id: []const u8,
-    profile: Profile,
-    /// For the app's own variables; `extra` is used as given.
-    placeholders: oci.Placeholders,
-    app_path: []const []const u8,
-    system_root: []const u8,
-    app_env: std.json.ArrayHashMap([]const u8),
-    /// "NAME=VALUE" from --env and overrides, set last.
-    extra: []const []const u8,
-};
-
-fn buildEnv(arena: Allocator, host: *const std.process.Environ.Map, spec: EnvSpec) !std.ArrayList(EnvVar) {
-    var env: std.ArrayList(EnvVar) = .empty;
-    for (passthrough_env) |name| {
-        if (host.get(name)) |value| try setEnv(arena, &env, name, value);
-    }
-
-    var path: std.ArrayList(u8) = .empty;
-    for (spec.app_path) |dir| try path.print(arena, "{s};", .{dir});
-    try path.print(arena, "{0s}\\System32;{0s};{0s}\\System32\\Wbem", .{spec.system_root});
-    try setEnv(arena, &env, "PATH", path.items);
-
-    const p = spec.profile;
-    try setEnv(arena, &env, "USERPROFILE", p.home);
-    try setEnv(arena, &env, "HOME", p.home);
-    if (p.home.len > 2 and p.home[1] == ':') {
-        try setEnv(arena, &env, "HOMEDRIVE", p.home[0..2]);
-        try setEnv(arena, &env, "HOMEPATH", p.home[2..]);
-    }
-    try setEnv(arena, &env, "APPDATA", p.roaming);
-    try setEnv(arena, &env, "LOCALAPPDATA", p.local);
-    try setEnv(arena, &env, "TEMP", p.temp);
-    try setEnv(arena, &env, "TMP", p.temp);
-    try setEnv(arena, &env, "ZIGSAW_ID", spec.id);
-
-    var it = spec.app_env.map.iterator();
-    while (it.next()) |kv| try setEnv(arena, &env, kv.key_ptr.*, try spec.placeholders.expand(arena, kv.value_ptr.*));
-    for (spec.extra) |assignment| {
-        const eq = std.mem.indexOfScalar(u8, assignment, '=') orelse
-            return fail("--env expects NAME=VALUE, got \"{s}\"", .{assignment});
-        try setEnv(arena, &env, assignment[0..eq], assignment[eq + 1 ..]);
-    }
-    return env;
-}
-
-/// Sets a variable, replacing any existing one whose name matches
-/// case-insensitively, as Windows treats them.
-fn setEnv(arena: Allocator, env: *std.ArrayList(EnvVar), name: []const u8, value: []const u8) !void {
-    for (env.items) |*kv| {
-        if (std.os.windows.eqlIgnoreCaseWtf8(kv.name, name)) {
-            kv.value = value;
-            return;
-        }
-    }
-    try env.append(arena, .{ .name = name, .value = value });
-}
-
-/// Encodes "NAME=VALUE\0...\0\0" in UTF-16, sorted by name as Windows expects.
-fn encodeEnvBlock(arena: Allocator, vars: []EnvVar) ![]u16 {
-    std.mem.sort(EnvVar, vars, {}, struct {
-        fn lessThan(_: void, a: EnvVar, b: EnvVar) bool {
-            return std.ascii.lessThanIgnoreCase(a.name, b.name);
-        }
-    }.lessThan);
-    var block: std.ArrayList(u16) = .empty;
-    for (vars) |kv| {
-        const line = try std.fmt.allocPrint(arena, "{s}={s}", .{ kv.name, kv.value });
-        try block.appendSlice(arena, try std.unicode.wtf8ToWtf16LeAlloc(arena, line));
-        try block.append(arena, 0);
-    }
-    try block.append(arena, 0);
-    return block.items;
-}
-
-test encodeEnvBlock {
-    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    var vars: std.ArrayList(EnvVar) = .empty;
-    try setEnv(arena, &vars, "Path", "x");
-    try setEnv(arena, &vars, "ComSpec", "cmd");
-    try setEnv(arena, &vars, "PATH", "y");
-    const block = try encodeEnvBlock(arena, vars.items);
-    const want = std.unicode.utf8ToUtf16LeStringLiteral("ComSpec=cmd\x00Path=y\x00\x00");
-    try std.testing.expectEqualSlices(u16, want, block);
 }

@@ -1,7 +1,11 @@
 # The recipes scripts/publish.sh publishes and tests/published.sh checks,
-# relative to recipes/. zig.json isn't published.
+# relative to recipes/, in the order they're built: an image comes before the
+# recipes that pin it as a runtime or SDK, so those find it in the store.
 busybox.json
 ripgrep.json
 mingit.json
 node.json
+prettier.json
 python.json
+zig.json
+sqlite.json

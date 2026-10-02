@@ -20,7 +20,7 @@ pub const default_registry = "ghcr.io/zigsaw-io";
 pub const registry_var = "ZIGSAW_REGISTRY";
 
 /// An image as the user named it, resolved to a full reference.
-const Target = struct {
+pub const Target = struct {
     /// The full reference, as refs record it.
     text: []const u8,
     ref: Registry.Reference,
@@ -28,7 +28,7 @@ const Target = struct {
     app_id: ?[]const u8,
 };
 
-fn resolve(ctx: *Context, text: []const u8) !Target {
+pub fn resolve(ctx: *Context, text: []const u8) !Target {
     const registry = ctx.env.get(registry_var) orelse default_registry;
     const short = expandShort(ctx.arena, registry, text) catch
         return fail("\"{s}\" isn't an app id, or an image reference like ghcr.io/owner/app:tag", .{text});
@@ -83,11 +83,11 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
 
     // The config first: the image has to be a zigsaw app, and the one asked
     // for, before any layer is worth downloading.
+    if (!oci.isConfigType(manifest.config.mediaType))
+        return fail("{f} is not a zigsaw app (its config type is {s}; it may be a container image)", .{ ref, manifest.config.mediaType });
     try downloadBlob(ctx, &registry, manifest.config);
-    const config = std.json.parseFromSliceLeaky(oci.AppConfig, arena, try ctx.store.readBlob(arena, manifest.config.digest), .{
-        .ignore_unknown_fields = true,
-    }) catch return fail("{f}: its app config can't be read", .{ref});
-    try oci.validateConfig(target.text, config);
+    const config = try oci.parseConfig(arena, target.text, manifest.config.mediaType, try ctx.store.readBlob(arena, manifest.config.digest));
+    try oci.validateLayers(target.text, manifest, config);
     if (target.app_id) |id| if (!std.ascii.eqlIgnoreCase(id, config.id))
         return fail("{f} holds {s}, not {s}", .{ ref, config.id, id });
 
@@ -165,8 +165,8 @@ test expandShort {
     try std.testing.expectError(error.InvalidId, expandShort(arena, default_registry, ":latest"));
 }
 
-/// Parses a fetched manifest, and checks it is a single zigsaw image zigsaw
-/// can unpack.
+/// Parses a fetched manifest, and checks it is a single image rather than an
+/// index. Whether it's a zigsaw app is up to its config.
 fn parseManifest(arena: std.mem.Allocator, ref: Registry.Reference, bytes: []const u8) !oci.Manifest {
     const Probe = struct { mediaType: ?[]const u8 = null, manifests: ?[]const std.json.Value = null };
     const probe = std.json.parseFromSliceLeaky(Probe, arena, bytes, .{ .ignore_unknown_fields = true }) catch
@@ -174,13 +174,16 @@ fn parseManifest(arena: std.mem.Allocator, ref: Registry.Reference, bytes: []con
     if (probe.manifests != null)
         return fail("{f} is a multi-platform index, not a zigsaw image", .{ref});
 
-    const manifest = std.json.parseFromSliceLeaky(oci.Manifest, arena, bytes, .{ .ignore_unknown_fields = true }) catch
-        return fail("{f} returned a manifest zigsaw can't read", .{ref});
-    if (!std.mem.eql(u8, manifest.config.mediaType, oci.media_type.config))
-        return fail("{f} is not a zigsaw app (its config type is {s}; it may be a container image)", .{ ref, manifest.config.mediaType });
-    for (manifest.layers) |l| {
-        if (!std.mem.eql(u8, l.mediaType, oci.media_type.layer_tar))
-            return fail("{f} has a layer of type {s}, which zigsaw can't unpack", .{ ref, l.mediaType });
-    }
-    return manifest;
+    return std.json.parseFromSliceLeaky(oci.Manifest, arena, bytes, .{ .ignore_unknown_fields = true }) catch
+        fail("{f} returned a manifest zigsaw can't read", .{ref});
+}
+
+/// The digest of the manifest `image_text` names in its registry, without
+/// downloading anything else.
+pub fn manifestDigest(ctx: *Context, image_text: []const u8) ![]const u8 {
+    const target = try resolve(ctx, image_text);
+    var registry: Registry = undefined;
+    try registry.init(ctx, target.ref, "pull");
+    defer registry.deinit();
+    return (try registry.fetchManifest()).digest;
 }

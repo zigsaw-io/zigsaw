@@ -7,6 +7,8 @@
 #   build isn't reproducible, or the recipe changed without a new version.
 # - A version that isn't published yet is reported, but isn't a failure:
 #   publishing is manual (scripts/publish.sh).
+# - An image built with a host toolchain (MSVC) isn't compared, since it isn't
+#   expected to match a build elsewhere.
 # - The pulled app must run, `latest` must be the same image, and the app must
 #   then be up to date.
 # CI runs this on a fresh Windows runner (.github/workflows/reproduce.yml), so
@@ -62,13 +64,21 @@ smoke_args() {
     net.frippery.busybox) printf '%s\n' true ;;
     org.nodejs.node) printf '%s\n' '-e 0' ;;
     org.python.python) printf '%s\n' '-c pass' ;;
+    org.ziglang.zig) printf '%s\n' version ;;
     *) printf '%s\n' --version ;;
     esac
 }
 ref_digest() { grep -o 'sha256:[0-9a-f]*' "$1\\refs\\$2.json"; }
 manifest() { cat "$1\\blobs\\sha256\\${2#sha256:}"; }
 # The digests a manifest lists: <store> <manifest digest> config|layers
-listed() { manifest "$1" "$2" | tr -d ' \r\n' | grep -o "\"$3\":[{[][^]}]*" | grep -o 'sha256:[0-9a-f]*'; }
+listed() { manifest "$1" "$2" | tr -d ' \r\n' | grep -o "\"$3\":\(\[[^]]*\]\|{[^}]*}\)" | grep -o 'sha256:[0-9a-f]*'; }
+# Whether an image was built with a host toolchain, such as MSVC, and so
+# isn't expected to match a build on another machine: <store> <manifest digest>
+host_built() {
+    local config
+    config=$(listed "$1" "$2" config)
+    tr -d ' \r\n' <"$1\\blobs\\sha256\\${config#sha256:}" | grep -q '"host":{"'
+}
 
 ids=()
 for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); do
@@ -99,7 +109,9 @@ for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); 
     pass "$id $version: pulls anonymously by app id"
 
     published=$(ref_digest "$pull_store" "$id")
-    if [ "$published" = "$built" ]; then
+    if host_built "$build_store" "$built"; then
+        printf 'host  %s %s is built with a host toolchain, so it isn'"'"'t compared\n' "$id" "$version"
+    elif [ "$published" = "$built" ]; then
         pass "$id $version: has the digest of a fresh build"
     else
         manifest "$build_store" "$built" >"$logs\\$id.built-manifest.json"

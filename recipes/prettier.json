@@ -1,0 +1,23 @@
+{
+  "id": "io.prettier.prettier",
+  "version": "3.9.9",
+  "command": "${node}\\node.exe",
+  "args": ["${app}\\bin\\prettier.cjs"],
+  "permissions": { "filesystem": ["cwd"] },
+  "runtimes": { "node": "org.nodejs.node:24.21.0@sha256:cb9c0bf069bdeb47c7de7a221a807c6540f67fdb6f3d16ea9a7be1ad4c77d247" },
+  "exports": {
+    "prettier": { "command": "${node}\\node.exe", "args": ["${app}\\bin\\prettier.cjs"] }
+  },
+  "modules": [
+    {
+      "name": "prettier",
+      "sources": [
+        {
+          "url": "https://registry.npmjs.org/prettier/-/prettier-3.9.9.tgz",
+          "sha256": "c3b162d30c45126873cc6338a539383e92120a390d10de78f373f42c2045b338",
+          "strip": 1
+        }
+      ]
+    }
+  ]
+}

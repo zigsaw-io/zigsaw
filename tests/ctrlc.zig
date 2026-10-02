@@ -339,10 +339,13 @@ fn ignoreEvent(_: DWORD) callconv(.winapi) BOOL {
 }
 
 /// node.exe in the installed app's deployment, found through its ref.
+/// node.exe in the deployment of the app's own layer, the manifest's last.
 fn installedNode(io: std.Io, arena: Allocator, store: []const u8) ![]const u8 {
     const ref = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ store, "refs", "org.nodejs.node.json" }), arena, .limited(64 << 10));
     const at = std.mem.indexOf(u8, ref, "sha256:") orelse return error.BadRef;
-    return std.fs.path.join(arena, &.{ store, "deploy", ref[at + 7 .. at + 7 + 64], "node.exe" });
+    const manifest = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ store, "blobs", "sha256", ref[at + 7 .. at + 7 + 64] }), arena, .limited(1 << 20));
+    const layer = std.mem.lastIndexOf(u8, manifest, "sha256:") orelse return error.BadManifest;
+    return std.fs.path.join(arena, &.{ store, "deploy", manifest[layer + 7 .. layer + 7 + 64], "node.exe" });
 }
 
 fn exists(io: std.Io, p: []const u8) !bool {

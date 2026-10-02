@@ -2,12 +2,15 @@
 //!
 //!   <root>\blobs\sha256\<hex>     OCI blobs: manifests, configs, layers
 //!   <root>\refs\<id>.json         installed app -> manifest digest
-//!   <root>\deploy\<hex>\          unpacked app tree, one per manifest digest
+//!   <root>\deploy\<hex>\          an unpacked layer, by layer digest: an app's own
+//!                                 files, or a runtime's, shared by the apps using it
 //!   <root>\data\<id>\             per-app writable state, kept across runs
 //!   <root>\grants\<id>.txt        host paths whose ACLs name the app's AppContainer
 //!   <root>\overrides\<id>.json    run options saved for the app (see override.zig)
 //!   <root>\bin\                   command shims for exported commands (see exports.zig)
 //!   <root>\cache\downloads\<hex>  fetched build sources, by sha256
+//!   <root>\cache\images\<hex>     marks a manifest that builds use (see deps.zig)
+//!   <root>\cache\builds\<hex>     the manifest a build with these inputs made (see builder.zig)
 //!   <root>\tmp\                   staging area
 //!   <root>\lock                   see "Locks" below
 //!
@@ -19,6 +22,7 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const acl = @import("acl.zig");
+const win32 = @import("win32.zig");
 const oci = @import("oci.zig");
 const layer = @import("layer.zig");
 const Context = @import("Context.zig");
@@ -30,7 +34,7 @@ root: []const u8,
 /// Report step timings, as `zigsaw -v` asks for.
 verbose: bool = false,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "overrides", "bin", "cache\\downloads", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "overrides", "bin", "cache\\downloads", "cache\\images", "cache\\builds", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|
@@ -75,7 +79,7 @@ pub const RunDir = struct {
 
     /// Deletes the directory and its lock.
     pub fn delete(d: RunDir, s: Store, arena: Allocator) void {
-        Io.Dir.cwd().deleteTree(s.io, d.path) catch {};
+        deleteTree(s.io, arena, d.path) catch {};
         d.lock.release(s.io);
         Io.Dir.cwd().deleteFile(s.io, lockPathFor(arena, d.path) catch return) catch {};
     }
@@ -95,7 +99,7 @@ pub fn makeRunDir(s: Store, arena: Allocator) !RunDir {
 fn discard(s: Store, arena: Allocator, p: []const u8) !void {
     const trash = try s.tmpPath(arena, "trash");
     try Io.Dir.rename(.cwd(), p, .cwd(), trash, s.io);
-    Io.Dir.cwd().deleteTree(s.io, trash) catch |err|
+    deleteTree(s.io, arena, trash) catch |err|
         note("warning: couldn't delete all of {s} ({t}); `zigsaw prune` will retry", .{ trash, err });
 }
 
@@ -270,43 +274,84 @@ pub fn listRefs(s: Store, arena: Allocator) ![]Ref {
 // ---------------------------------------------------------------------------
 // Images and deployments
 
+/// An image's manifest and config, read from the store and checked.
+pub const Loaded = struct {
+    manifest: oci.Manifest,
+    config: oci.AppConfig,
+};
+
+/// Reads the image with this manifest digest. `what` names it in messages.
+pub fn readImage(s: Store, arena: Allocator, what: []const u8, manifest_digest: []const u8) !Loaded {
+    const manifest = try s.readManifest(arena, manifest_digest);
+    const config = try oci.parseConfig(arena, what, manifest.config.mediaType, try s.readBlob(arena, manifest.config.digest));
+    try oci.validateLayers(what, manifest, config);
+    return .{ .manifest = manifest, .config = config };
+}
+
+/// The image with this manifest digest if the store has all of it: its
+/// manifest, config and layers. Null if any is missing.
+pub fn readCompleteImage(s: Store, arena: Allocator, manifest_digest: []const u8) !?Loaded {
+    const hex = oci.digestHex(manifest_digest) orelse return null;
+    if (!try exists(s.io, try s.blobPath(arena, hex))) return null;
+    const manifest = try s.readManifest(arena, manifest_digest);
+    for ([_][]const oci.Descriptor{ &.{manifest.config}, manifest.layers }) |descs| for (descs) |d| {
+        const h = oci.digestHex(d.digest) orelse return null;
+        if (!try exists(s.io, try s.blobPath(arena, h))) return null;
+    };
+    return try s.readImage(arena, manifest_digest, manifest_digest);
+}
+
+pub fn readManifest(s: Store, arena: Allocator, manifest_digest: []const u8) !oci.Manifest {
+    return std.json.parseFromSliceLeaky(oci.Manifest, arena, try s.readBlob(arena, manifest_digest), .{
+        .ignore_unknown_fields = true,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => |e| e,
+        else => fail("manifest {s} in the store can't be read", .{manifest_digest}),
+    };
+}
+
 pub const Image = struct {
     ref: Ref,
     manifest: oci.Manifest,
     config: oci.AppConfig,
-    /// Absolute path of the unpacked, shared, read-only app tree.
+    /// Absolute path of the app's own files: its layer's shared, read-only
+    /// deployment.
     deploy_dir: []const u8,
-    /// Marks the deployment as in use until released, or until zigsaw exits.
-    in_use: Lock,
+    /// The deployments of its runtimes, in the order of `config.runtimes`.
+    runtime_dirs: []const []const u8,
 };
 
-/// Loads an installed app to run it: locks its deployment as in use, and
-/// unpacks it first if it's missing.
+/// Loads an installed app to run it: locks the deployments of its layers as
+/// in use, and unpacks any that are missing.
 pub fn loadImage(s: Store, arena: Allocator, id: []const u8) !Image {
     const ref = try s.readRef(arena, id) orelse
         return fail("{s} is not installed (see `zigsaw list`)", .{id});
-    const manifest = try std.json.parseFromSliceLeaky(oci.Manifest, arena, try s.readBlob(arena, ref.manifest), .{
-        .ignore_unknown_fields = true,
-    });
-    if (!std.mem.eql(u8, manifest.config.mediaType, oci.media_type.config))
-        return fail("{s}: config type {s} is not a zigsaw app", .{ id, manifest.config.mediaType });
-    const config = try std.json.parseFromSliceLeaky(oci.AppConfig, arena, try s.readBlob(arena, manifest.config.digest), .{
-        .ignore_unknown_fields = true,
-    });
-    // Lock before deploying: if the deployment is being deleted, this waits,
-    // and `deploy` then unpacks it again.
-    const in_use = try openLock(s.io, try lockPathFor(arena, try s.deployPath(arena, ref.manifest)), .shared, .wait);
+    const image = try s.readImage(arena, id, ref.manifest);
+    const dirs = try s.useLayers(arena, image.manifest.layers);
     return .{
         .ref = ref,
-        .manifest = manifest,
-        .config = config,
-        .deploy_dir = try s.deploy(arena, ref.manifest, manifest),
-        .in_use = in_use,
+        .manifest = image.manifest,
+        .config = image.config,
+        .deploy_dir = dirs[dirs.len - 1],
+        .runtime_dirs = dirs[0 .. dirs.len - 1],
     };
 }
 
-pub fn deployPath(s: Store, arena: Allocator, manifest_digest: []const u8) ![]u8 {
-    const hex = oci.digestHex(manifest_digest) orelse return fail("malformed digest \"{s}\"", .{manifest_digest});
+/// Locks each layer's deployment as in use until zigsaw exits, unpacking it
+/// first if it's missing, and returns their paths.
+pub fn useLayers(s: Store, arena: Allocator, layers: []const oci.Descriptor) ![]const []const u8 {
+    const dirs = try arena.alloc([]const u8, layers.len);
+    for (layers, dirs) |l, *dir| {
+        // Lock before deploying: if the deployment is being deleted, this
+        // waits, and `deploy` then unpacks it again.
+        _ = try openLock(s.io, try lockPathFor(arena, try s.deployPath(arena, l.digest)), .shared, .wait);
+        dir.* = try s.deploy(arena, l);
+    }
+    return dirs;
+}
+
+pub fn deployPath(s: Store, arena: Allocator, layer_digest: []const u8) ![]u8 {
+    const hex = oci.digestHex(layer_digest) orelse return fail("malformed digest \"{s}\"", .{layer_digest});
     return s.path(arena, &.{ "deploy", hex });
 }
 
@@ -318,8 +363,8 @@ pub const Deletion = enum {
 
 /// Deletes a deployment, unless it is in use. A deployment that doesn't exist
 /// counts as deleted.
-pub fn deleteDeployment(s: Store, arena: Allocator, manifest_digest: []const u8) !Deletion {
-    const dest = try s.deployPath(arena, manifest_digest);
+pub fn deleteDeployment(s: Store, arena: Allocator, layer_digest: []const u8) !Deletion {
+    const dest = try s.deployPath(arena, layer_digest);
     if (!try exists(s.io, dest)) return .deleted;
     // The lock file stays: a run may be waiting on it, and `prune` removes it
     // once no deployment goes with it.
@@ -338,23 +383,51 @@ pub fn deleteDeployment(s: Store, arena: Allocator, manifest_digest: []const u8)
 }
 
 /// Whether a run is using a deployment.
-pub fn deploymentInUse(s: Store, arena: Allocator, manifest_digest: []const u8) !bool {
-    return isLocked(s.io, try lockPathFor(arena, try s.deployPath(arena, manifest_digest)));
+pub fn deploymentInUse(s: Store, arena: Allocator, layer_digest: []const u8) !bool {
+    return isLocked(s.io, try lockPathFor(arena, try s.deployPath(arena, layer_digest)));
 }
 
-/// Deletes the deployment of a manifest no installed app points at any more.
-/// Deployments are shared by apps built from identical inputs.
-pub fn deleteDeploymentIfUnused(s: Store, arena: Allocator, manifest_digest: []const u8) !?Deletion {
-    for (try s.listRefs(arena)) |ref| {
-        if (std.mem.eql(u8, ref.manifest, manifest_digest)) return null;
+/// Deletes the deployments of a manifest's layers that nothing uses any more
+/// (see `usedLayers`). Returns whether any had to be kept because a run is
+/// using it.
+pub fn deleteUnusedDeployments(s: Store, arena: Allocator, manifest_digest: []const u8) !bool {
+    const used = try s.usedLayers(arena, .{ .build_images = true });
+    var kept = false;
+    for ((try s.readManifest(arena, manifest_digest)).layers) |l| {
+        const hex = oci.digestHex(l.digest) orelse continue;
+        if (used.contains(hex)) continue;
+        if (try s.deleteDeployment(arena, l.digest) == .in_use) kept = true;
     }
-    return try s.deleteDeployment(arena, manifest_digest);
+    return kept;
 }
 
-/// Unpacks an image's layers as its deployment, unless that already exists.
-/// Deployments are shared by every run, so they are protected from changes.
-pub fn deploy(s: Store, arena: Allocator, manifest_digest: []const u8, manifest: oci.Manifest) ![]u8 {
-    const dest = try s.deployPath(arena, manifest_digest);
+pub const UsedOptions = struct {
+    /// Count the images that builds use (see `markBuildImage`) as used.
+    build_images: bool,
+};
+
+/// The hex digests of the layers that installed apps use, their runtimes'
+/// included, and optionally those of the images builds use.
+pub fn usedLayers(s: Store, arena: Allocator, opts: UsedOptions) !std.StringHashMapUnmanaged(void) {
+    var used: std.StringHashMapUnmanaged(void) = .empty;
+    var manifests: std.ArrayList([]const u8) = .empty;
+    for (try s.listRefs(arena)) |ref| try manifests.append(arena, ref.manifest);
+    if (opts.build_images) try manifests.appendSlice(arena, try s.listBuildImages(arena));
+    for (manifests.items) |digest| {
+        for ((try s.readManifest(arena, digest)).layers) |l| {
+            try used.put(arena, oci.digestHex(l.digest) orelse continue, {});
+        }
+    }
+    return used;
+}
+
+/// Unpacks a layer as its deployment, unless that already exists. Deployments
+/// are shared by every run, and by every app with the layer, so they are
+/// protected from changes.
+pub fn deploy(s: Store, arena: Allocator, desc: oci.Descriptor) ![]u8 {
+    if (!std.mem.eql(u8, desc.mediaType, oci.media_type.layer_tar))
+        return fail("layer type {s} is not supported", .{desc.mediaType});
+    const dest = try s.deployPath(arena, desc.digest);
     if (try exists(s.io, dest)) {
         // Cheap when already protected; covers deployments made before protection existed.
         try acl.protect(arena, dest);
@@ -365,18 +438,60 @@ pub fn deploy(s: Store, arena: Allocator, manifest_digest: []const u8, manifest:
     defer Io.Dir.cwd().deleteTree(s.io, work) catch {};
     const tree = try std.fs.path.join(arena, &.{ work, "app" });
     var start = Io.Timestamp.now(s.io, .awake);
-    for (manifest.layers) |desc| {
-        if (!std.mem.eql(u8, desc.mediaType, oci.media_type.layer_tar))
-            return fail("layer type {s} is not supported", .{desc.mediaType});
-        const hex = oci.digestHex(desc.digest) orelse return fail("malformed digest \"{s}\"", .{desc.digest});
-        try layer.extract(s.io, arena, try s.blobPath(arena, hex), tree);
-    }
-    Context.reportTime(s.io, s.verbose, start, "  unpack layers", .{});
+    try layer.extract(s.io, arena, try s.blobPath(arena, oci.digestHex(desc.digest).?), tree);
+    Context.reportTime(s.io, s.verbose, start, "  unpack {s}", .{oci.shortDigest(desc.digest)});
     try Io.Dir.rename(.cwd(), tree, .cwd(), dest, s.io);
     start = Io.Timestamp.now(s.io, .awake);
     try acl.protect(arena, dest);
     Context.reportTime(s.io, s.verbose, start, "  protect", .{});
     return dest;
+}
+
+// ---------------------------------------------------------------------------
+// The build cache: which image a build with given inputs made, by a hash of
+// the inputs (see builder.zig).
+
+fn buildCachePath(s: Store, arena: Allocator, inputs_hex: []const u8) ![]u8 {
+    return s.path(arena, &.{ "cache", "builds", inputs_hex });
+}
+
+/// The manifest digest of an earlier build with these inputs, if any.
+pub fn readBuildCache(s: Store, arena: Allocator, inputs_hex: []const u8) !?[]const u8 {
+    const bytes = Io.Dir.cwd().readFileAlloc(s.io, try s.buildCachePath(arena, inputs_hex), arena, .limited(1024)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => |e| return e,
+    };
+    const digest = std.mem.trim(u8, bytes, " \r\n");
+    return if (oci.digestHex(digest) != null) digest else null;
+}
+
+pub fn writeBuildCache(s: Store, arena: Allocator, inputs_hex: []const u8, manifest_digest: []const u8) !void {
+    const tmp = try s.tmpPath(arena, "build-cache");
+    try Io.Dir.cwd().writeFile(s.io, .{ .sub_path = tmp, .data = manifest_digest });
+    try Io.Dir.rename(.cwd(), tmp, .cwd(), try s.buildCachePath(arena, inputs_hex), s.io);
+}
+
+// ---------------------------------------------------------------------------
+// Images that builds use: runtimes and SDKs that aren't installed as apps.
+// Marking them keeps them, like cached downloads, until `prune --downloads`.
+
+pub fn markBuildImage(s: Store, arena: Allocator, manifest_digest: []const u8) !void {
+    const hex = oci.digestHex(manifest_digest) orelse return fail("malformed digest \"{s}\"", .{manifest_digest});
+    try Io.Dir.cwd().writeFile(s.io, .{ .sub_path = try s.path(arena, &.{ "cache", "images", hex }), .data = "" });
+}
+
+/// The manifest digests of the marked images that are still in the store.
+pub fn listBuildImages(s: Store, arena: Allocator) ![]const []const u8 {
+    var dir = try Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{ "cache", "images" }), .{ .iterate = true });
+    defer dir.close(s.io);
+    var digests: std.ArrayList([]const u8) = .empty;
+    var it = dir.iterate();
+    while (try it.next(s.io)) |entry| {
+        if (entry.kind != .file or !oci.isSha256Hex(entry.name)) continue;
+        if (!try exists(s.io, try s.blobPath(arena, entry.name))) continue;
+        try digests.append(arena, try std.fmt.allocPrint(arena, "sha256:{s}", .{entry.name}));
+    }
+    return digests.items;
 }
 
 // ---------------------------------------------------------------------------
@@ -415,6 +530,34 @@ pub fn deleteGrants(s: Store, arena: Allocator, id: []const u8) !void {
 
 // ---------------------------------------------------------------------------
 // Helpers
+
+/// Deletes a directory tree that apps or build tools have written to. Unlike
+/// Zig 0.16's deleteTree, it copes with the directory links Windows
+/// components leave in a profile, such as WinINet's
+/// INetCache\Content.IE5: it removes those links themselves (never what
+/// they point to), then the rest.
+pub fn deleteTree(io: Io, arena: Allocator, p: []const u8) !void {
+    Io.Dir.cwd().deleteTree(io, p) catch |err| switch (err) {
+        error.AccessDenied => {
+            try removeDirLinks(io, arena, p);
+            try Io.Dir.cwd().deleteTree(io, p);
+        },
+        else => |e| return e,
+    };
+}
+
+fn removeDirLinks(io: Io, arena: Allocator, p: []const u8) !void {
+    var dir = try Io.Dir.cwd().openDir(io, p, .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walk(arena);
+    defer walker.deinit();
+    var links: std.ArrayList([]const u8) = .empty;
+    while (try walker.next(io)) |entry| {
+        if (entry.kind == .sym_link) try links.append(arena, try std.fs.path.join(arena, &.{ p, entry.path }));
+    }
+    // A link to a file isn't a directory, and deleteTree deletes those itself.
+    for (links.items) |link| _ = win32.RemoveDirectoryW(try win32.wide(arena, link));
+}
 
 pub fn exists(io: Io, p: []const u8) !bool {
     Io.Dir.cwd().access(io, p, .{}) catch |err| switch (err) {

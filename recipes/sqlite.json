@@ -1,0 +1,43 @@
+{
+  "id": "org.sqlite.sqlite3",
+  "version": "3.53.4",
+  "command": "bin/sqlite3.exe",
+  "permissions": { "filesystem": ["cwd"] },
+  "sdk": {
+    "zig": "org.ziglang.zig:0.16.0@sha256:dfb37603d5cfdeab9876ae61fac3ac51ee4a5f15ddce58d7e0a7394546fbedfa",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:fa4eac7f8b4b87330acd44e6c67b1f0cfd0242460b02dbb8869ef9054f28c120"
+  },
+  "cleanup": ["/include", "/lib"],
+  "modules": [
+    {
+      "name": "zlib",
+      "sources": [
+        {
+          "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz",
+          "sha256": "d7a0654783a4da529d1bb793b7ad9c3318020af77667bcae35f95d0e42a792f3",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "for f in *.c; do zig cc -target x86_64-windows-gnu -O2 -c \"$f\" -o \"${f%.c}.o\" || exit 1; done",
+        "zig ar rcs libz.a *.o",
+        "mkdir -p \"$PREFIX/include\" \"$PREFIX/lib\"",
+        "cp zlib.h zconf.h \"$PREFIX/include\" && cp libz.a \"$PREFIX/lib\""
+      ]
+    },
+    {
+      "name": "sqlite",
+      "sources": [
+        {
+          "url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+          "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "mkdir -p \"$PREFIX/bin\"",
+        "zig cc -target x86_64-windows-gnu -O2 -s -DSQLITE_HAVE_ZLIB -I\"$PREFIX/include\" -o \"$PREFIX/bin/sqlite3.exe\" shell.c sqlite3.c \"$PREFIX/lib/libz.a\""
+      ]
+    }
+  ]
+}

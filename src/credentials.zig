@@ -229,7 +229,7 @@ fn prompt(arena: Allocator, label: []const u8, echo: enum { echo, no_echo }) ![]
         return fail("zigsaw login asks for the user name and password on a console; without one, use --username=<user> --password-stdin and pipe the password in", .{});
     const h = console.?;
 
-    std.debug.print("{s}", .{label});
+    Context.printStderr("{s}", .{label});
     if (echo == .no_echo) {
         prompt_console = h;
         prompt_mode = mode;
@@ -252,7 +252,7 @@ fn prompt(arena: Allocator, label: []const u8, echo: enum { echo, no_echo }) ![]
         try line.appendSlice(arena, buf[0..n]);
     } else true;
     // The Enter that ended the line wasn't echoed either.
-    if (echo == .no_echo) std.debug.print("\n", .{});
+    if (echo == .no_echo) Context.printStderr("\n", .{});
     if (!complete) return fail("login cancelled", .{});
     const end = std.mem.indexOfScalar(u16, line.items, '\n').?;
     const text = std.mem.trimEnd(u16, line.items[0..end], &.{'\r'});

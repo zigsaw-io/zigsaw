@@ -1,0 +1,17 @@
+{
+  "id": "test.build.msvc",
+  "version": "1",
+  "command": "bin/hello.exe",
+  "host": ["msvc"],
+  "modules": [
+    {
+      "name": "hello",
+      "shell": "cmd",
+      "sources": [{ "path": "hello.c" }],
+      "build": [
+        "cl /nologo /O2 /Brepro hello.c /link /Brepro",
+        "mkdir %PREFIX%\\bin && copy hello.exe %PREFIX%\\bin\\"
+      ]
+    }
+  ]
+}

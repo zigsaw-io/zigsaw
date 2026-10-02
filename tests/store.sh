@@ -38,11 +38,17 @@ deployments() { find "$ZIGSAW_HOME/deploy" -mindepth 1 -maxdepth 1 -type d | wc 
 blobs() { find "$ZIGSAW_HOME/blobs/sha256" -type f | wc -l; }
 expect_count() { local got; got=$("$1"); [ "$got" -eq "$2" ] || { echo "$1: got $got, want $2"; return 1; }; }
 
-# A copy of the busybox recipe whose version the checks change.
+# A copy of the busybox recipe whose version the checks change. Each version
+# also has a marker file saying which it is, so its files differ: deployments
+# are per layer, and versions with the same files would share one.
 recipe="$work\\busybox.json"
-cp "$root/recipes/busybox.json" "$recipe"
+sed 's/"dest": "busybox.exe"/"dest": "busybox.exe" }, { "path": "marker.txt"/' "$root/recipes/busybox.json" >"$recipe"
+echo original >"$work\\marker.txt"
 # (A POSIX path: sed -i can't move its temporary file across drives.)
-set_version() { sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$1\"/" "$(cygpath -u "$recipe")"; }
+set_version() {
+    sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$1\"/" "$(cygpath -u "$recipe")"
+    echo "$1" >"$work\\marker.txt"
+}
 installed_version() { z list | awk -v id=$BB '$1 == id { print $2 }'; }
 z build "$recipe" >/dev/null 2>&1 || { echo "building busybox failed"; exit 1; }
 

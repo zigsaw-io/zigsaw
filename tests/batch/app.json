@@ -9,9 +9,14 @@
     "echo-args": { "command": "echo-args.cmd" },
     "echo-args-pre": { "command": "echo-args.cmd", "args": ["${app}", "a b", "%PATH%"] }
   },
-  "sources": [
-    { "path": "echo-args.cmd" },
-    { "path": "exit-code.cmd" },
-    { "path": "../../zig-out/test/zigsaw-argv.exe", "dest": "argv.exe" }
+  "modules": [
+    {
+      "name": "scripts",
+      "sources": [
+        { "path": "echo-args.cmd" },
+        { "path": "exit-code.cmd" },
+        { "path": "../../zig-out/test/zigsaw-argv.exe", "dest": "argv.exe" }
+      ]
+    }
   ]
 }

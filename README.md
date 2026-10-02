@@ -6,12 +6,13 @@ Think Flatpak for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
-Status: [iteration 3](docs/iteration-3.md) is complete. Zigsaw builds,
-installs, runs, updates and cleans up command-line apps, shares them through
-registries, and puts their commands on PATH. Published apps install by id,
-and CI checks that their recipes build the same images on a fresh machine.
-Logins are kept per registry, and batch files run as commands. Git, Node,
-Python and the zig toolchain are tested.
+Status: [iteration 4](docs/iteration-4.md) is complete. Zigsaw builds
+command-line apps from source or from official binaries, runs them on shared
+runtimes, installs, updates and cleans them up, shares them through
+registries, and puts their commands on PATH. Builds run with pinned
+toolchain images (zig, BusyBox), or the machine's MSVC, and reproduce: CI
+checks that the recipes build the same images on a fresh machine. Git, Node,
+Python, SQLite and the zig toolchain are tested.
 
 ## Quick start
 
@@ -41,7 +42,8 @@ an installed Node), that one wins. `where node` shows which is found first.
 ## Commands
 
 ```
-zigsaw build <recipe.json>             build an app from a recipe, install it and its commands
+zigsaw build [--rebuild] [--keep-build-dir] <recipe.json>
+                                       build an app from a recipe, install it and its commands
 zigsaw pull <image>                    install an app and its commands from a registry
 zigsaw push <app-id> [<image>]         publish an installed app to a registry
 zigsaw login [--username=<user>] [--password-stdin] <registry>
@@ -57,7 +59,7 @@ zigsaw prune [--dry-run] [--downloads] [--data]
 
 ## Published apps
 
-The recipes in [recipes/](recipes/), except zig's, are published as images in
+The recipes in [recipes/](recipes/) are published as images in
 `ghcr.io/zigsaw-io`, tagged with their version and `latest`, so these install
 with `zigsaw pull <id>`:
 
@@ -67,7 +69,15 @@ with `zigsaw pull <id>`:
 | ripgrep | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
 | Git (MinGit) | `org.git_scm.MinGit` | 2.56.0.windows.1 | `git` |
 | Node.js | `org.nodejs.node` | 24.21.0 | `node`, `npm`, `npx` |
+| Prettier (on Node.js) | `io.prettier.prettier` | 3.9.9 | `prettier` |
 | Python | `org.python.python` | 3.14.7 | `python` |
+| zig | `org.ziglang.zig` | 0.16.0 | `zig` |
+| SQLite (built from source) | `org.sqlite.sqlite3` | 3.53.4 | `sqlite3` |
+
+Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
+files along, without installing Node as an app. SQLite is
+[built from source](#building-from-source) with zig and BusyBox, whose
+images are its SDK; pulling SQLite doesn't need them.
 
 [`scripts/publish.sh`](scripts/publish.sh) publishes the recipes listed in
 [`scripts/published-recipes.txt`](scripts/published-recipes.txt).
@@ -75,7 +85,8 @@ with `zigsaw pull <id>`:
 ### Reproducibility
 
 Each image has the same digest as a build of its recipe on any machine:
-sources are pinned by SHA-256, and builds write deterministic layers. The
+sources are pinned by SHA-256, runtimes by image digest, and builds write
+deterministic layers. The
 [Reproduce workflow](.github/workflows/reproduce.yml)
 ([runs](https://github.com/zigsaw-io/zigsaw/actions/workflows/reproduce.yml))
 checks this on every push to `main` and every pull request. On a fresh
@@ -86,6 +97,8 @@ compares the digest with the image published for the recipe's version
 - A version that isn't published yet is reported, but doesn't fail the run.
 - A different digest for the same version fails it. Either the build isn't
   reproducible, or the recipe changed without a new version.
+- An image built with a [host toolchain](#msvc) isn't compared, since it
+  isn't expected to match. (None of the published ones is.)
 
 The workflow only checks; publishing stays manual.
 
@@ -155,9 +168,9 @@ Installing a new version deletes the files of the one it replaces, unless
 that version is still running. `zigsaw prune` deletes everything else no
 installed app needs: the blobs of old versions, files kept because they were
 running, and whatever an interrupted build left in `tmp\`. `--dry-run` shows
-what it would delete. Cached downloads are kept for rebuilds unless you add
-`--downloads`, and the data of uninstalled apps is kept unless you add
-`--data`.
+what it would delete. Cached downloads, and the runtimes that builds used,
+are kept for rebuilds unless you add `--downloads`. The data of uninstalled
+apps is kept unless you add `--data`.
 
 Nothing a running app uses is deleted, and zigsaw commands can run at the same
 time: a run locks the files it uses, and `prune` waits for builds and pulls
@@ -217,7 +230,8 @@ removed, and `zigsaw rm --delete-data` deletes them with the app's data.
 
 ## Recipes
 
-A recipe is a JSON file listing pinned sources and how the app runs:
+A recipe is a JSON file saying how the app runs, and listing the modules
+that make up its files, each with pinned sources:
 
 ```json
 {
@@ -227,21 +241,29 @@ A recipe is a JSON file listing pinned sources and how the app runs:
   "path": ["."],
   "env": {},
   "permissions": { "network": false, "filesystem": [] },
-  "sources": [
+  "modules": [
     {
-      "url": "https://frippery.org/files/busybox/busybox-w64-FRP-6075-g169694ebd.exe",
-      "sha256": "07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075",
-      "dest": "busybox.exe"
+      "name": "busybox",
+      "sources": [
+        {
+          "url": "https://frippery.org/files/busybox/busybox-w64-FRP-6075-g169694ebd.exe",
+          "sha256": "07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075",
+          "dest": "busybox.exe"
+        }
+      ]
     }
   ]
 }
 ```
 
-Sources are either a `url` (a `sha256` is required; leave it out once and the
-build error prints the hash to pin) or a local `path`. A source is a single
-`file`, or a `zip` extracted into `dest` with optional `strip`. The type is
-inferred from the file name. Building the same recipe always produces the
-same image digest.
+Modules go into the app's files in order, so a later one can overlay an
+earlier one. Sources are either a `url` (a `sha256` is required; leave it out
+once and the build error prints the hash to pin) or a local `path`. A source
+is a single `file`, or an archive (`zip`, `tar`, `tar.gz`/`tgz` or `tar.xz`)
+extracted into `dest` with optional `strip`. The type is inferred from the
+file name. `cleanup` leaves files out of the app: `"/include"` is a path from
+the top, and `"*.pdb"` a file name pattern that matches anywhere. Building the
+same recipe always produces the same image digest.
 
 `exports` names the commands an app puts on PATH. Without it, the app exports
 its command under its file name (`busybox` above); `"exports": {}` exports
@@ -269,30 +291,182 @@ global npm packages in its data directory, and their commands on its PATH:
 "env": { "NPM_CONFIG_PREFIX": "${data}\\npm" }
 ```
 
+### Runtimes
+
+An app can run on another app's image, as Flatpak apps run on a runtime.
+Prettier's recipe has Node as a runtime it calls `node`, pinned by the
+digest of Node's image:
+
+```json
+"command": "${node}\\node.exe",
+"args": ["${app}\\bin\\prettier.cjs"],
+"runtimes": { "node": "org.nodejs.node:24.21.0@sha256:cb9c0bf069bdeb47..." },
+"exports": {
+  "prettier": { "command": "${node}\\node.exe", "args": ["${app}\\bin\\prettier.cjs"] }
+}
+```
+
+`${node}` is then a placeholder for Node's directory, which the command,
+exports, `path` and `env` can use. `args` go before the caller's, for the
+app's own command as for an export. Leave the digest out once and the build
+error prints the one to pin: the installed app's if its version matches,
+otherwise the registry's. The build takes the runtime from the store if it's
+there, built or pulled, and from its registry otherwise.
+
+A runtime's files go into the app's image as a layer of their own, so
+pulling Prettier brings Node's files without installing Node as an app, and
+removing Node as an app doesn't affect Prettier. Each layer is unpacked once
+and shared, so Node as an app and Node as Prettier's runtime use the same
+files on disk. Every run gets the runtime's `path` entries after the app's,
+and its `env` before the app's, so Prettier's runs have npm's settings as
+Node's do. Runtimes can't have runtimes of their own.
+
+A pinned runtime doesn't change by itself: moving Prettier to a newer Node
+is an edit to its recipe, like a new source hash.
+
+### Building from source
+
+A module with `build` commands compiles its sources instead of placing them.
+[`recipes/sqlite.json`](recipes/sqlite.json) builds zlib and then SQLite with
+zig's C compiler:
+
+```json
+"sdk": {
+  "zig": "org.ziglang.zig:0.16.0@sha256:dfb37603d5cfdeab...",
+  "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:fa4eac7f8b4b8733..."
+},
+"cleanup": ["/include", "/lib"],
+"modules": [
+  {
+    "name": "zlib",
+    "sources": [{ "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz", "sha256": "...", "strip": 1 }],
+    "build": [
+      "for f in *.c; do zig cc -target x86_64-windows-gnu -O2 -c \"$f\" -o \"${f%.c}.o\" || exit 1; done",
+      "zig ar rcs libz.a *.o",
+      "mkdir -p \"$PREFIX/include\" \"$PREFIX/lib\"",
+      "cp zlib.h zconf.h \"$PREFIX/include\" && cp libz.a \"$PREFIX/lib\""
+    ]
+  },
+  {
+    "name": "sqlite",
+    "sources": [{ "url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip", "sha256": "...", "strip": 1 }],
+    "build": [
+      "mkdir -p \"$PREFIX/bin\"",
+      "zig cc -target x86_64-windows-gnu -O2 -s -DSQLITE_HAVE_ZLIB -I\"$PREFIX/include\" -o \"$PREFIX/bin/sqlite3.exe\" shell.c sqlite3.c \"$PREFIX/lib/libz.a\""
+    ]
+  }
+]
+```
+
+- **`sdk`** names the images the build uses, pinned like runtimes. They're on
+  PATH while building, before the runtimes, and aren't part of the app's
+  image; its config records their digests. zig gives C and C++ compilers
+  (`zig cc`, `zig c++`, `zig ar`), and BusyBox gives sh, make, sed, awk,
+  patch, tar and the rest of a Unix toolbox.
+- **Modules** build in order. A module's sources are unpacked into its own
+  directory, and its commands run there one after another, until one fails.
+  Whatever the modules install into `$PREFIX` is the app's files, after
+  `cleanup`. A later module sees what earlier ones installed, as SQLite finds
+  zlib above. A module without `build` puts its sources into `$PREFIX`.
+- **Commands** run in BusyBox's `sh`, or with `"shell": "cmd"` in cmd.exe
+  (then `%PREFIX%`). `env` adds variables for a module's commands.
+- **The build sandbox** is like a run's: an environment built from scratch,
+  with fresh profile folders, and a job object that ends whatever the commands
+  leave running. `SOURCE_DATE_EPOCH` is fixed at 1980-01-01.
+- **Builds happen on `B:`.** The build's directory is mapped to `B:` while it
+  runs, as `subst` does, so the paths compilers write into what they build
+  (`__FILE__` in asserts, debug info) are `B:\src\<module>\...` on every
+  machine. Builds take turns with `B:`, and a build fails if something other
+  than zigsaw has mapped it.
+- **No network**, unless a module sets `"network": true`. Sources are the
+  pinned inputs; a module that downloads makes an image that can't be
+  expected to reproduce, so its config records it and installing it warns.
+  This is a convention, not a wall: build steps get proxy variables pointing
+  nowhere, which tools such as curl, wget, npm and pip honour.
+
+`zigsaw build --keep-build-dir` keeps the build's directory afterwards, to
+look at what a failed build left; `zigsaw prune` deletes it later.
+
+Two things about zig's C compiler, for executables that reproduce:
+
+- **Name the target.** Without `-target`, `zig cc` builds for the machine
+  it runs on, its CPU and Windows version included, so a build elsewhere
+  differs, and the result may not run on older CPUs. The recipes pass
+  `-target x86_64-windows-gnu`.
+- **Pass `-s`.** Otherwise it writes a PDB with each executable, and those
+  differ from build to build. zig also refuses `__DATE__` and `__TIME__`,
+  which would differ too.
+
+**Builds are reused.** zigsaw remembers which image each build made, by a
+hash of its inputs: the recipe, its local sources, and zigsaw itself (URL
+sources and images are pinned in the recipe). Building an unchanged recipe
+again, or `zigsaw update` of an app built from one, takes the image of the
+earlier build instead of building it again, since the result would be the
+same. `-v` says so; `zigsaw build --rebuild` builds anyway.
+
+### MSVC
+
+Projects that need Microsoft's compiler can use the Visual Studio installed
+on the machine, since Visual Studio's license doesn't allow it to be an
+image:
+
+```json
+"host": ["msvc"],
+"modules": [
+  {
+    "name": "hello",
+    "shell": "cmd",
+    "sources": [{ "path": "hello.c" }],
+    "build": [
+      "cl /nologo /O2 /Brepro hello.c /link /Brepro",
+      "mkdir %PREFIX%\\bin && copy hello.exe %PREFIX%\\bin\\"
+    ]
+  }
+]
+```
+
+zigsaw finds the newest Visual Studio with the C++ tools (prereleases
+included) with `vswhere`, and runs its `vcvars64.bat` to learn the build
+environment: the compilers on PATH, `INCLUDE`, `LIB` and the rest. The
+image's config records the MSVC and Windows SDK versions, and installing it
+warns that it won't rebuild the same elsewhere. A machine with another
+Visual Studio builds something else, so these builds are never reused
+either. `/Brepro` keeps the compiler and linker from writing timestamps.
+
 ## How it works
 
 **Images** are standard OCI image manifests with a zigsaw config
-(`application/vnd.zigsaw.app.config.v1+json`) and plain, deterministic tar
-layers, so any OCI registry can store them.
+(`application/vnd.zigsaw.app.config.v2+json`) and plain, deterministic tar
+layers, so any OCI registry can store them. The layers are those of the app's
+runtimes, in the order the config lists them, then one of the app's own
+files. The config also records how the image was built: the hash of every
+source, and any SDK images. zigsaw still reads the v1 configs of images made
+before runtimes existed; older versions of zigsaw refuse v2 images.
 
-**Builds** never unpack sources to disk. zigsaw indexes the files each source
-contributes and streams them from the downloads and zip archives straight
-into the layer, hashing it on the way. The app's files are created once, when
-the layer is deployed, by several workers in parallel. Rebuilding an
-installed app creates no files at all. Creating files is the slow part on
-Windows, because Defender scans each new one.
+**Builds** without build commands never unpack sources to disk. zigsaw
+indexes the files each source contributes and streams them from the
+downloads and archives straight into the layer, hashing it on the way.
+Compressed tars are decompressed once, into the download cache. The app's
+files are created once, when the layer is deployed, by several workers in
+parallel. Rebuilding such an app creates no files at all. Creating files is
+the slow part on Windows, because Defender scans each new one. Builds with
+build commands need real files, so they unpack their sources into a directory
+under `tmp\`, mapped to `B:`, and make the layer from what ends up in
+`B:\prefix`.
 
 **Store** (`%LOCALAPPDATA%\zigsaw`, or `%ZIGSAW_HOME%`):
 
 ```
 blobs\sha256\<hex>     manifests, configs, layers
 refs\<id>.json         installed app -> manifest digest
-deploy\<hex>\          unpacked app tree, shared by all runs
+deploy\<hex>\          an unpacked layer, by layer digest, shared by all runs and apps
 data\<id>\             per-app writable state, kept across runs
 grants\<id>.txt        host paths granted to the app's AppContainer
 overrides\<id>.json    run options saved with `zigsaw override`
 bin\<name>.exe         command shims, with a <name>.shim file saying what each runs
-cache\downloads\<hex>  fetched sources, by sha256
+cache\downloads\<hex>  fetched sources, by sha256 (and decompressed tars)
+cache\images\<hex>     marks images that builds use as runtimes or SDKs, kept like downloads
+cache\builds\<hex>     the image of an earlier build, by a hash of its inputs
 tmp\                   staging area, and the data of --ephemeral runs
 lock, *.lock           lock files that let zigsaw commands run side by side
 ```
@@ -305,12 +479,12 @@ than `.cmd` scripts, so programs that start `node` or `git` directly find
 them, and Ctrl+C doesn't ask "Terminate batch job?".
 
 **Runs** get an environment built from scratch: `PATH` is the app's
-directories plus System32. `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and `TEMP`
-point into `data\<id>\home`. The working directory is that home folder unless
-the app has the `cwd` filesystem permission. A job object ends the whole
-process tree when the run ends. Deployed app files deny writes and deletes to
-the user, so no run, and nothing else running as you, can change an installed
-app.
+directories, then its runtimes', then System32. `USERPROFILE`, `APPDATA`,
+`LOCALAPPDATA` and `TEMP` point into `data\<id>\home`. The working directory
+is that home folder unless the app has the `cwd` filesystem permission. A job
+object ends the whole process tree when the run ends. Deployed files deny
+writes and deletes to the user, so no run, and nothing else running as you,
+can change an installed app or runtime.
 
 The app shares the terminal, so Ctrl+C and Ctrl+Break reach it just as when
 it runs alone, also through a shim. zigsaw waits for it and passes on its
@@ -320,7 +494,8 @@ started detached.
 
 **`--sandbox=appcontainer`** also runs the app under a per-app AppContainer
 identity (`zigsaw.<id>`). It can then read and write only its data directory,
-read its own app files, and use the host paths and network it was granted.
+read its own files and its runtimes', and use the host paths and network it
+was granted.
 Host grants are ACL entries on those paths; `zigsaw rm` removes them again.
 It suits self-contained tools such as busybox and ripgrep. Git, Node scripts,
 npm and zig fail under it, because Windows doesn't let AppContainers resolve
@@ -333,6 +508,7 @@ zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through both sandboxes (Git Bash, network)
 bash tests/shims.sh     # command shims end to end
 bash tests/store.sh     # update, prune, and what they keep while apps run
+bash tests/build.sh     # building apps: runtimes, build commands on B:, reproducibility across stores
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update and logins through local registries (see the script's header)
@@ -364,5 +540,16 @@ tests need a local registry such as [zot](https://zotregistry.dev) on
 - zigsaw keeps its own registry logins; it doesn't read Docker's
   `config.json` or credential helpers.
 - Multi-platform image indexes aren't supported.
+- Runtimes can't have runtimes of their own.
+- Pushing an app uploads its runtimes' layers to the app's repository, even
+  when the registry has them in another one.
+- Build steps are kept off the network by convention (proxy variables), not
+  enforced: a tool that ignores them can still download.
+- Each build starts with fresh profile folders, so zig rebuilds its C runtime
+  in every build: about 30 s on the development machine. Builds need `B:`
+  free, and run one at a time.
+- Builds with MSVC depend on the machine's Visual Studio, so they don't
+  reproduce elsewhere, and CI doesn't check them. Only x64 MSVC builds are
+  set up.
 
-[docs/iteration-3.md](docs/iteration-3.md) lists what hasn't been tested yet.
+[docs/iteration-4.md](docs/iteration-4.md) lists what hasn't been tested yet.

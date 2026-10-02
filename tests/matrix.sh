@@ -11,6 +11,12 @@
 # Each check states the intended outcome per sandbox: "ok" (exits 0) or
 # "fails" (exits non-zero). The soft sandbox doesn't enforce permissions, so
 # its intended outcome for a denied action is "ok".
+#
+# Each run of an app is stopped after MATRIX_TIMEOUT seconds (default 120),
+# and counts as failed, so a hung tool can't stall the matrix. The report
+# shows how long slow checks took. The zig check compiles a project, which
+# takes minutes the first time after zig's image changes, while the app's
+# cache in its data directory is cold.
 
 set -u
 export MSYS_NO_PATHCONV=1 # Keep arguments like "/c" from being rewritten into paths.
@@ -52,8 +58,17 @@ mkdir -p "$outside" && echo secret >"$outside\\secret.txt"
 rows=()
 mismatches=0
 
-# Runs an installed app in the current sandbox ($sb).
-run() { "$zigsaw" run --sandbox="$sb" "$@"; }
+limit=${MATRIX_TIMEOUT:-120}
+started=$SECONDS
+
+# Runs an installed app in the current sandbox ($sb), for at most $limit
+# seconds. Ending zigsaw ends the app's whole process tree (its job object).
+run() {
+    timeout "$limit" "$zigsaw" run --sandbox="$sb" "$@"
+    local code=$?
+    [ $code -eq 124 ] && echo "error: timed out after ${limit}s"
+    return $code
+}
 
 # The most telling line of a failed command's output: the first that looks
 # like an error, else the last non-empty one.
@@ -73,7 +88,7 @@ tool() {
 expect() {
     local want_soft=$1 want_ac=$2 label=$3
     shift 3
-    local cells=() notes=()
+    local cells=() notes=() start=$SECONDS
     for sb in soft appcontainer; do
         local want=$want_soft
         [ "$sb" = appcontainer ] && want=$want_ac
@@ -90,7 +105,9 @@ expect() {
             mismatches=$((mismatches + 1))
         fi
     done
-    rows+=("$(printf '%-8s %-38s %-22s %s' "$current_tool" "$label" "${cells[0]}" "${cells[1]}")")
+    local took=$((SECONDS - start)) time=""
+    [ $took -ge 5 ] && time="  (${took}s)"
+    rows+=("$(printf '%-8s %-38s %-22s %s%s' "$current_tool" "$label" "${cells[0]}" "${cells[1]}" "$time")")
     for n in "${notes[@]}"; do rows+=("$(printf '%-8s   %s' '' "$n")"); done
 }
 
@@ -166,7 +183,7 @@ echo
 printf '%-8s %-38s %-22s %s\n' TOOL CHECK SOFT APPCONTAINER
 printf '%s\n' "${rows[@]}"
 echo
-echo "$mismatches result(s) differ from the intended behaviour."
+echo "$mismatches result(s) differ from the intended behaviour. The checks took $((SECONDS - started))s."
 
 if $own_store; then
     for id in $BB $RG $GIT $NODE $PY $ZIG; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done

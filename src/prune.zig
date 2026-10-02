@@ -37,20 +37,22 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     const arena = ctx.arena;
     const store = ctx.store;
     const refs = try store.listRefs(arena);
+    const build_images = try store.listBuildImages(arena);
 
-    // Everything the installed apps refer to, by hex digest.
+    // Everything the installed apps refer to, by hex digest, and unless
+    // downloads go too, the images that builds use.
+    var manifests: std.ArrayList([]const u8) = .empty;
+    for (refs) |ref| try manifests.append(arena, ref.manifest);
+    if (!opts.downloads) try manifests.appendSlice(arena, build_images);
     var blobs_used: std.StringHashMapUnmanaged(void) = .empty;
-    var deployments_used: std.StringHashMapUnmanaged(void) = .empty;
-    for (refs) |ref| {
-        const manifest = try std.json.parseFromSliceLeaky(oci.Manifest, arena, try store.readBlob(arena, ref.manifest), .{
-            .ignore_unknown_fields = true,
-        });
-        try deployments_used.put(arena, oci.digestHex(ref.manifest).?, {});
+    for (manifests.items) |digest| {
+        const manifest = try store.readManifest(arena, digest);
         for ([_][]const oci.Descriptor{ &.{manifest.config}, manifest.layers }) |descs| {
             for (descs) |d| try blobs_used.put(arena, oci.digestHex(d.digest) orelse continue, {});
         }
-        try blobs_used.put(arena, oci.digestHex(ref.manifest).?, {});
+        try blobs_used.put(arena, oci.digestHex(digest).?, {});
     }
+    const deployments_used = try store.usedLayers(arena, .{ .build_images = !opts.downloads });
 
     var blobs: Tally = .{};
     const blob_dir = try store.path(arena, &.{ "blobs", "sha256" });
@@ -96,7 +98,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
             continue;
         }
         tmp.add(try treeSize(io, arena, p));
-        if (!opts.dry_run) try Io.Dir.cwd().deleteTree(io, p);
+        if (!opts.dry_run) try Store.deleteTree(io, arena, p);
     }
     if (!opts.dry_run) try deleteStaleLocks(io, arena, tmp_dir);
 
@@ -106,6 +108,23 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         const p = try std.fs.path.join(arena, &.{ downloads_dir, entry.name });
         downloads.add(try treeSize(io, arena, p));
         if (opts.downloads and !opts.dry_run) try Io.Dir.cwd().deleteTree(io, p);
+    }
+    // Builds remembered by their inputs: those whose image is gone now, and
+    // with --downloads, all of them. (Tiny files, so not reported.)
+    const builds_dir = try store.path(arena, &.{ "cache", "builds" });
+    if (!opts.dry_run) for (try listDir(io, arena, builds_dir)) |entry| {
+        const digest = try store.readBuildCache(arena, entry.name);
+        const gone = if (digest) |d| !try Store.exists(io, try store.blobPath(arena, oci.digestHex(d).?)) else true;
+        if (opts.downloads or gone) try Io.Dir.cwd().deleteFile(io, try std.fs.path.join(arena, &.{ builds_dir, entry.name }));
+    };
+
+    // The images builds use count as downloads: their blobs and deployments
+    // went above, with --downloads, and these marks go with them.
+    var build_only: usize = 0;
+    for (build_images) |digest| {
+        if (!isInstalledManifest(refs, digest)) build_only += 1;
+        if (opts.downloads and !opts.dry_run)
+            try Io.Dir.cwd().deleteFile(io, try store.path(arena, &.{ "cache", "images", oci.digestHex(digest).? }));
     }
 
     // Data of apps that were removed without --delete-data.
@@ -118,7 +137,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         const size = try treeSize(io, arena, p);
         data.add(size);
         try orphans.append(arena, try std.fmt.allocPrint(arena, "{s} ({Bi:.1})", .{ entry.name, size }));
-        if (opts.data and !opts.dry_run) try Io.Dir.cwd().deleteTree(io, p);
+        if (opts.data and !opts.dry_run) try Store.deleteTree(io, arena, p);
     }
 
     // Report.
@@ -153,6 +172,8 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         note("kept data of apps that aren't installed: {s}; --data deletes it", .{try std.mem.join(arena, ", ", orphans.items)});
     if (!opts.downloads and downloads.count > 0)
         note("kept {d} cached download(s) ({Bi:.1}) for rebuilds; --downloads deletes them", .{ downloads.count, downloads.bytes });
+    if (!opts.downloads and build_only > 0)
+        note("kept {d} image(s) that builds use as runtimes or SDKs; --downloads deletes them", .{build_only});
 }
 
 const Entry = struct { name: []const u8, kind: Io.File.Kind };
@@ -200,5 +221,10 @@ fn treeSize(io: Io, arena: Allocator, p: []const u8) !u64 {
 
 fn isInstalled(refs: []const Store.Ref, id: []const u8) bool {
     for (refs) |ref| if (std.ascii.eqlIgnoreCase(ref.id, id)) return true;
+    return false;
+}
+
+fn isInstalledManifest(refs: []const Store.Ref, digest: []const u8) bool {
+    for (refs) |ref| if (std.mem.eql(u8, ref.manifest, digest)) return true;
     return false;
 }

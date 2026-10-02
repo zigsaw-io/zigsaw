@@ -44,7 +44,7 @@ fn updateApp(ctx: *Context, ref: Store.Ref) !void {
     };
     const newer = if (std.fs.path.isAbsoluteWindows(source)) newer: {
         if (!try Store.exists(ctx.io, source)) return fail("{s}: its recipe {s} is gone", .{ ref.id, source });
-        const image = try builder.build(ctx, source);
+        const image = try builder.build(ctx, source, .{});
         break :newer if (std.mem.eql(u8, image.manifest_digest, ref.manifest)) null else image;
     } else newer: {
         const reference = Registry.Reference.parse(source) catch

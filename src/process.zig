@@ -222,7 +222,23 @@ pub fn spawn(arena: Allocator, spec: SpawnSpec) !u32 {
     var code: win32.DWORD = 0;
     if (win32.GetExitCodeProcess(info.hProcess, &code) == 0)
         return win32.lastErrorFail("GetExitCodeProcess");
+    endJob(job);
     return code;
+}
+
+/// Ends whatever is left in the job, and waits a while for it to be gone.
+/// Closing the job would end it too, but without waiting, and what's ending
+/// can still hold files open: a build's tools, say, whose directory is
+/// deleted next.
+fn endJob(job: win32.HANDLE) void {
+    _ = win32.TerminateJobObject(job, 1);
+    var info: win32.JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = .{};
+    var waited: u32 = 0;
+    while (waited < 5000) : (waited += 10) {
+        if (win32.QueryInformationJobObject(job, win32.JobObjectBasicAccountingInformation, &info, @sizeOf(@TypeOf(info)), null) == 0) return;
+        if (info.ActiveProcesses == 0) return;
+        win32.Sleep(10);
+    }
 }
 
 fn ignoreCtrlC(event: win32.DWORD) callconv(.winapi) win32.BOOL {

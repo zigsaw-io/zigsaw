@@ -22,7 +22,9 @@ const usage =
     \\usage: zigsaw [-v|--verbose] <command> [options]
     \\
     \\commands:
-    \\  build <recipe.json>             build an app from a recipe, install it and its commands
+    \\  build [--rebuild] [--keep-build-dir] <recipe.json>
+    \\                                  build an app from a recipe, install it and its commands;
+    \\                                  --rebuild builds even if an earlier build had the same inputs
     \\  pull <image>                    install an app and its commands from a registry
     \\  push <app-id> [<image>]         publish an installed app to a registry
     \\  login [--username=<user>] [--password-stdin] <registry>
@@ -95,7 +97,7 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     const command = args[0];
     const rest = args[1..];
     if (std.mem.eql(u8, command, "help") or isFlag(command, "help")) {
-        std.debug.print("{s}", .{usage});
+        Context.printStderr("{s}", .{usage});
         return 0;
     }
     // Logins don't touch the store.
@@ -114,9 +116,19 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     // Commands hold the store lock shared, and prune exclusively; see Store.zig.
     // `run` takes it itself, and `list` only reads.
     if (std.mem.eql(u8, command, "build")) {
-        if (rest.len != 1) return usageError();
+        var opts: builder.Options = .{};
+        var recipe_path: ?[]const u8 = null;
+        for (rest) |arg| {
+            if (isFlag(arg, "keep-build-dir")) {
+                opts.keep_build_dir = true;
+            } else if (isFlag(arg, "rebuild")) {
+                opts.rebuild = true;
+            } else if (recipe_path == null and !std.mem.startsWith(u8, arg, "-")) {
+                recipe_path = arg;
+            } else return usageError();
+        }
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try install.install(ctx, try builder.build(ctx, rest[0]));
+        try install.install(ctx, try builder.build(ctx, recipe_path orelse return usageError(), opts));
         return 0;
     }
     if (std.mem.eql(u8, command, "pull")) {
@@ -180,7 +192,7 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
 }
 
 fn usageError() error{Failed} {
-    std.debug.print("{s}", .{usage});
+    Context.printStderr("{s}", .{usage});
     return error.Failed;
 }
 
@@ -366,6 +378,8 @@ fn list(ctx: *Context) !void {
         var names: std.ArrayList([]const u8) = .empty;
         for (shims) |s| if (std.mem.eql(u8, s.sidecar.app, ref.id)) try names.append(arena, s.name);
         try w.print("{s:<32} {s:<20} {s:<20} {s}", .{ ref.id, ref.version, oci.shortDigest(ref.manifest), try std.mem.join(arena, ", ", names.items) });
+        const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
+        for (image.config.runtimes.map.values()) |r| try w.print("  (runtime {s} {s})", .{ r.id, r.version });
         const saved = try override.load(ctx.store, arena, ref.id);
         if (!saved.isEmpty()) try w.print("  (override {f})", .{saved});
         try w.writeByte('\n');
@@ -400,10 +414,10 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     try appcontainer.deleteProfile(arena, id);
 
     try store.deleteRef(arena, id);
-    if (try store.deleteDeploymentIfUnused(arena, ref.manifest)) |deletion| if (deletion == .in_use)
+    if (try store.deleteUnusedDeployments(arena, ref.manifest))
         note("kept {s}'s files, which are still in use; `zigsaw prune` removes them later", .{id});
     if (delete_data) {
-        try Io.Dir.cwd().deleteTree(io, try store.path(arena, &.{ "data", id }));
+        try Store.deleteTree(io, arena, try store.path(arena, &.{ "data", id }));
         try override.delete(store, arena, id);
     }
 
@@ -413,7 +427,11 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
 test {
     _ = @import("builder.zig");
     _ = @import("credentials.zig");
+    _ = @import("deps.zig");
+    _ = @import("drive.zig");
+    _ = @import("environment.zig");
     _ = @import("exports.zig");
+    _ = @import("msvc.zig");
     _ = @import("oci.zig");
     _ = @import("override.zig");
     _ = @import("process.zig");
@@ -425,5 +443,6 @@ test {
     _ = @import("run.zig");
     _ = @import("Sidecar.zig");
     _ = @import("Store.zig");
+    _ = @import("Tree.zig");
     _ = @import("zipfile.zig");
 }

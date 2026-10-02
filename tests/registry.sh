@@ -114,6 +114,16 @@ check "push node (100 MB layer)" za push org.nodejs.node "$repo/node"
 check "pull node" zb pull "$repo/node:24.21.0"
 check "the pulled node runs" zb run org.nodejs.node -e 'process.exit(0)'
 
+# An app with a runtime: the runtime's layer travels in the app's image, and
+# a pull brings it without installing the runtime as an app.
+za build "$root\\recipes\\prettier.json" >/dev/null 2>&1 || { echo "building prettier (on node) failed"; exit 1; }
+store_d="$work\\d"
+zd() { ZIGSAW_HOME="$store_d" "$zigsaw" "$@"; }
+check "push an app with a runtime" za push io.prettier.prettier "$repo/prettier"
+check "pull it into an empty store" zd pull "$repo/prettier:3.9.9"
+check "it runs on the runtime its image brought" sh -c "ZIGSAW_HOME='$store_d' \"\$0\" run io.prettier.prettier --version | grep -q '^3.9.9'" "$zigsaw"
+check "the runtime isn't installed as an app" sh -c "! ZIGSAW_HOME='$store_d' \"\$0\" list | grep -q '^org.nodejs.node '" "$zigsaw"
+
 # Real registries, read-only: the token flow works.
 check "ghcr.io: token, container image refused" refused ghcr.io/oras-project/oras:v1.2.0
 # Credentials in the environment are for the default registry (ghcr.io), so
@@ -159,10 +169,11 @@ if [ -n "${AUTH_REGISTRY:-}" ]; then
     za logout "$AUTH_REGISTRY" >/dev/null 2>&1
 fi
 
-# Installed apps are protected against deletion, so remove them through zigsaw.
-for store in "$work\a" "$work\b" "$work\c"; do
-    for id in net.frippery.busybox org.nodejs.node; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
-    ZIGSAW_HOME="$store" "$zigsaw" prune >/dev/null 2>&1
+# Installed apps are protected against deletion, so remove them through
+# zigsaw, and the images builds use with prune --downloads.
+for store in "$work\a" "$work\b" "$work\c" "$work\d"; do
+    for id in net.frippery.busybox org.nodejs.node io.prettier.prettier; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
+    ZIGSAW_HOME="$store" "$zigsaw" prune --downloads >/dev/null 2>&1
 done
 rm -rf "$work"
 echo

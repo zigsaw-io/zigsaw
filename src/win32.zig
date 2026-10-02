@@ -139,6 +139,19 @@ pub extern "kernel32" fn UpdateProcThreadAttribute(
 pub extern "kernel32" fn DeleteProcThreadAttributeList(list: *anyopaque) callconv(.winapi) void;
 
 pub extern "kernel32" fn WaitForSingleObject(h: HANDLE, milliseconds: DWORD) callconv(.winapi) DWORD;
+pub const WAIT_ABANDONED: DWORD = 0x80;
+pub const WAIT_TIMEOUT: DWORD = 0x102;
+pub extern "kernel32" fn CreateMutexW(attributes: ?*anyopaque, initial_owner: BOOL, name: ?LPCWSTR) callconv(.winapi) ?HANDLE;
+pub extern "kernel32" fn ReleaseMutex(mutex: HANDLE) callconv(.winapi) BOOL;
+
+// DOS devices: drive letters mapped to directories, as `subst` makes.
+pub const DDD_RAW_TARGET_PATH: DWORD = 0x1;
+pub const DDD_REMOVE_DEFINITION: DWORD = 0x2;
+pub const DDD_EXACT_MATCH_ON_REMOVE: DWORD = 0x4;
+pub const DDD_NO_BROADCAST_SYSTEM: DWORD = 0x8;
+pub const ERROR_FILE_NOT_FOUND: DWORD = 2;
+pub extern "kernel32" fn DefineDosDeviceW(flags: DWORD, device: LPCWSTR, target: ?LPCWSTR) callconv(.winapi) BOOL;
+pub extern "kernel32" fn QueryDosDeviceW(device: ?LPCWSTR, target: [*]u16, max: DWORD) callconv(.winapi) DWORD;
 pub extern "kernel32" fn GetExitCodeProcess(h: HANDLE, exit_code: *DWORD) callconv(.winapi) BOOL;
 
 // ---------------------------------------------------------------------------
@@ -178,6 +191,28 @@ pub const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = extern struct {
 };
 
 pub extern "kernel32" fn CreateJobObjectW(attributes: ?*anyopaque, name: ?LPCWSTR) callconv(.winapi) ?HANDLE;
+pub extern "kernel32" fn TerminateJobObject(job: HANDLE, exit_code: u32) callconv(.winapi) BOOL;
+pub const JobObjectBasicAccountingInformation: c_int = 1;
+pub const JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = extern struct {
+    TotalUserTime: i64 = 0,
+    TotalKernelTime: i64 = 0,
+    ThisPeriodTotalUserTime: i64 = 0,
+    ThisPeriodTotalKernelTime: i64 = 0,
+    TotalPageFaultCount: DWORD = 0,
+    TotalProcesses: DWORD = 0,
+    ActiveProcesses: DWORD = 0,
+    TotalTerminatedProcesses: DWORD = 0,
+};
+pub extern "kernel32" fn QueryInformationJobObject(
+    job: HANDLE,
+    class: c_int,
+    info: *anyopaque,
+    length: DWORD,
+    return_length: ?*DWORD,
+) callconv(.winapi) BOOL;
+pub extern "kernel32" fn Sleep(milliseconds: DWORD) callconv(.winapi) void;
+/// Removes an empty directory, or a directory link itself (not its target).
+pub extern "kernel32" fn RemoveDirectoryW(path: LPCWSTR) callconv(.winapi) BOOL;
 pub extern "kernel32" fn SetInformationJobObject(
     job: HANDLE,
     class: c_int,
@@ -375,8 +410,7 @@ pub fn selfExePath(gpa: std.mem.Allocator) ![]u8 {
 /// (see `Context.fail`).
 pub fn lastErrorFail(what: []const u8) error{Failed} {
     const code = GetLastError();
-    std.log.err("{s} failed: error {d} ({s})", .{ what, code, errorName(code) });
-    return error.Failed;
+    return @import("Context.zig").fail("{s} failed: error {d} ({s})", .{ what, code, errorName(code) });
 }
 
 /// Formats a Win32 error code with its symbolic name when std knows it.
