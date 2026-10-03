@@ -23,6 +23,7 @@ const oci = @import("oci.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const environment = @import("environment.zig");
+const exports = @import("exports.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
 const fail = Context.fail;
@@ -140,13 +141,17 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         }),
     }
 
-    return process.spawn(arena, .{
+    const code = try process.spawn(arena, .{
         .exe = exe,
         .command_line = command_line,
         .env_block = try environment.encodeBlock(arena, env.items),
         .cwd = cwd,
         .security = if (security) |*s| s else null,
     });
+    // Commands the run installed, as `npm install -g` does, get shims. An
+    // --ephemeral run's are gone with its data directory.
+    if (run_dir == null and exports.hasCommandDirs(cfg)) exports.syncAfterRun(ctx, cfg.id);
+    return code;
 }
 
 // ---------------------------------------------------------------------------

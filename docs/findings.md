@@ -69,6 +69,13 @@ Windows. We tested this with a probe program that calls
 AppContainer. The probe ruled out missing grants on parent folders as the
 cause.
 
+**3. On Windows Server 2025, `NUL` is denied too** (iteration 6, seen on
+GitHub's `windows-2025` runners). Git opens `/dev/null` as it starts, and
+fails ("could not open '/dev/null' for reading and writing: Permission
+denied"), so even `git --version` fails there. On Windows 11 it starts. The
+matrix marks these AppContainer failures as known gaps, so CI only fails
+when a result changes.
+
 ## Other findings
 
 - **Fixed: `soft` runs could modify installed apps.** Python wrote a file into

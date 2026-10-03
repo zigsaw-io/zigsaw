@@ -129,7 +129,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
     }
     for (r.modules) |m| build_info.network = build_info.network or m.network;
 
-    var sources: Sources = .{ .ctx = ctx, .fetcher = .{ .ctx = ctx, .base_dir = std.fs.path.dirname(recipe_path) orelse "." } };
+    var sources: Sources = .{ .ctx = ctx, .fetcher = .{ .ctx = ctx, .base_dir = std.fs.path.dirname(recipe_path) orelse ".", .app = r.id } };
     defer sources.deinit();
     var tree: Tree = undefined;
     var root: ?BuildRoot = null;
@@ -302,8 +302,13 @@ const BuildRoot = struct {
                 try writeAlias(ctx, path, shim_exe.?, t, p, name, e);
             };
         }
-        // The aliases come first: a tool's image says what they are.
-        if (aliases.items.len > 0) try path_dirs.insert(arena, 0, letter ++ "\\bin");
+        // The aliases come first: a tool's image says what they are. BusyBox's
+        // sh runs its own applets before anything on PATH, so they win over
+        // those too (zig's ar over BusyBox's).
+        if (aliases.items.len > 0) {
+            try path_dirs.insert(arena, 0, letter ++ "\\bin");
+            try environment.set(arena, &tool_vars, "BB_OVERRIDE_APPLETS", try std.mem.join(arena, " ", aliases.items));
+        }
         const msvc: ?msvc_host.Toolchain = if (r.host.len > 0) try msvc_host.find(ctx, path) else null;
         if (msvc) |tc| {
             try path_dirs.appendSlice(arena, tc.path);
@@ -380,14 +385,16 @@ const BuildRoot = struct {
                 const dest = if (m.build.len == 0) prefix else try std.fs.path.join(arena, &.{ b.path, "src", m.name });
                 try writeSources(io, arena, &tree, m, dest);
             }
-            if (m.build.len > 0) try b.runCommands(ctx, m, .build);
+            if (m.build.len > 0) try b.runCommands(ctx, m, .build, .fail);
         }
         return Tree.fromDir(io, arena, prefix);
     }
 
     /// Runs a module's vendor step, or takes what an earlier one made from
     /// the download cache, and leaves the module's directory with its sources
-    /// and what the step made. Returns the sha256 of that.
+    /// and what the step made. Returns the sha256 of that. If the commands of
+    /// a pinned step fail, what they make is fetched from the sources next to
+    /// the app's image, if it's there.
     ///
     /// Either way, the build then starts from the same files: after the
     /// commands run, the module's directory and the build's profile folders
@@ -402,8 +409,7 @@ const BuildRoot = struct {
         var cached: ?[]const u8 = if (v.sha256) |h| try ctx.store.path(arena, &.{ "cache", "downloads", h }) else null;
         if (cached != null and try Store.exists(io, cached.?)) {
             if (ctx.verbose) note("module {s}: vendored files from the cache (sha256 {s})", .{ m.name, v.sha256.? });
-        } else {
-            try b.runCommands(ctx, m, .vendor);
+        } else if (b.runCommands(ctx, m, .vendor, if (v.sha256 != null) .warn else .fail)) |_| {
             const made = try std.fs.path.join(arena, &.{ dest, v.dir });
             if (!try Store.exists(io, made))
                 return fail("module {s}: the vendor commands left nothing in {s}", .{ m.name, v.dir });
@@ -426,6 +432,16 @@ const BuildRoot = struct {
             try unpackSources(ctx, m, recipe_path, dest);
             try makeScratchDirs(ctx, b.path, .fresh);
             cached = kept;
+        } else |err| {
+            // What the commands would have made is pinned, so it may be kept
+            // next to the app's image (see Fetcher.fromSources).
+            if (err != error.CommandFailed) return err;
+            var fetcher: Fetcher = .{ .ctx = ctx, .base_dir = std.fs.path.dirname(recipe_path) orelse ".", .app = b.id };
+            defer fetcher.deinit();
+            cached = try fetcher.fromSources(v.sha256.?, try std.fmt.allocPrint(arena, "module {s}'s vendored files", .{m.name}), "its vendor commands failed");
+            try Store.deleteTree(io, arena, dest);
+            try unpackSources(ctx, m, recipe_path, dest);
+            try makeScratchDirs(ctx, b.path, .fresh);
         }
 
         var tree: Tree = .{};
@@ -455,8 +471,9 @@ const BuildRoot = struct {
     const Step = enum { vendor, build };
 
     /// Runs a module's build commands, or its vendor commands, which have
-    /// network access.
-    fn runCommands(b: *const BuildRoot, ctx: *Context, m: recipe.Module, step: Step) !void {
+    /// network access. If one fails, the build fails, or with `.warn`,
+    /// runCommands returns error.CommandFailed after saying so.
+    fn runCommands(b: *const BuildRoot, ctx: *Context, m: recipe.Module, step: Step, on_failure: enum { fail, warn }) !void {
         const arena = ctx.arena;
         const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
         const commands = switch (step) {
@@ -496,7 +513,13 @@ const BuildRoot = struct {
                 .env_block = block,
                 .cwd = cwd,
             });
-            if (code != 0) return fail("module {s}: {t} command {d} exited with code {d}:\n  {s}", .{ m.name, step, n, code, command });
+            if (code != 0) switch (on_failure) {
+                .fail => return fail("module {s}: {t} command {d} exited with code {d}:\n  {s}", .{ m.name, step, n, code, command }),
+                .warn => {
+                    note("warning: module {s}: {t} command {d} exited with code {d}", .{ m.name, step, n, code });
+                    return error.CommandFailed;
+                },
+            };
         }
     }
 

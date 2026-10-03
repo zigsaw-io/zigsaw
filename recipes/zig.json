@@ -2,8 +2,21 @@
   "id": "org.ziglang.zig",
   "version": "0.16.0",
   "command": "zig.exe",
-  "env": { "ZIG_GLOBAL_CACHE_DIR": "${cache}" },
+  "env": {
+    "ZIG_GLOBAL_CACHE_DIR": "${cache}",
+    "CC_x86_64_pc_windows_gnu": "cc",
+    "CXX_x86_64_pc_windows_gnu": "c++",
+    "AR_x86_64_pc_windows_gnu": "ar",
+    "CRATE_CC_NO_DEFAULTS": "1",
+    "CFLAGS_x86_64_pc_windows_gnu": "-O3 -ffunction-sections -fdata-sections",
+    "CXXFLAGS_x86_64_pc_windows_gnu": "-O3 -ffunction-sections -fdata-sections"
+  },
   "aliases": {
+    "cc": { "command": "zig.exe", "args": ["cc", "-target", "x86_64-windows-gnu"] },
+    "c++": { "command": "zig.exe", "args": ["c++", "-target", "x86_64-windows-gnu"] },
+    "ar": { "command": "zig.exe", "args": ["ar"] },
+    "ranlib": { "command": "zig.exe", "args": ["ranlib"] },
+    "rc": { "command": "zig.exe", "args": ["rc"] },
     "dlltool": { "command": "zig.exe", "args": ["dlltool"] }
   },
   "permissions": { "filesystem": ["cwd"] },

@@ -10,11 +10,14 @@
   "modules": [
     {
       "name": "hello",
-      "sources": [{ "path": "Cargo.toml" }, { "path": "Cargo.lock" }, { "path": "main.rs", "dest": "src/main.rs" }],
+      "sources": [
+        { "path": "Cargo.toml" }, { "path": "Cargo.lock" }, { "path": "build.rs" }, { "path": "greet.c" },
+        { "path": "main.rs", "dest": "src/main.rs" }
+      ],
       "vendor": {
         "commands": ["cargo vendor --locked vendor >/dev/null"],
         "dir": "vendor",
-        "sha256": "2ddc7f8dfad53e1b1aee99b9ea94153e80aaad681347da32a32ca5e6560a6067"
+        "sha256": "82033412dfbd51c74b18715309e1317e08434b21f75d2bf065d920f7aac324ef"
       },
       "build": [
         "cargo build --offline --locked --release --config 'source.crates-io.replace-with=\"vendored\"' --config 'source.vendored.directory=\"vendor\"'",

@@ -5,10 +5,10 @@
 #
 #   tests/ctrlc.sh [path\to\zigsaw.exe]
 #
-# Needs Git Bash and network access (for the Node download, unless the store in
-# %ZIGSAW_HOME% already caches it). Builds the test driver (tests/ctrlc.zig),
-# which runs each app in a pseudoconsole, as a terminal does, so no window
-# opens. Uses a temporary store unless ZIGSAW_HOME is set.
+# Needs Git Bash and network access (for the Node download, unless the store
+# in %ZIGSAW_HOME% or SEED_DOWNLOADS has it). Builds the test driver
+# (tests/ctrlc.zig), which runs each app in a pseudoconsole, as a terminal
+# does, so no window opens. Uses a temporary store unless ZIGSAW_HOME is set.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -25,6 +25,13 @@ if [ -z "${ZIGSAW_HOME:-}" ]; then
 fi
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
+# SEED_DOWNLOADS: another store's cache\downloads, whose files are linked, or
+# copied, into this one's, so as not to download them again.
+if [ -n "${SEED_DOWNLOADS:-}" ]; then
+    mkdir -p "$ZIGSAW_HOME\\cache\\downloads"
+    cp -l "$(cygpath -u "$SEED_DOWNLOADS")"/* "$(cygpath -u "$ZIGSAW_HOME")/cache/downloads/" 2>/dev/null ||
+        cp -n "$(cygpath -u "$SEED_DOWNLOADS")"/* "$(cygpath -u "$ZIGSAW_HOME")/cache/downloads/"
+fi
 
 "$zigsaw" build "$root/recipes/node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
 "$root/zig-out/test/zigsaw-ctrlc.exe" "$zigsaw" "$ZIGSAW_HOME" "$work"

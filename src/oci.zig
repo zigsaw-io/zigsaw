@@ -21,7 +21,27 @@ pub const media_type = struct {
     /// Images made before runtimes existed: no runtimes, one layer. Still read.
     pub const config_v1 = "application/vnd.zigsaw.app.config.v1+json";
     pub const layer_tar = "application/vnd.oci.image.layer.v1.tar";
+    /// The config of the manifest that keeps an image's sources next to it
+    /// in its repository (see remote.zig), and each of those files.
+    pub const sources_config = "application/vnd.zigsaw.sources.v1+json";
+    pub const source = "application/vnd.zigsaw.source.v1";
 };
+
+/// The config of an image's sources manifest: which image they were built
+/// into.
+pub const SourcesConfig = struct {
+    id: []const u8,
+    version: []const u8,
+    /// The image's manifest digest.
+    image: []const u8,
+};
+
+/// The tag of the manifest that keeps the sources of the image with this
+/// manifest digest, in the image's repository: "sha256-<hex>.sources", as
+/// cosign tags what it attaches to an image.
+pub fn sourcesTag(arena: std.mem.Allocator, image_digest: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "sha256-{s}.sources", .{digestHex(image_digest).?});
+}
 
 pub const Descriptor = struct {
     mediaType: []const u8,
@@ -317,7 +337,7 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
     var it = c.exports.map.iterator();
     while (it.next()) |e| {
         if (!isValidExportName(e.key_ptr.*))
-            return fail("{s}: export name \"{s}\" must be letters, digits, '.', '-', '_' (and not zigsaw's own)", .{ what, e.key_ptr.* });
+            return fail("{s}: export name \"{s}\" must be letters, digits, '.', '-', '_', '+' (and not zigsaw's own)", .{ what, e.key_ptr.* });
         if (!isValidCommand(e.value_ptr.command, aliases))
             return fail("{s}: export {s} command \"{s}\" must be a relative path inside the app, or start with a runtime's ${{alias}}\\", .{ what, e.key_ptr.*, e.value_ptr.command });
     }
@@ -327,7 +347,7 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
         var it_aliases = a.map.iterator();
         while (it_aliases.next()) |e| {
             if (!isValidExportName(e.key_ptr.*))
-                return fail("{s}: alias name \"{s}\" must be letters, digits, '.', '-', '_' (and not zigsaw's own)", .{ what, e.key_ptr.* });
+                return fail("{s}: alias name \"{s}\" must be letters, digits, '.', '-', '_', '+' (and not zigsaw's own)", .{ what, e.key_ptr.* });
             if (!isValidCommand(e.value_ptr.command, &.{}))
                 return fail("{s}: alias {s} command \"{s}\" must be a relative path inside the app", .{ what, e.key_ptr.*, e.value_ptr.command });
         }
@@ -364,11 +384,11 @@ pub fn isValidAlias(name: []const u8) bool {
 }
 
 /// Export names become file names in the shim directory, so they are plain
-/// and can't shadow zigsaw's own executables.
+/// and can't shadow zigsaw's own executables. '+' is for names like c++.
 pub fn isValidExportName(name: []const u8) bool {
     if (name.len == 0 or name.len > 64 or name[0] == '.') return false;
     for (name) |c| switch (c) {
-        'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_' => {},
+        'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_', '+' => {},
         else => return false,
     };
     for ([_][]const u8{ "zigsaw", "zigsaw-shim" }) |reserved| {
@@ -429,6 +449,7 @@ test isValidId {
 test isValidExportName {
     try std.testing.expect(isValidExportName("node"));
     try std.testing.expect(isValidExportName("python3.14"));
+    try std.testing.expect(isValidExportName("c++"));
     try std.testing.expect(!isValidExportName("Zigsaw"));
     try std.testing.expect(!isValidExportName("a/b"));
     try std.testing.expect(!isValidExportName(".hidden"));
@@ -558,6 +579,14 @@ test parseFsGrant {
     try std.testing.expect(!parseFsGrant("D:\\src").?.read_only);
     try std.testing.expect(parseFsGrant("relative\\dir") == null);
     try std.testing.expect(parseFsGrant("home") == null);
+}
+
+test sourcesTag {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const tag = try sourcesTag(arena_state.allocator(), "sha256:" ++ "ab" ** 32);
+    try std.testing.expectEqualStrings("sha256-" ++ "ab" ** 32 ++ ".sources", tag);
+    try std.testing.expect(tag.len <= 128);
 }
 
 test digestHex {

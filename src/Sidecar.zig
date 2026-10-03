@@ -44,6 +44,11 @@ pub fn parse(bytes: []const u8) error{InvalidShimFile}!Sidecar {
     };
 }
 
+pub fn eql(a: Sidecar, b: Sidecar) bool {
+    return std.mem.eql(u8, a.zigsaw, b.zigsaw) and std.mem.eql(u8, a.home, b.home) and
+        std.mem.eql(u8, a.app, b.app) and std.mem.eql(u8, a.command, b.command);
+}
+
 pub fn format(s: Sidecar, w: *std.Io.Writer) std.Io.Writer.Error!void {
     try w.print(
         \\# Written by zigsaw. The .exe next to this file runs:

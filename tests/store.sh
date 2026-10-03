@@ -5,8 +5,9 @@
 #
 #   tests/store.sh [path\to\zigsaw.exe]
 #
-# Needs Git Bash and network access (for the busybox download). Always uses a
-# temporary store, since it deletes things, and removes it afterwards.
+# Needs Git Bash and network access (for the busybox download, unless
+# SEED_DOWNLOADS has it). Always uses a temporary store, since it deletes
+# things, and removes it afterwards.
 # Updating from a registry is covered by tests/registry.sh.
 
 set -u
@@ -17,6 +18,13 @@ zigsaw=${1:-$root/zig-out/bin/zigsaw.exe}
 ZIGSAW_HOME=$(cygpath -w "$(mktemp -d)")
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
+# SEED_DOWNLOADS: another store's cache\downloads, whose files are linked, or
+# copied, into this one's, so as not to download them again.
+if [ -n "${SEED_DOWNLOADS:-}" ]; then
+    mkdir -p "$ZIGSAW_HOME\\cache\\downloads"
+    cp -l "$(cygpath -u "$SEED_DOWNLOADS")"/* "$(cygpath -u "$ZIGSAW_HOME")/cache/downloads/" 2>/dev/null ||
+        cp -n "$(cygpath -u "$SEED_DOWNLOADS")"/* "$(cygpath -u "$ZIGSAW_HOME")/cache/downloads/"
+fi
 
 BB=net.frippery.busybox
 

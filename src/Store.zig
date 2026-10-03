@@ -117,6 +117,8 @@ fn discard(s: Store, arena: Allocator, p: []const u8) !void {
 //   long as the app runs. A deployment is only deleted under an exclusive
 //   lock, so never while in use.
 // - tmp\run-<hex>.lock is held by an --ephemeral run for its data directory.
+// - bin.lock is held exclusively while an app's command shims change: as it
+//   is installed or removed, and after its runs (see exports.zig).
 //
 // Locks end when zigsaw exits, however it exits.
 
@@ -155,6 +157,12 @@ pub fn lock(s: Store, arena: Allocator, mode: Io.File.Lock) !Lock {
     if (try tryLock(s.io, p, mode)) |l| return l;
     note("waiting for another zigsaw command to finish...", .{});
     return openLock(s.io, p, mode, .wait);
+}
+
+/// Takes bin.lock, waiting for whoever has it. A process holding it can't
+/// take it again.
+pub fn lockShims(s: Store, arena: Allocator) !Lock {
+    return openLock(s.io, try s.path(arena, &.{"bin.lock"}), .exclusive, .wait);
 }
 
 /// Whether the lock file at `p`, if there is one, is held by a running zigsaw.

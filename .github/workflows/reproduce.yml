@@ -1,7 +1,9 @@
-# Checks that the published recipes build the same images on a fresh machine:
-# runs the unit tests, then builds each recipe in scripts/published-recipes.txt
-# and compares its digest with the image published for the recipe's version
-# (tests/published.sh). It only verifies; scripts/publish.sh publishes.
+# Checks that the published recipes build the same images on a fresh machine,
+# and runs the end-to-end suites there: the unit tests, then each recipe in
+# scripts/published-recipes.txt built and compared with the image published
+# for the recipe's version (tests/published.sh), then the suites in tests/,
+# which take what they'd download from that build's store. It only verifies;
+# scripts/publish.sh publishes.
 name: Reproduce
 
 on:
@@ -21,7 +23,7 @@ concurrency:
 jobs:
   reproduce:
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,6 +33,12 @@ jobs:
         with:
           version: 0.16.0
 
+      - name: Paths for the steps below
+        shell: bash
+        run: |
+          t=$RUNNER_TEMP
+          printf '%s\n' "TMP=$t" "TEMP=$t" "BUILD_HOME=$t\\store" "SEED_DOWNLOADS=$t\\store\\cache\\downloads" "LOG_DIR=$t\\logs" >>"$GITHUB_ENV"
+
       - name: Unit tests
         run: zig build test --summary all
 
@@ -39,16 +47,63 @@ jobs:
 
       - name: Build the published recipes and compare them with the published images
         shell: bash
-        env:
-          LOG_DIR: ${{ runner.temp }}\published-logs
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
           bash tests/published.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/published.txt"
+
+      # The suites run whether or not the steps before them passed.
+      - name: tests/build.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/build.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/build.txt"
+
+      - name: tests/store.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/store.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/store.txt"
+
+      - name: tests/shims.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/shims.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/shims.txt"
+
+      - name: tests/batch.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/batch.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/batch.txt"
+
+      - name: tests/ctrlc.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/ctrlc.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/ctrlc.txt"
+
+      - name: tests/registry.sh, against two local zot registries
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          ZOT_URL: https://github.com/project-zot/zot/releases/download/v2.1.21/zot-windows-amd64-minimal.exe
+          ZOT_SHA256: 241c5ac5cb13c8a87861f337bcf3e298d7ef852129107f03c940273e8a9ef746
+        run: |
+          zot="$(cygpath -u "$RUNNER_TEMP")/zot.exe"
+          curl -sSfLo "$zot" "$ZOT_URL"
+          echo "$ZOT_SHA256 *$zot" | sha256sum -c -
+          bash tests/zot.sh "$zot" bash tests/registry.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/registry.txt"
+
+      # Last, in the build store, whose apps it runs: it changes their data.
+      - name: tests/matrix.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          ZIGSAW_HOME: ${{ runner.temp }}\store
+          # zig's project check compiles zig's build runner with a cold cache.
+          MATRIX_TIMEOUT: 600
+          LOG_DIR: ${{ runner.temp }}\logs
+        run: bash tests/matrix.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/matrix.txt"
 
       - name: Upload the logs
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: published-logs
-          path: ${{ runner.temp }}\published-logs
+          name: logs
+          path: ${{ runner.temp }}\logs
           if-no-files-found: ignore

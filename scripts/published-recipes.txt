@@ -10,3 +10,4 @@ zig.json
 sqlite.json
 rust.json
 ripgrep.json
+bat.json

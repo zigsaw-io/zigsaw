@@ -10,20 +10,22 @@
   "modules": [
     {
       "name": "greet",
-      "sources": [{ "path": "greet.c" }, { "path": "greet.h" }],
+      "sources": [{ "path": "greet.c" }, { "path": "greet.h" }, { "path": "twice.cpp" }],
       "build": [
-        "zig cc -target x86_64-windows-gnu -O2 -c greet.c -o greet.o",
-        "zig ar rcs libgreet.a greet.o",
+        "cc -O2 -c greet.c -o greet.o",
+        "c++ -O2 -fno-exceptions -fno-rtti -c twice.cpp -o twice.o",
+        "ar rc libgreet.a greet.o twice.o && ranlib libgreet.a",
         "mkdir -p \"$PREFIX/include\" \"$PREFIX/lib\"",
         "cp greet.h \"$PREFIX/include\" && cp libgreet.a \"$PREFIX/lib\""
       ]
     },
     {
       "name": "app",
-      "sources": [{ "path": "main.c" }],
+      "sources": [{ "path": "main.c" }, { "path": "hello.rc" }],
       "build": [
         "mkdir -p \"$PREFIX/bin\"",
-        "zig cc -target x86_64-windows-gnu -O2 -s -I\"$PREFIX/include\" -o \"$PREFIX/bin/hello.exe\" \"$PWD/main.c\" \"$PREFIX/lib/libgreet.a\""
+        "rc /fo hello.res hello.rc",
+        "cc -O2 -s -I\"$PREFIX/include\" -o \"$PREFIX/bin/hello.exe\" \"$PWD/main.c\" hello.res \"$PREFIX/lib/libgreet.a\""
       ]
     },
     {

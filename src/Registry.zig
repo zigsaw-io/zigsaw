@@ -166,9 +166,22 @@ pub fn hasBlob(r: *Registry, digest: []const u8) !bool {
 
 /// Downloads a blob to `dest` and checks it against its descriptor.
 pub fn downloadBlob(r: *Registry, desc: oci.Descriptor, dest: []const u8) !Store.FileHash {
+    const hash = try r.downloadBlobByDigest(desc.digest, dest) orelse
+        return r.failStatus(.{ .status = .not_found }, "downloading a blob");
+    if (hash.size != desc.size) {
+        Io.Dir.cwd().deleteFile(r.ctx.io, dest) catch {};
+        return fail("blob {s} from {f} doesn't match its digest", .{ desc.digest, r.ref });
+    }
+    return hash;
+}
+
+/// Downloads the blob with this digest to `dest`, and checks it. Null if the
+/// repository doesn't have it.
+pub fn downloadBlobByDigest(r: *Registry, digest: []const u8, dest: []const u8) !?Store.FileHash {
     const io = r.ctx.io;
     var file = try Io.Dir.cwd().createFile(io, dest, .{ .read = true });
-    errdefer Io.Dir.cwd().deleteFile(io, dest) catch {};
+    var keep = false;
+    defer if (!keep) Io.Dir.cwd().deleteFile(io, dest) catch {};
     defer file.close(io);
     var file_buf: [64 * 1024]u8 = undefined;
     var file_writer = file.writer(io, &file_buf);
@@ -177,16 +190,18 @@ pub fn downloadBlob(r: *Registry, desc: oci.Descriptor, dest: []const u8) !Store
 
     const res = try r.send(.{
         .method = .GET,
-        .url = try r.url("/v2/{s}/blobs/{s}", .{ r.ref.repository, desc.digest }),
+        .url = try r.url("/v2/{s}/blobs/{s}", .{ r.ref.repository, digest }),
         .sink = &hashed.writer,
     });
+    if (res.status == .not_found) return null;
     if (res.status != .ok) return r.failStatus(res, "downloading a blob");
     try hashed.writer.flush();
     try file_writer.interface.flush();
 
     const hash: Store.FileHash = .{ .hex = std.fmt.bytesToHex(hashed.hasher.finalResult(), .lower), .size = try file.length(io) };
-    if (!std.mem.eql(u8, &hash.hex, oci.digestHex(desc.digest).?) or hash.size != desc.size)
-        return fail("blob {s} from {f} doesn't match its digest", .{ desc.digest, r.ref });
+    if (!std.mem.eql(u8, &hash.hex, oci.digestHex(digest).?))
+        return fail("blob {s} from {f} doesn't match its digest", .{ digest, r.ref });
+    keep = true;
     return hash;
 }
 

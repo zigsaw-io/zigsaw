@@ -114,9 +114,14 @@ fn downloadBlob(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !void 
     ctx.timed(start, "download {s}", .{desc.digest});
 }
 
+pub const PushOptions = struct {
+    /// Also push the files the app was built from (see `pushSources`).
+    sources: bool = false,
+};
+
 /// Publishes an installed app. Without an image, it goes to its own image in
 /// the default registry. The tag defaults to the app's version.
-pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8) !void {
+pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8, opts: PushOptions) !void {
     const arena = ctx.arena;
     const installed = try ctx.store.readRef(arena, id) orelse return fail("{s} is not installed", .{id});
     const target = try resolve(ctx, image_text orelse id);
@@ -138,16 +143,82 @@ pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8) !void {
 
     // Blobs before the manifest that refers to them; skip what's already there.
     for ([_][]const oci.Descriptor{ &.{manifest.config}, manifest.layers }) |descs| {
-        for (descs) |desc| {
-            if (try registry.hasBlob(desc.digest)) continue;
-            if (desc.size > 1 << 20) note("uploading {s} ({d} bytes)", .{ desc.digest, desc.size });
-            const start = ctx.now();
-            try registry.uploadBlob(desc, try ctx.store.blobPath(arena, oci.digestHex(desc.digest).?));
-            ctx.timed(start, "upload {s}", .{desc.digest});
-        }
+        for (descs) |desc| try uploadIfMissing(ctx, &registry, desc, try ctx.store.blobPath(arena, oci.digestHex(desc.digest).?));
     }
     try registry.pushManifest(ref.tag.?, manifest_bytes);
     note("pushed {s} {s} to {f}\n  manifest {s}", .{ id, installed.version, ref, installed.manifest });
+    if (opts.sources) try pushSources(ctx, &registry, installed);
+}
+
+/// Keeps the files an app was built from next to its image, so that a build
+/// of its recipe still finds them if they're gone from where they came from
+/// (see Fetcher.fromSources): a manifest in the image's repository, tagged
+/// by the image's digest, whose layers are the build's pinned sources and
+/// what its vendor steps made, from the download cache. A registry keeps
+/// blobs a manifest refers to, and serves them by digest, which is their
+/// sha256.
+fn pushSources(ctx: *Context, registry: *Registry, installed: Store.Ref) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+    const image = try ctx.store.readImage(arena, installed.id, installed.manifest);
+    const build = image.config.build orelse {
+        note("  {s} {s} wasn't built from a recipe here, so it has no sources to push", .{ installed.id, installed.version });
+        return;
+    };
+    var hashes: std.ArrayList([]const u8) = .empty;
+    for (build.sources) |h| if (!contains(hashes.items, h)) try hashes.append(arena, h);
+    if (build.vendor) |v| for (v.map.values()) |h| if (!contains(hashes.items, h)) try hashes.append(arena, h);
+
+    var layers: std.ArrayList(oci.Descriptor) = .empty;
+    var missing: usize = 0;
+    for (hashes.items) |h| {
+        const p = try ctx.store.path(arena, &.{ "cache", "downloads", h });
+        if (!try Store.exists(io, p)) {
+            missing += 1;
+            continue;
+        }
+        const file = try Store.sha256File(io, p);
+        if (!std.mem.eql(u8, &file.hex, h)) return fail("{s} in the download cache isn't what its name says; delete it and build {s} again", .{ p, installed.id });
+        const desc: oci.Descriptor = .{ .mediaType = oci.media_type.source, .digest = try std.fmt.allocPrint(arena, "sha256:{s}", .{h}), .size = file.size };
+        try uploadIfMissing(ctx, registry, desc, p);
+        try layers.append(arena, desc);
+    }
+    if (missing > 0) note("  {d} of its sources aren't in the download cache (local files, or deleted by prune --downloads), so they aren't pushed", .{missing});
+    if (layers.items.len == 0) return;
+
+    const config: oci.SourcesConfig = .{ .id = installed.id, .version = installed.version, .image = installed.manifest };
+    const config_desc = try ctx.store.putBlob(arena, try oci.toJson(arena, config), oci.media_type.sources_config);
+    try uploadIfMissing(ctx, registry, config_desc, try ctx.store.blobPath(arena, oci.digestHex(config_desc.digest).?));
+    var annotations: std.json.ArrayHashMap([]const u8) = .{};
+    try annotations.map.put(arena, "org.opencontainers.image.title", try std.fmt.allocPrint(arena, "{s} {s} sources", .{ installed.id, installed.version }));
+    const manifest: oci.Manifest = .{ .config = config_desc, .layers = layers.items, .annotations = annotations };
+    const tag = try oci.sourcesTag(arena, installed.manifest);
+    try registry.pushManifest(tag, try oci.toJson(arena, manifest));
+    note("pushed its {d} source file(s) next to it, as {s}", .{ layers.items.len, tag });
+}
+
+fn uploadIfMissing(ctx: *Context, registry: *Registry, desc: oci.Descriptor, path: []const u8) !void {
+    if (try registry.hasBlob(desc.digest)) return;
+    if (desc.size > 1 << 20) note("uploading {s} ({d} bytes)", .{ desc.digest, desc.size });
+    const start = ctx.now();
+    try registry.uploadBlob(desc, path);
+    ctx.timed(start, "upload {s}", .{desc.digest});
+}
+
+fn contains(hashes: []const []const u8, h: []const u8) bool {
+    for (hashes) |x| if (std.mem.eql(u8, x, h)) return true;
+    return false;
+}
+
+/// Downloads the file with this sha256 from the sources kept next to app
+/// `id`'s image in the default registry (see `pushSources`) to `dest`. Null
+/// if the repository doesn't have it.
+pub fn fetchSource(ctx: *Context, id: []const u8, sha256: []const u8, dest: []const u8) !?Store.FileHash {
+    const target = try resolve(ctx, id);
+    var registry: Registry = undefined;
+    try registry.init(ctx, target.ref, "pull");
+    defer registry.deinit();
+    return registry.downloadBlobByDigest(try std.fmt.allocPrint(ctx.arena, "sha256:{s}", .{sha256}), dest);
 }
 
 test expandShort {

@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # End-to-end checks for `zigsaw push` and `zigsaw pull` against a real
-# registry: apps round-trip between two stores through it, byte for byte.
+# registry: apps round-trip between two stores through it, byte for byte,
+# and builds take sources that are gone from their URLs from next to images.
 #
 #   tests/registry.sh [registry-host] [path\to\zigsaw.exe]
 #
 # The registry defaults to localhost:5000 and must already be running with no
-# authentication, for example zot (https://zotregistry.dev):
-#   zot serve config.json   # with "http": { "address": "127.0.0.1", "port": "5000" }
-# Also makes read-only requests to ghcr.io and Docker Hub.
+# authentication, for example zot (https://zotregistry.dev). Also makes
+# read-only requests to ghcr.io and Docker Hub.
 #
 # To also check registry logins, run a second registry that requires one and
-# set AUTH_REGISTRY (e.g. localhost:5001), AUTH_USER and AUTH_PASSWORD. For zot,
-# add "auth": { "htpasswd": { "path": "htpasswd" } } to its "http" settings,
-# with a bcrypt htpasswd line, e.g. from `htpasswd -nB <user>`. The checks
-# save a login for AUTH_REGISTRY in Windows Credential Manager and remove it at
-# the end, so use a registry on localhost.
+# set AUTH_REGISTRY (e.g. localhost:5001), AUTH_USER and AUTH_PASSWORD. The
+# checks save a login for AUTH_REGISTRY in Windows Credential Manager and
+# remove it at the end, so use a registry on localhost. tests/zot.sh starts
+# both registries and sets these:
+#   tests/zot.sh path\to\zot.exe bash tests/registry.sh
+#
+# Set SEED_DOWNLOADS to another store's cache\downloads to take the busybox
+# and Node downloads from there.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -35,6 +38,13 @@ store_a="$work\\a"
 store_b="$work\\b"
 za() { ZIGSAW_HOME="$store_a" "$zigsaw" "$@"; }
 zb() { ZIGSAW_HOME="$store_b" "$zigsaw" "$@"; }
+# SEED_DOWNLOADS: another store's cache\downloads, whose files are linked, or
+# copied, into store a's, so as not to download them again.
+if [ -n "${SEED_DOWNLOADS:-}" ]; then
+    mkdir -p "$store_a\\cache\\downloads"
+    cp -l "$(cygpath -u "$SEED_DOWNLOADS")"/* "$(cygpath -u "$store_a")/cache/downloads/" 2>/dev/null ||
+        cp -n "$(cygpath -u "$SEED_DOWNLOADS")"/* "$(cygpath -u "$store_a")/cache/downloads/"
+fi
 
 failures=0
 check() {
@@ -108,6 +118,59 @@ other_app_image() {
 check "pull by app id refuses an image of another app" other_app_image
 check "push by app id refuses another app's image" sh -c "ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_a' \"\$0\" push net.frippery.busybox org.example.other:2 2>&1 | grep -q 'is the image of org.example.other'" "$zigsaw"
 
+# Sources next to images: push --sources keeps the files an app was built
+# from in its image's repository, and a build whose pinned source can't be
+# had from its URL takes it from there, by its sha256. Each build below is in
+# a fresh store, against a local web server: busybox's httpd.
+pushed_sources() { sza push --sources net.frippery.busybox 2>&1 | grep -q 'pushed its 1 source file(s) next to it, as sha256-[0-9a-f]*.sources'; }
+check "push --sources keeps busybox's source next to its image" pushed_sources
+bb_exe=$(find "$(cygpath -u "$store_a")/deploy" -name busybox.exe | head -1)
+mkdir -p "$work\\www"
+"$bb_exe" httpd -f -p 127.0.0.1:18098 -h "$work\\www" &
+httpd=$!
+bb_file=busybox-w64-FRP-6075-g169694ebd.exe
+sed "s|https://frippery.org/files/busybox/$bb_file|http://127.0.0.1:18098/$bb_file|" "$root\\recipes\\busybox.json" >"$work\\busybox-local.json"
+# from_sources <recipe> <store>: builds it in the new store <store>, which
+# must take its source from next to the image, and make the same image as
+# store_a's.
+from_sources() {
+    local out
+    out=$(ZIGSAW_REGISTRY="$repo" ZIGSAW_HOME="$work\\$2" "$zigsaw" build "$1" 2>&1) || { echo "$out" | tail -2; return 1; }
+    grep -q "fetching sha256 07bb1e5b095b from the sources next to $repo/net.frippery.busybox" <<<"$out" && grep -q "manifest $full_digest" <<<"$out"
+}
+check "a source whose URL is gone comes from next to its image" from_sources "$work\\busybox-local.json" fresh1
+echo "not busybox" >"$work\\www\\$bb_file"
+check "and one whose URL serves other bytes" from_sources "$work\\busybox-local.json" fresh2
+missing_everywhere() {
+    sed 's/"net.frippery.busybox"/"test.registry.nosources"/' "$work\\busybox-local.json" >"$work\\nosources.json"
+    ZIGSAW_REGISTRY="$repo" ZIGSAW_HOME="$work\\fresh-none" "$zigsaw" build "$work\\nosources.json" 2>&1 |
+        grep -q "and the sources next to $repo/test.registry.nosources don't have it"
+}
+check "without sources next to the image, the build fails, saying so" missing_everywhere
+kill $httpd 2>/dev/null
+
+# A vendor step's result is kept with the sources too, and taken from there
+# when its commands fail.
+VENDORED=test.registry.vendored
+vendor_recipe() {
+    printf '{ "id": "%s", "version": "1", "command": "x.txt", "exports": {}, "sdk": { "busybox": "net.frippery.busybox@%s" },\n  "modules": [{ "name": "m", "vendor": { "commands": ["%s"], "dir": "deps"%s }, "build": ["cp deps/x.txt \\"$PREFIX/x.txt\\""] }] }\n' \
+        $VENDORED "$full_digest" "$1" "${2:-}"
+}
+vendor_recipe 'mkdir -p deps && echo vendored > deps/x.txt' >"$work\\vendor-unpinned.json"
+vendor_hash=$(za build "$work\\vendor-unpinned.json" 2>&1 | grep -o '"sha256": "[0-9a-f]*"' | cut -d'"' -f4)
+vendor_recipe 'mkdir -p deps && echo vendored > deps/x.txt' ", \"sha256\": \"$vendor_hash\"" >"$work\\vendor.json"
+vendor_recipe 'exit 3' ", \"sha256\": \"$vendor_hash\"" >"$work\\vendor-failing.json"
+za build "$work\\vendor.json" >/dev/null 2>&1
+vendored_digest=$(grep -o 'sha256:[0-9a-f]*' "$store_a\\refs\\$VENDORED.json")
+vendor_from_sources() {
+    local out
+    sza push --sources $VENDORED >/dev/null 2>&1 || { echo "push --sources failed"; return 1; }
+    out=$(ZIGSAW_REGISTRY="$repo" ZIGSAW_HOME="$work\\fresh-vendor" "$zigsaw" build "$work\\vendor-failing.json" 2>&1) || { echo "$out" | tail -2; return 1; }
+    grep -q "module m's vendored files: its vendor commands failed; fetching sha256 ${vendor_hash:0:12}" <<<"$out" &&
+        grep -q "manifest $vendored_digest" <<<"$out"
+}
+check "a vendor step whose commands fail takes what they make from next to the image" vendor_from_sources
+
 # A large app: its 100 MB layer streams both ways.
 za build "$root\\recipes\\node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
 check "push node (100 MB layer)" za push org.nodejs.node "$repo/node"
@@ -171,8 +234,8 @@ fi
 
 # Installed apps are protected against deletion, so remove them through
 # zigsaw, and the images builds use with prune --downloads.
-for store in "$work\a" "$work\b" "$work\c" "$work\d"; do
-    for id in net.frippery.busybox org.nodejs.node io.prettier.prettier; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
+for store in "$work\a" "$work\b" "$work\c" "$work\d" "$work\fresh1" "$work\fresh2" "$work\fresh-none" "$work\fresh-vendor"; do
+    for id in net.frippery.busybox org.nodejs.node io.prettier.prettier test.registry.vendored; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
     ZIGSAW_HOME="$store" "$zigsaw" prune --downloads >/dev/null 2>&1
 done
 rm -rf "$work"

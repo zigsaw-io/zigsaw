@@ -4,7 +4,7 @@
   "command": "bin/sqlite3.exe",
   "permissions": { "filesystem": ["cwd"] },
   "sdk": {
-    "zig": "org.ziglang.zig:0.16.0@sha256:4d90aaafb78377f20acb2468b7b1d32d10f4c00fa5501eff8601be09740ddba4",
+    "zig": "org.ziglang.zig:0.16.0@sha256:4f6673f39561e71cda433f8b2b4155bc9a4816f62cc98e3f09148692c7e1a05f",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:fa4eac7f8b4b87330acd44e6c67b1f0cfd0242460b02dbb8869ef9054f28c120"
   },
   "cleanup": ["/include", "/lib"],

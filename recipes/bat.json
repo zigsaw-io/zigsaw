@@ -1,0 +1,34 @@
+{
+  "id": "com.github.sharkdp.bat",
+  "version": "0.26.1",
+  "command": "bat.exe",
+  "permissions": { "filesystem": ["cwd:ro"] },
+  "sdk": {
+    "rust": "org.rust-lang.rust:1.99.0@sha256:28784c4bc3708a07de7fde9259dd192185e4631464fbdba467bd95becfc8be2b",
+    "zig": "org.ziglang.zig:0.16.0@sha256:4f6673f39561e71cda433f8b2b4155bc9a4816f62cc98e3f09148692c7e1a05f",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:fa4eac7f8b4b87330acd44e6c67b1f0cfd0242460b02dbb8869ef9054f28c120"
+  },
+  "modules": [
+    {
+      "name": "bat",
+      "sources": [
+        {
+          "url": "https://static.crates.io/crates/bat/bat-0.26.1.crate",
+          "sha256": "cf66d0164db6827afe1694b8d4939f36a5507b7186f8d3cc529c66baf03b0d09",
+          "strip": 1
+        }
+      ],
+      "vendor": {
+        "commands": ["cargo vendor --locked vendor >/dev/null"],
+        "dir": "vendor",
+        "sha256": "33bdae3f7c06990f47ef6a7c877b51099074f65fd62d3b88924818a804005e6f"
+      },
+      "build": [
+        "cargo build --offline --locked --release --config 'source.crates-io.replace-with=\"vendored\"' --config 'source.vendored.directory=\"vendor\"'",
+        "mkdir -p \"$PREFIX/autocomplete\"",
+        "cp target/release/bat.exe README.md LICENSE-MIT LICENSE-APACHE CHANGELOG.md target/release/build/bat-*/out/assets/manual/bat.1 \"$PREFIX/\"",
+        "cp target/release/build/bat-*/out/assets/completions/* \"$PREFIX/autocomplete/\""
+      ]
+    }
+  ]
+}

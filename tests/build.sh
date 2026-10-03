@@ -10,8 +10,8 @@
 # SQLite and Rust downloads, and crates from crates.io). Always uses
 # temporary stores, since it removes apps, and deletes them afterwards. To
 # skip downloading what a store already has (zig's is 97 MB, Rust's 150 MB),
-# set SEED_DOWNLOADS to its cache\downloads directory; its files are copied
-# into the temporary stores.
+# set SEED_DOWNLOADS to its cache\downloads directory; its files are linked,
+# or copied, into the temporary stores.
 #
 # The build commands' checks map B:, as every build does, and briefly map it
 # themselves with subst. Don't run this while B: is in use.
@@ -26,10 +26,13 @@ export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
 bin="$ZIGSAW_HOME\\bin"
 
-# seed <store>: copies SEED_DOWNLOADS into the store's download cache.
+# seed <store>: puts SEED_DOWNLOADS's files into the store's download cache,
+# as hard links if it's on the same drive.
 seed() {
     [ -n "${SEED_DOWNLOADS:-}" ] || return 0
-    mkdir -p "$1\\cache\\downloads" && cp "$(cygpath -u "$SEED_DOWNLOADS")"/* "$(cygpath -u "$1")/cache/downloads/"
+    local from to
+    from=$(cygpath -u "$SEED_DOWNLOADS") to="$(cygpath -u "$1")/cache/downloads"
+    mkdir -p "$to" && { cp -l "$from"/* "$to/" 2>/dev/null || cp -n "$from"/* "$to/"; }
 }
 seed "$ZIGSAW_HOME"
 
@@ -141,10 +144,12 @@ HELLO=test.build.hello
 z build "$root\\recipes\\zig.json" >/dev/null 2>&1 || { echo "building zig failed"; exit 1; }
 zig_digest=$(manifest_of org.ziglang.zig)
 
-# The C app: module greet installs a library, module app links it, and
-# module notes runs cmd.exe. Built in <dir>, a copy of tests\build\c.
+# The C app, built with zig's aliases: module greet installs a library of C
+# and C++, module app links it with a resource, and module notes runs
+# cmd.exe. Its ar is zig's, not BusyBox's applet of the same name. Built in
+# <dir>, a copy of tests\build\c.
 hello_recipe() {
-    mkdir -p "$1" && cp "$(cygpath -u "$root")"/tests/build/c/*.[ch] "$(cygpath -u "$1")" &&
+    mkdir -p "$1" && cp "$(cygpath -u "$root")"/tests/build/c/*.{c,h,cpp,rc} "$(cygpath -u "$1")" &&
         sed -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" "$root\\tests\\build\\c\\hello.json.in" >"$1\\hello.json"
 }
 hello_recipe "$work\\c"
@@ -161,16 +166,18 @@ drive_free() { ! subst | grep -q '^B:'; }
 no_build_root() { ! ls "$ZIGSAW_HOME\\tmp" | grep -q '^zigsaw-build-'; }
 
 start=$SECONDS
-check "a recipe with build commands builds with the zig and busybox SDK" z build "$work\\c\\hello.json"
+check "a recipe with build commands builds with zig's aliases (cc, c++, ar, ranlib, rc) and busybox" z build "$work\\c\\hello.json"
 hello_time=$((SECONDS - start))
 hello_digest=$(manifest_of $HELLO)
 hello_runs() {
     local out
     out=$(z run $HELLO zigsaw | tr -d '\r')
     [ "$out" = "hello, zigsaw
-built from B:/src/app/main.c" ] || { echo "got: $out"; return 1; }
+built from B:/src/app/main.c
+twice 21 is 42
+a string from its resources" ] || { echo "got: $out"; return 1; }
 }
-check "it runs: its app module linked what the greet module installed, on B:" hello_runs
+check "it runs: its app module linked what the greet module installed (C and C++), and its resources, on B:" hello_runs
 hello_files() {
     local dir="$ZIGSAW_HOME\\deploy\\$(own_layer $HELLO)"
     [ ! -e "$dir\\include" ] && [ ! -e "$dir\\lib" ] && [ "$(tr -d '\r' <"$dir\\notes.txt")" = "built by cmd" ]
@@ -386,21 +393,38 @@ check "sqlite3 runs, with zlib" sh -c "[ \"\$(\"\$0\" run org.sqlite.sqlite3 :me
 # --- Rust from source ---------------------------------------------------------------
 
 check "rust.json builds the Rust SDK image" z build "$root\\recipes\\rust.json"
+# Rust's image keeps cargo's home in its data directory, whose bin is on its
+# PATH, so what `cargo install` installs gets a shim.
+mkdir -p "$work\\tiny\\src" &&
+    printf '[package]\nname = "zigsaw-tiny"\nversion = "1.0.0"\nedition = "2021"\n' >"$work\\tiny\\Cargo.toml" &&
+    printf 'fn main() { println!("tiny {}", std::env::args().nth(1).unwrap_or_default()); }\n' >"$work\\tiny\\src\\main.rs"
+cargo_installed() {
+    local out
+    out=$(cd "$work\\tiny" && z run --command=cargo org.rust-lang.rust install --offline --quiet --path . 2>&1)
+    grep -q 'added zigsaw-tiny to' <<<"$out" || { echo "$out" | tail -3; return 1; }
+    [ "$("$bin\\zigsaw-tiny.exe" hi | tr -d '\r')" = "tiny hi" ]
+}
+check "cargo install gives what it installs a shim" cargo_installed
 # A program whose windows-sys crate needs dlltool, which zig's image
-# provides; its crates come from crates.io through a vendor step.
+# provides, and whose build.rs compiles C with the cc crate, which finds
+# zig's cc through the variables zig's image sets; its crates come from
+# crates.io through a vendor step.
 RUST=test.build.rust
-mkdir -p "$work\\rust" && cp "$(cygpath -u "$root")"/tests/build/rust/{Cargo.toml,Cargo.lock,main.rs} "$(cygpath -u "$work")/rust/" &&
+mkdir -p "$work\\rust" && cp "$(cygpath -u "$root")"/tests/build/rust/{Cargo.toml,Cargo.lock,build.rs,greet.c,main.rs} "$(cygpath -u "$work")/rust/" &&
     sed -e "s/@RUST@/$(manifest_of org.rust-lang.rust)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
         "$root\\tests\\build\\rust\\hello.json.in" >"$work\\rust\\hello.json"
-check "a Rust program builds, its crates vendored, with zig's dlltool" z build "$work\\rust\\hello.json"
+check "a Rust program builds, its crates vendored, with zig's dlltool, and C through zig's cc" z build "$work\\rust\\hello.json"
 rust_app_digest=$(manifest_of $RUST)
 rust_runs() {
     local out
     out=$(z run $RUST zigsaw | tr -d '\r')
     [ "$out" = "hello, zigsaw, from Rust
+hello from C, zigsaw (42)
 Windows is up: true" ] || { echo "got: $out"; return 1; }
+    # C's stderr, from zig's headers and Rust's C runtime.
+    [ "$(z run --env=GREET_DEBUG=1 $RUST x 2>&1 >/dev/null | tr -d '\r')" = "greet_c(x)" ]
 }
-check "it runs, calling Windows through windows-sys" rust_runs
+check "it runs, calling its C, and Windows through windows-sys" rust_runs
 # Each build root has a new random name, so a real path or a time in the
 # executable would show.
 rust_again() { [ "$(rebuilt_manifest "$work\\rust\\hello.json")" = "$rust_app_digest" ]; }

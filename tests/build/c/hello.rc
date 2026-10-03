@@ -1,0 +1,4 @@
+STRINGTABLE
+BEGIN
+    1 "a string from its resources"
+END

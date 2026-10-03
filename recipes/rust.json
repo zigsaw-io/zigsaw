@@ -2,7 +2,8 @@
   "id": "org.rust-lang.rust",
   "version": "1.99.0",
   "command": "bin/cargo.exe",
-  "path": ["bin"],
+  "path": ["bin", "${data}\\cargo\\bin"],
+  "env": { "CARGO_HOME": "${data}\\cargo" },
   "permissions": { "network": true, "filesystem": ["cwd"] },
   "exports": {
     "cargo": { "command": "bin/cargo.exe" },

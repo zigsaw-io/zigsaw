@@ -26,7 +26,9 @@ const usage =
     \\                                  build an app from a recipe, install it and its commands;
     \\                                  --rebuild builds even if an earlier build had the same inputs
     \\  pull <image>                    install an app and its commands from a registry
-    \\  push <app-id> [<image>]         publish an installed app to a registry
+    \\  push [--sources] <app-id> [<image>]
+    \\                                  publish an installed app to a registry; --sources also
+    \\                                  keeps the files it was built from next to it
     \\  login [--username=<user>] [--password-stdin] <registry>
     \\                                  check and save a login for a registry
     \\  logout <registry>               delete a registry's saved login
@@ -139,9 +141,18 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         return 0;
     }
     if (std.mem.eql(u8, command, "push")) {
-        if (rest.len != 1 and rest.len != 2) return usageError();
+        var opts: remote.PushOptions = .{};
+        var names: std.ArrayList([]const u8) = .empty;
+        for (rest) |arg| {
+            if (isFlag(arg, "sources")) {
+                opts.sources = true;
+            } else if (!std.mem.startsWith(u8, arg, "-")) {
+                try names.append(ctx.arena, arg);
+            } else return usageError();
+        }
+        if (names.items.len != 1 and names.items.len != 2) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try remote.push(ctx, rest[0], if (rest.len == 2) rest[1] else null);
+        try remote.push(ctx, names.items[0], if (names.items.len == 2) names.items[1] else null, opts);
         return 0;
     }
     if (std.mem.eql(u8, command, "run")) return runtime.run(ctx, try parseRunOptions(ctx, rest));
@@ -394,8 +405,12 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     const store = ctx.store;
     const ref = try store.readRef(arena, id) orelse return fail("{s} is not installed", .{id});
 
+    // Held until the ref is gone, so a run of the app that ends meanwhile
+    // can't give it shims again.
+    const shims_lock = try store.lockShims(arena);
+    defer shims_lock.release(io);
     const removed_exports = try exports.removeAll(ctx, id);
-    if (removed_exports.len > 0) note("removed exports {s}", .{try std.mem.join(arena, ", ", removed_exports)});
+    if (removed_exports.len > 0) note("removed commands {s}", .{try std.mem.join(arena, ", ", removed_exports)});
 
     // Undo ACL grants on host paths made for the app's AppContainer.
     const host_grants = try store.readGrants(arena, id);

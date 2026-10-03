@@ -14,6 +14,8 @@
 # Builds happen in a temporary store, unless ZIGSAW_HOME points at one (to
 # reuse its downloads). Either way, each image is built from its recipe right
 # before it's pushed, so what's published is exactly what the recipe produces.
+# The files each image was built from are pushed next to it (push --sources),
+# so its recipe still builds if they're gone from where they came from.
 
 set -eu
 export MSYS_NO_PATHCONV=1
@@ -38,7 +40,7 @@ for recipe in "$@"; do
     id=$(grep -o '"id": *"[^"]*"' "$recipe" | cut -d'"' -f4)
     echo "== $id"
     "$zigsaw" build "$recipe"
-    "$zigsaw" push "$id"
+    "$zigsaw" push --sources "$id"
     "$zigsaw" push "$id" "$id:latest"
     version=$("$zigsaw" list | awk -v id="$id" '$1 == id { print $2 }')
     digest=$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$id.json")

@@ -6,13 +6,16 @@ Think Flatpak for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
-Status: [iteration 5](docs/iteration-5.md) is complete. Zigsaw builds
+Status: [iteration 6](docs/iteration-6.md) is complete. Zigsaw builds
 command-line apps from source or from official binaries, runs them on shared
 runtimes, installs, updates and cleans them up, shares them through
-registries, and puts their commands on PATH. Builds run with pinned
-toolchain images (zig, BusyBox, Rust), or the machine's MSVC, and reproduce:
-CI checks that the recipes build the same images on a fresh machine. Git,
-Node, Python, SQLite, ripgrep and the zig and Rust toolchains are tested.
+registries, and puts their commands on PATH, also those they install while
+they run. Builds run with pinned toolchain images (zig, BusyBox, Rust), or
+the machine's MSVC, and reproduce: CI checks that the recipes build the same
+images on a fresh machine, and runs the end-to-end tests there. Registries
+keep the files images were built from, so recipes build even when a download
+is gone. Git, Node, Python, SQLite, ripgrep, bat and the zig and Rust
+toolchains are tested.
 
 ## Quick start
 
@@ -45,7 +48,9 @@ an installed Node), that one wins. `where node` shows which is found first.
 zigsaw build [--rebuild] [--keep-build-dir] <recipe.json>
                                        build an app from a recipe, install it and its commands
 zigsaw pull <image>                    install an app and its commands from a registry
-zigsaw push <app-id> [<image>]         publish an installed app to a registry
+zigsaw push [--sources] <app-id> [<image>]
+                                       publish an installed app to a registry; --sources
+                                       also pushes the files it was built from
 zigsaw login [--username=<user>] [--password-stdin] <registry>
                                        check and save a login for a registry
 zigsaw logout <registry>               delete a registry's saved login
@@ -74,11 +79,13 @@ with `zigsaw pull <id>`:
 | SQLite (built from source) | `org.sqlite.sqlite3` | 3.53.4 | `sqlite3` |
 | Rust (windows-gnu) | `org.rust-lang.rust` | 1.99.0 | `cargo`, `rustc` |
 | ripgrep (built from source) | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
+| bat (built from source) | `com.github.sharkdp.bat` | 0.26.1 | `bat` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
-files along, without installing Node as an app. SQLite and ripgrep are
+files along, without installing Node as an app. SQLite, ripgrep and bat are
 [built from source](#building-from-source): SQLite with zig and BusyBox,
-ripgrep with [Rust](#rust), zig and BusyBox, whose images are their SDK.
+ripgrep and bat with [Rust](#rust), zig and BusyBox, whose images are their
+SDK. bat's C libraries (oniguruma, libgit2, zlib) are compiled by zig.
 Pulling them doesn't need those.
 
 [`scripts/publish.sh`](scripts/publish.sh) publishes the recipes listed in
@@ -94,7 +101,8 @@ deterministic layers. The
 checks this on every push to `main` and every pull request. On a fresh
 Windows runner, it runs the unit tests, builds each published recipe, and
 compares the digest with the image published for the recipe's version
-([`tests/published.sh`](tests/published.sh)).
+([`tests/published.sh`](tests/published.sh)). Then it runs the end-to-end
+suites (see [Testing](#testing)) on that runner too.
 
 - A version that isn't published yet is reported, but doesn't fail the run.
 - A different digest for the same version fails it. Either the build isn't
@@ -133,6 +141,30 @@ each one against its digest, and refuses images that aren't zigsaw apps
 allowed to reach before you run it.
 
 Registries on `localhost` are reached over plain HTTP; all others over HTTPS.
+
+### Sources next to images
+
+Downloads go away: a project moves its files, or its server refuses
+everyone. A recipe pins each file by its sha256, which is also the digest an
+OCI registry stores a blob under, so a registry can keep them:
+
+```powershell
+zigsaw push --sources net.frippery.busybox
+```
+
+- **`push --sources`** also pushes the files the app was built from (its
+  sources and what its [vendor steps](#vendor-steps) made, from the download
+  cache) to the image's repository, under a manifest tagged
+  `sha256-<image digest>.sources`, which keeps the registry from deleting
+  them.
+- **A build falls back to them.** When a pinned source's URL fails, or no
+  longer serves the pinned file, `zigsaw build` fetches the file by its
+  sha256 from next to the image of the recipe's app in the default registry,
+  and checks it. So does a vendor step whose commands fail. The image is the
+  same either way.
+- [`scripts/publish.sh`](scripts/publish.sh) pushes the published images'
+  sources, so their recipes build even when an upstream server is gone, as
+  BusyBox's was in October 2026.
 
 ### Logging in
 
@@ -201,15 +233,36 @@ cmd.exe would act on, such as `&`, `|`, `%` and `^`, can't run a command of
 their own. An argument with a line break can't be passed to a batch file
 safely, so it's refused.
 
-The commands of global npm packages are batch files, so after
-`zigsaw run --command=npm org.nodejs.node install -g typescript`, this runs `tsc`:
-
-```powershell
-zigsaw run --command=tsc org.nodejs.node --version
-```
+The commands of global npm packages, such as `tsc.cmd`, are batch files.
 
 Ctrl+C behaves as when the batch file runs alone: the program it started gets
 the Ctrl+C, and cmd.exe then asks "Terminate batch job (Y/N)?".
+
+### Commands installed while an app runs
+
+Package managers install commands too: `npm install -g typescript` puts
+`tsc` in npm's global prefix, which Node's recipe keeps in its data
+directory. After each run of an app, zigsaw gives the commands in its PATH
+entries in `${data}` shims, as it does exports, and removes the shims of
+commands that are gone:
+
+```powershell
+npm install -g typescript   # through the npm shim
+tsc --version
+```
+
+- A command is an `.exe`, `.com`, `.cmd` or `.bat` file directly in such a
+  directory. Its shim runs `zigsaw run --command=<name> <app>`, so it runs
+  in the app's environment.
+- The app's exports win over a command of the same name, and a name another
+  app provides is left to it.
+- An `--ephemeral` run's commands get none: they're deleted with its data
+  directory.
+- Rebuilding or updating the app keeps them, `zigsaw rm` removes them, and
+  `zigsaw list` shows them with the exports.
+
+Rust's image keeps cargo's home in its data directory, so what
+`cargo install` installs gets a shim too.
 
 ### Changing an app's options
 
@@ -296,6 +349,10 @@ and their commands on its PATH:
 "env": { "NPM_CONFIG_PREFIX": "${data}\\npm" }
 ```
 
+PATH entries in `${data}` are also where the app's runs install commands,
+which then get shims (see
+[commands installed while an app runs](#commands-installed-while-an-app-runs)).
+
 ### Runtimes
 
 An app can run on another app's image, as Flatpak apps run on a runtime.
@@ -337,7 +394,7 @@ zig's C compiler:
 
 ```json
 "sdk": {
-  "zig": "org.ziglang.zig:0.16.0@sha256:4d90aaafb78377f2...",
+  "zig": "org.ziglang.zig:0.16.0@sha256:4f6673f39561e71c...",
   "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:fa4eac7f8b4b8733..."
 },
 "cleanup": ["/include", "/lib"],
@@ -366,8 +423,9 @@ zig's C compiler:
 - **`sdk`** names the images the build uses, pinned like runtimes. They're on
   PATH while building, before the runtimes, and aren't part of the app's
   image; its config records their digests. zig gives C and C++ compilers
-  (`zig cc`, `zig c++`, `zig ar`), and BusyBox gives sh, make, sed, awk,
-  patch, tar and the rest of a Unix toolbox.
+  (`zig cc`, `zig c++`, `zig ar`, also as `cc`, `c++`, `ar`, `ranlib` and
+  `rc`), and BusyBox gives sh, make, sed, awk, patch, tar and the rest of a
+  Unix toolbox.
 - **Modules** build in order. A module's sources are unpacked into its own
   directory, and its commands run there one after another, until one fails.
   Whatever the modules install into `$PREFIX` is the app's files, after
@@ -399,7 +457,7 @@ Two things about zig's C compiler, for executables that reproduce:
 - **Name the target.** Without `-target`, `zig cc` builds for the machine
   it runs on, its CPU and Windows version included, so a build elsewhere
   differs, and the result may not run on older CPUs. The recipes pass
-  `-target x86_64-windows-gnu`.
+  `-target x86_64-windows-gnu`, and the `cc` and `c++` aliases do.
 - **Pass `-s`.** Otherwise it writes a PDB with each executable, and those
   differ from build to build. zig also refuses `__DATE__` and `__TIME__`,
   which would differ too.
@@ -428,11 +486,17 @@ same image as one without. Whatever else a tool keeps in its profile folders
 is still fresh in each build.
 
 **Images can give builds commands.** An SDK or runtime image can provide a
-command under a name that other tools look for, as zig's provides
-`dlltool`, which Rust needs:
+command under a name that other tools look for. zig's provides a C compiler
+under the names build scripts and makefiles expect, and `dlltool`, which
+Rust needs:
 
 ```json
 "aliases": {
+  "cc": { "command": "zig.exe", "args": ["cc", "-target", "x86_64-windows-gnu"] },
+  "c++": { "command": "zig.exe", "args": ["c++", "-target", "x86_64-windows-gnu"] },
+  "ar": { "command": "zig.exe", "args": ["ar"] },
+  "ranlib": { "command": "zig.exe", "args": ["ranlib"] },
+  "rc": { "command": "zig.exe", "args": ["rc"] },
   "dlltool": { "command": "zig.exe", "args": ["dlltool"] }
 }
 ```
@@ -441,7 +505,9 @@ Aliases are like exports, but for builds rather than for you: each one is
 `B:\bin\<name>.exe` while a build that uses the image runs, first on its
 PATH. It runs the command with the alias's arguments, then its caller's, in
 the caller's environment. If two images alias the same name, the one listed
-first in the recipe wins.
+first in the recipe wins. Aliases also win over BusyBox's applets of the
+same name, which its sh would otherwise run instead of anything on PATH
+(zig's `ar` over BusyBox's): builds list them in `BB_OVERRIDE_APPLETS`.
 
 ### Vendor steps
 
@@ -519,8 +585,36 @@ assembler that Rust doesn't ship
 zig's image gives builds its own `dlltool` as an alias, and that one needs
 none.
 
+**Crates that compile C**, with the [cc crate](https://docs.rs/cc), use
+zig's `cc`, `c++` and `ar` aliases too. For the `x86_64-pc-windows-gnu`
+target, the cc crate would look for `gcc` instead, and pass a `--target`
+that zig doesn't accept, so zig's image also sets the variables it reads:
+
+```json
+"CC_x86_64_pc_windows_gnu": "cc",
+"CXX_x86_64_pc_windows_gnu": "c++",
+"AR_x86_64_pc_windows_gnu": "ar",
+"CRATE_CC_NO_DEFAULTS": "1",
+"CFLAGS_x86_64_pc_windows_gnu": "-O3 -ffunction-sections -fdata-sections",
+"CXXFLAGS_x86_64_pc_windows_gnu": "-O3 -ffunction-sections -fdata-sections"
+```
+
+`CRATE_CC_NO_DEFAULTS` turns off the cc crate's own flags, that `--target`
+among them, so the flags it would pass in a release build come from
+`CFLAGS` instead, whatever the profile. The C code is compiled with zig's
+MinGW headers, which are for Windows' newer C runtime (UCRT), and linked
+with Rust's MinGW libraries, for the older `msvcrt.dll`. So far that has
+worked: [`recipes/bat.json`](recipes/bat.json) builds bat with oniguruma,
+libgit2 and zlib this way, from its crate on crates.io, as its release
+binaries have them.
+
 Rust builds reproduce without further flags: crates' paths are relative to
 the project, and the linker takes its timestamp from `SOURCE_DATE_EPOCH`.
+
+The image sets `CARGO_HOME` to `${data}\cargo`. Run as an app, cargo keeps
+its home in its data directory, and what `cargo install` installs is a
+[command on PATH](#commands-installed-while-an-app-runs). In builds, it's
+`B:\data\cargo`, fresh for each build.
 
 ### MSVC
 
@@ -616,35 +710,48 @@ identity (`zigsaw.<id>`). It can then read and write only its data directory,
 read its own files and its runtimes', and use the host paths and network it
 was granted.
 Host grants are ACL entries on those paths; `zigsaw rm` removes them again.
-It suits self-contained tools such as busybox and ripgrep. Git, Node scripts,
-npm and zig fail under it, because Windows doesn't let AppContainers resolve
-real paths; see [findings](docs/findings.md).
+It suits self-contained tools such as busybox, ripgrep and bat. Git, Node
+scripts, npm and zig fail under it, because Windows doesn't let AppContainers
+resolve real paths, and on Windows Server 2025 git doesn't start at all; see
+[findings](docs/findings.md).
 
 ## Testing
 
 ```bash
 zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through both sandboxes (Git Bash, network)
-bash tests/shims.sh     # command shims end to end
+bash tests/shims.sh     # command shims end to end, also for commands installed at run time
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, build commands on B:, tool caches, aliases, vendor steps, Rust, reproducibility
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
-bash tests/registry.sh  # push, pull, update and logins through local registries (see the script's header)
+bash tests/registry.sh  # push, pull, update, logins and sources next to images, through local registries (see its header)
 bash tests/published.sh # fresh builds have the published digests; anonymous pulls, latest, redirects
 ```
 
 The scripts build the recipes they need from [recipes/](recipes/) into
-temporary stores unless `ZIGSAW_HOME` points at one. The matrix reports every
-check whose result differs from zigsaw's intended behaviour. The registry
-tests need a local registry such as [zot](https://zotregistry.dev) on
-`localhost:5000`.
+temporary stores unless `ZIGSAW_HOME` points at one. Set `SEED_DOWNLOADS` to
+another store's `cache\downloads` and they take the files from there instead
+of downloading them. The matrix reports every check whose result differs from
+zigsaw's intended behaviour, and fails for those; it also shows the known
+gaps below that it runs into, but doesn't fail for them. The registry tests
+need a local registry such as
+[zot](https://zotregistry.dev) on `localhost:5000`;
+[`tests/zot.sh`](tests/zot.sh) starts two, one of them wanting a login:
+
+```bash
+bash tests/zot.sh path/to/zot.exe bash tests/registry.sh
+```
+
+The [Reproduce workflow](.github/workflows/reproduce.yml) runs all of them on
+a fresh runner, after `published.sh`, with its build store as
+`SEED_DOWNLOADS`, and as the matrix's store.
 
 ## Known gaps
 
-- Commands that an app installs while it runs, such as `tsc` from
-  `npm install -g typescript`, run with `zigsaw run --command=tsc org.nodejs.node`,
-  but aren't put on PATH.
+- A command an app's run installs that names the app's files by their
+  absolute path, as pip's launchers name their `python.exe`, stops working
+  when an update deploys the app elsewhere. npm's and cargo's don't.
 - A batch file that turns on delayed expansion itself
   (`setlocal EnableDelayedExpansion`) expands `!var!` in its own arguments.
 - Under `--sandbox=appcontainer`, access granted to a host path lasts until
@@ -671,12 +778,14 @@ tests need a local registry such as [zot](https://zotregistry.dev) on
 - Vendor steps run their commands with network access and nothing more
   confining than a build's sandbox; only what they leave in their directory
   is pinned.
-- Rust builds need zig in their SDK, for `dlltool`. Only the
-  `x86_64-pc-windows-gnu` target is set up, and crates that compile C code
-  (with the `cc` crate) have no C compiler yet.
+- Rust builds need zig in their SDK, for `dlltool` and C. Only the
+  `x86_64-pc-windows-gnu` target is set up. Crates' C code is compiled with
+  fixed flags rather than the profile's, against zig's UCRT headers but
+  linked with Rust's `msvcrt.dll` libraries; C code that needs what only UCRT
+  has would fail to link.
 - Rust builds need the store's path to be shorter than about 100
   characters: rustc starts its linker from the Rust image's deployment, and
   can't start a program whose path is longer than Windows' 260 characters.
   The default store, `%LOCALAPPDATA%\zigsaw`, is well within that.
 
-[docs/iteration-5.md](docs/iteration-5.md) lists what hasn't been tested yet.
+[docs/iteration-6.md](docs/iteration-6.md) lists what hasn't been tested yet.
