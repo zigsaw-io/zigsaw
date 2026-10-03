@@ -15,6 +15,9 @@
 //!   B:\prefix\        $PREFIX, where the modules install the app's files
 //!   B:\home\          the profile folders of the build's tools, fresh for each build
 //!   B:\data\          the data directory runtimes' variables point to while building
+//!   B:\cache\<id>\    ${cache} of a tool that uses it, kept between builds in the
+//!                     store's cache\tools\<id>, and moved here for the build
+//!   B:\bin\           shims for the commands the tools' images alias, first on PATH
 //!
 //! Commands run in an environment built from scratch, as apps do, with the
 //! SDK's and runtimes' directories on PATH, and in a job object that ends
@@ -28,12 +31,14 @@ const Tree = @import("Tree.zig");
 const deps = @import("deps.zig");
 const drive = @import("drive.zig");
 const environment = @import("environment.zig");
+const exports = @import("exports.zig");
 const install = @import("install.zig");
 const Fetcher = @import("fetch.zig");
 const msvc_host = @import("msvc.zig");
 const oci = @import("oci.zig");
 const process = @import("process.zig");
 const recipe = @import("recipe.zig");
+const Sidecar = @import("Sidecar.zig");
 const Store = @import("Store.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
@@ -140,6 +145,12 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
             try build_info.host.map.put(arena, "msvc", tc.tools_version);
             try build_info.host.map.put(arena, "windows-sdk", tc.sdk_version);
         }
+        // Then every vendor step, for the same reason.
+        var vendored: std.json.ArrayHashMap([]const u8) = .{};
+        for (r.modules) |m| if (m.vendor != null) {
+            try vendored.map.put(arena, m.name, try root.?.vendor(ctx, m, recipe_path));
+        };
+        if (vendored.map.count() > 0) build_info.vendor = vendored;
         tree = try root.?.buildModules(ctx, &sources, r, recipe_path);
     } else {
         tree = .{};
@@ -249,6 +260,8 @@ const BuildRoot = struct {
     tool_vars: []const environment.Var,
     /// The host's MSVC, if the recipe builds with it.
     msvc: ?msvc_host.Toolchain,
+    /// The ids of the tools whose caches are in cache\ for the build.
+    caches: []const []const u8,
 
     const letter = drive.letter;
 
@@ -257,26 +270,46 @@ const BuildRoot = struct {
         const arena = ctx.arena;
         const path = try ctx.store.makeTmpDir(arena, drive.dir_prefix[0 .. drive.dir_prefix.len - 1]);
         errdefer Io.Dir.cwd().deleteTree(io, path) catch {};
-        for ([_][]const u8{ "src", "prefix", "data" }) |sub| try Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ path, sub }));
+        for ([_][]const u8{ "src", "prefix", "cache" }) |sub| try Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ path, sub }));
+        try makeScratchDirs(ctx, path, .new);
         const profile: environment.Profile = try .init(arena, letter ++ "\\");
-        const real_profile: environment.Profile = try .init(arena, path);
-        for ([_][]const u8{ real_profile.roaming, real_profile.temp }) |dir| try Io.Dir.cwd().createDirPath(io, dir);
 
         var path_dirs: std.ArrayList([]const u8) = .empty;
         var tool_vars: std.ArrayList(environment.Var) = .empty;
+        var caches: std.ArrayList([]const u8) = .empty;
+        var aliases: std.ArrayList([]const u8) = .empty;
+        var shim_exe: ?[]const u8 = null;
         for (tools) |t| {
             // In a tool's own entries, ${app} is its directory; ${data} is
-            // where the build keeps runtimes' data.
-            const p: oci.Placeholders = .{ .app = t.dir, .data = letter ++ "\\data" };
+            // where the build keeps runtimes' data, and ${cache} the tool's
+            // cache, if it uses one.
+            const id = t.config.id;
+            const cache = oci.usesCache(t.config.path, t.config.env);
+            if (cache and !containsIgnoreCase(caches.items, id)) try caches.append(arena, id);
+            const p: oci.Placeholders = .{
+                .app = t.dir,
+                .data = letter ++ "\\data",
+                .cache = if (cache) try std.fmt.allocPrint(arena, "{s}\\cache\\{s}", .{ letter, id }) else null,
+            };
             try path_dirs.appendSlice(arena, try environment.pathDirs(arena, p, t.config.path));
             try environment.expand(arena, &tool_vars, p, t.config.env);
+            // Of two tools with an alias of the same name, the first's wins,
+            // as on PATH.
+            if (t.config.aliases) |a| for (a.map.keys(), a.map.values()) |name, e| {
+                if (containsIgnoreCase(aliases.items, name)) continue;
+                try aliases.append(arena, name);
+                if (shim_exe == null) shim_exe = try exports.shimExe(ctx, try win32.selfExePath(arena));
+                try writeAlias(ctx, path, shim_exe.?, t, p, name, e);
+            };
         }
+        // The aliases come first: a tool's image says what they are.
+        if (aliases.items.len > 0) try path_dirs.insert(arena, 0, letter ++ "\\bin");
         const msvc: ?msvc_host.Toolchain = if (r.host.len > 0) try msvc_host.find(ctx, path) else null;
         if (msvc) |tc| {
             try path_dirs.appendSlice(arena, tc.path);
             for (tc.vars) |v| try environment.set(arena, &tool_vars, v.name, v.value);
         }
-        return .{
+        const b: BuildRoot = .{
             .path = path,
             .drive = try drive.acquire(arena, path),
             .id = r.id,
@@ -284,18 +317,53 @@ const BuildRoot = struct {
             .path_dirs = path_dirs.items,
             .tool_vars = tool_vars.items,
             .msvc = msvc,
+            .caches = caches.items,
         };
+        // Once the drive is this build's, so builds take turns with the
+        // caches too.
+        errdefer b.drive.release();
+        for (b.caches) |id| try b.takeCache(ctx, id);
+        return b;
     }
 
-    /// Unmaps the drive and deletes the build root, unless it's to be kept.
+    /// Moves a tool's cache from the store into the build root, or starts
+    /// an empty one.
+    fn takeCache(b: *const BuildRoot, ctx: *Context, id: []const u8) !void {
+        const io = ctx.io;
+        const arena = ctx.arena;
+        const kept = try ctx.store.path(arena, &.{ "cache", "tools", id });
+        const here = try std.fs.path.join(arena, &.{ b.path, "cache", id });
+        if (try Store.exists(io, kept)) {
+            Io.Dir.rename(.cwd(), kept, .cwd(), here, io) catch |err| {
+                if (ctx.verbose) note("couldn't use {s}'s cache ({t}); building without it", .{ id, err });
+            };
+        }
+        try Io.Dir.cwd().createDirPath(io, here);
+    }
+
+    /// Moves the tools' caches back into the store, unmaps the drive, and
+    /// deletes the build root, unless it's to be kept.
     fn finish(b: *BuildRoot, ctx: *Context, keep: bool) void {
         b.drive.release();
+        for (b.caches) |id| b.keepCache(ctx, id) catch |err| {
+            if (ctx.verbose) note("couldn't keep {s}'s cache ({t}); the next build starts without it", .{ id, err });
+        };
         if (keep) {
             note("kept the build directory: {s}", .{b.path});
         } else {
             Store.deleteTree(ctx.io, ctx.arena, b.path) catch |err|
                 note("warning: couldn't delete all of {s} ({t}); `zigsaw prune` will retry", .{ b.path, err });
         }
+    }
+
+    /// Moves a tool's cache back into the store. If the store has one again,
+    /// put back by a build in another logon session, this one goes with the
+    /// build root.
+    fn keepCache(b: *const BuildRoot, ctx: *Context, id: []const u8) !void {
+        const arena = ctx.arena;
+        const here = try std.fs.path.join(arena, &.{ b.path, "cache", id });
+        const kept = try ctx.store.path(arena, &.{ "cache", "tools", id });
+        try Io.Dir.rename(.cwd(), here, .cwd(), kept, ctx.io);
     }
 
     /// Builds each module in turn into the prefix, and returns the tree of
@@ -307,26 +375,100 @@ const BuildRoot = struct {
         for (r.modules) |m| {
             var tree: Tree = .{};
             try sources.add(&tree, m, recipe_path);
-            const dest = if (m.build.len == 0) prefix else try std.fs.path.join(arena, &.{ b.path, "src", m.name });
-            try Io.Dir.cwd().createDirPath(io, dest);
-            tree.writeFiles(io, arena, dest) catch |err| switch (err) {
-                error.OutOfMemory => |e| return e,
-                else => return fail("module {s}: unpacking its sources into {s}: {t}", .{ m.name, dest, err }),
-            };
-            if (m.build.len > 0) try b.runCommands(ctx, m);
+            // A module with a vendor step has its files already.
+            if (m.vendor == null) {
+                const dest = if (m.build.len == 0) prefix else try std.fs.path.join(arena, &.{ b.path, "src", m.name });
+                try writeSources(io, arena, &tree, m, dest);
+            }
+            if (m.build.len > 0) try b.runCommands(ctx, m, .build);
         }
         return Tree.fromDir(io, arena, prefix);
     }
 
-    fn runCommands(b: *const BuildRoot, ctx: *Context, m: recipe.Module) !void {
+    /// Runs a module's vendor step, or takes what an earlier one made from
+    /// the download cache, and leaves the module's directory with its sources
+    /// and what the step made. Returns the sha256 of that.
+    ///
+    /// Either way, the build then starts from the same files: after the
+    /// commands run, the module's directory and the build's profile folders
+    /// start again from scratch, with only what the step left in its `dir`.
+    fn vendor(b: *const BuildRoot, ctx: *Context, m: recipe.Module, recipe_path: []const u8) ![]const u8 {
+        const io = ctx.io;
+        const arena = ctx.arena;
+        const v = m.vendor.?;
+        const dest = try std.fs.path.join(arena, &.{ b.path, "src", m.name });
+        try unpackSources(ctx, m, recipe_path, dest);
+
+        var cached: ?[]const u8 = if (v.sha256) |h| try ctx.store.path(arena, &.{ "cache", "downloads", h }) else null;
+        if (cached != null and try Store.exists(io, cached.?)) {
+            if (ctx.verbose) note("module {s}: vendored files from the cache (sha256 {s})", .{ m.name, v.sha256.? });
+        } else {
+            try b.runCommands(ctx, m, .vendor);
+            const made = try std.fs.path.join(arena, &.{ dest, v.dir });
+            if (!try Store.exists(io, made))
+                return fail("module {s}: the vendor commands left nothing in {s}", .{ m.name, v.dir });
+            const tree = try Tree.fromDir(io, arena, made);
+            const file = try tree.writeLayerFile(ctx);
+            const got = try arena.dupe(u8, &file.hash.hex);
+            // Kept under its actual hash, as downloads are, so pinning it
+            // doesn't run the commands again.
+            const kept = try ctx.store.path(arena, &.{ "cache", "downloads", got });
+            if (try Store.exists(io, kept)) {
+                Io.Dir.cwd().deleteFile(io, file.path) catch {};
+            } else {
+                try Io.Dir.rename(.cwd(), file.path, .cwd(), kept, io);
+            }
+            const want = v.sha256 orelse
+                return fail("module {s}: \"vendor\" has no sha256. Pin what its commands made with:\n  \"sha256\": \"{s}\"", .{ m.name, got });
+            if (!std.mem.eql(u8, want, got))
+                return fail("sha256 mismatch for what module {s}'s vendor commands made in {s}\n  expected {s}\n  got      {s}", .{ m.name, v.dir, want, got });
+            try Store.deleteTree(io, arena, dest);
+            try unpackSources(ctx, m, recipe_path, dest);
+            try makeScratchDirs(ctx, b.path, .fresh);
+            cached = kept;
+        }
+
+        var tree: Tree = .{};
+        var archives: std.ArrayList(*Tree.Archive) = .empty;
+        defer for (archives.items) |a| a.close(io);
+        const src: recipe.Source = .{ .path = cached.?, .type = .tar, .dest = v.dir };
+        tree.addSource(ctx, &archives, src, cached.?, v.sha256.?) catch |err| switch (err) {
+            error.OutOfMemory => |e| return e,
+            else => return fail("module {s}: reading its vendored files ({s}): {t}", .{ m.name, cached.?, err }),
+        };
+        try writeSources(io, arena, &tree, m, dest);
+        return v.sha256.?;
+    }
+
+    /// The directories of the build's profile and of runtimes' data in the
+    /// build root `path`: made for a new build root, or made again from
+    /// scratch.
+    fn makeScratchDirs(ctx: *Context, path: []const u8, how: enum { new, fresh }) !void {
+        const io = ctx.io;
+        const arena = ctx.arena;
+        const real_profile: environment.Profile = try .init(arena, path);
+        const data = try std.fs.path.join(arena, &.{ path, "data" });
+        if (how == .fresh) for ([_][]const u8{ real_profile.home, data }) |dir| try Store.deleteTree(io, arena, dir);
+        for ([_][]const u8{ real_profile.roaming, real_profile.temp, data }) |dir| try Io.Dir.cwd().createDirPath(io, dir);
+    }
+
+    const Step = enum { vendor, build };
+
+    /// Runs a module's build commands, or its vendor commands, which have
+    /// network access.
+    fn runCommands(b: *const BuildRoot, ctx: *Context, m: recipe.Module, step: Step) !void {
         const arena = ctx.arena;
         const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
+        const commands = switch (step) {
+            .vendor => m.vendor.?.commands,
+            .build => m.build,
+        };
         var vars: std.ArrayList(environment.Var) = .empty;
         try vars.appendSlice(arena, b.tool_vars);
         try environment.set(arena, &vars, "PREFIX", letter ++ "\\prefix");
         try environment.set(arena, &vars, "SOURCE_DATE_EPOCH", source_date_epoch);
         try environment.set(arena, &vars, "ZIGSAW_BUILD", "1");
-        if (!m.network) {
+        if (step == .build and !m.network) {
             // Discouraged, not prevented: tools that honor proxy variables
             // fail to connect, and nothing else is stopped.
             for ([_][]const u8{ "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY" }) |name|
@@ -345,15 +487,16 @@ const BuildRoot = struct {
         const shell = try b.findShell(ctx, m, system_root);
         const cwd = try std.fmt.allocPrint(arena, "{s}\\src\\{s}", .{ letter, m.name });
 
-        for (m.build, 1..) |command, n| {
-            note("[{s} {d}/{d}] {s}", .{ m.name, n, m.build.len, command });
+        const label = if (step == .vendor) " vendor" else "";
+        for (commands, 1..) |command, n| {
+            note("[{s}{s} {d}/{d}] {s}", .{ m.name, label, n, commands.len, command });
             const code = try process.spawn(arena, .{
                 .exe = shell.exe,
                 .command_line = try shell.commandLine(arena, command),
                 .env_block = block,
                 .cwd = cwd,
             });
-            if (code != 0) return fail("module {s}: build command {d} exited with code {d}:\n  {s}", .{ m.name, n, code, command });
+            if (code != 0) return fail("module {s}: {t} command {d} exited with code {d}:\n  {s}", .{ m.name, step, n, code, command });
         }
     }
 
@@ -373,6 +516,51 @@ const BuildRoot = struct {
         }
     }
 };
+
+/// Puts one of a tool's aliases into the build root's bin\, as a shim that
+/// runs its command with its arguments, then the caller's.
+fn writeAlias(ctx: *Context, root: []const u8, shim_exe: []const u8, t: Tool, p: oci.Placeholders, name: []const u8, e: oci.Export) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+    const exe = if (oci.isPlaceholderPath(e.command)) try p.expand(arena, e.command) else try std.fs.path.join(arena, &.{ t.dir, e.command });
+    std.mem.replaceScalar(u8, exe, '/', '\\');
+    if (!try Store.exists(io, exe))
+        return fail("{s}'s alias {s} runs {s}, which isn't in it", .{ t.config.id, name, e.command });
+    const args = try arena.alloc([]const u8, e.args.len);
+    for (args, e.args) |*arg, template| arg.* = try p.expand(arena, template);
+
+    const bin = try std.fs.path.join(arena, &.{ root, "bin" });
+    try Io.Dir.cwd().createDirPath(io, bin);
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.allocPrint(arena, "{s}\\{s}.exe", .{ bin, name }), .data = shim_exe });
+    const alias: Sidecar.Alias = .{ .exe = exe, .command_line = try process.buildCommandLine(arena, exe, args) };
+    var text: Io.Writer.Allocating = .init(arena);
+    try alias.format(&text.writer);
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.allocPrint(arena, "{s}\\{s}{s}", .{ bin, name, Sidecar.extension }), .data = text.written() });
+}
+
+/// Creates a module's indexed sources in `dest`.
+fn writeSources(io: Io, arena: Allocator, tree: *const Tree, m: recipe.Module, dest: []const u8) !void {
+    try Io.Dir.cwd().createDirPath(io, dest);
+    tree.writeFiles(io, arena, dest) catch |err| switch (err) {
+        error.OutOfMemory => |e| return e,
+        else => return fail("module {s}: unpacking its sources into {s}: {t}", .{ m.name, dest, err }),
+    };
+}
+
+/// Unpacks a module's sources into `dest`, all of them already downloaded,
+/// without noting their hashes for the record of the build.
+fn unpackSources(ctx: *Context, m: recipe.Module, recipe_path: []const u8, dest: []const u8) !void {
+    var sources: Sources = .{ .ctx = ctx, .fetcher = .{ .ctx = ctx, .base_dir = std.fs.path.dirname(recipe_path) orelse "." } };
+    defer sources.deinit();
+    var tree: Tree = .{};
+    try sources.add(&tree, m, recipe_path);
+    try writeSources(ctx.io, ctx.arena, &tree, m, dest);
+}
+
+fn containsIgnoreCase(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| if (std.ascii.eqlIgnoreCase(n, name)) return true;
+    return false;
+}
 
 const Shell = struct {
     exe: []const u8,

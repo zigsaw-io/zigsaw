@@ -38,7 +38,8 @@ const usage =
     \\  rm [--delete-data] <app-id>     uninstall an app and its commands
     \\  prune [--dry-run] [--downloads] [--data]
     \\                                  delete what no installed app needs; also cached
-    \\                                  downloads, and the data of uninstalled apps
+    \\                                  downloads and tool caches, and the data of
+    \\                                  uninstalled apps
     \\
     \\An image is <registry>/<repository>[:tag][@digest], e.g. ghcr.io/owner/node:24.21.0,
     \\or <app-id>[:tag][@digest] for the app's image in the default registry, e.g.

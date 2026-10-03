@@ -61,10 +61,14 @@ pub const Export = struct {
 /// runs, so images stay the same on every machine:
 ///   ${app}      the app's (read-only) directory
 ///   ${data}     the app's data directory, or the fresh one of an --ephemeral run
+///   ${cache}    a directory for caches that are safe to keep: <data>\cache in
+///               runs, and one kept between builds when a build uses the app
 ///   ${<alias>}  the directory of the runtime the app calls <alias>
 pub const Placeholders = struct {
     app: []const u8,
     data: []const u8,
+    /// Null where caches don't apply; "${cache}" is then kept as is.
+    cache: ?[]const u8 = null,
     runtimes: []const Dir = &.{},
 
     pub const Dir = struct { alias: []const u8, path: []const u8 };
@@ -89,10 +93,20 @@ pub const Placeholders = struct {
     fn lookup(p: Placeholders, name: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, name, "app")) return p.app;
         if (std.mem.eql(u8, name, "data")) return p.data;
+        if (std.mem.eql(u8, name, "cache")) return p.cache;
         for (p.runtimes) |r| if (std.mem.eql(u8, r.alias, name)) return r.path;
         return null;
     }
 };
+
+/// Whether PATH entries and variables, an app's or a runtime's, use
+/// ${cache}, so that whatever runs with them, a build included, needs a
+/// cache directory.
+pub fn usesCache(path: []const []const u8, env: std.json.ArrayHashMap([]const u8)) bool {
+    for (path) |p| if (std.mem.indexOf(u8, p, "${cache}") != null) return true;
+    for (env.map.values()) |v| if (std.mem.indexOf(u8, v, "${cache}") != null) return true;
+    return false;
+}
 
 /// The name in a "${name}" at the start of `s`, if there is one.
 fn placeholderAt(s: []const u8) ?[]const u8 {
@@ -110,12 +124,13 @@ pub fn isPlaceholderPath(entry: []const u8) bool {
 /// The placeholders a path may start with, wherever paths are checked.
 const Anchors = struct {
     app: bool = false,
+    /// ${data}, and ${cache} inside it.
     data: bool = false,
     aliases: []const []const u8 = &.{},
 
     fn allows(a: Anchors, name: []const u8) bool {
         if (std.mem.eql(u8, name, "app")) return a.app;
-        if (std.mem.eql(u8, name, "data")) return a.data;
+        if (std.mem.eql(u8, name, "data") or std.mem.eql(u8, name, "cache")) return a.data;
         for (a.aliases) |alias| if (std.mem.eql(u8, alias, name)) return true;
         return false;
     }
@@ -131,8 +146,8 @@ fn isValidAnchoredPath(p: []const u8, anchors: Anchors, bare: bool) bool {
     return (rest[0] == '\\' or rest[0] == '/') and isSafeRelPath(rest[1..]);
 }
 
-/// A PATH entry: a relative path inside the app, or ${app}, ${data} or a
-/// runtime's alias, optionally followed by a relative path inside it.
+/// A PATH entry: a relative path inside the app, or ${app}, ${data}, ${cache}
+/// or a runtime's alias, optionally followed by a relative path inside it.
 pub fn isValidPathEntry(entry: []const u8, aliases: []const []const u8) bool {
     return isValidAnchoredPath(entry, .{ .app = true, .data = true, .aliases = aliases }, true);
 }
@@ -153,8 +168,8 @@ pub const Runtime = struct {
     /// The digest of the runtime's own layer.
     layer: []const u8,
     /// The runtime's PATH entries and variables, which every run of the app
-    /// gets. In them, ${app} is the runtime's directory, and ${data} the app's
-    /// data directory.
+    /// gets. In them, ${app} is the runtime's directory, and ${data} and
+    /// ${cache} are the app's.
     path: []const []const u8 = &.{"."},
     env: std.json.ArrayHashMap([]const u8) = .{},
 };
@@ -165,6 +180,9 @@ pub const Build = struct {
     sdk: std.json.ArrayHashMap([]const u8) = .{},
     /// The sha256 of each source, in recipe order.
     sources: []const []const u8 = &.{},
+    /// What each module's vendor step made, by module name: its sha256.
+    /// Absent unless a module has one.
+    vendor: ?std.json.ArrayHashMap([]const u8) = null,
     /// Whether a build step had network access. Then the image depends on
     /// more than its pinned inputs.
     network: bool = false,
@@ -190,6 +208,11 @@ pub const AppConfig = struct {
     permissions: Permissions = .{},
     /// Commands the app provides, by name.
     exports: std.json.ArrayHashMap(Export) = .{},
+    /// Commands the image gives builds that use it as an SDK or runtime, by
+    /// name: like exports, but on the build's PATH rather than the user's.
+    /// zig's image makes `dlltool` run `zig dlltool`, for instance. Absent
+    /// unless there are some.
+    aliases: ?std.json.ArrayHashMap(Export) = null,
     /// The images the app runs with, by alias, in the order of their layers.
     runtimes: std.json.ArrayHashMap(Runtime) = .{},
     /// Null in images made before iteration 4.
@@ -288,7 +311,7 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
     if (!isValidCommand(c.command, aliases))
         return fail("{s}: command \"{s}\" must be a relative path inside the app, or start with a runtime's ${{alias}}\\", .{ what, c.command });
     for (c.path) |p| if (!isValidPathEntry(p, aliases))
-        return fail("{s}: path entry \"{s}\" must be a relative path inside the app, or start with ${{app}}, ${{data}} or a runtime's ${{alias}}", .{ what, p });
+        return fail("{s}: path entry \"{s}\" must be a relative path inside the app, or start with ${{app}}, ${{data}}, ${{cache}} or a runtime's ${{alias}}", .{ what, p });
     for (c.permissions.filesystem) |spec| if (parseFsGrant(spec) == null)
         return fail("{s}: filesystem permission \"{s}\" must be \"cwd\" or an absolute path, optionally with \":ro\"", .{ what, spec });
     var it = c.exports.map.iterator();
@@ -298,6 +321,17 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
         if (!isValidCommand(e.value_ptr.command, aliases))
             return fail("{s}: export {s} command \"{s}\" must be a relative path inside the app, or start with a runtime's ${{alias}}\\", .{ what, e.key_ptr.*, e.value_ptr.command });
     }
+    // Builds run an image's aliases from the image itself, whose runtimes
+    // they don't have.
+    if (c.aliases) |a| {
+        var it_aliases = a.map.iterator();
+        while (it_aliases.next()) |e| {
+            if (!isValidExportName(e.key_ptr.*))
+                return fail("{s}: alias name \"{s}\" must be letters, digits, '.', '-', '_' (and not zigsaw's own)", .{ what, e.key_ptr.* });
+            if (!isValidCommand(e.value_ptr.command, &.{}))
+                return fail("{s}: alias {s} command \"{s}\" must be a relative path inside the app", .{ what, e.key_ptr.*, e.value_ptr.command });
+        }
+    }
 }
 
 fn validateRuntimes(what: []const u8, runtimes: std.json.ArrayHashMap(Runtime)) error{Failed}!void {
@@ -305,11 +339,11 @@ fn validateRuntimes(what: []const u8, runtimes: std.json.ArrayHashMap(Runtime)) 
     const values = runtimes.map.values();
     for (aliases, values, 0..) |alias, r, i| {
         if (!isValidAlias(alias))
-            return fail("{s}: runtime alias \"{s}\" must be lowercase letters, digits, '-' or '_', start with a letter, and not be app or data", .{ what, alias });
+            return fail("{s}: runtime alias \"{s}\" must be lowercase letters, digits, '-' or '_', start with a letter, and not be app, data or cache", .{ what, alias });
         if (!isValidId(r.id) or r.version.len == 0 or digestHex(r.image) == null or digestHex(r.layer) == null)
             return fail("{s}: runtime {s} needs a valid id, version, image digest and layer digest", .{ what, alias });
         for (r.path) |p| if (!isValidAnchoredPath(p, .{ .app = true, .data = true }, true))
-            return fail("{s}: runtime {s}'s path entry \"{s}\" must be inside it, or start with ${{app}} or ${{data}}", .{ what, alias, p });
+            return fail("{s}: runtime {s}'s path entry \"{s}\" must be inside it, or start with ${{app}}, ${{data}} or ${{cache}}", .{ what, alias, p });
         for (aliases[0..i], values[0..i]) |earlier_alias, earlier| if (std.ascii.eqlIgnoreCase(earlier.id, r.id))
             return fail("{s}: runtimes {s} and {s} are both {s}", .{ what, earlier_alias, alias, r.id });
     }
@@ -323,7 +357,10 @@ pub fn isValidAlias(name: []const u8) bool {
         'a'...'z', '0'...'9', '-', '_' => {},
         else => return false,
     };
-    return !std.mem.eql(u8, name, "app") and !std.mem.eql(u8, name, "data");
+    for ([_][]const u8{ "app", "data", "cache" }) |reserved| {
+        if (std.mem.eql(u8, name, reserved)) return false;
+    }
+    return true;
 }
 
 /// Export names become file names in the shim directory, so they are plain
@@ -430,6 +467,22 @@ test "Placeholders.expand" {
     try std.testing.expectEqualStrings("${HOME} $ ${app", try p.expand(arena, "${HOME} $ ${app"));
     try std.testing.expectEqualStrings("${python}\\x", try p.expand(arena, "${python}\\x"));
     try std.testing.expectEqualStrings("", try p.expand(arena, ""));
+    // Without a cache directory, ${cache} stays as it is.
+    try std.testing.expectEqualStrings("${cache}\\zig", try p.expand(arena, "${cache}\\zig"));
+    var with_cache = p;
+    with_cache.cache = "B:\\cache\\org.ziglang.zig";
+    try std.testing.expectEqualStrings("B:\\cache\\org.ziglang.zig", try with_cache.expand(arena, "${cache}"));
+}
+
+test usesCache {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    var env: std.json.ArrayHashMap([]const u8) = .{};
+    try env.map.put(arena_state.allocator(), "NPM_CONFIG_PREFIX", "${data}\\npm");
+    try std.testing.expect(!usesCache(&.{"."}, env));
+    try std.testing.expect(usesCache(&.{ ".", "${cache}\\bin" }, env));
+    try env.map.put(arena_state.allocator(), "ZIG_GLOBAL_CACHE_DIR", "${cache}");
+    try std.testing.expect(usesCache(&.{"."}, env));
 }
 
 test isValidPathEntry {
@@ -439,6 +492,7 @@ test isValidPathEntry {
     try std.testing.expect(isValidPathEntry("${data}", none));
     try std.testing.expect(isValidPathEntry("${data}\\npm", none));
     try std.testing.expect(isValidPathEntry("${app}/tools/bin", none));
+    try std.testing.expect(isValidPathEntry("${cache}\\bin", none));
     try std.testing.expect(!isValidPathEntry("${data}npm", none));
     try std.testing.expect(!isValidPathEntry("${data}\\..\\other", none));
     try std.testing.expect(!isValidPathEntry("${data}\\", none));
@@ -465,6 +519,7 @@ test isValidAlias {
     try std.testing.expect(isValidAlias("py3_14-x"));
     try std.testing.expect(!isValidAlias("app"));
     try std.testing.expect(!isValidAlias("data"));
+    try std.testing.expect(!isValidAlias("cache"));
     try std.testing.expect(!isValidAlias("Node"));
     try std.testing.expect(!isValidAlias("3d"));
     try std.testing.expect(!isValidAlias("a.b"));

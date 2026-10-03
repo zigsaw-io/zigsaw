@@ -1,0 +1,44 @@
+{
+  "id": "org.rust-lang.rust",
+  "version": "1.99.0",
+  "command": "bin/cargo.exe",
+  "path": ["bin"],
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "exports": {
+    "cargo": { "command": "bin/cargo.exe" },
+    "rustc": { "command": "bin/rustc.exe" }
+  },
+  "cleanup": [
+    "/manifest.in",
+    "/lib/rustlib/x86_64-pc-windows-gnu/bin/rust-lld.exe",
+    "/lib/rustlib/x86_64-pc-windows-gnu/bin/gcc-ld",
+    "/lib/rustlib/x86_64-pc-windows-gnu/bin/wasm-component-ld.exe"
+  ],
+  "modules": [
+    {
+      "name": "rust",
+      "sources": [
+        {
+          "url": "https://static.rust-lang.org/dist/rustc-1.99.0-x86_64-pc-windows-gnu.tar.xz",
+          "sha256": "015f770c3ca0b3226a24fe159f30b03782a91679ba16159f7d83550f768fb795",
+          "strip": 2
+        },
+        {
+          "url": "https://static.rust-lang.org/dist/cargo-1.99.0-x86_64-pc-windows-gnu.tar.xz",
+          "sha256": "36dc7cba4be341c5a6cb3e10f660c4565b6f87f318d3cb87519b2cfe8c630bca",
+          "strip": 2
+        },
+        {
+          "url": "https://static.rust-lang.org/dist/rust-std-1.99.0-x86_64-pc-windows-gnu.tar.xz",
+          "sha256": "a2382bf189d5621e09db647da419a8e1d4c604d60941cb116da00ce34042b1dd",
+          "strip": 2
+        },
+        {
+          "url": "https://static.rust-lang.org/dist/rust-mingw-1.99.0-x86_64-pc-windows-gnu.tar.xz",
+          "sha256": "ad2b4b41362a99a86e20a8dbcec4be81b99f2d507f6408a72c7a139bc1919080",
+          "strip": 2
+        }
+      ]
+    }
+  ]
+}

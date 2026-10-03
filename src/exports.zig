@@ -99,7 +99,7 @@ fn binDir(ctx: *Context) ![]const u8 {
 }
 
 /// zigsaw-shim.exe's bytes. It is installed next to zigsaw.exe.
-fn shimExe(ctx: *Context, zigsaw: []const u8) ![]const u8 {
+pub fn shimExe(ctx: *Context, zigsaw: []const u8) ![]const u8 {
     const path = try std.fs.path.join(ctx.arena, &.{ std.fs.path.dirname(zigsaw).?, "zigsaw-shim.exe" });
     return Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(16 << 20)) catch |err|
         fail("reading {s}, which should be installed next to zigsaw.exe: {t}", .{ path, err });

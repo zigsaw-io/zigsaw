@@ -42,7 +42,8 @@ ZIG=org.ziglang.zig
 # --- Setup -------------------------------------------------------------------
 
 installed=$("$zigsaw" list)
-for recipe in busybox ripgrep mingit node python zig; do
+# zig and rust before ripgrep, which builds with them.
+for recipe in busybox zig rust ripgrep mingit node python; do
     id=$(grep -o '"id": *"[^"]*"' "$root/recipes/$recipe.json" | cut -d'"' -f4)
     if ! grep -q "^$id " <<<"$installed"; then
         echo "building $id..."

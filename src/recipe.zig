@@ -59,6 +59,8 @@ pub const Source = struct {
             .{ ".tgz", .@"tar.gz" },
             .{ ".tar.xz", .@"tar.xz" },
             .{ ".txz", .@"tar.xz" },
+            // Rust packages from crates.io.
+            .{ ".crate", .@"tar.gz" },
         };
         for (suffixes) |entry| if (std.ascii.endsWithIgnoreCase(name, entry[0])) return entry[1];
         return .file;
@@ -78,8 +80,26 @@ pub const Module = struct {
     env: std.json.ArrayHashMap([]const u8) = .{},
     /// Lets the build commands use the network, which the image records.
     network: bool = false,
+    /// Fetches what the build needs besides the sources, such as a Rust
+    /// project's crates, pinned by hash so the build itself stays offline.
+    vendor: ?Vendor = null,
 
     pub const Shell = enum { sh, cmd };
+};
+
+/// A module's vendor step: commands that run with network access before
+/// anything builds, and leave what the build needs in `dir`. A hash of what
+/// they leave pins it, as a source's sha256 pins a download, so the image
+/// still depends only on pinned inputs.
+pub const Vendor = struct {
+    /// Run in the module's directory, with its shell and variables.
+    commands: []const []const u8,
+    /// Where the commands leave what they fetch, inside the module's directory.
+    dir: []const u8,
+    /// Of the tar zigsaw makes from `dir`, in the layer format, so it
+    /// depends only on the files' paths and contents. Required: a build
+    /// without it fails and reports the hash to pin.
+    sha256: ?[]const u8 = null,
 };
 
 pub const Recipe = struct {
@@ -93,6 +113,8 @@ pub const Recipe = struct {
     /// Commands to put on PATH. Without this, the app exports its command
     /// under its file name (e.g. "rg" for rg.exe); `{}` exports nothing.
     exports: ?std.json.ArrayHashMap(oci.Export) = null,
+    /// Commands the image gives builds that use it (see oci.AppConfig).
+    aliases: ?std.json.ArrayHashMap(oci.Export) = null,
     /// Images the build uses, by alias: references pinned with "@sha256:...".
     sdk: std.json.ArrayHashMap([]const u8) = .{},
     /// Images the app runs with, by alias, pinned the same way. Their
@@ -129,6 +151,7 @@ pub const Recipe = struct {
             .env = r.env,
             .permissions = r.permissions,
             .exports = exports,
+            .aliases = r.aliases,
             .runtimes = runtimes,
             .build = build,
         };
@@ -171,7 +194,7 @@ fn validateDependencies(file_name: []const u8, r: Recipe) error{Failed}!void {
         const what, const deps = group;
         for (deps.map.keys()) |alias| {
             if (!oci.isValidAlias(alias))
-                return fail("{s}: {s} alias \"{s}\" must be lowercase letters, digits, '-' or '_', start with a letter, and not be app or data", .{ file_name, what, alias });
+                return fail("{s}: {s} alias \"{s}\" must be lowercase letters, digits, '-' or '_', start with a letter, and not be app, data or cache", .{ file_name, what, alias });
         }
     }
     // Both kinds are on PATH while building, so one alias means one image.
@@ -191,8 +214,20 @@ fn validateModules(file_name: []const u8, modules: []const Module) error{Failed}
             return fail("{s}: module {s} has neither sources nor build commands", .{ file_name, m.name });
         if (m.build.len == 0 and (m.network or m.env.map.count() > 0))
             return fail("{s}: module {s} sets \"network\" or \"env\", which only apply to build commands", .{ file_name, m.name });
+        if (m.vendor) |v| try validateVendor(file_name, m, v);
         for (m.sources, 1..) |s, n| try validateSource(file_name, m.name, n, s);
     }
+}
+
+fn validateVendor(file_name: []const u8, m: Module, v: Vendor) error{Failed}!void {
+    if (m.build.len == 0)
+        return fail("{s}: module {s} has a \"vendor\" step, but no build commands to use what it fetches", .{ file_name, m.name });
+    if (v.commands.len == 0)
+        return fail("{s}: module {s}'s \"vendor\" step has no commands", .{ file_name, m.name });
+    if (!oci.isSafeRelPath(v.dir) or std.mem.trim(u8, v.dir, "./\\").len == 0)
+        return fail("{s}: module {s}'s vendor dir \"{s}\" must be a directory inside the module's", .{ file_name, m.name, v.dir });
+    if (v.sha256) |h| if (!oci.isSha256Hex(h))
+        return fail("{s}: module {s}'s vendor sha256 must be 64 lowercase hex characters", .{ file_name, m.name });
 }
 
 fn validateSource(file_name: []const u8, module: []const u8, n: usize, s: Source) error{Failed}!void {
@@ -305,6 +340,12 @@ test "recipe checks" {
     );
     try std.testing.expectEqual(Source.Kind.@"tar.gz", ok.modules[0].sources[0].kind());
 
+    const vendored = try parse(arena, "t.json",
+        \\{ "id": "x", "version": "1", "command": "a.exe",
+        \\  "modules": [{ "name": "m", "build": ["x"], "vendor": { "commands": ["cargo vendor"], "dir": "vendor/crates" } }] }
+    );
+    try std.testing.expectEqualStrings("vendor/crates", vendored.modules[0].vendor.?.dir);
+
     const bad = [_][]const u8{
         // A command in a runtime needs exports.
         \\{ "id": "x", "version": "1", "command": "${node}\\node.exe", "runtimes": { "node": "n" }, "modules": [{ "name": "m", "build": ["x"] }] }
@@ -342,6 +383,23 @@ test "recipe checks" {
         ,
         \\{ "id": "x", "version": "1", "command": "a.exe", "host": ["msvc"], "modules": [{ "name": "m", "sources": [{ "path": "a.exe" }] }] }
         ,
+        // Aliases: plain names, for commands in the image itself.
+        \\{ "id": "x", "version": "1", "command": "a.exe", "aliases": { "a/b": { "command": "a.exe" } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "aliases": { "ab": { "command": "${node}\\node.exe" } }, "runtimes": { "node": "n" }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        // Vendor steps: only with build commands, with commands, into a
+        // directory inside the module's, pinned by a well-formed hash.
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "path": "a.exe" }], "vendor": { "commands": ["x"], "dir": "v" } }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "build": ["x"], "vendor": { "commands": [], "dir": "v" } }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "build": ["x"], "vendor": { "commands": ["x"], "dir": "." } }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "build": ["x"], "vendor": { "commands": ["x"], "dir": "../v" } }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "build": ["x"], "vendor": { "commands": ["x"], "dir": "v", "sha256": "ABC" } }] }
+        ,
     };
     for (bad) |text| try std.testing.expectError(error.Failed, parse(arena, "t.json", text));
 }
@@ -353,6 +411,7 @@ test "archive kinds are inferred" {
         .{ "zlib-1.3.1.tar.gz", .@"tar.gz" },
         .{ "x.tar.xz", .@"tar.xz" },
         .{ "x.tar", .tar },
+        .{ "https://static.crates.io/crates/ripgrep/ripgrep-15.2.0.crate", .@"tar.gz" },
         .{ "tool.exe", .file },
     };
     for (cases) |c| {

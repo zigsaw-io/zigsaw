@@ -2,6 +2,10 @@
   "id": "org.ziglang.zig",
   "version": "0.16.0",
   "command": "zig.exe",
+  "env": { "ZIG_GLOBAL_CACHE_DIR": "${cache}" },
+  "aliases": {
+    "dlltool": { "command": "zig.exe", "args": ["dlltool"] }
+  },
   "permissions": { "filesystem": ["cwd"] },
   "modules": [
     {

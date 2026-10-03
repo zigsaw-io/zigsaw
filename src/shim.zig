@@ -5,6 +5,10 @@
 //!
 //! and exits with the app's exit code. The caller's arguments are passed on
 //! exactly as typed, so nothing is re-quoted on the way through.
+//!
+//! Builds also copy it, as `B:\bin\<name>.exe`, for each alias their tools
+//! provide. Its `.shim` then holds an alias (Sidecar.Alias), and the shim runs
+//! the alias's command line and the caller's arguments directly.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -42,7 +46,9 @@ fn shim(arena: Allocator) !u32 {
     const self = try win32.selfExePath(arena);
     const sidecar_path = try std.mem.concat(arena, u8, &.{ self[0 .. self.len - std.fs.path.extension(self).len], Sidecar.extension });
     const bytes = try readSmallFile(arena, sidecar_path);
+    const args = try argumentsAsTyped(arena, std.mem.span(win32.GetCommandLineW()));
     const sidecar = Sidecar.parse(bytes) catch {
+        if (Sidecar.Alias.parse(bytes)) |alias| return runAlias(arena, alias, args) else |_| {}
         std.log.err("zigsaw shim: {s} is missing zigsaw, home, app or command", .{sidecar_path});
         return error.Failed;
     };
@@ -57,11 +63,22 @@ fn shim(arena: Allocator) !u32 {
     try process.appendQuoted(arena, &command_line, try std.fmt.allocPrint(arena, "--command={s}", .{sidecar.command}));
     try command_line.append(arena, ' ');
     try process.appendQuoted(arena, &command_line, sidecar.app);
-    const args = try argumentsAsTyped(arena, std.mem.span(win32.GetCommandLineW()));
-    if (args.len > 0 and args[0] != ' ' and args[0] != '\t') try command_line.append(arena, ' ');
-    try command_line.appendSlice(arena, args);
+    try appendArguments(arena, &command_line, args);
 
     return process.spawn(arena, .{ .exe = sidecar.zigsaw, .command_line = command_line.items });
+}
+
+fn runAlias(arena: Allocator, alias: Sidecar.Alias, args: []const u8) !u32 {
+    var command_line: std.ArrayList(u8) = .empty;
+    try command_line.appendSlice(arena, alias.command_line);
+    try appendArguments(arena, &command_line, args);
+    return process.spawn(arena, .{ .exe = alias.exe, .command_line = command_line.items });
+}
+
+/// Appends the caller's arguments as typed, separated by a space.
+fn appendArguments(arena: Allocator, command_line: *std.ArrayList(u8), args: []const u8) !void {
+    if (args.len > 0 and args[0] != ' ' and args[0] != '\t') try command_line.append(arena, ' ');
+    try command_line.appendSlice(arena, args);
 }
 
 fn readSmallFile(arena: Allocator, path: []const u8) ![]const u8 {

@@ -6,13 +6,13 @@ Think Flatpak for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
-Status: [iteration 4](docs/iteration-4.md) is complete. Zigsaw builds
+Status: [iteration 5](docs/iteration-5.md) is complete. Zigsaw builds
 command-line apps from source or from official binaries, runs them on shared
 runtimes, installs, updates and cleans them up, shares them through
 registries, and puts their commands on PATH. Builds run with pinned
-toolchain images (zig, BusyBox), or the machine's MSVC, and reproduce: CI
-checks that the recipes build the same images on a fresh machine. Git, Node,
-Python, SQLite and the zig toolchain are tested.
+toolchain images (zig, BusyBox, Rust), or the machine's MSVC, and reproduce:
+CI checks that the recipes build the same images on a fresh machine. Git,
+Node, Python, SQLite, ripgrep and the zig and Rust toolchains are tested.
 
 ## Quick start
 
@@ -66,18 +66,20 @@ with `zigsaw pull <id>`:
 | App | Id | Version | Commands |
 |---|---|---|---|
 | BusyBox | `net.frippery.busybox` | FRP-6075-g169694ebd | `busybox` |
-| ripgrep | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
 | Git (MinGit) | `org.git_scm.MinGit` | 2.56.0.windows.1 | `git` |
 | Node.js | `org.nodejs.node` | 24.21.0 | `node`, `npm`, `npx` |
 | Prettier (on Node.js) | `io.prettier.prettier` | 3.9.9 | `prettier` |
 | Python | `org.python.python` | 3.14.7 | `python` |
 | zig | `org.ziglang.zig` | 0.16.0 | `zig` |
 | SQLite (built from source) | `org.sqlite.sqlite3` | 3.53.4 | `sqlite3` |
+| Rust (windows-gnu) | `org.rust-lang.rust` | 1.99.0 | `cargo`, `rustc` |
+| ripgrep (built from source) | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
-files along, without installing Node as an app. SQLite is
-[built from source](#building-from-source) with zig and BusyBox, whose
-images are its SDK; pulling SQLite doesn't need them.
+files along, without installing Node as an app. SQLite and ripgrep are
+[built from source](#building-from-source): SQLite with zig and BusyBox,
+ripgrep with [Rust](#rust), zig and BusyBox, whose images are their SDK.
+Pulling them doesn't need those.
 
 [`scripts/publish.sh`](scripts/publish.sh) publishes the recipes listed in
 [`scripts/published-recipes.txt`](scripts/published-recipes.txt).
@@ -168,8 +170,8 @@ Installing a new version deletes the files of the one it replaces, unless
 that version is still running. `zigsaw prune` deletes everything else no
 installed app needs: the blobs of old versions, files kept because they were
 running, and whatever an interrupted build left in `tmp\`. `--dry-run` shows
-what it would delete. Cached downloads, and the runtimes that builds used,
-are kept for rebuilds unless you add `--downloads`. The data of uninstalled
+what it would delete. Cached downloads, the runtimes that builds used, and
+build tools' caches are kept for rebuilds unless you add `--downloads`. The data of uninstalled
 apps is kept unless you add `--data`.
 
 Nothing a running app uses is deleted, and zigsaw commands can run at the same
@@ -280,11 +282,14 @@ recipe runs npm without its `.cmd` wrapper:
 If another installed app already exports a name, the build skips it with a
 warning.
 
-`env` values, `path` entries and export arguments can use two placeholders:
-`${app}` for the app's directory, and `${data}` for its data directory (the
-fresh one, in an `--ephemeral` run). They're expanded each time the app runs,
-so the image is the same on every machine. Node's recipe uses them to keep
-global npm packages in its data directory, and their commands on its PATH:
+`env` values, `path` entries and export arguments can use placeholders:
+`${app}` for the app's directory, `${data}` for its data directory (the
+fresh one, in an `--ephemeral` run), and `${cache}` for a directory of caches
+that are safe to keep, `cache` in the data directory (see
+[tool caches](#building-from-source) for what it means in builds). They're
+expanded each time the app runs, so the image is the same on every machine.
+Node's recipe uses them to keep global npm packages in its data directory,
+and their commands on its PATH:
 
 ```json
 "path": [".", "${data}\\npm"],
@@ -332,7 +337,7 @@ zig's C compiler:
 
 ```json
 "sdk": {
-  "zig": "org.ziglang.zig:0.16.0@sha256:dfb37603d5cfdeab...",
+  "zig": "org.ziglang.zig:0.16.0@sha256:4d90aaafb78377f2...",
   "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:fa4eac7f8b4b8733..."
 },
 "cleanup": ["/include", "/lib"],
@@ -382,7 +387,9 @@ zig's C compiler:
   pinned inputs; a module that downloads makes an image that can't be
   expected to reproduce, so its config records it and installing it warns.
   This is a convention, not a wall: build steps get proxy variables pointing
-  nowhere, which tools such as curl, wget, npm and pip honour.
+  nowhere, which tools such as curl, wget, npm and pip honour. What a
+  package manager would fetch comes from a [vendor step](#vendor-steps)
+  instead.
 
 `zigsaw build --keep-build-dir` keeps the build's directory afterwards, to
 look at what a failed build left; `zigsaw prune` deletes it later.
@@ -403,6 +410,117 @@ sources and images are pinned in the recipe). Building an unchanged recipe
 again, or `zigsaw update` of an app built from one, takes the image of the
 earlier build instead of building it again, since the result would be the
 same. `-v` says so; `zigsaw build --rebuild` builds anyway.
+
+**Tool caches are kept.** An SDK or runtime image can point a tool's cache
+at `${cache}`, as zig's does:
+
+```json
+"env": { "ZIG_GLOBAL_CACHE_DIR": "${cache}" }
+```
+
+In a build, `${cache}` is `B:\cache\<tool id>`, a directory zigsaw keeps
+between builds in the store and moves onto `B:` for each one. zig keeps the C
+runtime it builds on first use there, about 30 s of work, and the objects it
+compiles, so building SQLite takes 2 s instead of 42 the second time.
+`${cache}` is only for caches that are safe to keep, being keyed by the
+contents of their inputs, as zig's is: a build with a warm cache makes the
+same image as one without. Whatever else a tool keeps in its profile folders
+is still fresh in each build.
+
+**Images can give builds commands.** An SDK or runtime image can provide a
+command under a name that other tools look for, as zig's provides
+`dlltool`, which Rust needs:
+
+```json
+"aliases": {
+  "dlltool": { "command": "zig.exe", "args": ["dlltool"] }
+}
+```
+
+Aliases are like exports, but for builds rather than for you: each one is
+`B:\bin\<name>.exe` while a build that uses the image runs, first on its
+PATH. It runs the command with the alias's arguments, then its caller's, in
+the caller's environment. If two images alias the same name, the one listed
+first in the recipe wins.
+
+### Vendor steps
+
+Package managers, such as cargo, fetch a project's dependencies from the
+network, which build commands don't have. A module's `vendor` step fetches
+them first, and the recipe pins what it fetched by hash, as it pins
+downloads:
+
+```json
+"vendor": {
+  "commands": ["cargo vendor --locked vendor"],
+  "dir": "vendor",
+  "sha256": "c58cbe1a06b9fa52..."
+}
+```
+
+- **The commands run with network access**, in the module's directory,
+  after all downloads and before any module builds. They see the module's
+  sources and the SDK, not what earlier modules installed.
+- **The hash is of what they leave in `dir`**, made into a tar as layers
+  are (sorted, without times or owners), so it depends only on file names and
+  contents. Leave it out once and the build fails, printing the hash to pin;
+  a different result fails the build, naming both.
+- **It's kept with the downloads**, under its hash, so later builds take it
+  from there without running the commands, and without the network.
+- **The build sees the same files either way.** After the commands run,
+  the module's directory and the build's profile folders start again from
+  scratch, with only the module's sources and `dir`.
+- **The image stays hermetic.** Its config records the hash under
+  `build.vendor`, and the build commands still have no network.
+
+This suits any tool that puts a project's locked dependencies in a
+directory, such as `cargo vendor` or `go mod vendor`. It relies on the tool
+fetching the same files every time, which a lockfile gives; the pinned hash
+catches it if not.
+
+### Rust
+
+The Rust SDK image, [`org.rust-lang.rust`](recipes/rust.json), is the
+official toolchain for `x86_64-pc-windows-gnu`: rustc, cargo, the standard
+library, and the MinGW linker Rust ships with it. It needs no Visual Studio.
+It leaves out `rust-lld` and the WebAssembly linker, which windows-gnu builds
+don't use, so the image is 650 MB rather than 880. A Rust module vendors its
+crates, then builds offline from them:
+
+```json
+"sdk": {
+  "rust": "org.rust-lang.rust:1.99.0@sha256:...",
+  "zig": "org.ziglang.zig:0.16.0@sha256:...",
+  "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
+},
+"modules": [
+  {
+    "name": "hello",
+    "sources": [{ "path": "Cargo.toml" }, { "path": "Cargo.lock" }, { "path": "main.rs", "dest": "src/main.rs" }],
+    "vendor": { "commands": ["cargo vendor --locked vendor"], "dir": "vendor", "sha256": "..." },
+    "build": [
+      "cargo build --offline --locked --release --config 'source.crates-io.replace-with=\"vendored\"' --config 'source.vendored.directory=\"vendor\"'",
+      "cp target/release/hello.exe \"$PREFIX/hello.exe\""
+    ]
+  }
+]
+```
+
+[`recipes/ripgrep.json`](recipes/ripgrep.json) builds ripgrep this way from
+its crate on crates.io, with ripgrep's own `release-lto` profile, the one its
+release binaries are built with, and generates its man page and shell
+completions as its releases do.
+
+**Rust builds need zig in the SDK as well.** The `windows-sys` crate, which
+nearly every Rust program for Windows uses, links Windows' functions in a
+way that makes rustc run `dlltool`. The `dlltool` Rust ships needs an
+assembler that Rust doesn't ship
+([rust-lang/rust#103939](https://github.com/rust-lang/rust/issues/103939)).
+zig's image gives builds its own `dlltool` as an alias, and that one needs
+none.
+
+Rust builds reproduce without further flags: crates' paths are relative to
+the project, and the linker takes its timestamp from `SOURCE_DATE_EPOCH`.
 
 ### MSVC
 
@@ -467,6 +585,7 @@ bin\<name>.exe         command shims, with a <name>.shim file saying what each r
 cache\downloads\<hex>  fetched sources, by sha256 (and decompressed tars)
 cache\images\<hex>     marks images that builds use as runtimes or SDKs, kept like downloads
 cache\builds\<hex>     the image of an earlier build, by a hash of its inputs
+cache\tools\<id>\      the cache of a build tool whose image uses ${cache}
 tmp\                   staging area, and the data of --ephemeral runs
 lock, *.lock           lock files that let zigsaw commands run side by side
 ```
@@ -508,7 +627,7 @@ zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through both sandboxes (Git Bash, network)
 bash tests/shims.sh     # command shims end to end
 bash tests/store.sh     # update, prune, and what they keep while apps run
-bash tests/build.sh     # building apps: runtimes, build commands on B:, reproducibility across stores
+bash tests/build.sh     # building apps: runtimes, build commands on B:, tool caches, aliases, vendor steps, Rust, reproducibility
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update and logins through local registries (see the script's header)
@@ -545,11 +664,19 @@ tests need a local registry such as [zot](https://zotregistry.dev) on
   when the registry has them in another one.
 - Build steps are kept off the network by convention (proxy variables), not
   enforced: a tool that ignores them can still download.
-- Each build starts with fresh profile folders, so zig rebuilds its C runtime
-  in every build: about 30 s on the development machine. Builds need `B:`
-  free, and run one at a time.
+- Builds need `B:` free, and run one at a time.
 - Builds with MSVC depend on the machine's Visual Studio, so they don't
   reproduce elsewhere, and CI doesn't check them. Only x64 MSVC builds are
   set up.
+- Vendor steps run their commands with network access and nothing more
+  confining than a build's sandbox; only what they leave in their directory
+  is pinned.
+- Rust builds need zig in their SDK, for `dlltool`. Only the
+  `x86_64-pc-windows-gnu` target is set up, and crates that compile C code
+  (with the `cc` crate) have no C compiler yet.
+- Rust builds need the store's path to be shorter than about 100
+  characters: rustc starts its linker from the Rust image's deployment, and
+  can't start a program whose path is longer than Windows' 260 characters.
+  The default store, `%LOCALAPPDATA%\zigsaw`, is well within that.
 
-[docs/iteration-4.md](docs/iteration-4.md) lists what hasn't been tested yet.
+[docs/iteration-5.md](docs/iteration-5.md) lists what hasn't been tested yet.

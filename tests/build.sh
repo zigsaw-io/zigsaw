@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # End-to-end checks for building apps: runtimes, which an app runs with and
 # whose layers travel in its image, and build commands, which build an app
-# from source with SDK images (zig and busybox).
+# from source with SDK images (zig, busybox and Rust), tools' caches and
+# aliases, and vendor steps.
 #
 #   tests/build.sh [path\to\zigsaw.exe]
 #
-# Needs Git Bash and network access (busybox, Node, Prettier, zig, zlib and
-# SQLite downloads). Always uses temporary stores, since it removes apps, and
-# deletes them afterwards. To skip downloading what a store already has
-# (zig's is 97 MB), set SEED_DOWNLOADS to its cache\downloads directory; its
-# files are copied into the temporary stores.
+# Needs Git Bash and network access (busybox, Node, Prettier, zig, zlib,
+# SQLite and Rust downloads, and crates from crates.io). Always uses
+# temporary stores, since it removes apps, and deletes them afterwards. To
+# skip downloading what a store already has (zig's is 97 MB, Rust's 150 MB),
+# set SEED_DOWNLOADS to its cache\downloads directory; its files are copied
+# into the temporary stores.
 #
 # The build commands' checks map B:, as every build does, and briefly map it
 # themselves with subst. Don't run this while B: is in use.
@@ -158,7 +160,9 @@ config_of() { cat "$ZIGSAW_HOME\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$Z
 drive_free() { ! subst | grep -q '^B:'; }
 no_build_root() { ! ls "$ZIGSAW_HOME\\tmp" | grep -q '^zigsaw-build-'; }
 
+start=$SECONDS
 check "a recipe with build commands builds with the zig and busybox SDK" z build "$work\\c\\hello.json"
+hello_time=$((SECONDS - start))
 hello_digest=$(manifest_of $HELLO)
 hello_runs() {
     local out
@@ -176,6 +180,43 @@ records_sdk() { config_of $HELLO | tr -d ' \r\n' | grep -q "\"sdk\":{\"zig\":\"$
 check "the config records the SDK" records_sdk
 free_afterwards() { drive_free && no_build_root; }
 check "the build drive is free afterwards, and the build root gone" free_afterwards
+
+# zig's image puts its cache in ${cache}, which builds keep: building again
+# doesn't build zig's C runtime again, and makes the same image.
+rebuilt_manifest() { z build --rebuild "$1" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2; }
+warm_hello() {
+    [ -d "$ZIGSAW_HOME\\cache\\tools\\org.ziglang.zig" ] || { echo "no cache\\tools\\org.ziglang.zig"; return 1; }
+    [ "$(rebuilt_manifest "$work\\c\\hello.json")" = "$hello_digest" ]
+}
+start=$SECONDS
+check "a rebuild with zig's kept cache makes the same image" warm_hello
+printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$hello_time"
+check "zig run as an app has its cache in its data directory" sh -c "\"\$0\" run org.ziglang.zig env | grep '\.global_cache_dir' | grep -qF 'data\\\\org.ziglang.zig\\\\cache\"'" "$zigsaw"
+
+# A tool of our own whose image declares a cache: each build sees what
+# earlier ones left there. It also gives builds a command, greet, which
+# runs its copy of busybox's echo.
+mkdir -p "$work\\cachey" && echo tool >"$work\\cachey\\tool.txt" && cp "$ZIGSAW_HOME\\deploy\\$(own_layer $BB)\\busybox.exe" "$work\\cachey\\"
+printf '{ "id": "test.tool.cachey", "version": "1", "command": "tool.txt", "exports": {}, "env": { "CACHEDIR": "${cache}" },\n  "aliases": { "greet": { "command": "busybox.exe", "args": ["echo", "hello from an alias:"] } },\n  "modules": [{ "name": "m", "sources": [{ "path": "tool.txt" }, { "path": "busybox.exe" }] }] }\n' >"$work\\cachey\\tool.json"
+z build "$work\\cachey\\tool.json" >/dev/null 2>&1
+printf '{ "id": "test.build.cached", "version": "1", "command": "x.txt", "exports": {}, "sdk": { "busybox": "%s@%s", "cachey": "test.tool.cachey@%s" },\n  "modules": [{ "name": "m", "build": ["echo built >> \\"$CACHEDIR/n\\"", "echo \\"$CACHEDIR\\" > \\"$PREFIX/dir.txt\\"", "cp \\"$CACHEDIR/n\\" \\"$PREFIX/x.txt\\"", "greet \\"a  b\\" c > \\"$PREFIX/greet.txt\\""] }] }\n' \
+    $BB "$bb_digest" "$(manifest_of test.tool.cachey)" >"$work\\cachey\\cached.json"
+kept_cache() {
+    z build "$work\\cachey\\cached.json" >/dev/null 2>&1 && z build --rebuild "$work\\cachey\\cached.json" >/dev/null 2>&1 || return 1
+    local dir="$ZIGSAW_HOME\\deploy\\$(own_layer test.build.cached)"
+    # (BusyBox's sh shows paths in variables with '/'.)
+    [ "$(tr -d '\r' <"$dir\\dir.txt" | tr '/' '\\')" = 'B:\cache\test.tool.cachey' ] || { echo "\${cache} was $(cat "$dir\\dir.txt")"; return 1; }
+    [ "$(grep -c built "$dir\\x.txt")" -eq 2 ] || { echo "the second build saw: $(cat "$dir\\x.txt")"; return 1; }
+    [ -f "$ZIGSAW_HOME\\cache\\tools\\test.tool.cachey\\n" ] && drive_free && no_build_root
+}
+check "a tool's \${cache} is B:\\cache\\<id>, kept between builds in the store" kept_cache
+aliased() {
+    local got
+    got=$(tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer test.build.cached)\\greet.txt")
+    [ "$got" = "hello from an alias: a  b c" ] || { echo "greet said: $got"; return 1; }
+}
+check "a tool's alias runs its command with its arguments, then the caller's" aliased
+check "prune keeps tools' caches, and says so" sh -c "\"\$0\" prune --dry-run 2>&1 | grep -q 'kept the caches of 2 build tool(s)'" "$zigsaw"
 
 # Builds are reused when nothing they depend on changed.
 reused() {
@@ -245,7 +286,39 @@ online() {
         config_of test.build.online | grep -q '"network": true'
 }
 check "a module with \"network\": true can, and the image records it" online
+
+# A vendor step fetches with network access; its result is pinned by hash,
+# so the build itself stays offline and the image hermetic. Its commands
+# also leave junk.txt, which the build mustn't see. <vendor extra> goes into
+# "vendor", e.g. a "sha256".
+vendor_recipe() {
+    printf '{ "id": "test.build.vendored", "version": "1", "command": "x.txt", "exports": {}, "sdk": { "busybox": "%s@%s" },\n  "modules": [{ "name": "m",\n    "vendor": { "commands": ["mkdir -p deps && wget -O deps/hello.txt http://127.0.0.1:18099/hello.txt", "echo junk > junk.txt"], "dir": "deps"%s },\n    "build": ["[ ! -e junk.txt ]", "cp deps/hello.txt \\"$PREFIX/x.txt\\"", "! wget -q -O x http://127.0.0.1:18099/hello.txt"] }] }\n' \
+        $BB "$bb_digest" "${1:-}"
+}
+vendor_recipe >"$work\\unpinned-vendor.json"
+vendor_hash=$(z build "$work\\unpinned-vendor.json" 2>&1 | grep -A1 'Pin what its commands made' | grep -o '"sha256": "[0-9a-f]*"' | cut -d'"' -f4)
+check "an unpinned vendor step fails, naming the hash to pin" test -n "$vendor_hash"
+vendor_recipe ", \"sha256\": \"$vendor_hash\"" >"$work\\vendored.json"
+vendored() {
+    local out
+    # The unpinned build kept what it fetched; this one is to fetch again.
+    rm "$ZIGSAW_HOME\\cache\\downloads\\$vendor_hash" || return 1
+    out=$(z build "$work\\vendored.json" 2>&1) || { echo "$out" | tail -3; return 1; }
+    grep -q '^\[m vendor 1/2\]' <<<"$out" && ! grep -q 'used the network' <<<"$out" &&
+        [ "$(tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer test.build.vendored)\\x.txt")" = served ] &&
+        config_of test.build.vendored | tr -d ' \r\n' | grep -q "\"vendor\":{\"m\":\"$vendor_hash\"},\"network\":false"
+}
+check "pinned, it builds offline from what the step fetched, and the config records it" vendored
+vendor_recipe ", \"sha256\": \"$(printf '0%.0s' $(seq 64))\"" >"$work\\misvendored.json"
+check "a vendor step that makes something else fails, naming both hashes" sh -c "\"\$0\" build '$work\\misvendored.json' 2>&1 | grep -A2 'sha256 mismatch for what module m.s vendor commands made in deps' | grep -q 'got      $vendor_hash'" "$zigsaw"
 kill $httpd 2>/dev/null
+vendored_from_cache() {
+    local out
+    out=$(z -v build --rebuild "$work\\vendored.json" 2>&1) || { echo "$out" | tail -3; return 1; }
+    grep -q 'vendored files from the cache' <<<"$out" && ! grep -q '^\[m vendor' <<<"$out" &&
+        [ "$(tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer test.build.vendored)\\x.txt")" = served ]
+}
+check "with the server gone, a rebuild takes the vendored files from the cache" vendored_from_cache
 
 printf '{ "id": "test.build.nosh", "version": "1", "command": "x", "exports": {}, "sdk": { "zig": "org.ziglang.zig@%s" }, "modules": [{ "name": "m", "build": ["true"] }] }\n' "$zig_digest" >"$work\\nosh.json"
 check "sh modules without busybox in the SDK fail, saying so" sh -c "\"\$0\" build '$work\\nosh.json' 2>&1 | grep -q 'add busybox to'" "$zigsaw"
@@ -310,12 +383,37 @@ fi
 check "sqlite.json builds SQLite and zlib from source" z build "$root\\recipes\\sqlite.json"
 check "sqlite3 runs, with zlib" sh -c "[ \"\$(\"\$0\" run org.sqlite.sqlite3 :memory: 'select sqlite_version(), length(sqlar_uncompress(sqlar_compress(zeroblob(1000)), 1000))' | tr -d '\r')\" = '3.53.4|1000' ]" "$zigsaw"
 
+# --- Rust from source ---------------------------------------------------------------
+
+check "rust.json builds the Rust SDK image" z build "$root\\recipes\\rust.json"
+# A program whose windows-sys crate needs dlltool, which zig's image
+# provides; its crates come from crates.io through a vendor step.
+RUST=test.build.rust
+mkdir -p "$work\\rust" && cp "$(cygpath -u "$root")"/tests/build/rust/{Cargo.toml,Cargo.lock,main.rs} "$(cygpath -u "$work")/rust/" &&
+    sed -e "s/@RUST@/$(manifest_of org.rust-lang.rust)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\rust\\hello.json.in" >"$work\\rust\\hello.json"
+check "a Rust program builds, its crates vendored, with zig's dlltool" z build "$work\\rust\\hello.json"
+rust_app_digest=$(manifest_of $RUST)
+rust_runs() {
+    local out
+    out=$(z run $RUST zigsaw | tr -d '\r')
+    [ "$out" = "hello, zigsaw, from Rust
+Windows is up: true" ] || { echo "got: $out"; return 1; }
+}
+check "it runs, calling Windows through windows-sys" rust_runs
+# Each build root has a new random name, so a real path or a time in the
+# executable would show.
+rust_again() { [ "$(rebuilt_manifest "$work\\rust\\hello.json")" = "$rust_app_digest" ]; }
+check "built again, from the vendored crates in the cache, it's the same image" rust_again
+
 # Removing the apps also deletes their AppContainer profiles. The images
 # builds use stay until prune --downloads, and only zigsaw can delete their
 # protected deployments.
 for id in $APP io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.sqlite.sqlite3 \
-    test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted; do z rm --delete-data $id >/dev/null 2>&1; done
+    test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
+    test.build.vendored org.rust-lang.rust $RUST; do z rm --delete-data $id >/dev/null 2>&1; done
 z prune --downloads --data >/dev/null 2>&1
+check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
 rm -rf "$ZIGSAW_HOME" "$work"
 echo
 echo "$failures check(s) failed."

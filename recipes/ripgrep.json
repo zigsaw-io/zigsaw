@@ -3,15 +3,33 @@
   "version": "15.2.0",
   "command": "rg.exe",
   "permissions": { "filesystem": ["cwd:ro"] },
+  "sdk": {
+    "rust": "org.rust-lang.rust:1.99.0@sha256:2317aebbf72b1d7ac358467a163fb2fefc9ddf6e6d577b8d2a5ad5fba359d9a5",
+    "zig": "org.ziglang.zig:0.16.0@sha256:4d90aaafb78377f20acb2468b7b1d32d10f4c00fa5501eff8601be09740ddba4",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:fa4eac7f8b4b87330acd44e6c67b1f0cfd0242460b02dbb8869ef9054f28c120"
+  },
   "modules": [
     {
       "name": "ripgrep",
       "sources": [
         {
-          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
-          "sha256": "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+          "url": "https://static.crates.io/crates/ripgrep/ripgrep-15.2.0.crate",
+          "sha256": "a30750b6d0743bfdd2656ebbaf4555aa278c43144b84bc389bcbfa399485ec71",
           "strip": 1
         }
+      ],
+      "vendor": {
+        "commands": ["cargo vendor --locked vendor >/dev/null"],
+        "dir": "vendor",
+        "sha256": "c58cbe1a06b9fa521863672c130f963b90db1322e0173f3559af3ec5fb9eb80a"
+      },
+      "build": [
+        "cargo build --offline --locked --profile release-lto --config 'source.crates-io.replace-with=\"vendored\"' --config 'source.vendored.directory=\"vendor\"'",
+        "mkdir -p \"$PREFIX/doc\" \"$PREFIX/complete\"",
+        "cp target/release-lto/rg.exe README.md COPYING LICENSE-MIT UNLICENSE \"$PREFIX/\"",
+        "cp CHANGELOG.md FAQ.md GUIDE.md \"$PREFIX/doc/\"",
+        "target/release-lto/rg.exe --generate man > \"$PREFIX/doc/rg.1\"",
+        "for shell in bash:rg.bash fish:rg.fish zsh:_rg powershell:_rg.ps1; do target/release-lto/rg.exe --generate complete-${shell%%:*} > \"$PREFIX/complete/${shell#*:}\" || exit 1; done"
       ]
     }
   ]

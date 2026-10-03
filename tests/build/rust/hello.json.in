@@ -1,0 +1,25 @@
+{
+  "id": "test.build.rust",
+  "version": "1",
+  "command": "hello.exe",
+  "sdk": {
+    "rust": "org.rust-lang.rust@@RUST@",
+    "zig": "org.ziglang.zig@@ZIG@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "modules": [
+    {
+      "name": "hello",
+      "sources": [{ "path": "Cargo.toml" }, { "path": "Cargo.lock" }, { "path": "main.rs", "dest": "src/main.rs" }],
+      "vendor": {
+        "commands": ["cargo vendor --locked vendor >/dev/null"],
+        "dir": "vendor",
+        "sha256": "2ddc7f8dfad53e1b1aee99b9ea94153e80aaad681347da32a32ca5e6560a6067"
+      },
+      "build": [
+        "cargo build --offline --locked --release --config 'source.crates-io.replace-with=\"vendored\"' --config 'source.vendored.directory=\"vendor\"'",
+        "cp target/release/hello.exe \"$PREFIX/hello.exe\""
+      ]
+    }
+  ]
+}

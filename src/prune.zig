@@ -1,7 +1,7 @@
 //! `zigsaw prune`: deletes what no installed app needs: the blobs and
 //! deployments of versions that were replaced or removed, and leftovers in
-//! tmp\. On request, also cached downloads and the data of apps that are no
-//! longer installed. Anything a running app uses is kept.
+//! tmp\. On request, also cached downloads, build tools' caches, and the data
+//! of apps that are no longer installed. Anything a running app uses is kept.
 
 const std = @import("std");
 const Io = std.Io;
@@ -14,7 +14,8 @@ const note = Context.note;
 pub const Options = struct {
     /// Only report what would be deleted.
     dry_run: bool = false,
-    /// Also delete cached build sources, which rebuilds would download again.
+    /// Also delete cached build sources, which rebuilds would download again,
+    /// and the caches of build tools, which they would fill again.
     downloads: bool = false,
     /// Also delete the data directories of apps that aren't installed.
     data: bool = false,
@@ -109,6 +110,15 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         downloads.add(try treeSize(io, arena, p));
         if (opts.downloads and !opts.dry_run) try Io.Dir.cwd().deleteTree(io, p);
     }
+    // Build tools' caches go like downloads: keeping them only makes builds
+    // faster.
+    var tool_caches: Tally = .{};
+    const tools_dir = try store.path(arena, &.{ "cache", "tools" });
+    for (try listDir(io, arena, tools_dir)) |entry| {
+        const p = try std.fs.path.join(arena, &.{ tools_dir, entry.name });
+        tool_caches.add(try treeSize(io, arena, p));
+        if (opts.downloads and !opts.dry_run) try Store.deleteTree(io, arena, p);
+    }
     // Builds remembered by their inputs: those whose image is gone now, and
     // with --downloads, all of them. (Tiny files, so not reported.)
     const builds_dir = try store.path(arena, &.{ "cache", "builds" });
@@ -148,6 +158,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         .{ deployments, true, "deployment", "deployments" },
         .{ tmp, true, "temporary item", "temporary items" },
         .{ downloads, opts.downloads, "cached download", "cached downloads" },
+        .{ tool_caches, opts.downloads, "build tool cache", "build tool caches" },
         .{ data, opts.data, "data directory", "data directories" },
     };
     for (parts) |part| {
@@ -172,6 +183,8 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         note("kept data of apps that aren't installed: {s}; --data deletes it", .{try std.mem.join(arena, ", ", orphans.items)});
     if (!opts.downloads and downloads.count > 0)
         note("kept {d} cached download(s) ({Bi:.1}) for rebuilds; --downloads deletes them", .{ downloads.count, downloads.bytes });
+    if (!opts.downloads and tool_caches.count > 0)
+        note("kept the caches of {d} build tool(s) ({Bi:.1}) for faster builds; --downloads deletes them", .{ tool_caches.count, tool_caches.bytes });
     if (!opts.downloads and build_only > 0)
         note("kept {d} image(s) that builds use as runtimes or SDKs; --downloads deletes them", .{build_only});
 }

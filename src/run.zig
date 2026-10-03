@@ -76,9 +76,12 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const host_cwd = try std.process.currentPathAlloc(io, arena);
     const cwd = if (cwd_granted) host_cwd else profile.home;
 
+    const cache_dir = try std.fs.path.join(arena, &.{ data_dir, "cache" });
+    if (usesCache(cfg)) try Io.Dir.cwd().createDirPath(io, cache_dir);
+
     const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
-    const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir);
-    const placeholders: oci.Placeholders = .{ .app = image.deploy_dir, .data = data_dir, .runtimes = runtimes.dirs };
+    const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir, cache_dir);
+    const placeholders: oci.Placeholders = .{ .app = image.deploy_dir, .data = data_dir, .cache = cache_dir, .runtimes = runtimes.dirs };
     // The app's directories first, then each runtime's.
     var app_path: std.ArrayList([]const u8) = .empty;
     try app_path.appendSlice(arena, try environment.pathDirs(arena, placeholders, cfg.path));
@@ -206,18 +209,26 @@ const Runtimes = struct {
     /// Each runtime's directory, by alias, for the app's placeholders.
     dirs: []const oci.Placeholders.Dir,
     /// The placeholders of each runtime's own entries: ${app} is the
-    /// runtime's directory, and ${data} the app's data directory.
+    /// runtime's directory, and ${data} and ${cache} are the app's.
     own: []const oci.Placeholders,
 };
 
-fn runtimeDirs(arena: Allocator, cfg: oci.AppConfig, dirs: []const []const u8, data_dir: []const u8) !Runtimes {
+fn runtimeDirs(arena: Allocator, cfg: oci.AppConfig, dirs: []const []const u8, data_dir: []const u8, cache_dir: []const u8) !Runtimes {
     const named = try arena.alloc(oci.Placeholders.Dir, dirs.len);
     const own = try arena.alloc(oci.Placeholders, dirs.len);
     for (cfg.runtimes.map.keys(), dirs, named, own) |alias, dir, *n, *o| {
         n.* = .{ .alias = alias, .path = dir };
-        o.* = .{ .app = dir, .data = data_dir };
+        o.* = .{ .app = dir, .data = data_dir, .cache = cache_dir };
     }
     return .{ .dirs = named, .own = own };
+}
+
+/// Whether the app's entries or its runtimes' use ${cache}, which is then
+/// created before the run.
+fn usesCache(cfg: oci.AppConfig) bool {
+    if (oci.usesCache(cfg.path, cfg.env)) return true;
+    for (cfg.runtimes.map.values()) |r| if (oci.usesCache(r.path, r.env)) return true;
+    return false;
 }
 
 const Command = struct {
