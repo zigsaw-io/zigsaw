@@ -167,9 +167,9 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
     while (exported.next()) |e| try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "export {s}", .{e.key_ptr.*}), e.value_ptr.command);
 
     const start = ctx.now();
-    const layer_file = try tree.writeLayerFile(ctx);
+    const layer_file = try tree.writeLayerFile(ctx, .gzip);
     ctx.timed(start, "write layer ({d} entries)", .{tree.nodes.count()});
-    try layers.append(arena, try ctx.store.putBlobFile(arena, layer_file.path, layer_file.hash, oci.media_type.layer_tar));
+    try layers.append(arena, try ctx.store.putBlobFile(arena, layer_file.path, layer_file.hash, oci.media_type.layer_tar_gzip));
 
     const config_desc = try ctx.store.putBlob(arena, try oci.toJson(arena, config), oci.media_type.config);
     var annotations: std.json.ArrayHashMap([]const u8) = .{};
@@ -414,7 +414,7 @@ const BuildRoot = struct {
             if (!try Store.exists(io, made))
                 return fail("module {s}: the vendor commands left nothing in {s}", .{ m.name, v.dir });
             const tree = try Tree.fromDir(io, arena, made);
-            const file = try tree.writeLayerFile(ctx);
+            const file = try tree.writeLayerFile(ctx, .none);
             const got = try arena.dupe(u8, &file.hash.hex);
             // Kept under its actual hash, as downloads are, so pinning it
             // doesn't run the commands again.

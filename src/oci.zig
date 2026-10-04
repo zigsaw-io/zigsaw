@@ -20,7 +20,10 @@ pub const media_type = struct {
     pub const config = "application/vnd.zigsaw.app.config.v2+json";
     /// Images made before runtimes existed: no runtimes, one layer. Still read.
     pub const config_v1 = "application/vnd.zigsaw.app.config.v1+json";
+    /// Layers of images built before iteration 7. Still read.
     pub const layer_tar = "application/vnd.oci.image.layer.v1.tar";
+    /// Layers as builds make them: the same tar, gzip-compressed.
+    pub const layer_tar_gzip = "application/vnd.oci.image.layer.v1.tar+gzip";
     /// The config of the manifest that keeps an image's sources next to it
     /// in its repository (see remote.zig), and each of those files.
     pub const sources_config = "application/vnd.zigsaw.sources.v1+json";
@@ -259,13 +262,23 @@ pub fn isConfigType(t: []const u8) bool {
 /// Checks that a manifest's layers are the ones its config accounts for:
 /// each runtime's, in order, then the app's own.
 pub fn validateLayers(what: []const u8, m: Manifest, c: AppConfig) error{Failed}!void {
-    for (m.layers) |l| if (!std.mem.eql(u8, l.mediaType, media_type.layer_tar))
+    for (m.layers) |l| if (layerCompression(l.mediaType) == null)
         return fail("{s} has a layer of type {s}, which zigsaw can't unpack", .{ what, l.mediaType });
     const runtimes = c.runtimes.map.values();
     if (m.layers.len != runtimes.len + 1)
         return fail("{s} has {d} layer(s), but its config accounts for {d}: one per runtime, and the app's own", .{ what, m.layers.len, runtimes.len + 1 });
     for (c.runtimes.map.keys(), runtimes, m.layers[0..runtimes.len]) |alias, r, l| if (!std.mem.eql(u8, r.layer, l.digest))
         return fail("{s}: runtime {s}'s layer {s} isn't in its manifest's place for it", .{ what, alias, r.layer });
+}
+
+pub const Compression = enum { none, gzip };
+
+/// How a layer of this media type is compressed; null if it isn't a layer
+/// type zigsaw can unpack.
+pub fn layerCompression(layer_type: []const u8) ?Compression {
+    if (std.mem.eql(u8, layer_type, media_type.layer_tar)) return .none;
+    if (std.mem.eql(u8, layer_type, media_type.layer_tar_gzip)) return .gzip;
+    return null;
 }
 
 /// The layer of the app's own files.
@@ -567,6 +580,15 @@ test "layers must match the runtimes" {
     try std.testing.expectError(error.Failed, validateLayers("test", .{ .config = config, .layers = &.{layer(other)} }, c));
     try std.testing.expectError(error.Failed, validateLayers("test", .{ .config = config, .layers = &.{ layer(other), layer(digest) } }, c));
     try std.testing.expectEqualStrings(other, ownLayer(.{ .config = config, .layers = &.{ layer(digest), layer(other) } }).digest);
+
+    // Plain and gzip layers can be mixed, as when a runtime was built before
+    // layers were compressed; other types are refused.
+    const gzip: Descriptor = .{ .mediaType = media_type.layer_tar_gzip, .digest = other, .size = 1 };
+    try validateLayers("test", .{ .config = config, .layers = &.{ layer(digest), gzip } }, c);
+    const zstd: Descriptor = .{ .mediaType = "application/vnd.oci.image.layer.v1.tar+zstd", .digest = other, .size = 1 };
+    try std.testing.expectError(error.Failed, validateLayers("test", .{ .config = config, .layers = &.{ layer(digest), zstd } }, c));
+    try std.testing.expectEqual(.gzip, layerCompression(media_type.layer_tar_gzip).?);
+    try std.testing.expectEqual(.none, layerCompression(media_type.layer_tar).?);
 
     try c.runtimes.map.put(arena, "node2", .{ .id = "org.nodejs.NODE", .version = "22", .image = digest, .layer = other });
     try std.testing.expectError(error.Failed, validateConfig("test", c));

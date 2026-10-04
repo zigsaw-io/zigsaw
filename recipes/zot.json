@@ -1,0 +1,40 @@
+{
+  "id": "dev.zotregistry.zot",
+  "version": "2.1.21",
+  "command": "zot.exe",
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "sdk": {
+    "go": "org.golang.go:1.27.1@sha256:426de395c658dc3dd5c1459edb4016d9d98a5752923bac56f9220473458fd8bf",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "zot",
+      "sources": [
+        {
+          "url": "https://proxy.golang.org/zotregistry.dev/zot/v2/@v/v2.1.21.zip",
+          "sha256": "fefad9b100010ce075409cceed7daec16e0a646060d22658d8bcefbb423ef101",
+          "strip": 3
+        }
+      ],
+      "env": { "CGO_ENABLED": "0", "GOEXPERIMENT": "jsonv2" },
+      "vendor": {
+        "commands": [
+          "go mod vendor",
+          "go list -deps -f '{{if and .Module (not .Module.Main)}}{{.ImportPath}}{{end}}' ./cmd/zot >packages.txt",
+          "go list -deps -f '{{if and .Module (not .Module.Main)}}{{range .EmbedFiles}}{{$.ImportPath}}/{{.}} {{end}}{{end}}' ./cmd/zot | tr ' ' '\\n' | grep . >embeds.txt || true",
+          "for p in $(cat packages.txt); do for f in vendor/$p/*; do [ -f \"$f\" ] && echo \"$f\"; done; done >files.txt",
+          "sed 's|^|vendor/|' embeds.txt >>files.txt",
+          "mkdir minimal && tar -cf - vendor/modules.txt -T files.txt | tar -xf - -C minimal",
+          "rm -rf vendor packages.txt embeds.txt files.txt && mv minimal/vendor vendor && rmdir minimal"
+        ],
+        "dir": "vendor",
+        "sha256": "a833a00f41b69f8b71e63bf708e8f8cb6013fe5a9aeeeaeca3de8bec211c763e"
+      },
+      "build": [
+        "go build -mod=vendor -buildmode=pie -ldflags '-X zotregistry.dev/zot/v2/pkg/buildinfo.ReleaseTag=v2.1.21 -X zotregistry.dev/zot/v2/pkg/buildinfo.Commit=v2.1.21-0-g6429ce6 -X zotregistry.dev/zot/v2/pkg/buildinfo.BinaryType=minimal -X zotregistry.dev/zot/v2/pkg/buildinfo.GoVersion=go1.27.1 -s -w' -o \"$PREFIX/zot.exe\" ./cmd/zot",
+        "cp LICENSE README.md \"$PREFIX/\""
+      ]
+    }
+  ]
+}

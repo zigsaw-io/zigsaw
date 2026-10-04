@@ -64,7 +64,7 @@ smoke_args() {
     net.frippery.busybox) printf '%s\n' true ;;
     org.nodejs.node) printf '%s\n' '-e 0' ;;
     org.python.python) printf '%s\n' '-c pass' ;;
-    org.ziglang.zig) printf '%s\n' version ;;
+    org.ziglang.zig | org.golang.go) printf '%s\n' version ;;
     *) printf '%s\n' --version ;;
     esac
 }

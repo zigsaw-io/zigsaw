@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # End-to-end checks for building apps: runtimes, which an app runs with and
 # whose layers travel in its image, and build commands, which build an app
-# from source with SDK images (zig, busybox and Rust), tools' caches and
+# from source with SDK images (zig, busybox, Rust and Go), tools' caches and
 # aliases, and vendor steps.
 #
 #   tests/build.sh [path\to\zigsaw.exe]
 #
 # Needs Git Bash and network access (busybox, Node, Prettier, zig, zlib,
-# SQLite and Rust downloads, and crates from crates.io). Always uses
+# SQLite, Rust and Go downloads, and crates from crates.io). Always uses
 # temporary stores, since it removes apps, and deletes them afterwards. To
 # skip downloading what a store already has (zig's is 97 MB, Rust's 150 MB),
 # set SEED_DOWNLOADS to its cache\downloads directory; its files are linked,
@@ -183,6 +183,13 @@ hello_files() {
     [ ! -e "$dir\\include" ] && [ ! -e "$dir\\lib" ] && [ "$(tr -d '\r' <"$dir\\notes.txt")" = "built by cmd" ]
 }
 check "cleanup left out include and lib, and the cmd module ran" hello_files
+# The app's own layer is a gzip-compressed tar that other tools read too.
+gzip_layer() {
+    local manifest="$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $HELLO | cut -d: -f2)"
+    tr -d ' \r\n' <"$manifest" | grep -q "\"mediaType\":\"application/vnd.oci.image.layer.v1.tar+gzip\",\"digest\":\"sha256:$(own_layer $HELLO)\"" &&
+        tar -tzf "$(cygpath -u "$ZIGSAW_HOME\\blobs\\sha256\\$(own_layer $HELLO)")" | grep -q '^notes.txt$'
+}
+check "its layer is a gzip-compressed tar, which tar lists" gzip_layer
 records_sdk() { config_of $HELLO | tr -d ' \r\n' | grep -q "\"sdk\":{\"zig\":\"$zig_digest\",\"busybox\":\"$bb_digest\"}"; }
 check "the config records the SDK" records_sdk
 free_afterwards() { drive_free && no_build_root; }
@@ -430,12 +437,46 @@ check "it runs, calling its C, and Windows through windows-sys" rust_runs
 rust_again() { [ "$(rebuilt_manifest "$work\\rust\\hello.json")" = "$rust_app_digest" ]; }
 check "built again, from the vendored crates in the cache, it's the same image" rust_again
 
+# --- Go from source -----------------------------------------------------------------
+
+check "go.json builds the Go SDK image" z build "$root\\recipes\\go.json"
+# Go's image keeps GOPATH in its data directory, whose bin is on its PATH, so
+# what `go install` installs gets a shim.
+mkdir -p "$work\\gotiny" &&
+    printf 'module zigsaw.test/zigsaw-gotiny\n\ngo 1.27\n' >"$work\\gotiny\\go.mod" &&
+    printf 'package main\n\nimport (\n\t"fmt"\n\t"os"\n)\n\nfunc main() { fmt.Println("gotiny", os.Args[1]) }\n' >"$work\\gotiny\\main.go"
+go_installed() {
+    local out
+    out=$(cd "$work\\gotiny" && z run --command=go org.golang.go install . 2>&1)
+    grep -q 'added zigsaw-gotiny to' <<<"$out" || { echo "$out" | tail -3; return 1; }
+    [ "$("$bin\\zigsaw-gotiny.exe" hi | tr -d '\r')" = "gotiny hi" ]
+}
+check "go install gives what it installs a shim" go_installed
+# A program built with Go's image, whose GOFLAGS trim paths: it says where
+# it was built from, as module paths, and calls Windows.
+GOAPP=test.build.go
+mkdir -p "$work\\go" && cp "$(cygpath -u "$root")"/tests/build/go/{go.mod,main.go} "$(cygpath -u "$work")/go/" &&
+    sed -e "s/@GO@/$(manifest_of org.golang.go)/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\go\\hello.json.in" >"$work\\go\\hello.json"
+check "a Go program builds with Go's image" z build "$work\\go\\hello.json"
+go_app_digest=$(manifest_of $GOAPP)
+go_runs() {
+    local out
+    out=$(z run $GOAPP zigsaw | tr -d '\r')
+    [ "$out" = "hello, zigsaw, from Go
+built from zigsaw.test/hello/main.go
+Windows is up: true" ] || { echo "got: $out"; return 1; }
+}
+check "it runs, with its paths trimmed, and calls Windows" go_runs
+go_again() { [ "$(rebuilt_manifest "$work\\go\\hello.json")" = "$go_app_digest" ]; }
+check "built again, with Go's kept cache, it's the same image" go_again
+
 # Removing the apps also deletes their AppContainer profiles. The images
 # builds use stay until prune --downloads, and only zigsaw can delete their
 # protected deployments.
 for id in $APP io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.sqlite.sqlite3 \
     test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
-    test.build.vendored org.rust-lang.rust $RUST; do z rm --delete-data $id >/dev/null 2>&1; done
+    test.build.vendored org.rust-lang.rust $RUST org.golang.go $GOAPP; do z rm --delete-data $id >/dev/null 2>&1; done
 z prune --downloads --data >/dev/null 2>&1
 check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
 rm -rf "$ZIGSAW_HOME" "$work"

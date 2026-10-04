@@ -4,16 +4,13 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{
         .default_target = .{ .os_tag = .windows },
     });
-    const optimize = b.standardOptimizeOption(.{});
+    const chosen = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size (default: ReleaseSafe for zigsaw.exe, Debug otherwise)");
+    const optimize = chosen orelse .Debug;
 
-    const exe_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    // AppContainer profiles live in userenv; ACL editing lives in advapi32.
-    exe_mod.linkSystemLibrary("userenv", .{});
-    exe_mod.linkSystemLibrary("advapi32", .{});
+    // zigsaw compresses, hashes and unpacks layers of hundreds of MB, which
+    // takes about 8 times as long in Debug: 74 s instead of 9 s to compress
+    // zig's layer.
+    const exe_mod = zigsawModule(b, target, chosen orelse .ReleaseSafe);
 
     const exe = b.addExecutable(.{
         .name = "zigsaw",
@@ -67,11 +64,23 @@ pub fn build(b: *std.Build) void {
     argv_step.dependOn(&b.addInstallArtifact(argv, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = exe_mod })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize) })).step);
     const shim_test_mod = b.createModule(.{
         .root_source_file = b.path("src/shim.zig"),
         .target = target,
         .optimize = optimize,
     });
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shim_test_mod })).step);
+}
+
+fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+    const mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // AppContainer profiles live in userenv; ACL editing lives in advapi32.
+    mod.linkSystemLibrary("userenv", .{});
+    mod.linkSystemLibrary("advapi32", .{});
+    return mod;
 }

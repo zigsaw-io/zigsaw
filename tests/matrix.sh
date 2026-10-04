@@ -42,12 +42,16 @@ GIT=org.git_scm.MinGit
 NODE=org.nodejs.node
 PY=org.python.python
 ZIG=org.ziglang.zig
+GO=org.golang.go
+FZF=com.github.junegunn.fzf
+ZOT=dev.zotregistry.zot
 
 # --- Setup -------------------------------------------------------------------
 
 installed=$("$zigsaw" list)
-# zig and rust before ripgrep and bat, which build with them.
-for recipe in busybox zig rust ripgrep bat mingit node python; do
+# zig and rust before ripgrep and bat, and go before fzf and zot, which build
+# with them.
+for recipe in busybox zig rust ripgrep bat go fzf zot mingit node python; do
     id=$(grep -o '"id": *"[^"]*"' "$root/recipes/$recipe.json" | cut -d'"' -f4)
     if ! grep -q "^$id " <<<"$installed"; then
         echo "building $id..."
@@ -72,7 +76,12 @@ started=$SECONDS
 # Its stdin is empty, whatever the matrix's is: given a pipe, as in CI,
 # ripgrep would search that instead of its working directory.
 run() {
-    timeout "$limit" "$zigsaw" run --sandbox="$sb" "$@" </dev/null
+    run_input "$@" </dev/null
+}
+
+# Like run, but the app reads the caller's stdin.
+run_input() {
+    timeout "$limit" "$zigsaw" run --sandbox="$sb" "$@"
     local code=$?
     [ $code -eq 124 ] && echo "error: timed out after ${limit}s"
     return $code
@@ -200,6 +209,29 @@ expect ok gap "zig env" run $ZIG env
 zig_project() { run $ZIG init >/dev/null && run $ZIG build run; }
 expect ok gap "init, build and run a project" zig_project
 
+tool go
+for sb in soft appcontainer; do
+    printf 'module zigsaw.test/hi\n\ngo 1.27\n' >"$work\\go\\$sb\\go.mod"
+    printf 'package main\n\nimport "fmt"\n\nfunc main() { fmt.Println("hi from go") }\n' >"$work\\go\\$sb\\main.go"
+done
+expect ok ok "runs" run $GO version
+go_run() { run $GO run . | grep -q 'hi from go'; }
+# Go's toolchain opens NUL, which Windows Server 2025 denies AppContainers
+# (docs/findings.md).
+expect ok gap "builds and runs a module in granted cwd" go_run
+
+tool fzf
+expect ok ok "runs" run $FZF --version
+fzf_filters() { [ "$(printf 'apple\nbanana\ncherry\n' | run_input $FZF --filter=an | tr -d '\r')" = banana ]; }
+expect ok ok "filters lines from stdin" fzf_filters
+
+tool zot
+for sb in soft appcontainer; do
+    printf '{ "distSpecVersion": "1.1.1", "storage": { "rootDirectory": "data" },\n  "http": { "address": "127.0.0.1", "port": "5099" }, "log": { "level": "warn" } }\n' >"$work\\zot\\$sb\\zot.json"
+done
+expect ok ok "runs" run $ZOT --version
+expect ok ok "verifies a config in granted cwd" run $ZOT verify zot.json
+
 # --- Report ------------------------------------------------------------------
 
 echo
@@ -209,7 +241,7 @@ echo
 echo "$mismatches result(s) differ from the intended behaviour, and $gaps known gap(s) failed. The checks took $((SECONDS - started))s."
 
 if $own_store; then
-    for id in $BB $RG $BAT $GIT $NODE $PY $ZIG; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
+    for id in $BB $RG $BAT $GIT $NODE $PY $ZIG $GO $FZF $ZOT; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
     rm -rf "$ZIGSAW_HOME"
 fi
 rm -rf "$work"

@@ -435,7 +435,7 @@ pub fn usedLayers(s: Store, arena: Allocator, opts: UsedOptions) !std.StringHash
 /// are shared by every run, and by every app with the layer, so they are
 /// protected from changes.
 pub fn deploy(s: Store, arena: Allocator, desc: oci.Descriptor) ![]u8 {
-    if (!std.mem.eql(u8, desc.mediaType, oci.media_type.layer_tar))
+    const compression = oci.layerCompression(desc.mediaType) orelse
         return fail("layer type {s} is not supported", .{desc.mediaType});
     const dest = try s.deployPath(arena, desc.digest);
     if (try exists(s.io, dest)) {
@@ -447,8 +447,21 @@ pub fn deploy(s: Store, arena: Allocator, desc: oci.Descriptor) ![]u8 {
     const work = try s.makeTmpDir(arena, "deploy");
     defer Io.Dir.cwd().deleteTree(s.io, work) catch {};
     const tree = try std.fs.path.join(arena, &.{ work, "app" });
+    const blob = try s.blobPath(arena, oci.digestHex(desc.digest).?);
     var start = Io.Timestamp.now(s.io, .awake);
-    try layer.extract(s.io, arena, try s.blobPath(arena, oci.digestHex(desc.digest).?), tree);
+    // Extracting reads files' bytes from their places in a plain tar, in
+    // parallel, so a gzip layer is decompressed first, next to the tree.
+    const tar = switch (compression) {
+        .none => blob,
+        .gzip => tar: {
+            const p = try std.fs.path.join(arena, &.{ work, "layer.tar" });
+            try layer.inflate(s.io, blob, p);
+            Context.reportTime(s.io, s.verbose, start, "  inflate {s}", .{oci.shortDigest(desc.digest)});
+            start = Io.Timestamp.now(s.io, .awake);
+            break :tar p;
+        },
+    };
+    try layer.extract(s.io, arena, tar, tree);
     Context.reportTime(s.io, s.verbose, start, "  unpack {s}", .{oci.shortDigest(desc.digest)});
     try Io.Dir.rename(.cwd(), tree, .cwd(), dest, s.io);
     start = Io.Timestamp.now(s.io, .awake);

@@ -1,0 +1,17 @@
+{
+  "id": "test.build.go",
+  "version": "1",
+  "command": "hello.exe",
+  "sdk": {
+    "go": "org.golang.go@@GO@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "modules": [
+    {
+      "name": "hello",
+      "sources": [{ "path": "go.mod" }, { "path": "main.go" }],
+      "env": { "CGO_ENABLED": "0" },
+      "build": ["go build -o \"$PREFIX/hello.exe\" ."]
+    }
+  ]
+}

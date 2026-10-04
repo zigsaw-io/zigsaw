@@ -135,15 +135,17 @@ pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8, opts: PushOp
         return fail("{s}'s version \"{s}\" can't be a tag; add one: {s}:<tag>", .{ id, installed.version, target.text });
 
     const manifest_bytes = try ctx.store.readBlob(arena, installed.manifest);
-    const manifest = try std.json.parseFromSliceLeaky(oci.Manifest, arena, manifest_bytes, .{ .ignore_unknown_fields = true });
+    const image = try ctx.store.readImage(arena, id, installed.manifest);
+    const mounts = try mountSources(arena, ref, installed.source, image.manifest, image.config);
 
     var registry: Registry = undefined;
     try registry.init(ctx, ref, "pull,push");
     defer registry.deinit();
+    registry.pull_from = try mounts.repositories(arena);
 
     // Blobs before the manifest that refers to them; skip what's already there.
-    for ([_][]const oci.Descriptor{ &.{manifest.config}, manifest.layers }) |descs| {
-        for (descs) |desc| try uploadIfMissing(ctx, &registry, desc, try ctx.store.blobPath(arena, oci.digestHex(desc.digest).?));
+    for ([_][]const oci.Descriptor{ &.{image.manifest.config}, image.manifest.layers }) |descs| {
+        for (descs) |desc| try uploadIfMissing(ctx, &registry, desc, try ctx.store.blobPath(arena, oci.digestHex(desc.digest).?), mounts.by_digest.get(desc.digest));
     }
     try registry.pushManifest(ref.tag.?, manifest_bytes);
     note("pushed {s} {s} to {f}\n  manifest {s}", .{ id, installed.version, ref, installed.manifest });
@@ -180,7 +182,7 @@ fn pushSources(ctx: *Context, registry: *Registry, installed: Store.Ref) !void {
         const file = try Store.sha256File(io, p);
         if (!std.mem.eql(u8, &file.hex, h)) return fail("{s} in the download cache isn't what its name says; delete it and build {s} again", .{ p, installed.id });
         const desc: oci.Descriptor = .{ .mediaType = oci.media_type.source, .digest = try std.fmt.allocPrint(arena, "sha256:{s}", .{h}), .size = file.size };
-        try uploadIfMissing(ctx, registry, desc, p);
+        try uploadIfMissing(ctx, registry, desc, p, null);
         try layers.append(arena, desc);
     }
     if (missing > 0) note("  {d} of its sources aren't in the download cache (local files, or deleted by prune --downloads), so they aren't pushed", .{missing});
@@ -188,7 +190,7 @@ fn pushSources(ctx: *Context, registry: *Registry, installed: Store.Ref) !void {
 
     const config: oci.SourcesConfig = .{ .id = installed.id, .version = installed.version, .image = installed.manifest };
     const config_desc = try ctx.store.putBlob(arena, try oci.toJson(arena, config), oci.media_type.sources_config);
-    try uploadIfMissing(ctx, registry, config_desc, try ctx.store.blobPath(arena, oci.digestHex(config_desc.digest).?));
+    try uploadIfMissing(ctx, registry, config_desc, try ctx.store.blobPath(arena, oci.digestHex(config_desc.digest).?), null);
     var annotations: std.json.ArrayHashMap([]const u8) = .{};
     try annotations.map.put(arena, "org.opencontainers.image.title", try std.fmt.allocPrint(arena, "{s} {s} sources", .{ installed.id, installed.version }));
     const manifest: oci.Manifest = .{ .config = config_desc, .layers = layers.items, .annotations = annotations };
@@ -197,12 +199,58 @@ fn pushSources(ctx: *Context, registry: *Registry, installed: Store.Ref) !void {
     note("pushed its {d} source file(s) next to it, as {s}", .{ layers.items.len, tag });
 }
 
-fn uploadIfMissing(ctx: *Context, registry: *Registry, desc: oci.Descriptor, path: []const u8) !void {
+/// Uploads a blob unless the repository has it, or mounts it from
+/// `mount_from` if the registry can.
+fn uploadIfMissing(ctx: *Context, registry: *Registry, desc: oci.Descriptor, path: []const u8, mount_from: ?[]const u8) !void {
     if (try registry.hasBlob(desc.digest)) return;
-    if (desc.size > 1 << 20) note("uploading {s} ({d} bytes)", .{ desc.digest, desc.size });
     const start = ctx.now();
-    try registry.uploadBlob(desc, path);
-    ctx.timed(start, "upload {s}", .{desc.digest});
+    switch (try registry.startUpload(desc.digest, mount_from)) {
+        .mounted => {
+            if (desc.size > 1 << 20) note("mounted {s} ({d} bytes) from {s}", .{ desc.digest, desc.size, mount_from.? });
+            ctx.timed(start, "mount {s}", .{desc.digest});
+        },
+        .location => |location| {
+            if (mount_from) |from| if (ctx.verbose) note("  couldn't mount {s} from {s}", .{ oci.shortDigest(desc.digest), from });
+            if (desc.size > 1 << 20) note("uploading {s} ({d} bytes)", .{ desc.digest, desc.size });
+            try registry.finishUpload(location, desc, path);
+            ctx.timed(start, "upload {s}", .{desc.digest});
+        },
+    }
+}
+
+/// Where on the target's registry a pushed image's blobs may be already, so
+/// that they're mounted rather than uploaded: by digest, the repository.
+const Mounts = struct {
+    by_digest: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
+
+    /// Each repository once.
+    fn repositories(m: Mounts, arena: std.mem.Allocator) ![]const []const u8 {
+        var repos: std.ArrayList([]const u8) = .empty;
+        for (m.by_digest.values()) |r| if (!contains(repos.items, r)) try repos.append(arena, r);
+        return repos.items;
+    }
+};
+
+/// - Every blob in the repository the app was pulled from (`pulled_from`, as
+///   its ref records it), if that's on the target's registry.
+/// - Otherwise each runtime's layer in the runtime's own repository there,
+///   in the default layout: next to the target, named by the runtime's id,
+///   where `zigsaw push <runtime id>` puts it.
+fn mountSources(arena: std.mem.Allocator, target: Registry.Reference, pulled_from: ?[]const u8, manifest: oci.Manifest, config: oci.AppConfig) !Mounts {
+    var m: Mounts = .{};
+    if (pulled_from) |text| if (Registry.Reference.parse(text)) |pulled| {
+        if (std.ascii.eqlIgnoreCase(pulled.host, target.host) and !std.mem.eql(u8, pulled.repository, target.repository)) {
+            try m.by_digest.put(arena, manifest.config.digest, pulled.repository);
+            for (manifest.layers) |l| try m.by_digest.put(arena, l.digest, pulled.repository);
+            return m;
+        }
+    } else |_| {};
+    const namespace = if (std.mem.lastIndexOfScalar(u8, target.repository, '/')) |i| target.repository[0 .. i + 1] else "";
+    for (config.runtimes.map.values()) |r| {
+        const repository = try std.mem.concat(arena, u8, &.{ namespace, try std.ascii.allocLowerString(arena, r.id) });
+        if (!std.mem.eql(u8, repository, target.repository)) try m.by_digest.put(arena, r.layer, repository);
+    }
+    return m;
 }
 
 fn contains(hashes: []const []const u8, h: []const u8) bool {
@@ -257,4 +305,48 @@ pub fn manifestDigest(ctx: *Context, image_text: []const u8) ![]const u8 {
     try registry.init(ctx, target.ref, "pull");
     defer registry.deinit();
     return (try registry.fetchManifest()).digest;
+}
+
+test mountSources {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const node_layer = "sha256:" ++ "a" ** 64;
+    const own_layer = "sha256:" ++ "b" ** 64;
+    const config_digest = "sha256:" ++ "c" ** 64;
+    const layer = struct {
+        fn of(d: []const u8) oci.Descriptor {
+            return .{ .mediaType = oci.media_type.layer_tar_gzip, .digest = d, .size = 1 };
+        }
+    }.of;
+    const manifest: oci.Manifest = .{
+        .config = .{ .mediaType = oci.media_type.config, .digest = config_digest, .size = 1 },
+        .layers = &.{ layer(node_layer), layer(own_layer) },
+    };
+    var config: oci.AppConfig = .{ .id = "io.prettier.prettier", .version = "3", .command = "${node}\\node.exe" };
+    try config.runtimes.map.put(arena, "node", .{ .id = "org.nodejs.node", .version = "24", .image = "sha256:" ++ "d" ** 64, .layer = node_layer });
+    const target = try Registry.Reference.parse("ghcr.io/zigsaw-io/io.prettier.prettier:3");
+
+    // Built here: the runtime's layer, from the runtime's repository next to the target.
+    const built = try mountSources(arena, target, "D:\\recipes\\prettier.json", manifest, config);
+    try std.testing.expectEqualStrings("zigsaw-io/org.nodejs.node", built.by_digest.get(node_layer).?);
+    try std.testing.expectEqual(null, built.by_digest.get(own_layer));
+    const repositories = try built.repositories(arena);
+    try std.testing.expectEqual(1, repositories.len);
+    try std.testing.expectEqualStrings("zigsaw-io/org.nodejs.node", repositories[0]);
+
+    // Pulled from elsewhere on the same registry: everything, from there.
+    const pulled = try mountSources(arena, target, "ghcr.io/me/prettier:3", manifest, config);
+    for ([_][]const u8{ config_digest, node_layer, own_layer }) |d| try std.testing.expectEqualStrings("me/prettier", pulled.by_digest.get(d).?);
+
+    // Pulled from another registry, or from the target itself: only the runtime's layer.
+    for ([_][]const u8{ "docker.io/me/prettier:3", "ghcr.io/zigsaw-io/io.prettier.prettier:2" }) |source| {
+        const m = try mountSources(arena, target, source, manifest, config);
+        try std.testing.expectEqual(1, m.by_digest.count());
+        try std.testing.expectEqualStrings("zigsaw-io/org.nodejs.node", m.by_digest.get(node_layer).?);
+    }
+
+    // A runtime pushed to a repository of its own id, at the registry's top level.
+    const top = try mountSources(arena, try Registry.Reference.parse("localhost:5000/io.prettier.prettier"), null, manifest, config);
+    try std.testing.expectEqualStrings("org.nodejs.node", top.by_digest.get(node_layer).?);
 }

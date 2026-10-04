@@ -72,9 +72,12 @@ cause.
 **3. On Windows Server 2025, `NUL` is denied too** (iteration 6, seen on
 GitHub's `windows-2025` runners). Git opens `/dev/null` as it starts, and
 fails ("could not open '/dev/null' for reading and writing: Permission
-denied"), so even `git --version` fails there. On Windows 11 it starts. The
-matrix marks these AppContainer failures as known gaps, so CI only fails
-when a result changes.
+denied"), so even `git --version` fails there. On Windows 11 it starts. Go's
+toolchain opens `NUL` too, while it builds ("error obtaining buildID for go
+tool compile: open NUL: Access is denied"), so Go builds that work under an
+AppContainer on Windows 11 fail there (iteration 7). The matrix marks these
+AppContainer failures as known gaps, so CI only fails when a result
+changes.
 
 ## Other findings
 

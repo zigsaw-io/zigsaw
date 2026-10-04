@@ -6,23 +6,24 @@ Think Flatpak for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
-Status: [iteration 6](docs/iteration-6.md) is complete. Zigsaw builds
+Status: [iteration 7](docs/iteration-7.md) is complete. Zigsaw builds
 command-line apps from source or from official binaries, runs them on shared
 runtimes, installs, updates and cleans them up, shares them through
-registries, and puts their commands on PATH, also those they install while
-they run. Builds run with pinned toolchain images (zig, BusyBox, Rust), or
-the machine's MSVC, and reproduce: CI checks that the recipes build the same
-images on a fresh machine, and runs the end-to-end tests there. Registries
+registries as compressed images, and puts their commands on PATH, also those
+they install while they run. Builds run with pinned toolchain images (zig,
+BusyBox, Rust, Go), or the machine's MSVC, and reproduce: CI checks that the
+recipes build the same images on a fresh machine, and runs the end-to-end
+tests there, against a registry zigsaw builds and runs itself. Registries
 keep the files images were built from, so recipes build even when a download
-is gone. Git, Node, Python, SQLite, ripgrep, bat and the zig and Rust
-toolchains are tested.
+is gone. Git, Node, Python, SQLite, ripgrep, bat, fzf, zot and the zig, Rust
+and Go toolchains are tested.
 
 ## Quick start
 
 Requires Zig 0.16.
 
 ```powershell
-zig build
+zig build                # ReleaseSafe by default; -Doptimize=Debug for a quicker compile
 .\zig-out\bin\zigsaw.exe pull org.nodejs.node
 .\zig-out\bin\zigsaw.exe run org.nodejs.node -e "console.log(process.version)"
 ```
@@ -80,13 +81,20 @@ with `zigsaw pull <id>`:
 | Rust (windows-gnu) | `org.rust-lang.rust` | 1.99.0 | `cargo`, `rustc` |
 | ripgrep (built from source) | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
 | bat (built from source) | `com.github.sharkdp.bat` | 0.26.1 | `bat` |
+| Go | `org.golang.go` | 1.27.1 | `go`, `gofmt` |
+| fzf (built from source) | `com.github.junegunn.fzf` | 0.74.4 | `fzf` |
+| zot, minimal (built from source) | `dev.zotregistry.zot` | 2.1.21 | `zot` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
-files along, without installing Node as an app. SQLite, ripgrep and bat are
-[built from source](#building-from-source): SQLite with zig and BusyBox,
-ripgrep and bat with [Rust](#rust), zig and BusyBox, whose images are their
-SDK. bat's C libraries (oniguruma, libgit2, zlib) are compiled by zig.
-Pulling them doesn't need those.
+files along, without installing Node as an app. SQLite, ripgrep, bat, fzf
+and zot are [built from source](#building-from-source): SQLite with zig and
+BusyBox, ripgrep and bat with [Rust](#rust), zig and BusyBox, fzf and zot
+with [Go](#go) and BusyBox, whose images are their SDK. bat's C libraries
+(oniguruma, libgit2, zlib) are compiled by zig. Pulling them doesn't need
+those.
+
+Layers are gzip-compressed, so a pull downloads much less than it unpacks:
+88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
 
 [`scripts/publish.sh`](scripts/publish.sh) publishes the recipes listed in
 [`scripts/published-recipes.txt`](scripts/published-recipes.txt).
@@ -139,6 +147,19 @@ store and registry. `pull` downloads only blobs the store doesn't have, checks
 each one against its digest, and refuses images that aren't zigsaw apps
 (such as Docker container images). Like `build`, it shows what the app is
 allowed to reach before you run it.
+
+`push` uploads only blobs the repository doesn't have. A blob the registry
+already holds in another repository is mounted from there, which uploads
+nothing:
+
+- an app's runtime layers, from the runtime's own repository next to the
+  app's, where `zigsaw push <runtime id>` puts it: pushing
+  `io.prettier.prettier` by app id mounts Node's layer from
+  `org.nodejs.node`;
+- all of an app pulled from another repository on the same registry, from
+  that one.
+
+Registries that can't mount, or won't, get the blob uploaded instead.
 
 Registries on `localhost` are reached over plain HTTP; all others over HTTPS.
 
@@ -616,6 +637,62 @@ its home in its data directory, and what `cargo install` installs is a
 [command on PATH](#commands-installed-while-an-app-runs). In builds, it's
 `B:\data\cargo`, fresh for each build.
 
+### Go
+
+The Go SDK image, [`org.golang.go`](recipes/go.json), is Go's official
+Windows release, without Go's own test suite. Its variables make Go builds
+hermetic and reproducible by default:
+
+```json
+"GOPATH": "${data}\\go",
+"GOCACHE": "${cache}",
+"GOTOOLCHAIN": "local",
+"GOFLAGS": "-trimpath -modcacherw"
+```
+
+- `GOTOOLCHAIN=local`: Go never downloads another toolchain, whatever a
+  `go.mod` asks for.
+- `-trimpath`: executables name their sources by module path, not by where
+  the SDK and the sources were, so the same module builds the same image in
+  any store. It applies to `go build` run as an app too.
+- `-modcacherw`: Go's module cache can be deleted like any other directory,
+  as builds delete theirs.
+- `GOCACHE=${cache}`: compiled packages are kept between builds, as zig's
+  cache is.
+
+A Go module vendors its dependencies, then builds offline from them:
+
+```json
+"sdk": {
+  "go": "org.golang.go:1.27.1@sha256:...",
+  "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
+},
+"modules": [
+  {
+    "name": "hello",
+    "sources": [{ "path": "go.mod" }, { "path": "go.sum" }, { "path": "main.go" }],
+    "env": { "CGO_ENABLED": "0" },
+    "vendor": { "commands": ["go mod vendor"], "dir": "vendor", "sha256": "..." },
+    "build": ["go build -mod=vendor -o \"$PREFIX/hello.exe\" ."]
+  }
+]
+```
+
+[`recipes/fzf.json`](recipes/fzf.json) builds fzf this way, from its module
+zip on proxy.golang.org, which never changes once published, with the flags
+of fzf's own release builds.
+
+[`recipes/zot.json`](recipes/zot.json) builds the zot registry's minimal
+binary, as its Makefile's `binary-minimal` does. `go mod vendor` vendors
+what every build of the module could need, for zot 561 modules, 415 MB. So
+its vendor step then keeps only the packages, and their embedded files,
+that `go list -deps ./cmd/zot` names: 68 MB from 166 modules. The tests run
+their registries with it.
+
+The image puts `GOPATH` in its data directory, with `${data}\go\bin` on
+PATH, so what `go install` installs is a
+[command on PATH](#commands-installed-while-an-app-runs).
+
 ### MSVC
 
 Projects that need Microsoft's compiler can use the Visual Studio installed
@@ -648,18 +725,21 @@ either. `/Brepro` keeps the compiler and linker from writing timestamps.
 ## How it works
 
 **Images** are standard OCI image manifests with a zigsaw config
-(`application/vnd.zigsaw.app.config.v2+json`) and plain, deterministic tar
-layers, so any OCI registry can store them. The layers are those of the app's
-runtimes, in the order the config lists them, then one of the app's own
-files. The config also records how the image was built: the hash of every
-source, and any SDK images. zigsaw still reads the v1 configs of images made
-before runtimes existed; older versions of zigsaw refuse v2 images.
+(`application/vnd.zigsaw.app.config.v2+json`) and deterministic tar layers,
+gzip-compressed (`application/vnd.oci.image.layer.v1.tar+gzip`), so any OCI
+registry can store them. The layers are those of the app's runtimes, in the
+order the config lists them, then one of the app's own files. The config also
+records how the image was built: the hash of every source, and any SDK
+images. zigsaw still reads the plain tar layers of images made before
+iteration 7, and the v1 configs of images made before runtimes existed;
+older versions of zigsaw refuse v2 images, and gzip layers.
 
 **Builds** without build commands never unpack sources to disk. zigsaw
 indexes the files each source contributes and streams them from the
-downloads and archives straight into the layer, hashing it on the way.
-Compressed tars are decompressed once, into the download cache. The app's
-files are created once, when the layer is deployed, by several workers in
+downloads and archives straight into the layer, compressing and hashing it on
+the way. Compressed source tars are decompressed once, into the download
+cache. The app's files are created once, when the layer is deployed (a gzip
+layer is decompressed first, to a temporary tar), by several workers in
 parallel. Rebuilding such an app creates no files at all. Creating files is
 the slow part on Windows, because Defender scans each new one. Builds with
 build commands need real files, so they unpack their sources into a directory
@@ -710,9 +790,13 @@ identity (`zigsaw.<id>`). It can then read and write only its data directory,
 read its own files and its runtimes', and use the host paths and network it
 was granted.
 Host grants are ACL entries on those paths; `zigsaw rm` removes them again.
-It suits self-contained tools such as busybox, ripgrep and bat. Git, Node
+Windows gives an AppContainer a temporary directory of its own, under
+`LOCALAPPDATA`, so zigsaw makes that one in the data directory too.
+It suits self-contained tools such as busybox, ripgrep, bat, fzf and zot, and
+Go builds work under it on Windows 11. Git, Node
 scripts, npm and zig fail under it, because Windows doesn't let AppContainers
-resolve real paths, and on Windows Server 2025 git doesn't start at all; see
+resolve real paths. On Windows Server 2025, which doesn't let them open
+`NUL` either, git doesn't start at all, and Go builds fail; see
 [findings](docs/findings.md).
 
 ## Testing
@@ -722,10 +806,10 @@ zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through both sandboxes (Git Bash, network)
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time
 bash tests/store.sh     # update, prune, and what they keep while apps run
-bash tests/build.sh     # building apps: runtimes, build commands on B:, tool caches, aliases, vendor steps, Rust, reproducibility
+bash tests/build.sh     # building apps: runtimes, build commands on B:, tool caches, aliases, vendor steps, Rust, Go, reproducibility
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
-bash tests/registry.sh  # push, pull, update, logins and sources next to images, through local registries (see its header)
+bash tests/registry.sh  # push, pull, update, mounts, logins and sources next to images, through local registries (see its header)
 bash tests/published.sh # fresh builds have the published digests; anonymous pulls, latest, redirects
 ```
 
@@ -737,10 +821,13 @@ zigsaw's intended behaviour, and fails for those; it also shows the known
 gaps below that it runs into, but doesn't fail for them. The registry tests
 need a local registry such as
 [zot](https://zotregistry.dev) on `localhost:5000`;
-[`tests/zot.sh`](tests/zot.sh) starts two, one of them wanting a login:
+[`tests/zot.sh`](tests/zot.sh) starts two, one of them wanting a login. They
+are the zot that [`recipes/zot.json`](recipes/zot.json) builds, run by
+zigsaw, from the store in `ZOT_HOME` or `BUILD_HOME`; without either, it
+builds zot in a temporary store first:
 
 ```bash
-bash tests/zot.sh path/to/zot.exe bash tests/registry.sh
+ZOT_HOME=path/to/a/store/with/zot bash tests/zot.sh bash tests/registry.sh
 ```
 
 The [Reproduce workflow](.github/workflows/reproduce.yml) runs all of them on
@@ -767,8 +854,15 @@ a fresh runner, after `published.sh`, with its build store as
   `config.json` or credential helpers.
 - Multi-platform image indexes aren't supported.
 - Runtimes can't have runtimes of their own.
-- Pushing an app uploads its runtimes' layers to the app's repository, even
-  when the registry has them in another one.
+- Pushing mounts a runtime's layer only from the runtime's repository in the
+  default layout, and an app's blobs only from where it was pulled. A blob
+  the registry holds elsewhere is uploaded again.
+- Each blob goes up in one request, so an upload that breaks off starts
+  again from the beginning, and registries that limit a request's size can't
+  take big layers.
+- A layer's compressed bytes, and so every image's digest, are what the
+  deflate of the Zig that zigsaw is built with makes. A Zig whose deflate
+  changed would make other digests from the same files; CI pins Zig 0.16.0.
 - Build steps are kept off the network by convention (proxy variables), not
   enforced: a tool that ignores them can still download.
 - Builds need `B:` free, and run one at a time.
@@ -787,5 +881,10 @@ a fresh runner, after `published.sh`, with its build store as
   characters: rustc starts its linker from the Rust image's deployment, and
   can't start a program whose path is longer than Windows' 260 characters.
   The default store, `%LOCALAPPDATA%\zigsaw`, is well within that.
+- Go builds are set up without cgo: Go's image has no C compiler of its
+  own, and recipes set `CGO_ENABLED=0`.
+- A Go vendor step downloads every module its `go.mod` names, whatever the
+  build uses: zot's takes 14 minutes and 5 GB of temporary space, for the
+  68 MB it keeps.
 
-[docs/iteration-6.md](docs/iteration-6.md) lists what hasn't been tested yet.
+[docs/iteration-7.md](docs/iteration-7.md) lists what hasn't been tested yet.

@@ -14,7 +14,7 @@
 # checks save a login for AUTH_REGISTRY in Windows Credential Manager and
 # remove it at the end, so use a registry on localhost. tests/zot.sh starts
 # both registries and sets these:
-#   tests/zot.sh path\to\zot.exe bash tests/registry.sh
+#   tests/zot.sh bash tests/registry.sh
 #
 # Set SEED_DOWNLOADS to another store's cache\downloads to take the busybox
 # and Node downloads from there.
@@ -82,6 +82,36 @@ check "pull by digest" zb pull "$repo/busybox@$full_digest"
 check "a digest that doesn't match is refused" fails zb pull "$repo/busybox@sha256:$(printf '0%.0s' {1..64})"
 check "a missing tag is reported" missing_tag
 check "the pulled app's commands are installed" test -f "$store_b\\bin\\busybox.exe"
+
+# Images built before iteration 7 have plain tar layers. One made here from
+# busybox's (its layer decompressed and uploaded, its manifest rewritten)
+# still pulls into an empty store, runs, and pushes.
+plain_image() {
+    local host=${registry/localhost/127.0.0.1} manifest old_hex old_size tar hex size location
+    local api="http://$host/v2/${repo#*/}/busybox"
+    manifest=$(cygpath -u "$store_a\\blobs\\sha256\\${full_digest#sha256:}")
+    old_hex=$(grep -o 'sha256:[0-9a-f]*' "$manifest" | tail -1 | cut -d: -f2)
+    old_size=$(stat -c %s "$(cygpath -u "$store_a\\blobs\\sha256\\$old_hex")")
+    # A Windows path: curl, not an MSYS program, gets its arguments as they
+    # are (MSYS_NO_PATHCONV), so no /dev/null either.
+    tar="$work\\plain.tar"
+    gzip -dc "$(cygpath -u "$store_a\\blobs\\sha256\\$old_hex")" >"$tar" || return 1
+    # From stdin: given a name with backslashes, sha256sum escapes it, and
+    # starts its line with a backslash.
+    hex=$(sha256sum <"$tar" | cut -d' ' -f1)
+    size=$(stat -c %s "$tar")
+    # The POST's answer has headers only.
+    location=$(curl -sf -X POST -D - "$api/blobs/uploads/" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
+    case $location in /*) location="http://$host$location" ;; esac
+    case $location in *\?*) location="$location&digest=sha256%3A$hex" ;; *) location="$location?digest=sha256%3A$hex" ;; esac
+    curl -sf -X PUT -H 'Content-Type: application/octet-stream' --data-binary @"$tar" "$location" >/dev/null || { echo "uploading the plain layer failed"; return 1; }
+    sed -e 's/layer\.v1\.tar+gzip/layer.v1.tar/' -e "s/$old_hex/$hex/" -e "s/\"size\": $old_size\$/\"size\": $size/" "$manifest" >"$tar.json"
+    curl -sf -X PUT -H 'Content-Type: application/vnd.oci.image.manifest.v1+json' --data-binary @"$tar.json" "$api/manifests/plain" >/dev/null || { echo "uploading the manifest failed"; return 1; }
+    ZIGSAW_HOME="$work\\plain" "$zigsaw" pull "$repo/busybox:plain" >/dev/null 2>&1 || { echo "pull failed"; return 1; }
+    [ "$(ZIGSAW_HOME="$work\\plain" "$zigsaw" run net.frippery.busybox echo plain | tr -d '\r')" = plain ] || { echo "it doesn't run"; return 1; }
+    ZIGSAW_HOME="$work\\plain" "$zigsaw" push net.frippery.busybox "$repo/busybox-plain" >/dev/null 2>&1 || { echo "push failed"; return 1; }
+}
+check "an image with a plain tar layer pulls, runs and pushes" plain_image
 
 # `update` follows the tag an app was pulled by, and leaves a digest alone.
 za push net.frippery.busybox "$repo/busybox:latest" >/dev/null 2>&1
@@ -187,6 +217,26 @@ check "pull it into an empty store" zd pull "$repo/prettier:3.9.9"
 check "it runs on the runtime its image brought" sh -c "ZIGSAW_HOME='$store_d' \"\$0\" run io.prettier.prettier --version | grep -q '^3.9.9'" "$zigsaw"
 check "the runtime isn't installed as an app" sh -c "! ZIGSAW_HOME='$store_d' \"\$0\" list | grep -q '^org.nodejs.node '" "$zigsaw"
 
+# Mounts. Pushed by app id, a runtime's image is where pushing an app on it
+# by app id looks for the runtime's layer, and mounts it from there instead
+# of uploading it.
+mounted_runtime() {
+    local node_layer out
+    node_layer=$(grep -o 'sha256:[0-9a-f]*' "$store_a\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$store_a\\refs\\org.nodejs.node.json" | cut -d: -f2)" | tail -1)
+    sza push org.nodejs.node >/dev/null 2>&1 || { echo "pushing node failed"; return 1; }
+    out=$(sza -v push io.prettier.prettier 2>&1) || { echo "$out" | tail -1; return 1; }
+    grep -q "^mounted $node_layer ([0-9]* bytes) from ${repo#*/}/org.nodejs.node$" <<<"$out" && ! grep -q " upload $node_layer" <<<"$out"
+}
+check "pushing an app by id mounts its runtime's layer from the runtime's repository" mounted_runtime
+# An app pulled from one repository, pushed to another on the same registry:
+# all of it is mounted from where it came from.
+remounted() {
+    local out
+    out=$(zd -v push io.prettier.prettier "$repo/prettier-copy" 2>&1) || { echo "$out" | tail -1; return 1; }
+    ! grep -q ' upload ' <<<"$out" && [ "$(grep -c ' mount sha256:' <<<"$out")" -eq 3 ] || { echo "$out" | grep -E 'upload|mount' | tail -3; return 1; }
+}
+check "pushing a pulled app to another repository mounts all of it" remounted
+
 # Real registries, read-only: the token flow works.
 check "ghcr.io: token, container image refused" refused ghcr.io/oras-project/oras:v1.2.0
 # Credentials in the environment are for the default registry (ghcr.io), so
@@ -227,6 +277,9 @@ if [ -n "${AUTH_REGISTRY:-}" ]; then
     check "login: push with the saved login" no_env za push net.frippery.busybox "$auth_repo"
     check "login: pull with the saved login" no_env zc pull "$auth_tag"
     check "login: -v says where the credentials came from" login_used
+    # Its config and layer, mounted from where they were pulled from.
+    login_mounts() { [ "$(no_env zc -v push net.frippery.busybox "$auth_repo-copy" 2>&1 | grep -c ' mount sha256:')" -eq 2 ]; }
+    check "login: a pulled app pushed to another repository there is mounted" login_mounts
     check "logout" logged_out
     check "logout: pull asks for a login again" asks_for_login no_env zc pull "$auth_tag"
     za logout "$AUTH_REGISTRY" >/dev/null 2>&1
@@ -234,7 +287,7 @@ fi
 
 # Installed apps are protected against deletion, so remove them through
 # zigsaw, and the images builds use with prune --downloads.
-for store in "$work\a" "$work\b" "$work\c" "$work\d" "$work\fresh1" "$work\fresh2" "$work\fresh-none" "$work\fresh-vendor"; do
+for store in "$work\a" "$work\b" "$work\c" "$work\d" "$work\plain" "$work\fresh1" "$work\fresh2" "$work\fresh-none" "$work\fresh-vendor"; do
     for id in net.frippery.busybox org.nodejs.node io.prettier.prettier test.registry.vendored; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
     ZIGSAW_HOME="$store" "$zigsaw" prune --downloads >/dev/null 2>&1
 done

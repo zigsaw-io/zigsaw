@@ -11,3 +11,6 @@ sqlite.json
 rust.json
 ripgrep.json
 bat.json
+go.json
+fzf.json
+zot.json

@@ -257,11 +257,7 @@ fn plainTar(ctx: *Context, file: []const u8, kind: recipe.Source.Kind, hash: []c
 
 fn decompress(gpa: Allocator, kind: recipe.Source.Kind, in: *Io.Reader, out: *Io.Writer) !void {
     switch (kind) {
-        .@"tar.gz" => {
-            var window: [std.compress.flate.max_window_len]u8 = undefined;
-            var d: std.compress.flate.Decompress = .init(in, .gzip, &window);
-            _ = try d.reader.streamRemaining(out);
-        },
+        .@"tar.gz" => try layer.gunzip(in, out),
         .@"tar.xz" => {
             var d = try std.compress.xz.Decompress.init(in, gpa, try gpa.alloc(u8, 64 * 1024));
             defer d.deinit();
@@ -331,8 +327,10 @@ pub const LayerFile = struct {
     hash: Store.FileHash,
 };
 
-/// Writes the layer to a temporary file, hashing it on the way.
-pub fn writeLayerFile(t: *const Tree, ctx: *Context) !LayerFile {
+/// Writes the layer to a temporary file, compressed as asked, hashing what's
+/// written on the way. Images' layers are gzip-compressed; what vendor steps
+/// make is kept as a plain tar, as its hash is pinned.
+pub fn writeLayerFile(t: *const Tree, ctx: *Context, compression: oci.Compression) !LayerFile {
     const io = ctx.io;
     const path = try ctx.store.tmpPath(ctx.arena, "layer");
     errdefer Io.Dir.cwd().deleteFile(io, path) catch {};
@@ -344,7 +342,14 @@ pub fn writeLayerFile(t: *const Tree, ctx: *Context) !LayerFile {
     var file_writer = file.writer(io, &file_buf);
     var hash_buf: [64 * 1024]u8 = undefined;
     var hashed = file_writer.interface.hashed(std.crypto.hash.sha2.Sha256.init(.{}), &hash_buf);
-    try t.writeLayer(io, ctx.arena, &hashed.writer);
+    switch (compression) {
+        .none => try t.writeLayer(io, ctx.arena, &hashed.writer),
+        .gzip => {
+            const gz = try layer.gzip(ctx.arena, &hashed.writer);
+            try t.writeLayer(io, ctx.arena, &gz.writer);
+            try gz.finish();
+        },
+    }
     try hashed.writer.flush();
     try file_writer.interface.flush();
 

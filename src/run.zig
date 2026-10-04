@@ -135,6 +135,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             .deploy_dir = image.deploy_dir,
             .runtime_dirs = image.runtime_dirs,
             .data_dir = data_dir,
+            .local_app_data = profile.local,
             .host_cwd = host_cwd,
             .grants = grants.items,
             .network = network,
@@ -161,6 +162,8 @@ const AppContainerSetup = struct {
     deploy_dir: []const u8,
     runtime_dirs: []const []const u8,
     data_dir: []const u8,
+    /// The run's LOCALAPPDATA, in its data directory.
+    local_app_data: []const u8,
     host_cwd: []const u8,
     grants: []const oci.FsGrant,
     network: bool,
@@ -169,6 +172,11 @@ const AppContainerSetup = struct {
 fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !win32.SECURITY_CAPABILITIES {
     const arena = ctx.arena;
     const profile = try appcontainer.Profile.ensure(arena, id);
+    // In an AppContainer, Windows' temporary directory isn't TEMP but the
+    // container's own, under LOCALAPPDATA, which is in the data directory
+    // here. Programs that ask Windows for it (GetTempPath2), as Go's and
+    // Rust's standard libraries do, need it to exist.
+    try Io.Dir.cwd().createDirPath(ctx.io, try std.fs.path.join(arena, &.{ setup.local_app_data, "Packages", profile.name, "AC", "Temp" }));
 
     const Grant = struct { path: []const u8, access: acl.Access, host: bool };
     var wanted: std.ArrayList(Grant) = .empty;

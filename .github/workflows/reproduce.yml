@@ -23,7 +23,9 @@ concurrency:
 jobs:
   reproduce:
     runs-on: windows-2025
-    timeout-minutes: 90
+    # zot's vendor step alone downloads 561 Go modules: 14-17 minutes on the
+    # development machine.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,17 +79,12 @@ jobs:
         shell: bash
         run: bash tests/ctrlc.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/ctrlc.txt"
 
+      # zot is the app recipes/zot.json builds, which published.sh built in
+      # the build store; tests/zot.sh runs it with zigsaw.
       - name: tests/registry.sh, against two local zot registries
         if: ${{ !cancelled() }}
         shell: bash
-        env:
-          ZOT_URL: https://github.com/project-zot/zot/releases/download/v2.1.21/zot-windows-amd64-minimal.exe
-          ZOT_SHA256: 241c5ac5cb13c8a87861f337bcf3e298d7ef852129107f03c940273e8a9ef746
-        run: |
-          zot="$(cygpath -u "$RUNNER_TEMP")/zot.exe"
-          curl -sSfLo "$zot" "$ZOT_URL"
-          echo "$ZOT_SHA256 *$zot" | sha256sum -c -
-          bash tests/zot.sh "$zot" bash tests/registry.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/registry.txt"
+        run: bash tests/zot.sh bash tests/registry.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/registry.txt"
 
       # Last, in the build store, whose apps it runs: it changes their data.
       - name: tests/matrix.sh

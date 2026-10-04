@@ -21,6 +21,10 @@ ref: Reference,
 host: []const u8,
 /// What the registry token must allow: "pull", or "pull,push".
 actions: []const u8,
+/// Other repositories on the registry that blobs may be mounted from (see
+/// `startUpload`), which the token must then let it pull from too. Set
+/// before the first request.
+pull_from: []const []const u8 = &.{},
 /// The Authorization header value, once the registry has asked for one.
 authorization: ?[]const u8 = null,
 /// The credentials for this registry, once it has asked for them.
@@ -205,13 +209,55 @@ pub fn downloadBlobByDigest(r: *Registry, digest: []const u8, dest: []const u8) 
     return hash;
 }
 
-/// Uploads the file at `path` as a blob, in one request.
-pub fn uploadBlob(r: *Registry, desc: oci.Descriptor, path: []const u8) !void {
-    const arena = r.ctx.arena;
-    const start = try r.send(.{ .method = .POST, .url = try r.url("/v2/{s}/blobs/uploads/", .{r.ref.repository}) });
-    if (start.status != .accepted) return r.failStatus(start, "starting an upload");
-    const location = start.location orelse return fail("{f} started an upload without saying where to send it", .{r.ref});
+pub const Upload = union(enum) {
+    /// The registry took the blob from the other repository.
+    mounted,
+    /// Where to send the blob (see `finishUpload`).
+    location: []const u8,
+};
 
+/// Starts uploading a blob. With `mount_from`, another repository on the
+/// registry that has it, the registry is asked to take it from there
+/// instead. Registries that can't, or won't, start an ordinary upload then.
+pub fn startUpload(r: *Registry, digest: []const u8, mount_from: ?[]const u8) !Upload {
+    const arena = r.ctx.arena;
+    if (mount_from) |from| if (contains(r.pull_from, from)) {
+        const res = try r.send(.{ .method = .POST, .url = try r.url("{s}", .{try uploadsPath(arena, r.ref.repository, .{ .digest = digest, .from = from })}) });
+        switch (res.status) {
+            .created => return .mounted,
+            .accepted => return .{ .location = try r.uploadLocation(res) },
+            // Not as the specification says, but then an ordinary upload
+            // may still work.
+            else => if (r.ctx.verbose) Context.note("  mounting {s} from {s}: HTTP {d}", .{ oci.shortDigest(digest), from, @intFromEnum(res.status) }),
+        }
+    };
+    const res = try r.send(.{ .method = .POST, .url = try r.url("{s}", .{try uploadsPath(arena, r.ref.repository, null)}) });
+    if (res.status != .accepted) return r.failStatus(res, "starting an upload");
+    return .{ .location = try r.uploadLocation(res) };
+}
+
+fn uploadLocation(r: *Registry, res: Response) ![]const u8 {
+    return res.location orelse fail("{f} started an upload without saying where to send it", .{r.ref});
+}
+
+/// The path that starts an upload to `repository`, asking for a mount if
+/// `mount` says from where.
+fn uploadsPath(arena: Allocator, repository: []const u8, mount: ?struct { digest: []const u8, from: []const u8 }) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.print(arena, "/v2/{s}/blobs/uploads/", .{repository});
+    if (mount) |m| {
+        try out.appendSlice(arena, "?mount=");
+        try percentEncode(arena, &out, m.digest);
+        try out.appendSlice(arena, "&from=");
+        try percentEncode(arena, &out, m.from);
+    }
+    return out.items;
+}
+
+/// Sends the file at `path` as the blob, in one request, to where
+/// `startUpload` said.
+pub fn finishUpload(r: *Registry, location: []const u8, desc: oci.Descriptor, path: []const u8) !void {
+    const arena = r.ctx.arena;
     var put_url: std.ArrayList(u8) = .empty;
     // The location may be a full URL or a path on the registry.
     if (std.mem.startsWith(u8, location, "http://") or std.mem.startsWith(u8, location, "https://")) {
@@ -412,9 +458,17 @@ fn authenticate(r: *Registry, challenge_text: []const u8) !void {
     switch (challenge.scheme) {
         .basic => r.authorization = basic orelse return r.failNeedsLogin(),
         .bearer => {
-            const scope = try std.fmt.allocPrint(arena, "repository:{s}:{s}", .{ r.ref.repository, r.actions });
-            r.authorization = try r.fetchToken(challenge, basic, scope) orelse
-                return if (credential) |c| r.failRefused(c) else r.failNeedsLogin();
+            var scopes: std.ArrayList([]const u8) = .empty;
+            try scopes.append(arena, try std.fmt.allocPrint(arena, "repository:{s}:{s}", .{ r.ref.repository, r.actions }));
+            for (r.pull_from) |from| try scopes.append(arena, try std.fmt.allocPrint(arena, "repository:{s}:pull", .{from}));
+            r.authorization = try r.fetchToken(challenge, basic, scopes.items) orelse without: {
+                // The extra repositories may be what it refused, e.g. if one
+                // doesn't exist. Push without mounting from them.
+                if (r.pull_from.len == 0) break :without null;
+                if (r.ctx.verbose) Context.note("  {s} refused a token that also reads {s}; asking without", .{ r.ref.host, try std.mem.join(arena, ", ", r.pull_from) });
+                r.pull_from = &.{};
+                break :without try r.fetchToken(challenge, basic, scopes.items[0..1]);
+            } orelse return if (credential) |c| r.failRefused(c) else r.failNeedsLogin();
         },
     }
 }
@@ -442,7 +496,7 @@ pub fn checkLogin(ctx: *Context, host: []const u8, credential: credentials.Crede
     const basic = try basicAuthorization(ctx.arena, credential);
     const authorization = switch (challenge.scheme) {
         .basic => basic,
-        .bearer => try r.fetchToken(challenge, basic, null) orelse return .refused,
+        .bearer => try r.fetchToken(challenge, basic, &.{}) orelse return .refused,
     };
     const again = try r.follow(.{ .method = .GET, .url = root }, authorization);
     return switch (again.status) {
@@ -457,26 +511,17 @@ fn parseChallenge(r: *Registry, text: []const u8) !Challenge {
         fail("{s} asked for authentication zigsaw doesn't support: {s}", .{ r.ref.host, text });
 }
 
-/// Gets a token from the challenge's realm, with `basic` credentials if
-/// given, and returns the Authorization header that carries it. Null if the
-/// realm refused.
-fn fetchToken(r: *Registry, challenge: Challenge, basic: ?[]const u8, scope: ?[]const u8) !?[]const u8 {
+/// Gets a token for `scopes` (none: one that only proves the credentials)
+/// from the challenge's realm, with `basic` credentials if given, and
+/// returns the Authorization header that carries it. Null if the realm
+/// refused.
+fn fetchToken(r: *Registry, challenge: Challenge, basic: ?[]const u8, scopes: []const []const u8) !?[]const u8 {
     const arena = r.ctx.arena;
     const realm = challenge.realm orelse return fail("{s} asked for a token without saying where to get one", .{r.ref.host});
     if (basic != null and !mayReceiveCredentials(realm, r.ref.isLocal()))
         return fail("{s} asked for its credentials to be sent to {s} over plain HTTP; zigsaw won't send them", .{ r.ref.host, realm });
 
-    var token_url: std.ArrayList(u8) = .empty;
-    try token_url.appendSlice(arena, realm);
-    var separator: u8 = if (std.mem.indexOfScalar(u8, realm, '?') == null) '?' else '&';
-    for ([_]struct { []const u8, ?[]const u8 }{ .{ "service", challenge.service }, .{ "scope", scope } }) |param| {
-        const value = param[1] orelse continue;
-        try token_url.print(arena, "{c}{s}=", .{ separator, param[0] });
-        try percentEncode(arena, &token_url, value);
-        separator = '&';
-    }
-
-    const res = try r.exchange(.{ .method = .GET, .url = token_url.items }, basic);
+    const res = try r.exchange(.{ .method = .GET, .url = try tokenUrl(arena, realm, challenge.service, scopes) }, basic);
     if (res.status == .unauthorized or res.status == .forbidden) return null;
     if (res.status != .ok) return fail("getting a token from {s}: HTTP {d}", .{ realm, @intFromEnum(res.status) });
     const Token = struct { token: ?[]const u8 = null, access_token: ?[]const u8 = null };
@@ -485,6 +530,30 @@ fn fetchToken(r: *Registry, challenge: Challenge, basic: ?[]const u8, scope: ?[]
     const token = parsed.token orelse parsed.access_token orelse
         return fail("{s} returned no token", .{realm});
     return try std.fmt.allocPrint(arena, "Bearer {s}", .{token});
+}
+
+/// The URL that asks `realm` for a token: for `service`, if the challenge
+/// named one, with a `scope` parameter for each of `scopes`.
+fn tokenUrl(arena: Allocator, realm: []const u8, service: ?[]const u8, scopes: []const []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(arena, realm);
+    var separator: u8 = if (std.mem.indexOfScalar(u8, realm, '?') == null) '?' else '&';
+    if (service) |s| {
+        try out.print(arena, "{c}service=", .{separator});
+        try percentEncode(arena, &out, s);
+        separator = '&';
+    }
+    for (scopes) |scope| {
+        try out.print(arena, "{c}scope=", .{separator});
+        try percentEncode(arena, &out, scope);
+        separator = '&';
+    }
+    return out.items;
+}
+
+fn contains(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| if (std.mem.eql(u8, n, name)) return true;
+    return false;
 }
 
 /// Credentials go to a token service only over HTTPS, unless the registry
@@ -683,4 +752,27 @@ test percentEncode {
     var out: std.ArrayList(u8) = .empty;
     try percentEncode(arena_state.allocator(), &out, "repository:a/b:pull,push");
     try std.testing.expectEqualStrings("repository%3Aa%2Fb%3Apull%2Cpush", out.items);
+}
+
+test tokenUrl {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try std.testing.expectEqualStrings(
+        "https://ghcr.io/token?service=ghcr.io&scope=repository%3Azigsaw-io%2Fapp%3Apull%2Cpush&scope=repository%3Azigsaw-io%2Forg.nodejs.node%3Apull",
+        try tokenUrl(arena, "https://ghcr.io/token", "ghcr.io", &.{ "repository:zigsaw-io/app:pull,push", "repository:zigsaw-io/org.nodejs.node:pull" }),
+    );
+    try std.testing.expectEqualStrings("https://auth.example/t?x=1&scope=a", try tokenUrl(arena, "https://auth.example/t?x=1", null, &.{"a"}));
+    try std.testing.expectEqualStrings("https://ghcr.io/token?service=ghcr.io", try tokenUrl(arena, "https://ghcr.io/token", "ghcr.io", &.{}));
+}
+
+test uploadsPath {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try std.testing.expectEqualStrings("/v2/zigsaw-io/app/blobs/uploads/", try uploadsPath(arena, "zigsaw-io/app", null));
+    try std.testing.expectEqualStrings(
+        "/v2/zigsaw-io/app/blobs/uploads/?mount=sha256%3Aab&from=zigsaw-io%2Forg.nodejs.node",
+        try uploadsPath(arena, "zigsaw-io/app", .{ .digest = "sha256:ab", .from = "zigsaw-io/org.nodejs.node" }),
+    );
 }
