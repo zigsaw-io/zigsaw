@@ -1,0 +1,17 @@
+{
+  "id": "test.build.cgo",
+  "version": "1",
+  "command": "hello.exe",
+  "sdk": {
+    "go": "org.golang.go@@GO@",
+    "zig": "org.ziglang.zig@@ZIG@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "modules": [
+    {
+      "name": "hello",
+      "sources": [{ "path": "go.mod" }, { "path": "main.go" }, { "path": "greet.c" }, { "path": "greet.h" }],
+      "build": ["go build -ldflags=-buildid= -o \"$PREFIX/hello.exe\" ."]
+    }
+  ]
+}

@@ -4,6 +4,11 @@
   "command": "zig.exe",
   "env": {
     "ZIG_GLOBAL_CACHE_DIR": "${cache}",
+    "CC": "cc",
+    "CXX": "c++",
+    "RC": "rc",
+    "LDFLAGS": "-s -Wl,-Brepro",
+    "CGO_LDFLAGS": "-s -Wl,-Brepro",
     "CC_x86_64_pc_windows_gnu": "cc",
     "CXX_x86_64_pc_windows_gnu": "c++",
     "AR_x86_64_pc_windows_gnu": "ar",

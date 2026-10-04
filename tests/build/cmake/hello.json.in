@@ -1,0 +1,29 @@
+{
+  "id": "test.build.cmake",
+  "version": "1",
+  "command": "bin/hello.exe",
+  "sdk": {
+    "cmake": "org.cmake.cmake@@CMAKE@",
+    "zig": "org.ziglang.zig@@ZIG@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "cleanup": ["/include", "/lib"],
+  "modules": [
+    {
+      "name": "hello",
+      "sources": [
+        { "path": "CMakeLists.txt" },
+        { "path": "greet.c" },
+        { "path": "greet.h" },
+        { "path": "twice.cpp" },
+        { "path": "main.c" },
+        { "path": "hello.rc" }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\"",
+        "cmake --build out",
+        "cmake --install out"
+      ]
+    }
+  ]
+}

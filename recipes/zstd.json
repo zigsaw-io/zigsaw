@@ -1,0 +1,35 @@
+{
+  "id": "com.github.facebook.zstd",
+  "version": "1.5.7",
+  "command": "bin/zstd.exe",
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "zstd": { "command": "bin/zstd.exe" },
+    "unzstd": { "command": "bin/zstd.exe", "args": ["-d"] },
+    "zstdcat": { "command": "bin/zstd.exe", "args": ["-dcf"] }
+  },
+  "sdk": {
+    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
+    "zig": "org.ziglang.zig:0.16.0@sha256:c6e3e4af90343370ce3ea59c42112d930e05ba801da238aea92d623a19a27ae7",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "cleanup": ["/include", "/lib"],
+  "modules": [
+    {
+      "name": "zstd",
+      "sources": [
+        {
+          "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+          "sha256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S build/cmake -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DZSTD_BUILD_SHARED=OFF -DZSTD_BUILD_TESTS=OFF",
+        "cmake --build out",
+        "cmake --install out",
+        "cp LICENSE COPYING README.md \"$PREFIX/\""
+      ]
+    }
+  ]
+}

@@ -3,6 +3,7 @@
   "version": "2.56.0.windows.1",
   "command": "cmd/git.exe",
   "path": ["cmd"],
+  "env": { "GIT_DISCOVERY_ACROSS_FILESYSTEM": "1" },
   "permissions": { "network": true, "filesystem": ["cwd"] },
   "modules": [
     {

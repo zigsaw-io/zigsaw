@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # End-to-end checks for building apps: runtimes, which an app runs with and
 # whose layers travel in its image, and build commands, which build an app
-# from source with SDK images (zig, busybox, Rust and Go), tools' caches and
-# aliases, and vendor steps.
+# from source with SDK images (zig, busybox, CMake, Rust, and Go with and
+# without C), tools' caches and aliases, and vendor steps.
 #
 #   tests/build.sh [path\to\zigsaw.exe]
 #
-# Needs Git Bash and network access (busybox, Node, Prettier, zig, zlib,
-# SQLite, Rust and Go downloads, and crates from crates.io). Always uses
+# Needs Git Bash and network access (busybox, Node, Prettier, zig, CMake,
+# zlib, SQLite, Rust and Go downloads, and crates from crates.io). Always uses
 # temporary stores, since it removes apps, and deletes them afterwards. To
 # skip downloading what a store already has (zig's is 97 MB, Rust's 150 MB),
 # set SEED_DOWNLOADS to its cache\downloads directory; its files are linked,
@@ -206,6 +206,33 @@ start=$SECONDS
 check "a rebuild with zig's kept cache makes the same image" warm_hello
 printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$hello_time"
 check "zig run as an app has its cache in its data directory" sh -c "\"\$0\" run org.ziglang.zig env | grep '\.global_cache_dir' | grep -qF 'data\\\\org.ziglang.zig\\\\cache\"'" "$zigsaw"
+
+# The C app's sources again, built with CMake and Ninja from CMake's image:
+# zig's image tells CMake its compilers (CC, CXX, RC) and how to link
+# reproducibly (LDFLAGS). Its program links as C++, with zig's libc++.
+CMAKEAPP=test.build.cmake
+check "cmake.json builds CMake's image, with Ninja" z build "$root\\recipes\\cmake.json"
+mkdir -p "$work\\cmake" && cp "$(cygpath -u "$root")"/tests/build/c/*.{c,h,cpp,rc} "$(cygpath -u "$root")"/tests/build/cmake/CMakeLists.txt "$(cygpath -u "$work")/cmake/" &&
+    sed -e "s/@CMAKE@/$(manifest_of org.cmake.cmake)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\cmake\\hello.json.in" >"$work\\cmake\\hello.json"
+start=$SECONDS
+check "a CMake project of C, C++ and resources builds with CMake's and zig's images" z build "$work\\cmake\\hello.json"
+cmake_time=$((SECONDS - start))
+cmake_app_digest=$(manifest_of $CMAKEAPP)
+cmake_runs() {
+    local out
+    out=$(z run $CMAKEAPP zigsaw | tr -d '\r')
+    [ "$out" = "hello, zigsaw
+built from B:/src/hello/main.c
+twice 21 is 42
+a string from its resources" ] || { echo "got: $out"; return 1; }
+    [ ! -e "$ZIGSAW_HOME\\deploy\\$(own_layer $CMAKEAPP)\\lib" ] || { echo "cleanup left lib"; return 1; }
+}
+check "it runs, as cmake --install installed it" cmake_runs
+start=$SECONDS
+cmake_again() { [ "$(rebuilt_manifest "$work\\cmake\\hello.json")" = "$cmake_app_digest" ]; }
+check "built again, it's the same image" cmake_again
+printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$cmake_time"
 
 # A tool of our own whose image declares a cache: each build sees what
 # earlier ones left there. It also gives builds a command, greet, which
@@ -470,13 +497,34 @@ Windows is up: true" ] || { echo "got: $out"; return 1; }
 check "it runs, with its paths trimmed, and calls Windows" go_runs
 go_again() { [ "$(rebuilt_manifest "$work\\go\\hello.json")" = "$go_app_digest" ]; }
 check "built again, with Go's kept cache, it's the same image" go_again
+# A Go program with C, built with zig's image too, whose variables make zig's
+# cc Go's C compiler, so cgo is on, and its links reproducible. The recipe
+# leaves Go's build ID out: zig's cc can't tell Go its version, and the
+# error Go hashes instead names a temporary file and the store.
+CGO=test.build.cgo
+mkdir -p "$work\\cgo" && cp "$(cygpath -u "$root")"/tests/build/cgo/{go.mod,main.go,greet.c,greet.h} "$(cygpath -u "$work")/cgo/" &&
+    sed -e "s/@GO@/$(manifest_of org.golang.go)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\cgo\\hello.json.in" >"$work\\cgo\\hello.json"
+check "a Go program with C builds with Go's and zig's images, cgo on by itself" z build "$work\\cgo\\hello.json"
+cgo_app_digest=$(manifest_of $CGO)
+cgo_runs() {
+    local out
+    out=$(z run $CGO zigsaw | tr -d '\r')
+    [ "$out" = "hello, zigsaw, from Go and C
+twice 21 is 42
+built from zigsaw.test/cgo/main.go
+C sees this process: true" ] || { echo "got: $out"; return 1; }
+}
+check "it runs, calling its C, which calls Windows" cgo_runs
+cgo_again() { [ "$(rebuilt_manifest "$work\\cgo\\hello.json")" = "$cgo_app_digest" ]; }
+check "built again, it's the same image" cgo_again
 
 # Removing the apps also deletes their AppContainer profiles. The images
 # builds use stay until prune --downloads, and only zigsaw can delete their
 # protected deployments.
-for id in $APP io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.sqlite.sqlite3 \
+for id in $APP io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP org.sqlite.sqlite3 \
     test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
-    test.build.vendored org.rust-lang.rust $RUST org.golang.go $GOAPP; do z rm --delete-data $id >/dev/null 2>&1; done
+    test.build.vendored org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO; do z rm --delete-data $id >/dev/null 2>&1; done
 z prune --downloads --data >/dev/null 2>&1
 check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
 rm -rf "$ZIGSAW_HOME" "$work"

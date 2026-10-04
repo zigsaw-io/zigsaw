@@ -5,7 +5,7 @@
   "permissions": { "filesystem": ["cwd:ro"] },
   "sdk": {
     "rust": "org.rust-lang.rust:1.99.0@sha256:9767e1e00829d60e9e3f87f734c08c8888d00b4d027540565b431234fba5f507",
-    "zig": "org.ziglang.zig:0.16.0@sha256:164be68d6e046b6dff3e4f6ddbf804d332caddfdfec34964909e2abd43680b76",
+    "zig": "org.ziglang.zig:0.16.0@sha256:c6e3e4af90343370ce3ea59c42112d930e05ba801da238aea92d623a19a27ae7",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [

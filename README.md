@@ -6,17 +6,17 @@ Think Flatpak for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
-Status: [iteration 7](docs/iteration-7.md) is complete. Zigsaw builds
+Status: [iteration 8](docs/iteration-8.md) is complete. Zigsaw builds
 command-line apps from source or from official binaries, runs them on shared
 runtimes, installs, updates and cleans them up, shares them through
 registries as compressed images, and puts their commands on PATH, also those
 they install while they run. Builds run with pinned toolchain images (zig,
-BusyBox, Rust, Go), or the machine's MSVC, and reproduce: CI checks that the
-recipes build the same images on a fresh machine, and runs the end-to-end
-tests there, against a registry zigsaw builds and runs itself. Registries
-keep the files images were built from, so recipes build even when a download
-is gone. Git, Node, Python, SQLite, ripgrep, bat, fzf, zot and the zig, Rust
-and Go toolchains are tested.
+BusyBox, CMake, Rust, Go with cgo), or the machine's MSVC, and reproduce: CI
+checks that the recipes build the same images on a fresh machine, and runs
+the end-to-end tests there, against a registry zigsaw builds and runs
+itself. Registries keep the files images were built from, so recipes build
+even when a download is gone. Git, Node, Python, SQLite, ripgrep, bat, fzf,
+zot, zstd and the zig, CMake, Rust and Go toolchains are tested.
 
 ## Quick start
 
@@ -84,14 +84,16 @@ with `zigsaw pull <id>`:
 | Go | `org.golang.go` | 1.27.1 | `go`, `gofmt` |
 | fzf (built from source) | `com.github.junegunn.fzf` | 0.74.4 | `fzf` |
 | zot, minimal (built from source) | `dev.zotregistry.zot` | 2.1.21 | `zot` |
+| CMake, with Ninja 1.13.2 | `org.cmake.cmake` | 4.4.4 | `cmake`, `ctest`, `cpack`, `ninja` |
+| zstd (built from source) | `com.github.facebook.zstd` | 1.5.7 | `zstd`, `unzstd`, `zstdcat` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
-files along, without installing Node as an app. SQLite, ripgrep, bat, fzf
-and zot are [built from source](#building-from-source): SQLite with zig and
-BusyBox, ripgrep and bat with [Rust](#rust), zig and BusyBox, fzf and zot
-with [Go](#go) and BusyBox, whose images are their SDK. bat's C libraries
-(oniguruma, libgit2, zlib) are compiled by zig. Pulling them doesn't need
-those.
+files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
+zot and zstd are [built from source](#building-from-source): SQLite with zig
+and BusyBox, ripgrep and bat with [Rust](#rust), zig and BusyBox, fzf and
+zot with [Go](#go) and BusyBox, zstd with [CMake](#cmake), zig and BusyBox,
+whose images are their SDK. bat's C libraries (oniguruma, libgit2, zlib) are
+compiled by zig. Pulling them doesn't need those.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -337,7 +339,9 @@ earlier one. Sources are either a `url` (a `sha256` is required; leave it out
 once and the build error prints the hash to pin) or a local `path`. A source
 is a single `file`, or an archive (`zip`, `tar`, `tar.gz`/`tgz` or `tar.xz`)
 extracted into `dest` with optional `strip`. The type is inferred from the
-file name. `cleanup` leaves files out of the app: `"/include"` is a path from
+file name. A link in a tar to a file in the same archive becomes a copy of
+that file; a link to a directory, or out of the archive, fails the build.
+`cleanup` leaves files out of the app: `"/include"` is a path from
 the top, and `"*.pdb"` a file name pattern that matches anywhere. Building the
 same recipe always produces the same image digest.
 
@@ -473,7 +477,7 @@ zig's C compiler:
 `zigsaw build --keep-build-dir` keeps the build's directory afterwards, to
 look at what a failed build left; `zigsaw prune` deletes it later.
 
-Two things about zig's C compiler, for executables that reproduce:
+Three things about zig's C compiler, for executables that reproduce:
 
 - **Name the target.** Without `-target`, `zig cc` builds for the machine
   it runs on, its CPU and Windows version included, so a build elsewhere
@@ -482,6 +486,9 @@ Two things about zig's C compiler, for executables that reproduce:
 - **Pass `-s`.** Otherwise it writes a PDB with each executable, and those
   differ from build to build. zig also refuses `__DATE__` and `__TIME__`,
   which would differ too.
+- **Link with an optimization level**, such as `-O2`, or with
+  `-Wl,-Brepro`. zig stamps executables it links without one with the
+  time.
 
 **Builds are reused.** zigsaw remembers which image each build made, by a
 hash of its inputs: the recipe, its local sources, and zigsaw itself (URL
@@ -530,6 +537,23 @@ first in the recipe wins. Aliases also win over BusyBox's applets of the
 same name, which its sh would otherwise run instead of anything on PATH
 (zig's `ar` over BusyBox's): builds list them in `BB_OVERRIDE_APPLETS`.
 
+zig's image also sets the variables most build tools read to find a C
+toolchain, and to link with it reproducibly:
+
+```json
+"CC": "cc",
+"CXX": "c++",
+"RC": "rc",
+"LDFLAGS": "-s -Wl,-Brepro",
+"CGO_LDFLAGS": "-s -Wl,-Brepro"
+```
+
+`CC`, `CXX` and `RC` name the aliases above, for [CMake](#cmake), make and
+Go's cgo. `LDFLAGS`, which CMake, make and configure scripts read, and
+`CGO_LDFLAGS`, which Go reads, take care of the last two of the three
+things above for every link: no PDB, and a timestamp that comes from the
+contents.
+
 ### Vendor steps
 
 Package managers, such as cargo, fetch a project's dependencies from the
@@ -564,6 +588,44 @@ This suits any tool that puts a project's locked dependencies in a
 directory, such as `cargo vendor` or `go mod vendor`. It relies on the tool
 fetching the same files every time, which a lockfile gives; the pinned hash
 catches it if not.
+
+### CMake
+
+The CMake image, [`org.cmake.cmake`](recipes/cmake.json), is Kitware's
+Windows release with Ninja's, without CMake's GUI and its HTML
+documentation. It sets `CMAKE_GENERATOR=Ninja`, so `cmake -S . -B out`
+writes Ninja's files. With zig in the SDK too, CMake takes zig's compilers
+from `CC`, `CXX` and `RC`, and its link flags from `LDFLAGS`, as
+[zig's image](#building-from-source) sets them:
+
+```json
+"sdk": {
+  "cmake": "org.cmake.cmake:4.4.4@sha256:...",
+  "zig": "org.ziglang.zig:0.16.0@sha256:...",
+  "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
+},
+"cleanup": ["/include", "/lib"],
+"modules": [
+  {
+    "name": "zstd",
+    "sources": [{ "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz", "sha256": "...", "strip": 1 }],
+    "build": [
+      "cmake -S build/cmake -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DZSTD_BUILD_SHARED=OFF -DZSTD_BUILD_TESTS=OFF",
+      "cmake --build out",
+      "cmake --install out"
+    ]
+  }
+]
+```
+
+That's [`recipes/zstd.json`](recipes/zstd.json). CMake sees zig as Clang
+for MinGW, and compiles zstd's C and its assembly with it.
+`cmake --install` puts the program, its library and headers into `$PREFIX`,
+and `cleanup` leaves only the program. Without `RC`, CMake would look for
+GNU's `windres` to compile resources; with it, CMake uses zig's `rc`, with
+the options of Microsoft's `rc.exe`. Builds reproduce without anything
+more: CMake writes the paths of the sources on `B:` into what it builds,
+which are the same everywhere.
 
 ### Rust
 
@@ -693,6 +755,34 @@ The image puts `GOPATH` in its data directory, with `${data}\go\bin` on
 PATH, so what `go install` installs is a
 [command on PATH](#commands-installed-while-an-app-runs).
 
+**Go programs with C** (cgo) build with zig in the SDK as well. zig's image
+sets `CC`, so cgo is on, with zig's `cc` as its C compiler, and
+`CGO_LDFLAGS=-s -Wl,-Brepro`: Go links such programs with the C compiler,
+whose linker would otherwise stamp them with the time and with the name of a
+debug file that names Go's temporary directories. The recipe leaves out Go's
+build ID:
+
+```json
+"sdk": {
+  "go": "org.golang.go:1.27.1@sha256:...",
+  "zig": "org.ziglang.zig:0.16.0@sha256:...",
+  "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
+},
+"modules": [
+  {
+    "name": "hello",
+    "sources": [{ "path": "go.mod" }, { "path": "main.go" }, { "path": "greet.c" }, { "path": "greet.h" }],
+    "build": ["go build -ldflags=-buildid= -o \"$PREFIX/hello.exe\" ."]
+  }
+]
+```
+
+Go asks the C compiler for its version with `cc -### -x c -c -`, and hashes
+the answer into the build ID. zig 0.16 prints the version but then fails,
+looking for an object file that `-###` never makes, so Go hashes the error
+instead, which names a temporary file and the store. Without a build ID, the
+executable is the same from any store.
+
 ### MSVC
 
 Projects that need Microsoft's compiler can use the Visual Studio installed
@@ -792,12 +882,23 @@ was granted.
 Host grants are ACL entries on those paths; `zigsaw rm` removes them again.
 Windows gives an AppContainer a temporary directory of its own, under
 `LOCALAPPDATA`, so zigsaw makes that one in the data directory too.
-It suits self-contained tools such as busybox, ripgrep, bat, fzf and zot, and
-Go builds work under it on Windows 11. Git, Node
-scripts, npm and zig fail under it, because Windows doesn't let AppContainers
-resolve real paths. On Windows Server 2025, which doesn't let them open
-`NUL` either, git doesn't start at all, and Go builds fail; see
-[findings](docs/findings.md).
+It suits self-contained tools such as busybox, ripgrep, bat, fzf, zot and
+zstd. What else works depends on the version of Windows, as it decides what
+AppContainers may do:
+
+- **Windows 11 26300.9550** lets them resolve real paths, so Python, zig,
+  CMake and Go builds work too. It doesn't let them see directories that
+  grant them nothing, such as the drive root. Git's and Node's recipes set
+  variables that keep them from looking there where they can: git's
+  configuration, `ls-remote`, Node scripts and `npm install` work, but
+  `git init`/`commit`, `npm install -g` and Node's `fs.realpathSync` don't.
+- **Older builds of Windows 11** didn't let them resolve real paths, which
+  git, Node, zig and CMake need.
+- **Windows Server 2025** doesn't let them open `NUL`, so git doesn't start
+  at all, and Go builds fail.
+
+See [findings](docs/findings.md). `tests/matrix.sh` checks what the Windows
+it runs on allows, and prints it.
 
 ## Testing
 
@@ -806,7 +907,7 @@ zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through both sandboxes (Git Bash, network)
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time
 bash tests/store.sh     # update, prune, and what they keep while apps run
-bash tests/build.sh     # building apps: runtimes, build commands on B:, tool caches, aliases, vendor steps, Rust, Go, reproducibility
+bash tests/build.sh     # building apps: runtimes, build commands on B:, tool caches, aliases, vendor steps, CMake, Rust, Go, cgo, reproducibility
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update, mounts, logins and sources next to images, through local registries (see its header)
@@ -818,8 +919,10 @@ temporary stores unless `ZIGSAW_HOME` points at one. Set `SEED_DOWNLOADS` to
 another store's `cache\downloads` and they take the files from there instead
 of downloading them. The matrix reports every check whose result differs from
 zigsaw's intended behaviour, and fails for those; it also shows the known
-gaps below that it runs into, but doesn't fail for them. The registry tests
-need a local registry such as
+gaps below that it runs into, but doesn't fail for them. It first runs a
+probe ([`tests/acprobe.zig`](tests/acprobe.zig)) in an AppContainer, and
+expects the AppContainer gaps whose causes the probe finds lifted to pass.
+The registry tests need a local registry such as
 [zot](https://zotregistry.dev) on `localhost:5000`;
 [`tests/zot.sh`](tests/zot.sh) starts two, one of them wanting a login. They
 are the zot that [`recipes/zot.json`](recipes/zot.json) builds, run by
@@ -841,6 +944,11 @@ a fresh runner, after `published.sh`, with its build store as
   when an update deploys the app elsewhere. npm's and cargo's don't.
 - A batch file that turns on delayed expansion itself
   (`setlocal EnableDelayedExpansion`) expands `!var!` in its own arguments.
+- Node's image sets `NODE_OPTIONS=--preserve-symlinks
+  --preserve-symlinks-main`, so that Node works under AppContainer. A
+  package linked in with a symlink (`npm link`, workspaces, pnpm) then finds
+  its dependencies from where the link is, not where the package is, in both
+  sandboxes.
 - Under `--sandbox=appcontainer`, access granted to a host path lasts until
   the app is removed, even after the permission or override that granted it
   is gone.
@@ -881,10 +989,19 @@ a fresh runner, after `published.sh`, with its build store as
   characters: rustc starts its linker from the Rust image's deployment, and
   can't start a program whose path is longer than Windows' 260 characters.
   The default store, `%LOCALAPPDATA%\zigsaw`, is well within that.
-- Go builds are set up without cgo: Go's image has no C compiler of its
-  own, and recipes set `CGO_ENABLED=0`.
+- cgo works only in builds that list zig in their SDK. `go build` run as an
+  app has no C compiler: aliases are only for builds, and Go's image can't
+  have zig as a runtime. Until zig's `cc -###` succeeds, recipes that use
+  cgo have to leave out Go's build ID (`-ldflags=-buildid=`), and their
+  executables are stripped.
+- CMake run as an app has no compiler either, for the same reason; it's
+  for builds, and for `cmake -E` and scripts. When a command it runs can't
+  be started, Ninja 1.13.2 crashes (exit code `0xC0000409`) instead of
+  reporting it.
+- Executables built with zig's `LDFLAGS` or `CGO_LDFLAGS` have no debug
+  information, as a PDB would differ from build to build.
 - A Go vendor step downloads every module its `go.mod` names, whatever the
   build uses: zot's takes 14 minutes and 5 GB of temporary space, for the
   68 MB it keeps.
 
-[docs/iteration-7.md](docs/iteration-7.md) lists what hasn't been tested yet.
+[docs/iteration-8.md](docs/iteration-8.md) lists what hasn't been tested yet.

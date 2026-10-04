@@ -3,7 +3,10 @@
   "version": "24.21.0",
   "command": "node.exe",
   "path": [".", "${data}\\npm"],
-  "env": { "NPM_CONFIG_PREFIX": "${data}\\npm" },
+  "env": {
+    "NPM_CONFIG_PREFIX": "${data}\\npm",
+    "NODE_OPTIONS": "--preserve-symlinks --preserve-symlinks-main"
+  },
   "permissions": { "network": true, "filesystem": ["cwd"] },
   "exports": {
     "node": { "command": "node.exe" },

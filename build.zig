@@ -63,6 +63,22 @@ pub fn build(b: *std.Build) void {
     const argv_step = b.step("argv-echo", "Build the argument-echo program used by tests/batch.sh");
     argv_step.dependOn(&b.addInstallArtifact(argv, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // Checks what Windows denies AppContainers, from inside one; see
+    // tests/matrix.sh and docs/findings.md. Also installed under zig-out\test.
+    const acprobe_mod = b.createModule(.{
+        .root_source_file = b.path("tests/acprobe.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    acprobe_mod.addImport("win32", b.createModule(.{
+        .root_source_file = b.path("src/win32.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    const acprobe = b.addExecutable(.{ .name = "zigsaw-acprobe", .root_module = acprobe_mod });
+    const acprobe_step = b.step("acprobe", "Build the AppContainer probe used by tests/matrix.sh");
+    acprobe_step.dependOn(&b.addInstallArtifact(acprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize) })).step);
     const shim_test_mod = b.createModule(.{

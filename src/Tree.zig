@@ -203,18 +203,29 @@ const TarEntry = struct {
     size: u64,
 };
 
+const TarLink = struct {
+    name: []const u8,
+    /// What the link points to, relative to its directory.
+    target: []const u8,
+};
+
+/// Lists a tar's files and directories. A link to a file in the archive
+/// becomes a copy of that file, as links can't go into layers; a link to
+/// anything else fails.
 fn listTar(arena: Allocator, archive: *Archive) ![]TarEntry {
     try archive.reader.seekTo(0);
     var name_buf: [Io.Dir.max_path_bytes]u8 = undefined;
     var link_buf: [Io.Dir.max_path_bytes]u8 = undefined;
     var it: std.tar.Iterator = .init(&archive.reader.interface, .{ .file_name_buffer = &name_buf, .link_name_buffer = &link_buf });
     var entries: std.ArrayList(TarEntry) = .empty;
+    var links: std.ArrayList(TarLink) = .empty;
     while (try it.next()) |e| {
         const name = std.mem.trimEnd(u8, e.name, "/");
         if (!oci.isSafeRelPath(name)) return error.TarBadPath;
-        switch (e.kind) {
-            .directory, .file => {},
-            .sym_link => return error.TarSymlinkUnsupported,
+        if (e.kind == .sym_link) {
+            // Resolved once all entries are known: the target may come later.
+            try links.append(arena, .{ .name = try arena.dupe(u8, name), .target = try arena.dupe(u8, e.link_name) });
+            continue;
         }
         try entries.append(arena, .{
             .name = try arena.dupe(u8, name),
@@ -225,7 +236,67 @@ fn listTar(arena: Allocator, archive: *Archive) ![]TarEntry {
             .size = e.size,
         });
     }
+    if (links.items.len == 0) return entries.items;
+
+    var by_name: std.StringHashMapUnmanaged(Resolved) = .empty;
+    for (entries.items) |e| try by_name.put(arena, try normalizePath(arena, e.name), if (e.is_dir) .dir else .{ .file = e });
+    for (links.items) |l| try by_name.put(arena, try normalizePath(arena, l.name), .{ .link = l });
+    for (links.items) |l| {
+        const target = try resolveLink(arena, by_name, l) orelse return error.TarLinkNotToAFile;
+        try entries.append(arena, .{ .name = l.name, .is_dir = false, .offset = target.offset, .size = target.size });
+    }
     return entries.items;
+}
+
+const Resolved = union(enum) { file: TarEntry, dir, link: TarLink };
+
+/// The file a link in a tar points to, through links to links. Null if it
+/// points to a directory, outside the archive, or to nothing in it.
+fn resolveLink(arena: Allocator, by_name: std.StringHashMapUnmanaged(Resolved), link: TarLink) !?TarEntry {
+    var current = link;
+    // As many links as Windows follows in one path.
+    for (0..63) |_| {
+        const path = try linkTargetPath(arena, current.name, current.target) orelse return null;
+        switch (by_name.get(path) orelse return null) {
+            .file => |e| return e,
+            .dir => return null,
+            .link => |l| current = l,
+        }
+    }
+    return null;
+}
+
+/// A link's target as a path in the archive, normalized: the target is
+/// relative to the link's directory. Null if it's absolute, or leads out of
+/// the archive.
+fn linkTargetPath(arena: Allocator, link_name: []const u8, target: []const u8) !?[]const u8 {
+    if (target.len == 0 or target[0] == '/' or target[0] == '\\' or std.mem.indexOfScalar(u8, target, ':') != null) return null;
+    var parts: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.tokenizeAny(u8, try normalizePath(arena, link_name), "/");
+    while (it.next()) |part| try parts.append(arena, part);
+    _ = parts.pop();
+    var target_it = std.mem.tokenizeAny(u8, target, "/\\");
+    while (target_it.next()) |part| {
+        if (std.mem.eql(u8, part, ".")) continue;
+        if (std.mem.eql(u8, part, "..")) {
+            _ = parts.pop() orelse return null;
+            continue;
+        }
+        try parts.append(arena, part);
+    }
+    return try std.mem.join(arena, "/", parts.items);
+}
+
+test linkTargetPath {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try std.testing.expectEqualStrings("z/bin/zstd", (try linkTargetPath(arena, "z/bin/unzstd", "zstd")).?);
+    try std.testing.expectEqualStrings("z/LICENSE", (try linkTargetPath(arena, "./z/doc/COPYING", "../LICENSE")).?);
+    try std.testing.expectEqualStrings("z/a/b", (try linkTargetPath(arena, "z/l", "./a/./b")).?);
+    try std.testing.expect(try linkTargetPath(arena, "z/l", "../../etc/passwd") == null);
+    try std.testing.expect(try linkTargetPath(arena, "z/l", "/etc/passwd") == null);
+    try std.testing.expect(try linkTargetPath(arena, "z/l", "C:\\x") == null);
 }
 
 /// A tar source as a plain tar: the file itself, or a decompressed copy kept
@@ -531,6 +602,53 @@ test "tar sources stream into a layer" {
         try std.testing.expectEqualStrings("deflated " ** 20, try readTestFile(arena, dest, "lib/x/a.txt"));
         try std.testing.expect(!try tree.isFile(arena, "lib/x/sub/b.txt"));
         try std.testing.expect(!try Store.exists(io, try std.fs.path.join(arena, &.{ dest, "lib", "x", "sub" })));
+    }
+}
+
+/// A tar of top/a.txt, with links top/sub/l -> ../a.txt, and top/l2 ->
+/// `second_target`, which comes before what it points to.
+fn writeLinkTestTar(io: Io, dir: Io.Dir, name: []const u8, second_target: []const u8) !void {
+    var out: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    var tar: std.tar.Writer = .{ .underlying_writer = &out.writer };
+    try tar.writeDir("top", .{ .mtime = 1 });
+    try tar.writeLink("top/l2", second_target, .{ .mtime = 1 });
+    try tar.writeDir("top/sub", .{ .mtime = 1 });
+    try tar.writeLink("top/sub/l", "../a.txt", .{ .mtime = 1 });
+    try tar.writeFileBytes("top/a.txt", "the file", .{ .mtime = 1 });
+    try tar.finishPedantically();
+    try dir.writeFile(io, .{ .sub_path = name, .data = out.written() });
+}
+
+test "links in tar sources become copies of the files they point to" {
+    const io = std.testing.io;
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try tmp.dir.realPathFileAlloc(io, ".", arena);
+
+    try writeLinkTestTar(io, tmp.dir, "good.tar", "sub/l");
+    const archive = try Archive.open(io, arena, try std.fs.path.join(arena, &.{ base, "good.tar" }));
+    defer archive.close(io);
+    var tree: Tree = .{};
+    try tree.addTarEntries(arena, archive, try listTar(arena, archive), ".", 1);
+    var out: Io.Writer.Allocating = .init(arena);
+    try tree.writeLayer(io, arena, &out.writer);
+    try tmp.dir.writeFile(io, .{ .sub_path = "good.layer", .data = out.written() });
+    const dest = try std.fs.path.join(arena, &.{ base, "good.out" });
+    try layer.extract(io, arena, try std.fs.path.join(arena, &.{ base, "good.layer" }), dest);
+    try std.testing.expectEqualStrings("the file", try readTestFile(arena, dest, "sub/l"));
+    try std.testing.expectEqualStrings("the file", try readTestFile(arena, dest, "l2"));
+
+    // To a directory, to nothing, out of the archive.
+    for ([_][]const u8{ "sub", "missing.txt", "../../x", "/etc/passwd" }) |target| {
+        try writeLinkTestTar(io, tmp.dir, "bad.tar", target);
+        const bad = try Archive.open(io, arena, try std.fs.path.join(arena, &.{ base, "bad.tar" }));
+        defer bad.close(io);
+        try std.testing.expectError(error.TarLinkNotToAFile, listTar(arena, bad));
     }
 }
 

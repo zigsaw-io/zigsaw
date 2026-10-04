@@ -20,6 +20,10 @@ on Windows 11 Home 10.0.26300 with Defender real-time protection on.
   AppContainers that zigsaw can't lift without admin rights.
 - One reproducibility hole in `soft` mode was found and fixed: apps could
   modify installed app files.
+- **Re-checked in iteration 8** (see [below](#re-checked-on-windows-11-263009550)):
+  on Windows 11 26300.9550, restriction 1 is gone, and git and Node work
+  under `appcontainer` in part. A low-integrity sandbox would suit every
+  tool tested.
 
 ### Matrix
 
@@ -79,6 +83,86 @@ AppContainer on Windows 11 fail there (iteration 7). The matrix marks these
 AppContainer failures as known gaps, so CI only fails when a result
 changes.
 
+## Re-checked on Windows 11 26300.9550
+
+Iteration 8, 2026-10-05. From iteration 7 on, several known AppContainer
+gaps passed on the development machine: `git --version`, `zig env`, zig's
+project, and Python's realpath. Three Windows updates (KB5124010, KB5121794,
+KB5124009) were installed on 2026-10-03, between iteration 6's matrix, where
+they failed, and iteration 7's.
+
+[`tests/acprobe.zig`](../tests/acprobe.zig) (`zig build acprobe`) checks the
+causes found above, from inside an AppContainer, on this machine:
+
+| Check | soft | appcontainer |
+|---|---|---|
+| `final-path-dos`: the working directory's path with its drive letter | ok | ok |
+| `self-path-dos`: the same for its own executable | ok | ok |
+| `final-path-nt`: the NT path, as a control | ok | ok |
+| `mount-manager`: opening the Mount Manager | ok | ok |
+| `drive-root`: the drive root's attributes | ok | denied |
+| `nul`: NUL, to read and write | ok | ok |
+
+- **Restriction 1 is gone here.** AppContainers can open the Mount Manager
+  now, so paths resolve to drive letters. Python's realpath, zig and CMake
+  work.
+- **Restriction 2 remains, and is wider than the drive root.** An
+  AppContainer can't read the attributes of any directory that doesn't
+  grant it access. Those are the drive root, `C:\Users`, and the parents of
+  the paths zigsaw grants.
+- **Windows Server 2025 isn't known.** CI's runners denied `NUL` in
+  iterations 6 and 7. The matrix now prints the probe's results, so the
+  Reproduce run's log shows them.
+
+What the remaining failures need:
+
+- **git** fails in repository discovery: it stats the working directory's
+  parent, to stop at a filesystem boundary, and dies when that's denied
+  ("failed to stat '...Temp'"). With `GIT_DISCOVERY_ACROSS_FILESYSTEM=1`,
+  which MinGit's recipe now sets, git skips that stat, and `config --global`
+  and `ls-remote` work. Creating files, git stats each directory of their
+  path from the drive root, so `init` and `commit` still fail.
+- **Node** resolves script and module paths with its JavaScript realpath,
+  which `lstat()`s each directory of the path, the drive root first. With
+  `NODE_OPTIONS=--preserve-symlinks --preserve-symlinks-main`, which Node's
+  recipe now sets, it doesn't, and scripts, `npm install` and npm's global
+  commands work. `fs.realpathSync` still fails, and so does `npm install -g`:
+  npm itself `lstat()`s `C:\Users`. `fs.realpathSync.native` works.
+
+[`tests/matrix.sh`](../tests/matrix.sh) runs the probe first, and expects each
+known gap whose causes the probe finds lifted to pass, so a regression
+fails it. Where the causes remain, the gap stays a known gap.
+
+### A low-integrity sandbox
+
+Option 2 below, tried by hand: `zigsaw-acprobe --low <command>` runs a
+command with a copy of the user's token labelled low integrity, which needs
+no privileges. The tools ran from their deployments, with their home and the
+working directory labelled low (`icacls <dir> /setintegritylevel low`):
+
+| | low integrity |
+|---|---|
+| The probe's six checks | all ok |
+| git: `--version`, `config --global`, `init` | ok |
+| Node: a script, `npm install`, `fetch` over HTTPS | ok |
+| Python: a script, `realpath` | ok |
+| zig: `env`, `cc` | ok |
+| Writing to a directory not labelled low, or into the store | denied |
+| Reading a file not labelled low | ok |
+
+- **Every tool tested works**, unlike under AppContainer: low integrity
+  restricts writing, not reading or path resolution.
+- **It confines writes only.** Reading and the network stay open, as in
+  `soft`.
+- **AppContainer grants break it.** A file whose ACL grants a particular
+  AppContainer access can't be read by a low-integrity process outside that
+  AppContainer, even though the user is granted full access. zigsaw grants
+  each app's AppContainer read access to its deployments the first time the
+  app runs under `--sandbox=appcontainer`. After that, zig at low integrity
+  can't find its own executable, and Python doesn't start. A low-integrity
+  sandbox would need deployments granted some other way, such as through
+  `ALL APPLICATION PACKAGES`.
+
 ## Other findings
 
 - **Fixed: `soft` runs could modify installed apps.** Python wrote a file into
@@ -120,10 +204,10 @@ use:
    tools work. This needs no further work.
 2. **Try a low-integrity sandbox.** Running at low integrity blocks writes to
    anything not labelled low, and zigsaw can label its data folder and granted
-   paths without admin rights. Reads and network access stay open. It isn't
-   known yet whether drive-letter conversion and `lstat("C:\\")` work at low
-   integrity. The same probe can answer that before any sandbox code is
-   written.
+   paths without admin rights. Reads and network access stay open.
+   Drive-letter conversion and `lstat("C:\\")` work at low integrity, and so
+   does every tool tested ([iteration 8](#a-low-integrity-sandbox)), as long
+   as the deployments' ACLs name no AppContainer.
 3. **A one-time admin setup step.** Granting `ALL APPLICATION PACKAGES` read
    access to `C:\`'s attributes would fix the Node failures (restriction 2).
    Drive-letter conversion (restriction 1) would still fail, so this alone

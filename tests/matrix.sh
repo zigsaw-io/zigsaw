@@ -15,6 +15,12 @@
 # docs/findings.md): a failure is reported, but isn't a mismatch, so the
 # matrix fails only for results that changed.
 #
+# Most known gaps are AppContainer failures caused by what Windows denies
+# AppContainers, which differs between Windows versions. The probe
+# (tests/acprobe.zig, built with `zig build acprobe`) checks those causes
+# from inside an AppContainer first, and checks whose causes it finds lifted
+# are expected to pass, so a regression fails the matrix.
+#
 # Each run of an app is stopped after MATRIX_TIMEOUT seconds (default 120),
 # and counts as failed, so a hung tool can't stall the matrix. The report
 # shows how long slow checks took. The zig check compiles a project, which
@@ -45,13 +51,15 @@ ZIG=org.ziglang.zig
 GO=org.golang.go
 FZF=com.github.junegunn.fzf
 ZOT=dev.zotregistry.zot
+CMAKE=org.cmake.cmake
+ZSTD=com.github.facebook.zstd
 
 # --- Setup -------------------------------------------------------------------
 
 installed=$("$zigsaw" list)
-# zig and rust before ripgrep and bat, and go before fzf and zot, which build
-# with them.
-for recipe in busybox zig rust ripgrep bat go fzf zot mingit node python; do
+# zig and rust before ripgrep and bat, go before fzf and zot, and zig and cmake
+# before zstd, which build with them.
+for recipe in busybox zig rust ripgrep bat go fzf zot cmake zstd mingit node python; do
     id=$(grep -o '"id": *"[^"]*"' "$root/recipes/$recipe.json" | cut -d'"' -f4)
     if ! grep -q "^$id " <<<"$installed"; then
         echo "building $id..."
@@ -61,6 +69,27 @@ done
 
 outside="$work\\outside"
 mkdir -p "$outside" && echo secret >"$outside\\secret.txt"
+
+# What this Windows denies AppContainers: the probe, as an app of its own,
+# run in one, from a granted directory.
+PROBE=test.matrix.acprobe
+(cd "$root" && zig build acprobe) || { echo "building the AppContainer probe failed"; exit 1; }
+mkdir -p "$work\\acprobe\\cwd" && cp "$root\\zig-out\\test\\zigsaw-acprobe.exe" "$work\\acprobe\\"
+printf '{ "id": "%s", "version": "1", "command": "zigsaw-acprobe.exe", "exports": {}, "permissions": { "filesystem": ["cwd"] },\n  "modules": [{ "name": "probe", "sources": [{ "path": "zigsaw-acprobe.exe" }] }] }\n' \
+    $PROBE >"$work\\acprobe\\acprobe.json"
+out=$("$zigsaw" build "$work\\acprobe\\acprobe.json" 2>&1) || { echo "$out"; exit 1; }
+probe=$(cd "$work\\acprobe\\cwd" && "$zigsaw" run --sandbox=appcontainer $PROBE 2>/dev/null | tr -d '\r')
+grep -q '^nul ' <<<"$probe" || { echo "the AppContainer probe didn't run: $probe"; exit 1; }
+
+# ac_if <check...>: the intended outcome under AppContainer of a known gap
+# whose causes are those probe checks: "ok" where they all passed, else "gap".
+ac_if() {
+    local check
+    for check in "$@"; do
+        grep -qx "$check ok" <<<"$probe" || { echo gap; return; }
+    done
+    echo ok
+}
 
 # --- Harness -----------------------------------------------------------------
 
@@ -162,52 +191,63 @@ bat_highlights() { run $BAT --color=always --style=plain a.rs | grep -q $'\e\\[[
 expect ok ok "highlights a file in granted cwd" bat_highlights
 expect ok fails "read ungranted host file" run $BAT --style=plain "$outside\\secret.txt"
 
+# Under AppContainer, git needs its own real path, and NUL. Repository
+# discovery would stat the working directory's parent, which the container
+# can't read, but the recipe's GIT_DISCOVERY_ACROSS_FILESYSTEM skips that.
+# Creating files, git stats each directory of their path, the drive root too.
 tool git
-expect ok gap "runs" run $GIT --version
+expect ok "$(ac_if self-path-dos nul)" "runs" run $GIT --version
 git_global_config() {
     run $GIT config --global user.email t@example.com &&
         run $GIT config --global --show-origin user.email | grep -q "data"
 }
-expect ok gap "global config in data dir" git_global_config
+expect ok "$(ac_if self-path-dos nul)" "global config in data dir" git_global_config
 git_commit() {
     echo hi >a.txt && run $GIT init -q && run $GIT add a.txt && run $GIT -c user.name=T commit -qm first
 }
-expect ok gap "init and commit in cwd" git_commit
-expect ok gap "ls-remote over https" run $GIT ls-remote https://github.com/ziglang/zig.git HEAD
+expect ok "$(ac_if self-path-dos nul drive-root)" "init and commit in cwd" git_commit
+expect ok "$(ac_if self-path-dos nul)" "ls-remote over https" run $GIT ls-remote https://github.com/ziglang/zig.git HEAD
 
 tool node
 echo 'console.log("hi")' >"$work\\node\\soft\\a.js"
 echo 'console.log("hi")' >"$work\\node\\appcontainer\\a.js"
+# Node's JavaScript realpath lstat()s each directory of a path, the drive
+# root too, which AppContainers can't; the recipe's NODE_OPTIONS keeps Node
+# from resolving the paths of scripts and modules that way. Its native
+# realpath needs drive letters, and child processes whose output is
+# ignored, as npm starts them, get NUL.
 expect ok ok "runs -e" run $NODE -e 'console.log(1)'
-expect ok gap "runs a script file" run $NODE a.js
-expect ok gap "fs.realpathSync" run $NODE -e 'require("fs").realpathSync(".")'
+expect ok "$(ac_if final-path-dos self-path-dos nul)" "runs a script file" run $NODE a.js
+expect ok "$(ac_if final-path-dos drive-root nul)" "fs.realpathSync" run $NODE -e 'require("fs").realpathSync(".")'
 expect ok ok "fetch over https" run $NODE -e 'fetch("https://example.com").then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))'
-expect ok gap "npm install" run --command=npm $NODE install --no-audit --no-fund is-number
+expect ok "$(ac_if final-path-dos self-path-dos nul)" "npm install" run --command=npm $NODE install --no-audit --no-fund is-number
 # The recipe points npm's global prefix at ${data}\npm and puts it on PATH.
 npm_global() {
     run --command=npm $NODE install -g --no-audit --no-fund semver@7 &&
         run --command=npm $NODE ls -g | grep -q semver &&
         [ -f "$ZIGSAW_HOME\\data\\$NODE\\npm\\node_modules\\semver\\package.json" ]
 }
+# npm itself lstat()s each directory of the data directory's path.
 expect ok gap "npm install -g into data dir" npm_global
 # Its command is semver.cmd, a batch file in ${data}\npm.
 global_bin() { [ "$(run --command=semver $NODE 1.2.3 | tr -d '\r')" = 1.2.3 ]; }
-expect ok gap "global package's .cmd command" global_bin
+expect ok "$(ac_if final-path-dos self-path-dos nul)" "global package's .cmd command" global_bin
 
 tool python
 echo 'print("hi")' >"$work\\python\\soft\\a.py"
 echo 'print("hi")' >"$work\\python\\appcontainer\\a.py"
 expect ok ok "runs a script file" run $PY a.py
-expect ok gap "realpath resolves cwd" run $PY -c 'import os, sys; sys.exit(os.path.realpath(".") != os.getcwd())'
+expect ok "$(ac_if final-path-dos)" "realpath resolves cwd" run $PY -c 'import os, sys; sys.exit(os.path.realpath(".") != os.getcwd())'
 expect ok ok "https with system certs" run $PY -c 'import urllib.request as u; u.urlopen("https://example.com", timeout=20)'
 expect ok fails "network denied by --unshare" run --unshare=network $PY -c 'import urllib.request as u; u.urlopen("https://example.com", timeout=10)'
 expect fails fails "can't write into app dir" run $PY -c 'import os, sys; open(os.path.join(sys.prefix, "x.txt"), "w")'
 
+# zig finds its library by its own real path.
 tool zig
 expect ok ok "runs" run $ZIG version
-expect ok gap "zig env" run $ZIG env
+expect ok "$(ac_if self-path-dos)" "zig env" run $ZIG env
 zig_project() { run $ZIG init >/dev/null && run $ZIG build run; }
-expect ok gap "init, build and run a project" zig_project
+expect ok "$(ac_if self-path-dos final-path-dos nul)" "init, build and run a project" zig_project
 
 tool go
 for sb in soft appcontainer; do
@@ -218,7 +258,7 @@ expect ok ok "runs" run $GO version
 go_run() { run $GO run . | grep -q 'hi from go'; }
 # Go's toolchain opens NUL, which Windows Server 2025 denies AppContainers
 # (docs/findings.md).
-expect ok gap "builds and runs a module in granted cwd" go_run
+expect ok "$(ac_if nul final-path-dos)" "builds and runs a module in granted cwd" go_run
 
 tool fzf
 expect ok ok "runs" run $FZF --version
@@ -232,16 +272,37 @@ done
 expect ok ok "runs" run $ZOT --version
 expect ok ok "verifies a config in granted cwd" run $ZOT verify zot.json
 
+# CMake finds its modules by its own real path. Whether it opens NUL isn't
+# known.
+tool cmake
+expect ok "$(ac_if self-path-dos nul)" "runs" run $CMAKE --version
+cmake_hashes() { echo hello >a.txt && run $CMAKE -E sha256sum a.txt | grep -q '^5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03 '; }
+expect ok "$(ac_if self-path-dos nul)" "hashes a file in granted cwd" cmake_hashes
+
+tool zstd
+expect ok ok "runs" run $ZSTD --version
+zstd_round_trip() {
+    seq 1 1000 >a.txt && run $ZSTD -q -f a.txt -o a.zst && run --command=unzstd $ZSTD -q -f a.zst -o b.txt && cmp -s a.txt b.txt
+}
+expect ok ok "compresses and restores in granted cwd" zstd_round_trip
+# (What it writes to stdout is compressed, binary.)
+zstd_reads_outside() { run $ZSTD -q -c "$outside\\secret.txt" >/dev/null; }
+expect ok fails "read ungranted host file" zstd_reads_outside
+
 # --- Report ------------------------------------------------------------------
 
+echo
+echo "In an AppContainer on $(cmd /c ver | tr -d '\r' | grep -v '^$') (tests/acprobe.zig):"
+grep -v '^#' <<<"$probe" | sed 's/^/  /'
 echo
 printf '%-8s %-38s %-22s %s\n' TOOL CHECK SOFT APPCONTAINER
 printf '%s\n' "${rows[@]}"
 echo
 echo "$mismatches result(s) differ from the intended behaviour, and $gaps known gap(s) failed. The checks took $((SECONDS - started))s."
 
+"$zigsaw" rm --delete-data $PROBE >/dev/null 2>&1
 if $own_store; then
-    for id in $BB $RG $BAT $GIT $NODE $PY $ZIG $GO $FZF $ZOT; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
+    for id in $BB $RG $BAT $GIT $NODE $PY $ZIG $GO $FZF $ZOT $CMAKE $ZSTD; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
     rm -rf "$ZIGSAW_HOME"
 fi
 rm -rf "$work"
