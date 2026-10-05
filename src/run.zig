@@ -10,8 +10,11 @@
 //! - a job object, so the whole process tree ends when the run ends.
 //!
 //! The `appcontainer` sandbox additionally runs the app under its AppContainer
-//! identity, which enforces the filesystem and network permissions. The `soft`
-//! sandbox only shapes what the app sees; it enforces nothing.
+//! identity, which enforces the filesystem and network permissions. The `low`
+//! sandbox runs it at low integrity, with its data directory and the paths it
+//! may write labelled low, which keeps it from writing anywhere else; reading
+//! and the network stay open. The `soft` sandbox only shapes what the app
+//! sees; it enforces nothing.
 
 const std = @import("std");
 const Io = std.Io;
@@ -126,11 +129,18 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     }
 
     var security: ?win32.SECURITY_CAPABILITIES = null;
+    var token: ?win32.HANDLE = null;
     switch (sandbox) {
         .soft => if (ctx.verbose) {
             for (grants.items) |g| if (g.path) |p|
                 note("note: soft sandbox doesn't enforce filesystem permissions; {s} is as reachable as any other path", .{p});
         },
+        .low => token = try setUpLow(ctx, cfg.id, .{
+            .data_dir = data_dir,
+            .host_cwd = host_cwd,
+            .grants = grants.items,
+            .network = network,
+        }),
         .appcontainer => security = try setUpAppContainer(ctx, cfg.id, .{
             .deploy_dir = image.deploy_dir,
             .runtime_dirs = image.runtime_dirs,
@@ -148,6 +158,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .env_block = try environment.encodeBlock(arena, env.items),
         .cwd = cwd,
         .security = if (security) |*s| s else null,
+        .token = token,
     });
     // Commands the run installed, as `npm install -g` does, get shims. An
     // --ephemeral run's are gone with its data directory.
@@ -192,9 +203,13 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     for (wanted.items) |w| {
         // Record host grants before changing anything, so `zigsaw rm` can undo
         // them even if a later step fails.
-        if (w.host) try ctx.store.recordGrant(arena, id, w.path);
+        if (w.host) try ctx.store.recordGrant(arena, id, .{ .kind = .appcontainer, .path = w.path });
+        // Access goes to the app's capability. What zigsaw granted the
+        // profile's package SID before goes in the same change: on the host,
+        // the app's own; in the store, any app's.
+        const old: acl.Revoke = if (w.host) .{ .sids = &.{profile.sid} } else .package_sids;
         const start = Io.Timestamp.now(ctx.io, .awake);
-        const changed = try acl.grant(arena, w.path, profile.sid, w.access);
+        const changed = try acl.grant(arena, w.path, profile.capability, w.access, old);
         if (changed and (w.host or ctx.verbose)) {
             note("granted {s} {t} access to {s} ({d} ms)", .{
                 profile.name, w.access, w.path, start.untilNow(ctx.io, .awake).toMilliseconds(),
@@ -203,6 +218,7 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     }
 
     var caps: std.ArrayList(win32.SID_AND_ATTRIBUTES) = .empty;
+    try caps.append(arena, .{ .Sid = profile.capability, .Attributes = win32.SE_GROUP_ENABLED });
     if (setup.network) {
         for ([_][]const u8{ appcontainer.capability.internet_client, appcontainer.capability.private_network_client_server }) |s| {
             try caps.append(arena, .{ .Sid = try appcontainer.sidFromString(arena, s), .Attributes = win32.SE_GROUP_ENABLED });
@@ -210,9 +226,100 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     }
     return .{
         .AppContainerSid = profile.sid,
-        .Capabilities = if (caps.items.len > 0) caps.items.ptr else null,
+        .Capabilities = caps.items.ptr,
         .CapabilityCount = @intCast(caps.items.len),
     };
+}
+
+// ---------------------------------------------------------------------------
+// Low integrity
+
+const LowSetup = struct {
+    data_dir: []const u8,
+    host_cwd: []const u8,
+    grants: []const oci.FsGrant,
+    network: bool,
+};
+
+/// Labels the data directory and the host paths the app may write low
+/// integrity, and returns the token the app runs with.
+fn setUpLow(ctx: *Context, id: []const u8, setup: LowSetup) !win32.HANDLE {
+    const arena = ctx.arena;
+    // Before iteration 9, AppContainer runs granted the app's package SID
+    // access, which keeps low-integrity processes out (see appcontainer.zig).
+    // The app's next AppContainer run grants its capability instead.
+    const package = try appcontainer.packageSid(arena, id);
+    _ = try acl.revoke(arena, setup.data_dir, .package_sids);
+    _ = try acl.labelLow(arena, setup.data_dir);
+
+    for (setup.grants) |g| {
+        const p = g.path orelse setup.host_cwd;
+        _ = try acl.revoke(arena, p, .{ .sids = &.{package} });
+        // Low integrity reads what the user can.
+        if (g.read_only) continue;
+        if (labelRefusal(p, ctx.env.get("USERPROFILE"))) |why| {
+            // The app's own permissions can't be taken back, only added to.
+            const instead = if (g.path == null) "run it from a directory inside it" else "grant a directory inside it, or read-only access (:ro)";
+            return fail("--sandbox=low won't label {s} low integrity: {s}, and every low-integrity process could then write anywhere in it; {s}", .{ p, why, instead });
+        }
+        const label: Store.Grant = .{ .kind = .low, .path = p };
+        if (try acl.ownLabel(arena, p)) |rid| if (rid <= win32.SECURITY_MANDATORY_LOW_RID) {
+            // Labelled for another app's runs: this app's need it too, so
+            // removing that app keeps it. A label that zigsaw didn't give
+            // stays when the app goes.
+            if (try ctx.store.grantedToOthers(arena, id, label)) try ctx.store.recordGrant(arena, id, label);
+            continue;
+        };
+        // Recorded first, so `zigsaw rm` can undo it even if a later step fails.
+        try ctx.store.recordGrant(arena, id, label);
+        const start = Io.Timestamp.now(ctx.io, .awake);
+        if (try acl.labelLow(arena, p))
+            note("labelled {s} low integrity ({d} ms)", .{ p, start.untilNow(ctx.io, .awake).toMilliseconds() });
+    }
+    if (ctx.verbose) {
+        note("note: low sandbox doesn't keep the app from reading what you can", .{});
+        if (!setup.network) note("note: low sandbox doesn't enforce network permissions", .{});
+    }
+    return process.lowIntegrityToken(arena);
+}
+
+/// Why zigsaw won't label `path` low for a run, if it won't: it's a drive's
+/// root, the user's profile, or a directory the profile is in.
+fn labelRefusal(path: []const u8, user_profile: ?[]const u8) ?[]const u8 {
+    const p = trimSeparators(path);
+    if (std.fs.path.dirnameWindows(p) == null) return "it's the root of a drive";
+    const profile = trimSeparators(user_profile orelse return null);
+    if (profile.len < p.len or !eqlPathPrefix(profile[0..p.len], p)) return null;
+    if (profile.len == p.len) return "it's your user profile";
+    if (profile[p.len] == '\\' or profile[p.len] == '/') return "your user profile is in it";
+    return null;
+}
+
+fn trimSeparators(path: []const u8) []const u8 {
+    return std.mem.trimEnd(u8, path, "\\/");
+}
+
+/// Equal ignoring ASCII case, with '/' and '\' alike.
+fn eqlPathPrefix(a: []const u8, b: []const u8) bool {
+    for (a, b) |x, y| {
+        const sx = x == '/' or x == '\\';
+        const sy = y == '/' or y == '\\';
+        if (sx and sy) continue;
+        if (std.ascii.toLower(x) != std.ascii.toLower(y)) return false;
+    }
+    return true;
+}
+
+test labelRefusal {
+    const home = "C:\\Users\\Ann";
+    for ([_][]const u8{ "C:\\", "C:", "D:\\", "d:/", "\\\\server\\share\\" }) |root|
+        try std.testing.expectEqualStrings("it's the root of a drive", labelRefusal(root, home).?);
+    try std.testing.expectEqualStrings("it's your user profile", labelRefusal("c:\\users\\ann\\", home).?);
+    try std.testing.expectEqualStrings("it's your user profile", labelRefusal("C:/Users/Ann", home ++ "\\").?);
+    try std.testing.expectEqualStrings("your user profile is in it", labelRefusal("C:\\Users", home).?);
+    for ([_][]const u8{ "C:\\Users\\Ann\\src", "C:\\Users\\Anna", "C:\\Users\\An", "D:\\src", "\\\\server\\share\\dir" }) |ok|
+        try std.testing.expectEqual(null, labelRefusal(ok, home));
+    try std.testing.expectEqual(null, labelRefusal("C:\\Users", null));
 }
 
 // ---------------------------------------------------------------------------

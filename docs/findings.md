@@ -24,6 +24,9 @@ on Windows 11 Home 10.0.26300 with Defender real-time protection on.
   on Windows 11 26300.9550, restriction 1 is gone, and git and Node work
   under `appcontainer` in part. A low-integrity sandbox would suit every
   tool tested.
+- **The `low` sandbox (iteration 9)** works for every tool the matrix runs,
+  and keeps them from writing outside their data directory and the paths
+  they may write (see [below](#the-low-sandbox)). It confines nothing else.
 
 ### Matrix
 
@@ -161,7 +164,64 @@ working directory labelled low (`icacls <dir> /setintegritylevel low`):
   app runs under `--sandbox=appcontainer`. After that, zig at low integrity
   can't find its own executable, and Python doesn't start. A low-integrity
   sandbox would need deployments granted some other way, such as through
-  `ALL APPLICATION PACKAGES`.
+  `ALL APPLICATION PACKAGES`. *Resolved in iteration 9; see below.*
+
+## The low sandbox
+
+Iteration 9, 2026-10-05, Windows 11 26300.9550.
+
+### Which grants keep low integrity out
+
+Python's deployment, copied without zigsaw's entries, then given one allow
+entry (read and execute, inherited) at a time, and run at low integrity
+(`zigsaw-acprobe --low`):
+
+| The entry's SID | At low integrity |
+|---|---|
+| none (the control) | runs |
+| an AppContainer's package SID, `S-1-15-2-` and seven numbers, as zigsaw granted until now | fails: every open is denied |
+| `ALL APPLICATION PACKAGES` (`S-1-15-2-1`) | runs |
+| `ALL RESTRICTED APPLICATION PACKAGES` (`S-1-15-2-2`) | runs |
+| a capability SID (`S-1-15-3-1024-` and eight numbers) | runs |
+
+- **Only package SIDs do it**, and they deny everything: reading a file,
+  listing the directory, and resolving the path (the probe's
+  `final-path-dos`, `self-path-dos` and `final-path-nt` all fail with
+  `ACCESS_DENIED`). The user's own full access doesn't help.
+- **Executables still start**, as the process that starts them maps the
+  file, which is why busybox seemed unaffected: it loads no DLL of its own.
+  Python fails loading its DLLs, and zig resolving its own path.
+- **zigsaw now grants a capability of each app's own** instead: a SID
+  derived from `zigsaw.<id>` (`DeriveCapabilitySidsFromName`), which only
+  that app's AppContainer runs hold. It isolates apps from each other as
+  the package SID did, and low integrity ignores it. Runs remove the old
+  entries from what they use: any package SID's from deployments and data
+  directories, which only zigsaw grants, and the app's own from host paths.
+
+### The matrix
+
+`tests/matrix.sh` runs each check in `soft`, then `appcontainer`, then
+`low`, so each low run reads files an AppContainer run has just been
+granted. Every check's low result is as intended, 0 mismatches:
+
+| Tool | Check | soft | appcontainer | low |
+|---|---|---|---|---|
+| busybox | write to an ungranted host dir | ok (not enforced) | fails (intended) | fails (intended) |
+| ripgrep, bat, zstd | read an ungranted host file | ok (not enforced) | fails (intended) | ok (not enforced) |
+| git | `init`/`commit` in cwd | ok | fails (known gap) | ok |
+| node | `fs.realpathSync`, `npm install -g` | ok | fails (known gap) | ok |
+| python | network denied by `--unshare` | ok (not enforced) | fails (intended) | ok (not enforced) |
+| all twelve tools | every other check | as in soft | | as in soft |
+
+- **Labels propagate.** zigsaw labels a directory with an inherited low
+  label (`(OI)(CI)(NW)`); the files already in it, and those the app
+  creates, inherit it, and removing the label removes theirs. 20,000 files
+  took 2.2 s to label, about what granting them to an AppContainer takes
+  (2.4 s).
+- **A low run's first label of its data directory** is the slow part, once:
+  zig's first low run took 9 s, with its cache.
+- **Windows Server 2025 isn't known.** CI runs the matrix there, as an
+  administrator; it wasn't seen from here.
 
 ## Other findings
 
@@ -207,7 +267,8 @@ use:
    paths without admin rights. Reads and network access stay open.
    Drive-letter conversion and `lstat("C:\\")` work at low integrity, and so
    does every tool tested ([iteration 8](#a-low-integrity-sandbox)), as long
-   as the deployments' ACLs name no AppContainer.
+   as the deployments' ACLs name no AppContainer. *Built in iteration 9 as
+   `--sandbox=low`* ([above](#the-low-sandbox)).
 3. **A one-time admin setup step.** Granting `ALL APPLICATION PACKAGES` read
    access to `C:\`'s attributes would fix the Node failures (restriction 2).
    Drive-letter conversion (restriction 1) would still fail, so this alone

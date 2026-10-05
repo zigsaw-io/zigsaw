@@ -6,17 +6,20 @@ Think Flatpak for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
-Status: [iteration 8](docs/iteration-8.md) is complete. Zigsaw builds
+Status: [iteration 9](docs/iteration-9.md) is complete. Zigsaw builds
 command-line apps from source or from official binaries, runs them on shared
 runtimes, installs, updates and cleans them up, shares them through
 registries as compressed images, and puts their commands on PATH, also those
-they install while they run. Builds run with pinned toolchain images (zig,
-BusyBox, CMake, Rust, Go with cgo), or the machine's MSVC, and reproduce: CI
-checks that the recipes build the same images on a fresh machine, and runs
-the end-to-end tests there, against a registry zigsaw builds and runs
-itself. Registries keep the files images were built from, so recipes build
-even when a download is gone. Git, Node, Python, SQLite, ripgrep, bat, fzf,
-zot, zstd and the zig, CMake, Rust and Go toolchains are tested.
+they install while they run. Runs can be kept from writing anywhere but
+their data and the paths they're granted, at low integrity, or confined to
+their permissions in an AppContainer. Builds run with pinned toolchain
+images (zig, BusyBox, CMake, Rust, Go with cgo), or the machine's MSVC, and
+reproduce: CI checks that the recipes build the same images on a fresh
+machine, and runs the end-to-end tests there, against a registry zigsaw
+builds and runs itself. Registries keep the files images were built from,
+so recipes build even when a download is gone. Git, Node, Python, SQLite,
+ripgrep, bat, fzf, zot, zstd and the zig, CMake, Rust and Go toolchains are
+tested.
 
 ## Quick start
 
@@ -240,7 +243,7 @@ to finish.
 | Option | Effect |
 |---|---|
 | `--command=<name>` | Run one of the app's exported commands, or another executable or batch file from the app's PATH or System32 (e.g. `--command=cmd`) |
-| `--sandbox=soft\|appcontainer` | `soft` (default) shapes the environment only; `appcontainer` also enforces permissions |
+| `--sandbox=soft\|low\|appcontainer` | `soft` (default) shapes the environment only; `low` also keeps the app from writing anywhere but its data directory and the paths granted; `appcontainer` enforces all permissions |
 | `--filesystem=<cwd\|path>[:ro]` | Grant access to a host location |
 | `--share=network` / `--unshare=network` | Override the app's network permission |
 | `--env=NAME=VALUE` | Set an environment variable |
@@ -295,6 +298,7 @@ including runs through its commands on PATH. It takes the same options as
 
 ```powershell
 zigsaw override --sandbox=appcontainer com.github.BurntSushi.ripgrep   # rg is always sandboxed
+zigsaw override --sandbox=low org.nodejs.node                          # node writes only its data and cwd
 zigsaw override --filesystem=D:\src org.nodejs.node                    # node can use D:\src
 zigsaw override --show org.nodejs.node                                 # what's saved
 zigsaw override --reset org.nodejs.node                                # remove them all
@@ -843,7 +847,7 @@ blobs\sha256\<hex>     manifests, configs, layers
 refs\<id>.json         installed app -> manifest digest
 deploy\<hex>\          an unpacked layer, by layer digest, shared by all runs and apps
 data\<id>\             per-app writable state, kept across runs
-grants\<id>.txt        host paths granted to the app's AppContainer
+grants\<id>.txt        host paths granted to the app's AppContainer, or labelled low for its runs
 overrides\<id>.json    run options saved with `zigsaw override`
 bin\<name>.exe         command shims, with a <name>.shim file saying what each runs
 cache\downloads\<hex>  fetched sources, by sha256 (and decompressed tars)
@@ -875,11 +879,30 @@ exit code. Closing the terminal gives the app the usual time to clean up.
 Whatever the app leaves running then ends with the run, even processes it
 started detached.
 
+**`--sandbox=low`** runs the app at low integrity, with a copy of your token
+that Windows lets any program make of its own. The app can then write only
+where the integrity label is low: zigsaw labels its data directory, and the
+host paths it may write (`cwd` and `--filesystem` paths without `:ro`). It
+can still read whatever you can, and use the network. Every tool the matrix
+runs works this way, including git, npm and zig builds.
+
+- A label lasts until `zigsaw rm` removes the app, and is inherited by
+  everything below the path. Meanwhile any low-integrity program can write
+  there, not only the app. Removing an app keeps the labels other apps' runs
+  need, and labels zigsaw didn't make.
+- zigsaw won't label a drive's root, your user profile, or a directory your
+  profile is in; grant a directory inside it, or read-only access.
+- The first label of a large tree takes a while, as Windows labels every
+  file below it: about 2 s for 20,000 files.
+
 **`--sandbox=appcontainer`** also runs the app under a per-app AppContainer
 identity (`zigsaw.<id>`). It can then read and write only its data directory,
 read its own files and its runtimes', and use the host paths and network it
 was granted.
-Host grants are ACL entries on those paths; `zigsaw rm` removes them again.
+Grants are ACL entries for a capability of the app's own, which only its runs
+hold; `zigsaw rm` removes those on host paths again. (An entry for the
+AppContainer's own SID, as zigsaw made before, would keep low-integrity
+programs out of the files: see [findings](docs/findings.md).)
 Windows gives an AppContainer a temporary directory of its own, under
 `LOCALAPPDATA`, so zigsaw makes that one in the data directory too.
 It suits self-contained tools such as busybox, ripgrep, bat, fzf, zot and
@@ -904,7 +927,8 @@ it runs on allows, and prints it.
 
 ```bash
 zig build test          # unit tests
-bash tests/matrix.sh    # runs real tools through both sandboxes (Git Bash, network)
+bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash, network)
+bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, build commands on B:, tool caches, aliases, vendor steps, CMake, Rust, Go, cgo, reproducibility
@@ -947,11 +971,21 @@ a fresh runner, after `published.sh`, with its build store as
 - Node's image sets `NODE_OPTIONS=--preserve-symlinks
   --preserve-symlinks-main`, so that Node works under AppContainer. A
   package linked in with a symlink (`npm link`, workspaces, pnpm) then finds
-  its dependencies from where the link is, not where the package is, in both
-  sandboxes.
+  its dependencies from where the link is, not where the package is, in every
+  sandbox.
 - Under `--sandbox=appcontainer`, access granted to a host path lasts until
   the app is removed, even after the permission or override that granted it
-  is gone.
+  is gone, and so does a low integrity label under `--sandbox=low`.
+- `--sandbox=low` confines writing only: the app can read whatever you can,
+  and use the network whatever its permissions say. At low integrity,
+  writing to the registry fails outside `HKCU\Software\AppDataLow`, and the
+  few directories Windows labels low itself, such as `AppData\LocalLow`, can
+  be written.
+- A host path an earlier zigsaw granted an app's AppContainer, to the
+  container's own SID, keeps other apps' low runs out until that app runs
+  under `--sandbox=appcontainer` again, or is removed; that app's own low
+  runs clear it too. In the store, runs clear such grants from what they
+  use.
 - Apps that locate folders with `SHGetKnownFolderPath` instead of environment
   variables would bypass the data-directory redirect. None of the tested tools
   do.
@@ -996,12 +1030,13 @@ a fresh runner, after `published.sh`, with its build store as
   executables are stripped.
 - CMake run as an app has no compiler either, for the same reason; it's
   for builds, and for `cmake -E` and scripts. When a command it runs can't
-  be started, Ninja 1.13.2 crashes (exit code `0xC0000409`) instead of
-  reporting it.
+  be started while other commands are running, Ninja 1.13.2 stops with
+  `ninja: fatal: ReadFile: The handle is invalid.` (once, it crashed with
+  `0xC0000409`) instead of reporting the command.
 - Executables built with zig's `LDFLAGS` or `CGO_LDFLAGS` have no debug
   information, as a PDB would differ from build to build.
 - A Go vendor step downloads every module its `go.mod` names, whatever the
   build uses: zot's takes 14 minutes and 5 GB of temporary space, for the
   68 MB it keeps.
 
-[docs/iteration-8.md](docs/iteration-8.md) lists what hasn't been tested yet.
+[docs/iteration-9.md](docs/iteration-9.md) lists what hasn't been tested yet.

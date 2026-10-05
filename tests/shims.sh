@@ -139,8 +139,8 @@ check "rebuilding drops removed exports, and keeps commands its runs installed" 
 check "list shows exports" sh -c "\"\$0\" list | grep '^$NODE ' | grep -q 'node, npm'" "$zigsaw"
 check "rm removes the app's shims only" sh -c "\"\$0\" rm $NODE >/dev/null 2>&1 && [ ! -e '$bin\\node.exe' ] && [ ! -e '$bin\\zigsaw-hello.exe' ] && [ -e '$bin\\other-tool.exe' ]" "$zigsaw"
 
-# Overrides reach shims: other-tool is busybox, which the appcontainer
-# sandbox keeps from writing outside its own directories.
+# Overrides reach shims: other-tool is busybox, which the appcontainer and
+# low sandboxes keep from writing outside its own directories.
 mkdir -p "$work\\outside"
 fails() { ! "$@"; }
 writes_outside() { via_cmd "other-tool sh -c \"echo x > '$work\\outside\\f'\""; }
@@ -151,6 +151,9 @@ rebuild_keeps() { "$zigsaw" build "$work\\other.json" >/dev/null 2>&1 && ! write
 check "the override survives a rebuild" rebuild_keeps
 "$zigsaw" override --reset "$OTHER" >/dev/null 2>&1
 check "after --reset, the shim writes there again" writes_outside
+"$zigsaw" override --sandbox=low "$OTHER" >/dev/null 2>&1
+check "a low override keeps the shim from writing there too" fails writes_outside
+"$zigsaw" override --reset "$OTHER" >/dev/null 2>&1
 
 "$zigsaw" rm "$NODE" >/dev/null 2>&1
 "$zigsaw" rm "$OTHER" >/dev/null 2>&1

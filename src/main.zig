@@ -57,8 +57,10 @@ const usage =
     \\run options (override takes them too, except --command):
     \\  --command=<name>                run one of the app's exported commands, or another
     \\                                  executable or batch file from the app or System32
-    \\  --sandbox=soft|appcontainer     soft (default) shapes the environment; appcontainer
-    \\                                  also enforces the app's permissions
+    \\  --sandbox=soft|low|appcontainer soft (default) shapes the environment; low also keeps
+    \\                                  the app from writing anywhere but its data directory
+    \\                                  and the paths granted; appcontainer enforces all of
+    \\                                  the app's permissions
     \\  --filesystem=<cwd|path>[:ro]    grant access to a host location
     \\  --share=network                 allow network access
     \\  --unshare=network               deny network access
@@ -251,7 +253,7 @@ const SettingsParser = struct {
         const value = opt.value orelse return false;
         if (std.mem.eql(u8, name, "sandbox")) {
             p.settings.sandbox = std.meta.stringToEnum(override.Sandbox, value) orelse
-                return fail("--sandbox must be soft or appcontainer", .{});
+                return fail("--sandbox must be soft, low or appcontainer", .{});
         } else if (std.mem.eql(u8, name, "filesystem")) {
             if (oci.parseFsGrant(value) == null)
                 return fail("--filesystem must be cwd or an absolute path, optionally with :ro; got \"{s}\"", .{value});
@@ -412,18 +414,35 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     const removed_exports = try exports.removeAll(ctx, id);
     if (removed_exports.len > 0) note("removed commands {s}", .{try std.mem.join(arena, ", ", removed_exports)});
 
-    // Undo ACL grants on host paths made for the app's AppContainer.
+    // Undo what the app's runs changed on host paths: access granted to its
+    // AppContainer, and low integrity labels no other app's runs need.
     const host_grants = try store.readGrants(arena, id);
     if (host_grants.len > 0) {
         const profile = try appcontainer.Profile.ensure(arena, id);
-        for (host_grants) |p| {
+        for (host_grants) |g| {
             // A deleted path took its ACL with it.
-            if (!try Store.exists(io, p)) continue;
-            acl.revoke(arena, p, profile.sid) catch |err| switch (err) {
-                error.Failed => continue, // Logged; keep undoing the rest.
-                else => |e| return e,
-            };
-            note("revoked {s} access to {s}", .{ profile.name, p });
+            if (!try Store.exists(io, g.path)) continue;
+            switch (g.kind) {
+                .appcontainer => {
+                    // The package SID is what zigsaw granted before capabilities.
+                    _ = acl.revoke(arena, g.path, .{ .sids = &.{ profile.capability, profile.sid } }) catch |err| switch (err) {
+                        error.Failed => continue, // Logged; keep undoing the rest.
+                        else => |e| return e,
+                    };
+                    note("revoked {s} access to {s}", .{ profile.name, g.path });
+                },
+                .low => {
+                    if (try store.grantedToOthers(arena, id, g)) {
+                        note("kept the low integrity label of {s}, which other apps' runs need", .{g.path});
+                        continue;
+                    }
+                    acl.unlabel(arena, g.path) catch |err| switch (err) {
+                        error.Failed => continue,
+                        else => |e| return e,
+                    };
+                    note("removed the low integrity label of {s}", .{g.path});
+                },
+            }
         }
         try store.deleteGrants(arena, id);
     }

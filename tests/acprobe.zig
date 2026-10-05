@@ -36,47 +36,8 @@ const FILE_FLAG_BACKUP_SEMANTICS: DWORD = 0x02000000;
 const VOLUME_NAME_DOS: DWORD = 0x0;
 const VOLUME_NAME_NT: DWORD = 0x2;
 
-const TOKEN_ASSIGN_PRIMARY: DWORD = 0x1;
-const TOKEN_DUPLICATE: DWORD = 0x2;
-const TOKEN_QUERY: DWORD = 0x8;
-const TOKEN_ADJUST_DEFAULT: DWORD = 0x80;
-const TokenIntegrityLevel: c_int = 25;
-const TokenIsAppContainer: c_int = 29;
-const SecurityImpersonation: c_int = 2;
-const TokenPrimary: c_int = 1;
-const SE_GROUP_INTEGRITY: DWORD = 0x20;
-
-const TOKEN_MANDATORY_LABEL = extern struct {
-    Label: win32.SID_AND_ATTRIBUTES,
-};
-
 extern "kernel32" fn GetFinalPathNameByHandleW(file: HANDLE, path: [*]u16, len: DWORD, flags: DWORD) callconv(.winapi) DWORD;
 extern "kernel32" fn GetCurrentDirectoryW(len: DWORD, buf: [*]u16) callconv(.winapi) DWORD;
-extern "advapi32" fn DuplicateTokenEx(
-    existing: HANDLE,
-    access: DWORD,
-    attributes: ?*anyopaque,
-    impersonation_level: c_int,
-    token_type: c_int,
-    new_token: *?HANDLE,
-) callconv(.winapi) win32.BOOL;
-extern "advapi32" fn SetTokenInformation(token: HANDLE, class: c_int, info: *const anyopaque, length: DWORD) callconv(.winapi) win32.BOOL;
-extern "advapi32" fn GetLengthSid(sid: win32.PSID) callconv(.winapi) DWORD;
-extern "advapi32" fn GetSidSubAuthorityCount(sid: win32.PSID) callconv(.winapi) *u8;
-extern "advapi32" fn GetSidSubAuthority(sid: win32.PSID, index: DWORD) callconv(.winapi) *DWORD;
-extern "advapi32" fn CreateProcessAsUserW(
-    token: HANDLE,
-    application_name: ?win32.LPCWSTR,
-    command_line: ?win32.LPWSTR,
-    process_attributes: ?*anyopaque,
-    thread_attributes: ?*anyopaque,
-    inherit_handles: win32.BOOL,
-    creation_flags: DWORD,
-    environment: ?*const anyopaque,
-    current_directory: ?win32.LPCWSTR,
-    startup_info: *win32.STARTUPINFOW,
-    process_information: *win32.PROCESS_INFORMATION,
-) callconv(.winapi) win32.BOOL;
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -145,15 +106,15 @@ fn finalPath(path: [*:0]const u16, volume: DWORD) Result {
 /// Prints the process's integrity level, and whether it's in an AppContainer.
 fn printSelf(out: *std.Io.Writer) !void {
     var token: ?HANDLE = null;
-    if (win32.OpenProcessToken(win32.GetCurrentProcess(), TOKEN_QUERY, &token) == 0) return out.print("# token unreadable\n", .{});
+    if (win32.OpenProcessToken(win32.GetCurrentProcess(), win32.TOKEN_QUERY, &token) == 0) return out.print("# token unreadable\n", .{});
     defer _ = win32.CloseHandle(token.?);
     var is_ac: DWORD = 0;
     var len: DWORD = 0;
-    _ = win32.GetTokenInformation(token.?, TokenIsAppContainer, &is_ac, @sizeOf(DWORD), &len);
-    var label: [256]u8 align(@alignOf(TOKEN_MANDATORY_LABEL)) = undefined;
-    if (win32.GetTokenInformation(token.?, TokenIntegrityLevel, &label, label.len, &len) == 0) return out.print("# integrity unreadable\n", .{});
-    const sid = @as(*const TOKEN_MANDATORY_LABEL, @ptrCast(&label)).Label.Sid;
-    const rid = GetSidSubAuthority(sid, GetSidSubAuthorityCount(sid).* - 1).*;
+    _ = win32.GetTokenInformation(token.?, win32.TokenIsAppContainer, &is_ac, @sizeOf(DWORD), &len);
+    var label: [256]u8 align(@alignOf(win32.TOKEN_MANDATORY_LABEL)) = undefined;
+    if (win32.GetTokenInformation(token.?, win32.TokenIntegrityLevel, &label, label.len, &len) == 0) return out.print("# integrity unreadable\n", .{});
+    const sid = @as(*const win32.TOKEN_MANDATORY_LABEL, @ptrCast(&label)).Label.Sid;
+    const rid = win32.GetSidSubAuthority(sid, win32.GetSidSubAuthorityCount(sid).* - 1).*;
     const level = if (rid < 0x1000) "untrusted" else if (rid < 0x2000) "low" else if (rid < 0x3000) "medium" else if (rid < 0x4000) "high" else "system";
     try out.print("# integrity {s}{s}\n", .{ level, if (is_ac != 0) ", in an AppContainer" else "" });
 }
@@ -169,14 +130,14 @@ fn runLow() !void {
     command[rest.len] = 0;
 
     var token: ?HANDLE = null;
-    if (win32.OpenProcessToken(win32.GetCurrentProcess(), TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT, &token) == 0)
+    if (win32.OpenProcessToken(win32.GetCurrentProcess(), win32.TOKEN_ASSIGN_PRIMARY | win32.TOKEN_DUPLICATE | win32.TOKEN_QUERY | win32.TOKEN_ADJUST_DEFAULT, &token) == 0)
         return lastError("OpenProcessToken");
     var low: ?HANDLE = null;
-    if (DuplicateTokenEx(token.?, 0, null, SecurityImpersonation, TokenPrimary, &low) == 0) return lastError("DuplicateTokenEx");
+    if (win32.DuplicateTokenEx(token.?, 0, null, win32.SecurityImpersonation, win32.TokenPrimary, &low) == 0) return lastError("DuplicateTokenEx");
     var sid: ?win32.PSID = null;
     if (win32.ConvertStringSidToSidW(std.unicode.utf8ToUtf16LeStringLiteral("S-1-16-4096"), &sid) == 0) return lastError("ConvertStringSidToSidW");
-    const label: TOKEN_MANDATORY_LABEL = .{ .Label = .{ .Sid = sid.?, .Attributes = SE_GROUP_INTEGRITY } };
-    if (SetTokenInformation(low.?, TokenIntegrityLevel, &label, @sizeOf(TOKEN_MANDATORY_LABEL) + GetLengthSid(sid.?)) == 0)
+    const label: win32.TOKEN_MANDATORY_LABEL = .{ .Label = .{ .Sid = sid.?, .Attributes = win32.SE_GROUP_INTEGRITY } };
+    if (win32.SetTokenInformation(low.?, win32.TokenIntegrityLevel, &label, @sizeOf(win32.TOKEN_MANDATORY_LABEL) + win32.GetLengthSid(sid.?)) == 0)
         return lastError("SetTokenInformation");
 
     var si: win32.STARTUPINFOW = .{ .cb = @sizeOf(win32.STARTUPINFOW), .dwFlags = win32.STARTF_USESTDHANDLES };
@@ -187,7 +148,7 @@ fn runLow() !void {
         if (h) |handle| _ = win32.SetHandleInformation(handle, win32.HANDLE_FLAG_INHERIT, win32.HANDLE_FLAG_INHERIT);
     }
     var pi: win32.PROCESS_INFORMATION = undefined;
-    if (CreateProcessAsUserW(low.?, null, &command, null, null, win32.TRUE, 0, null, null, &si, &pi) == 0)
+    if (win32.CreateProcessAsUserW(low.?, null, &command, null, null, win32.TRUE, 0, null, null, &si, &pi) == 0)
         return lastError("CreateProcessAsUserW");
     _ = win32.WaitForSingleObject(pi.hProcess, win32.INFINITE);
     var code: DWORD = 1;

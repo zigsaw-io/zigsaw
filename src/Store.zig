@@ -5,7 +5,8 @@
 //!   <root>\deploy\<hex>\          an unpacked layer, by layer digest: an app's own
 //!                                 files, or a runtime's, shared by the apps using it
 //!   <root>\data\<id>\             per-app writable state, kept across runs
-//!   <root>\grants\<id>.txt        host paths whose ACLs name the app's AppContainer
+//!   <root>\grants\<id>.txt        host paths whose ACLs zigsaw changed for the app:
+//!                                 grants to its AppContainer, low integrity labels
 //!   <root>\overrides\<id>.json    run options saved for the app (see override.zig)
 //!   <root>\bin\                   command shims for exported commands (see exports.zig)
 //!   <root>\cache\downloads\<hex>  fetched build sources, by sha256
@@ -441,6 +442,10 @@ pub fn deploy(s: Store, arena: Allocator, desc: oci.Descriptor) ![]u8 {
     if (try exists(s.io, dest)) {
         // Cheap when already protected; covers deployments made before protection existed.
         try acl.protect(arena, dest);
+        // Before iteration 9, AppContainer runs granted their package SIDs
+        // access to the deployments, which keeps low-integrity runs out
+        // (see appcontainer.zig). Also cheap once they're gone.
+        _ = try acl.revoke(arena, dest, .package_sids);
         return dest;
     }
 
@@ -518,30 +523,76 @@ pub fn listBuildImages(s: Store, arena: Allocator) ![]const []const u8 {
 }
 
 // ---------------------------------------------------------------------------
-// AppContainer grant tracking, so `zigsaw rm` can undo ACL changes on host paths
+// Changes to host paths' ACLs, so `zigsaw rm` can undo them: one line per
+// path, "<path>" for access granted to the app's AppContainer, "low <path>"
+// for a low integrity label zigsaw gave it. Paths are absolute, so a line
+// starting "low " is always a label.
+
+/// A change zigsaw made to a host path for an app.
+pub const Grant = struct {
+    kind: Kind,
+    path: []const u8,
+
+    pub const Kind = enum { appcontainer, low };
+
+    fn parse(line: []const u8) Grant {
+        if (std.mem.startsWith(u8, line, label_prefix)) return .{ .kind = .low, .path = line[label_prefix.len..] };
+        return .{ .kind = .appcontainer, .path = line };
+    }
+
+    fn eql(a: Grant, b: Grant) bool {
+        return a.kind == b.kind and std.os.windows.eqlIgnoreCaseWtf8(a.path, b.path);
+    }
+
+    pub fn format(g: Grant, w: *Io.Writer) Io.Writer.Error!void {
+        try w.print("{s}{s}", .{ if (g.kind == .low) label_prefix else "", g.path });
+    }
+
+    const label_prefix = "low ";
+};
 
 fn grantsPath(s: Store, arena: Allocator, id: []const u8) ![]u8 {
     return s.path(arena, &.{ "grants", try std.fmt.allocPrint(arena, "{s}.txt", .{id}) });
 }
 
-pub fn readGrants(s: Store, arena: Allocator, id: []const u8) ![]const []const u8 {
+pub fn readGrants(s: Store, arena: Allocator, id: []const u8) ![]const Grant {
     const bytes = Io.Dir.cwd().readFileAlloc(s.io, try s.grantsPath(arena, id), arena, .limited(1 << 20)) catch |err| switch (err) {
         error.FileNotFound => return &.{},
         else => |e| return e,
     };
-    var list: std.ArrayList([]const u8) = .empty;
+    return parseGrants(arena, bytes);
+}
+
+fn parseGrants(arena: Allocator, bytes: []const u8) ![]const Grant {
+    var list: std.ArrayList(Grant) = .empty;
     var it = std.mem.tokenizeAny(u8, bytes, "\r\n");
-    while (it.next()) |line| try list.append(arena, line);
+    while (it.next()) |line| try list.append(arena, .parse(line));
     return list.items;
 }
 
-pub fn recordGrant(s: Store, arena: Allocator, id: []const u8, host_path: []const u8) !void {
+pub fn recordGrant(s: Store, arena: Allocator, id: []const u8, grant: Grant) !void {
     const existing = try s.readGrants(arena, id);
-    for (existing) |p| if (std.os.windows.eqlIgnoreCaseWtf8(p, host_path)) return;
+    for (existing) |g| if (g.eql(grant)) return;
     var out: std.ArrayList(u8) = .empty;
-    for (existing) |p| try out.print(arena, "{s}\n", .{p});
-    try out.print(arena, "{s}\n", .{host_path});
+    for (existing) |g| try out.print(arena, "{f}\n", .{g});
+    try out.print(arena, "{f}\n", .{grant});
     try Io.Dir.cwd().writeFile(s.io, .{ .sub_path = try s.grantsPath(arena, id), .data = out.items });
+}
+
+/// Whether an app other than `id` has `grant` recorded: a label another
+/// app's runs still need, say.
+pub fn grantedToOthers(s: Store, arena: Allocator, id: []const u8, grant: Grant) !bool {
+    var dir = try Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{"grants"}), .{ .iterate = true });
+    defer dir.close(s.io);
+    const own = try std.fmt.allocPrint(arena, "{s}.txt", .{id});
+    var it = dir.iterate();
+    while (try it.next(s.io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".txt")) continue;
+        if (std.ascii.eqlIgnoreCase(entry.name, own)) continue;
+        const bytes = try dir.readFileAlloc(s.io, entry.name, arena, .limited(1 << 20));
+        for (try parseGrants(arena, bytes)) |g| if (g.eql(grant)) return true;
+    }
+    return false;
 }
 
 pub fn deleteGrants(s: Store, arena: Allocator, id: []const u8) !void {
@@ -553,6 +604,25 @@ pub fn deleteGrants(s: Store, arena: Allocator, id: []const u8) !void {
 
 // ---------------------------------------------------------------------------
 // Helpers
+
+/// Renames a file or directory, retrying for up to `max_wait_ms` while Windows
+/// refuses: it does while something holds a file in the directory open, as
+/// Defender does for a while to scan files a build has just written.
+pub fn renameRetrying(io: Io, from: []const u8, to: []const u8, max_wait_ms: u32) !void {
+    var waited: u32 = 0;
+    while (true) {
+        Io.Dir.rename(.cwd(), from, .cwd(), to, io) catch |err| switch (err) {
+            error.AccessDenied, error.FileBusy, error.AntivirusInterference => {
+                if (waited >= max_wait_ms) return err;
+                win32.Sleep(100);
+                waited += 100;
+                continue;
+            },
+            else => |e| return e,
+        };
+        return;
+    }
+}
 
 /// Deletes a directory tree that apps or build tools have written to. Unlike
 /// Zig 0.16's deleteTree, it copes with the directory links Windows
@@ -611,6 +681,64 @@ test "locks: shared locks coexist, an exclusive one excludes" {
     try std.testing.expectEqual(null, try tryLock(io, p, .shared));
     exclusive.release(io);
     try std.testing.expect(!try isLocked(io, p));
+}
+
+test "renameRetrying waits while a file in the directory is open" {
+    const io = std.testing.io;
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try tmp.dir.realPathFileAlloc(io, ".", arena);
+    const from = try std.fs.path.join(arena, &.{ base, "cache" });
+    const to = try std.fs.path.join(arena, &.{ base, "kept" });
+    try tmp.dir.createDirPath(io, "cache");
+    try tmp.dir.writeFile(io, .{ .sub_path = "cache\\f", .data = "x" });
+
+    // Held without FILE_SHARE_DELETE, as a scanner may, and closed after a while.
+    const held = win32.CreateFileW(try win32.wide(arena, try std.fs.path.join(arena, &.{ from, "f" })), win32.GENERIC_READ, win32.FILE_SHARE_READ, null, win32.OPEN_EXISTING, 0, null);
+    try std.testing.expect(held != win32.INVALID_HANDLE_VALUE);
+    try std.testing.expectError(error.AccessDenied, renameRetrying(io, from, to, 0));
+    const closer = try std.Thread.spawn(.{}, struct {
+        fn run(h: win32.HANDLE) void {
+            win32.Sleep(300);
+            _ = win32.CloseHandle(h);
+        }
+    }.run, .{held});
+    defer closer.join();
+    try renameRetrying(io, from, to, 5000);
+    try std.testing.expect(try exists(io, try std.fs.path.join(arena, &.{ to, "f" })));
+}
+
+test "grants: both kinds round-trip, once each; others' found by kind and path" {
+    const io = std.testing.io;
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const s: Store = .{ .io = io, .root = try tmp.dir.realPathFileAlloc(io, ".", arena) };
+    try tmp.dir.createDirPath(io, "grants");
+
+    try s.recordGrant(arena, "a.app", .{ .kind = .low, .path = "D:\\proj" });
+    try s.recordGrant(arena, "a.app", .{ .kind = .appcontainer, .path = "D:\\proj" });
+    try s.recordGrant(arena, "a.app", .{ .kind = .low, .path = "d:\\PROJ" });
+    try s.recordGrant(arena, "a.app", .{ .kind = .appcontainer, .path = "D:\\other" });
+    try s.recordGrant(arena, "b.app", .{ .kind = .low, .path = "d:\\Proj" });
+    const a = try s.readGrants(arena, "a.app");
+    try std.testing.expectEqual(3, a.len);
+    try std.testing.expectEqual(Grant.Kind.low, a[0].kind);
+    try std.testing.expectEqualStrings("D:\\proj", a[0].path);
+    try std.testing.expectEqual(Grant.Kind.appcontainer, a[1].kind);
+    try std.testing.expectEqualStrings("D:\\proj", a[1].path);
+    try std.testing.expectEqualStrings("D:\\other", a[2].path);
+    try std.testing.expectEqualDeep(@as([]const Grant, &.{}), try s.readGrants(arena, "c.app"));
+
+    try std.testing.expect(try s.grantedToOthers(arena, "a.app", .{ .kind = .low, .path = "D:\\PROJ" }));
+    try std.testing.expect(!try s.grantedToOthers(arena, "a.app", .{ .kind = .appcontainer, .path = "D:\\proj" }));
+    try std.testing.expect(!try s.grantedToOthers(arena, "b.app", .{ .kind = .low, .path = "D:\\other" }));
+    try std.testing.expect(try s.grantedToOthers(arena, "b.app", .{ .kind = .low, .path = "D:\\proj" }));
 }
 
 pub const FileHash = struct {

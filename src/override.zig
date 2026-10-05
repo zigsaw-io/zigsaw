@@ -10,7 +10,7 @@ const Store = @import("Store.zig");
 const oci = @import("oci.zig");
 const fail = Context.fail;
 
-pub const Sandbox = enum { soft, appcontainer };
+pub const Sandbox = enum { soft, low, appcontainer };
 
 /// Run options that can be given on the command line or saved as overrides.
 /// Null or empty fields leave the choice to the layer below: the command line

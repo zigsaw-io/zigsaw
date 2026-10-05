@@ -66,6 +66,7 @@ check "the app's .cmd command gets them exactly" gets_args "$zigsaw" run $APP
 check "an exported .cmd gets them exactly" gets_args "$zigsaw" run --command=echo-args $APP
 check "so does its shim" gets_args "$ZIGSAW_HOME\\bin\\echo-args.exe"
 check "and under --sandbox=appcontainer" gets_args "$zigsaw" run --sandbox=appcontainer $APP
+check "and under --sandbox=low" gets_args "$zigsaw" run --sandbox=low $APP
 check "no argument ran a command" test ! -e "$injected"
 # Attempts to run a command, one per run, so no other argument changes how
 # cmd.exe reads them.

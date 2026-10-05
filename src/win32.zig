@@ -120,6 +120,21 @@ pub extern "kernel32" fn CreateProcessW(
     startup_info: *STARTUPINFOW,
     process_information: *PROCESS_INFORMATION,
 ) callconv(.winapi) BOOL;
+/// CreateProcessW with another token: a copy of ours, here, which needs no
+/// privileges.
+pub extern "advapi32" fn CreateProcessAsUserW(
+    token: HANDLE,
+    application_name: ?LPCWSTR,
+    command_line: ?LPWSTR,
+    process_attributes: ?*anyopaque,
+    thread_attributes: ?*anyopaque,
+    inherit_handles: BOOL,
+    creation_flags: DWORD,
+    environment: ?*const anyopaque,
+    current_directory: ?LPCWSTR,
+    startup_info: *STARTUPINFOW,
+    process_information: *PROCESS_INFORMATION,
+) callconv(.winapi) BOOL;
 
 pub extern "kernel32" fn InitializeProcThreadAttributeList(
     list: ?*anyopaque,
@@ -249,6 +264,53 @@ pub extern "userenv" fn CreateAppContainerProfile(
 ) callconv(.winapi) HRESULT;
 pub extern "userenv" fn DeriveAppContainerSidFromAppContainerName(name: LPCWSTR, sid: *?PSID) callconv(.winapi) HRESULT;
 pub extern "userenv" fn DeleteAppContainerProfile(name: LPCWSTR) callconv(.winapi) HRESULT;
+/// The capability SIDs for a capability name, as S-1-15-3-1024-..., and the
+/// group SIDs Windows also derives from it. The arrays and SIDs are LocalAlloc'd.
+pub extern "api-ms-win-security-base-l1-2-2" fn DeriveCapabilitySidsFromName(
+    name: LPCWSTR,
+    group_sids: *?[*]PSID,
+    group_sid_count: *DWORD,
+    sids: *?[*]PSID,
+    sid_count: *DWORD,
+) callconv(.winapi) BOOL;
+
+// ---------------------------------------------------------------------------
+// Integrity levels
+
+pub const TOKEN_ASSIGN_PRIMARY: DWORD = 0x0001;
+pub const TOKEN_DUPLICATE: DWORD = 0x0002;
+pub const TOKEN_ADJUST_DEFAULT: DWORD = 0x0080;
+pub const TokenIntegrityLevel: c_int = 25;
+pub const TokenIsAppContainer: c_int = 29;
+pub const SecurityImpersonation: c_int = 2;
+pub const TokenPrimary: c_int = 1;
+pub const SE_GROUP_INTEGRITY: DWORD = 0x00000020;
+/// The low integrity level's SID, and the RID that ends it.
+pub const low_integrity_sid = "S-1-16-4096";
+pub const SECURITY_MANDATORY_LOW_RID: DWORD = 0x1000;
+
+pub const TOKEN_MANDATORY_LABEL = extern struct {
+    Label: SID_AND_ATTRIBUTES,
+};
+
+pub const LABEL_SECURITY_INFORMATION: DWORD = 0x00000010;
+pub const SYSTEM_MANDATORY_LABEL_ACE_TYPE: u8 = 0x11;
+pub const SYSTEM_MANDATORY_LABEL_NO_WRITE_UP: DWORD = 0x1;
+pub const OBJECT_INHERIT_ACE: u8 = 0x1;
+pub const CONTAINER_INHERIT_ACE: u8 = 0x2;
+pub const ACL_REVISION: DWORD = 2;
+
+pub extern "advapi32" fn DuplicateTokenEx(
+    existing: HANDLE,
+    access: DWORD,
+    attributes: ?*anyopaque,
+    impersonation_level: c_int,
+    token_type: c_int,
+    new_token: *?HANDLE,
+) callconv(.winapi) BOOL;
+pub extern "advapi32" fn SetTokenInformation(token: HANDLE, class: c_int, info: *const anyopaque, length: DWORD) callconv(.winapi) BOOL;
+pub extern "advapi32" fn InitializeAcl(acl: *ACL, length: DWORD, revision: DWORD) callconv(.winapi) BOOL;
+pub extern "advapi32" fn AddMandatoryAce(acl: *ACL, revision: DWORD, flags: DWORD, policy: DWORD, label: PSID) callconv(.winapi) BOOL;
 
 // ---------------------------------------------------------------------------
 // Security descriptors and ACLs
@@ -328,6 +390,13 @@ pub extern "advapi32" fn DeleteAce(acl: *ACL, index: DWORD) callconv(.winapi) BO
 
 pub extern "advapi32" fn FreeSid(sid: PSID) callconv(.winapi) ?*anyopaque;
 pub extern "advapi32" fn EqualSid(a: PSID, b: PSID) callconv(.winapi) BOOL;
+pub extern "advapi32" fn GetLengthSid(sid: PSID) callconv(.winapi) DWORD;
+pub const SID_IDENTIFIER_AUTHORITY = extern struct {
+    Value: [6]u8,
+};
+pub extern "advapi32" fn GetSidIdentifierAuthority(sid: PSID) callconv(.winapi) *SID_IDENTIFIER_AUTHORITY;
+pub extern "advapi32" fn GetSidSubAuthorityCount(sid: PSID) callconv(.winapi) *u8;
+pub extern "advapi32" fn GetSidSubAuthority(sid: PSID, index: DWORD) callconv(.winapi) *DWORD;
 pub extern "advapi32" fn ConvertStringSidToSidW(string_sid: LPCWSTR, sid: *?PSID) callconv(.winapi) BOOL;
 pub extern "advapi32" fn GetAce(acl: *ACL, index: DWORD, ace: *?*anyopaque) callconv(.winapi) BOOL;
 pub extern "advapi32" fn GetNamedSecurityInfoW(

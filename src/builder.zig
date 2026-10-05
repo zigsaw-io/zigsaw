@@ -339,7 +339,7 @@ const BuildRoot = struct {
         const kept = try ctx.store.path(arena, &.{ "cache", "tools", id });
         const here = try std.fs.path.join(arena, &.{ b.path, "cache", id });
         if (try Store.exists(io, kept)) {
-            Io.Dir.rename(.cwd(), kept, .cwd(), here, io) catch |err| {
+            Store.renameRetrying(io, kept, here, cache_move_wait_ms) catch |err| {
                 if (ctx.verbose) note("couldn't use {s}'s cache ({t}); building without it", .{ id, err });
             };
         }
@@ -368,8 +368,12 @@ const BuildRoot = struct {
         const arena = ctx.arena;
         const here = try std.fs.path.join(arena, &.{ b.path, "cache", id });
         const kept = try ctx.store.path(arena, &.{ "cache", "tools", id });
-        try Io.Dir.rename(.cwd(), here, .cwd(), kept, ctx.io);
+        try Store.renameRetrying(ctx.io, here, kept, cache_move_wait_ms);
     }
+
+    /// How long moving a tool's cache waits for Windows to stop refusing,
+    /// which it does while Defender scans what the build just wrote.
+    const cache_move_wait_ms = 5000;
 
     /// Builds each module in turn into the prefix, and returns the tree of
     /// what's there at the end.

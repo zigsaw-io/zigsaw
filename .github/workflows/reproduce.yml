@@ -69,6 +69,11 @@ jobs:
         shell: bash
         run: bash tests/shims.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/shims.txt"
 
+      - name: tests/sandbox.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/sandbox.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/sandbox.txt"
+
       - name: tests/batch.sh
         if: ${{ !cancelled() }}
         shell: bash

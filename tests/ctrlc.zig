@@ -1,9 +1,10 @@
 //! Test driver for console events. It runs node alone, through `zigsaw run`
-//! and through its shim, each in a pseudoconsole as a terminal hosts console
-//! programs, then presses Ctrl+C, sends Ctrl+Break or closes the console, and
-//! checks what the app and zigsaw do. It also runs node behind a batch file,
-//! alone and through `zigsaw run`, and answers cmd.exe's "Terminate batch
-//! job (Y/N)?". Built by `zig build ctrlc-driver`, run by tests/ctrlc.sh.
+//! (also with --sandbox=low) and through its shim, each in a pseudoconsole as
+//! a terminal hosts console programs, then presses Ctrl+C, sends Ctrl+Break or
+//! closes the console, and checks what the app and zigsaw do. It also runs
+//! node behind a batch file, alone and through `zigsaw run`, and answers
+//! cmd.exe's "Terminate batch job (Y/N)?". Built by `zig build ctrlc-driver`,
+//! run by tests/ctrlc.sh.
 //!
 //!   zigsaw-ctrlc <zigsaw.exe> <store> <work-dir>   run the checks; org.nodejs.node
 //!                                                  must be installed in <store>
@@ -31,6 +32,7 @@ extern "kernel32" fn AttachConsole(pid: DWORD) callconv(.winapi) BOOL;
 extern "kernel32" fn GenerateConsoleCtrlEvent(event: DWORD, group: DWORD) callconv(.winapi) BOOL;
 extern "kernel32" fn Sleep(ms: DWORD) callconv(.winapi) void;
 extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
+extern "kernel32" fn SetCurrentDirectoryW(path: win32.LPCWSTR) callconv(.winapi) BOOL;
 
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
@@ -45,6 +47,9 @@ pub fn main(init: std.process.Init) !void {
     // Whoever started us may have turned Ctrl+C off (Git Bash does), and
     // processes inherit that. Turn it back on for the apps, as a terminal would.
     _ = win32.SetConsoleCtrlHandler(null, win32.FALSE);
+    // The apps run in the work directory: node may use its working
+    // directory, which a --sandbox=low run labels low.
+    if (SetCurrentDirectoryW(try win32.wide(arena, args[3])) == 0) return error.NoWorkDir;
     var t: Tester = .{
         .arena = arena,
         .io = init.io,
@@ -87,6 +92,8 @@ const script = struct {
 const Way = enum {
     alone,
     zigsaw_run,
+    /// `zigsaw run --sandbox=low`, which starts node with another token.
+    zigsaw_run_low,
     shim,
     /// Node started by a batch file, which runs alone or through `zigsaw run --command`.
     batch_alone,
@@ -123,7 +130,7 @@ const Tester = struct {
         t.check("node alone: closing the console lets it clean up first", alone_cleaned, "its SIGHUP handler didn't finish");
         if (alone_close.child) |c| killIfRunning(c);
 
-        for ([_]Way{ .zigsaw_run, .shim }) |way| {
+        for ([_]Way{ .zigsaw_run, .zigsaw_run_low, .shim }) |way| {
             const name = @tagName(way);
             const sigint = try t.run(way, script.sigint, &.{}, .ctrl_c);
             t.checkf("{s}: Ctrl+C reaches the app, and its exit code comes back", .{name}, sigint.code == 3 and sigint.has("got-SIGINT"), try sigint.describe(t.arena));
@@ -199,6 +206,10 @@ const Tester = struct {
             .zigsaw_run => {
                 try appendArg(t.arena, &line, t.zigsaw);
                 try line.appendSlice(t.arena, " run org.nodejs.node");
+            },
+            .zigsaw_run_low => {
+                try appendArg(t.arena, &line, t.zigsaw);
+                try line.appendSlice(t.arena, " run --sandbox=low org.nodejs.node");
             },
             .shim => try appendArg(t.arena, &line, try std.fs.path.join(t.arena, &.{ t.store, "bin", "node.exe" })),
             // Windows runs a batch file given as the program through cmd.exe /c.

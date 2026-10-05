@@ -135,7 +135,30 @@ pub const SpawnSpec = struct {
     /// Null inherits ours.
     cwd: ?[]const u8 = null,
     security: ?*const win32.SECURITY_CAPABILITIES = null,
+    /// The child's token, such as `lowIntegrityToken`'s; null gives it ours.
+    token: ?win32.HANDLE = null,
 };
+
+/// A copy of zigsaw's token labelled low integrity, which a process can make
+/// of its own without privileges. Processes with it can't write to anything
+/// whose integrity label is higher (medium, by default), and can still read.
+/// Left to be closed at process exit.
+pub fn lowIntegrityToken(arena: Allocator) !win32.HANDLE {
+    var own: ?win32.HANDLE = null;
+    const access = win32.TOKEN_ASSIGN_PRIMARY | win32.TOKEN_DUPLICATE | win32.TOKEN_QUERY | win32.TOKEN_ADJUST_DEFAULT;
+    if (win32.OpenProcessToken(win32.GetCurrentProcess(), access, &own) == 0) return win32.lastErrorFail("OpenProcessToken");
+    defer _ = win32.CloseHandle(own.?);
+    var low: ?win32.HANDLE = null;
+    if (win32.DuplicateTokenEx(own.?, 0, null, win32.SecurityImpersonation, win32.TokenPrimary, &low) == 0)
+        return win32.lastErrorFail("DuplicateTokenEx");
+    var sid: ?win32.PSID = null;
+    if (win32.ConvertStringSidToSidW(try win32.wide(arena, win32.low_integrity_sid), &sid) == 0)
+        return win32.lastErrorFail("ConvertStringSidToSidW");
+    const label: win32.TOKEN_MANDATORY_LABEL = .{ .Label = .{ .Sid = sid.?, .Attributes = win32.SE_GROUP_INTEGRITY } };
+    if (win32.SetTokenInformation(low.?, win32.TokenIntegrityLevel, &label, @sizeOf(win32.TOKEN_MANDATORY_LABEL) + win32.GetLengthSid(sid.?)) == 0)
+        return win32.lastErrorFail("SetTokenInformation");
+    return low.?;
+}
 
 /// Runs a process to completion and returns its exit code. The child gets
 /// our stdio handles and nothing else, and runs in a job object, so its whole
@@ -202,18 +225,19 @@ pub fn spawn(arena: Allocator, spec: SpawnSpec) !u32 {
     _ = win32.SetConsoleCtrlHandler(&ignoreCtrlC, win32.TRUE);
 
     var info: win32.PROCESS_INFORMATION = undefined;
-    if (win32.CreateProcessW(
-        try win32.wide(arena, spec.exe),
-        try win32.wide(arena, spec.command_line),
-        null,
-        null,
-        @intFromBool(inherit_count > 0),
-        win32.EXTENDED_STARTUPINFO_PRESENT | win32.CREATE_UNICODE_ENVIRONMENT,
-        if (spec.env_block) |b| b.ptr else null,
-        if (spec.cwd) |c| try win32.wide(arena, c) else null,
-        &startup.StartupInfo,
-        &info,
-    ) == 0) return win32.lastErrorFail("CreateProcessW");
+    const exe = try win32.wide(arena, spec.exe);
+    const command_line = try win32.wide(arena, spec.command_line);
+    const inherit_handles: win32.BOOL = @intFromBool(inherit_count > 0);
+    const flags = win32.EXTENDED_STARTUPINFO_PRESENT | win32.CREATE_UNICODE_ENVIRONMENT;
+    const env: ?*const anyopaque = if (spec.env_block) |b| b.ptr else null;
+    const cwd: ?win32.LPCWSTR = if (spec.cwd) |c| try win32.wide(arena, c) else null;
+    if (spec.token) |token| {
+        if (win32.CreateProcessAsUserW(token, exe, command_line, null, null, inherit_handles, flags, env, cwd, &startup.StartupInfo, &info) == 0)
+            return win32.lastErrorFail("CreateProcessAsUserW");
+    } else {
+        if (win32.CreateProcessW(exe, command_line, null, null, inherit_handles, flags, env, cwd, &startup.StartupInfo, &info) == 0)
+            return win32.lastErrorFail("CreateProcessW");
+    }
     _ = win32.CloseHandle(info.hThread);
     defer _ = win32.CloseHandle(info.hProcess);
 
