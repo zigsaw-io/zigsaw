@@ -164,9 +164,11 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
     const config = try r.appConfig(arena, runtimes, build_info);
     try oci.validateConfig(recipe_path, config);
     const placeholders: oci.Placeholders = .{ .app = "", .data = "", .runtimes = runtime_dirs.items };
-    try checkCommand(ctx, &tree, placeholders, "command", config.command);
+    try checkCommand(ctx, &tree, placeholders, "command runs", config.command);
     var exported = config.exports.map.iterator();
-    while (exported.next()) |e| try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "export {s}", .{e.key_ptr.*}), e.value_ptr.command);
+    while (exported.next()) |e| try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "export {s} runs", .{e.key_ptr.*}), e.value_ptr.command);
+    if (config.shortcuts) |s| for (s.map.keys(), s.map.values()) |name, shortcut| if (shortcut.icon) |icon|
+        try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "shortcut \"{s}\" has the icon", .{name}), icon);
 
     const start = ctx.now();
     const layer_file = try tree.writeLayerFile(ctx, .gzip);
@@ -193,7 +195,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
 }
 
 /// Checks that a command is a file: in the app tree, or in a runtime's
-/// deployment. `what` names it in messages.
+/// deployment. `what` names it in messages, with a verb ("export rg runs").
 fn checkCommand(ctx: *Context, tree: *const Tree, placeholders: oci.Placeholders, what: []const u8, command: []const u8) !void {
     const arena = ctx.arena;
     if (std.mem.startsWith(u8, command, "${app}")) {
@@ -201,9 +203,9 @@ fn checkCommand(ctx: *Context, tree: *const Tree, placeholders: oci.Placeholders
     } else if (oci.isPlaceholderPath(command)) {
         const p = try placeholders.expand(arena, command);
         if (Store.exists(ctx.io, p) catch false) return;
-        return fail("{s} runs \"{s}\", which is not a file in that runtime", .{ what, command });
+        return fail("{s} \"{s}\", which is not a file in that runtime", .{ what, command });
     } else if (try tree.isFile(arena, command)) return;
-    return fail("{s} runs \"{s}\", which is not a file in the app tree the modules produce", .{ what, command });
+    return fail("{s} \"{s}\", which is not a file in the app tree the modules produce", .{ what, command });
 }
 
 /// Fetches modules' sources and indexes them into trees, keeping their
@@ -314,7 +316,7 @@ const BuildRoot = struct {
             if (t.config.aliases) |a| for (a.map.keys(), a.map.values()) |name, e| {
                 if (containsIgnoreCase(aliases.items, name)) continue;
                 try aliases.append(arena, name);
-                if (shim_exe == null) shim_exe = try exports.shimExe(ctx, try win32.selfExePath(arena));
+                if (shim_exe == null) shim_exe = try exports.shimExe(ctx, try win32.selfExePath(arena), .console);
                 try writeAlias(ctx, path, shim_exe.?, t, p, name, e);
             };
         }

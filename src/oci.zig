@@ -80,6 +80,18 @@ pub const Export = struct {
     args: []const []const u8 = &.{},
 };
 
+/// A Start menu shortcut, like a Flatpak's .desktop file. It runs one of the
+/// app's exports, through its shim.
+pub const Shortcut = struct {
+    /// The export it runs.
+    command: []const u8,
+    /// The shortcut's tooltip.
+    description: ?[]const u8 = null,
+    /// A file with the icon, in the app or a runtime: an .ico, or an .exe or
+    /// .dll that has one. Without it, the export's executable.
+    icon: ?[]const u8 = null,
+};
+
 /// What placeholders in a config stand for. They are expanded when the app
 /// runs, so images stay the same on every machine:
 ///   ${app}      the app's (read-only) directory
@@ -111,6 +123,17 @@ pub const Placeholders = struct {
             i += 1;
         }
         return out.items;
+    }
+
+    /// The file a command names: relative to the app's directory, or
+    /// starting with a placeholder.
+    pub fn commandPath(p: Placeholders, arena: std.mem.Allocator, command: []const u8) ![]u8 {
+        const path = if (isPlaceholderPath(command))
+            try p.expand(arena, command)
+        else
+            try std.fs.path.join(arena, &.{ p.app, command });
+        std.mem.replaceScalar(u8, path, '/', '\\');
+        return path;
     }
 
     fn lookup(p: Placeholders, name: []const u8) ?[]const u8 {
@@ -239,6 +262,9 @@ pub const AppConfig = struct {
     /// zig's image makes `dlltool` run `zig dlltool`, for instance. Absent
     /// unless there are some.
     aliases: ?std.json.ArrayHashMap(Export) = null,
+    /// Start menu shortcuts, by the name they show. Absent unless there are
+    /// some.
+    shortcuts: ?std.json.ArrayHashMap(Shortcut) = null,
     /// The images the app runs with, by alias, in the order of their layers.
     runtimes: std.json.ArrayHashMap(Runtime) = .{},
     /// Null in images made before iteration 4.
@@ -368,6 +394,38 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
                 return fail("{s}: alias {s} command \"{s}\" must be a relative path inside the app", .{ what, e.key_ptr.*, e.value_ptr.command });
         }
     }
+    if (c.shortcuts) |s| {
+        const names = s.map.keys();
+        for (names, s.map.values(), 0..) |name, shortcut, i| {
+            if (!isValidShortcutName(name))
+                return fail("{s}: shortcut name \"{s}\" must be 1-64 bytes without control characters or any of <>:\"/\\|?*, not start or end with a space or '.', and not be a device name such as CON", .{ what, name });
+            for (names[0..i]) |earlier| if (std.ascii.eqlIgnoreCase(earlier, name))
+                return fail("{s}: shortcuts \"{s}\" and \"{s}\" would be the same file", .{ what, earlier, name });
+            if (!c.exports.map.contains(shortcut.command))
+                return fail("{s}: shortcut \"{s}\" runs \"{s}\", which isn't one of the app's exports", .{ what, name, shortcut.command });
+            if (shortcut.icon) |icon| if (!isValidCommand(icon, aliases))
+                return fail("{s}: shortcut \"{s}\" icon \"{s}\" must be a relative path inside the app, or start with a runtime's ${{alias}}\\", .{ what, name, icon });
+            if (shortcut.description) |d| if (d.len > 256)
+                return fail("{s}: shortcut \"{s}\" description is longer than 256 bytes", .{ what, name });
+        }
+    }
+}
+
+/// Shortcut names become file names (`<name>.lnk`), which people see, so
+/// they may have spaces and any letters, but nothing Windows refuses.
+pub fn isValidShortcutName(name: []const u8) bool {
+    if (name.len == 0 or name.len > 64 or !std.unicode.utf8ValidateSlice(name)) return false;
+    for (name) |c| switch (c) {
+        0...31, 127, '<', '>', ':', '"', '/', '\\', '|', '?', '*' => return false,
+        else => {},
+    };
+    for ([_]u8{ name[0], name[name.len - 1] }) |c| if (c == ' ' or c == '.') return false;
+    // Windows reserves these names, with any extension.
+    const stem = name[0 .. std.mem.indexOfScalar(u8, name, '.') orelse name.len];
+    for ([_][]const u8{ "CON", "PRN", "AUX", "NUL" }) |device| if (std.ascii.eqlIgnoreCase(stem, device)) return false;
+    if (stem.len == 4 and (std.ascii.startsWithIgnoreCase(stem, "COM") or std.ascii.startsWithIgnoreCase(stem, "LPT")) and
+        stem[3] >= '0' and stem[3] <= '9') return false;
+    return true;
 }
 
 fn validateRuntimes(what: []const u8, runtimes: std.json.ArrayHashMap(Runtime)) error{Failed}!void {
@@ -407,7 +465,7 @@ pub fn isValidExportName(name: []const u8) bool {
         'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '_', '+' => {},
         else => return false,
     };
-    for ([_][]const u8{ "zigsaw", "zigsaw-shim" }) |reserved| {
+    for ([_][]const u8{ "zigsaw", "zigsaw-shim", "zigsaw-shimw" }) |reserved| {
         if (std.ascii.eqlIgnoreCase(name, reserved)) return false;
     }
     return true;
@@ -462,11 +520,20 @@ test isValidId {
     try std.testing.expect(!isValidId("x" ** 58));
 }
 
+test isValidShortcutName {
+    for ([_][]const u8{ "Text Editor", "GTK 4 Demo", "Éditeur de texte", "a", "Notes (beta)", "x.y", "COM10", "Console" }) |ok|
+        try std.testing.expect(isValidShortcutName(ok));
+    for ([_][]const u8{ "", " lead", "trail ", "dot.", ".dot", "a/b", "a\\b", "a:b", "what?", "tab\there", "con", "Nul.txt", "COM1", "lpt9", "\xff" }) |bad|
+        try std.testing.expect(!isValidShortcutName(bad));
+    try std.testing.expect(!isValidShortcutName("x" ** 65));
+}
+
 test isValidExportName {
     try std.testing.expect(isValidExportName("node"));
     try std.testing.expect(isValidExportName("python3.14"));
     try std.testing.expect(isValidExportName("c++"));
     try std.testing.expect(!isValidExportName("Zigsaw"));
+    try std.testing.expect(!isValidExportName("zigsaw-shimW"));
     try std.testing.expect(!isValidExportName("a/b"));
     try std.testing.expect(!isValidExportName(".hidden"));
     try std.testing.expect(!isValidExportName(""));

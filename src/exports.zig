@@ -7,6 +7,9 @@
 //! command directories: its PATH entries in its data directory, such as the
 //! global prefix of npm (`npm install -g typescript` gives `tsc`). Its shims
 //! are synced as it's installed, and after each of its runs.
+//!
+//! A command that is a GUI program gets zigsaw-shimw.exe, which opens no
+//! console window; any other gets zigsaw-shim.exe.
 
 const std = @import("std");
 const Io = std.Io;
@@ -14,6 +17,8 @@ const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Sidecar = @import("Sidecar.zig");
 const oci = @import("oci.zig");
+const pe = @import("pe.zig");
+const shortcuts = @import("shortcuts.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -49,12 +54,15 @@ pub fn list(ctx: *Context) ![]Shim {
     return shims.items;
 }
 
-/// Makes the store's shims match what the app provides, as it's installed.
-/// See `syncLocked`.
-pub fn sync(ctx: *Context, config: oci.AppConfig) !void {
+/// Makes the store's shims match what the app provides, as it's installed,
+/// with its layers deployed (see `syncLocked`), and then its Start menu
+/// shortcuts, which run them.
+pub fn sync(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig) !void {
     const lock = try ctx.store.lockShims(ctx.arena);
     defer lock.release(ctx.io);
-    try syncLocked(ctx, config, .install);
+    try syncLocked(ctx, manifest, config, .install);
+    const data_dir = try ctx.store.path(ctx.arena, &.{ "data", config.id });
+    try shortcuts.sync(ctx, config, try deployedPlaceholders(ctx, manifest, config, data_dir));
 }
 
 /// After a run of the app, gives the commands it installed shims, and
@@ -72,7 +80,7 @@ pub fn syncAfterRun(ctx: *Context, id: []const u8) void {
     // installed now counts.
     const ref = (ctx.store.readRef(arena, id) catch null) orelse return;
     const image = ctx.store.readImage(arena, id, ref.manifest) catch return;
-    syncLocked(ctx, image.config, .run) catch |err| switch (err) {
+    syncLocked(ctx, image.manifest, image.config, .run) catch |err| switch (err) {
         error.Failed => {},
         else => note("warning: couldn't update {s}'s commands: {t}", .{ id, err }),
     };
@@ -86,21 +94,23 @@ const When = enum { install, run };
 /// or updates the app's shims and removes those it no longer provides. A name
 /// another app already provides is skipped, with a warning on install. The
 /// caller holds the shims' lock (Store.lockShims).
-fn syncLocked(ctx: *Context, config: oci.AppConfig, when: When) !void {
+fn syncLocked(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, when: When) !void {
     const io = ctx.io;
     const arena = ctx.arena;
     const installed = try list(ctx);
     const zigsaw = try win32.selfExePath(arena);
     const data_dir = try ctx.store.path(arena, &.{ "data", config.id });
     const found = try findCommands(io, arena, try commandDirs(arena, config, data_dir));
+    const placeholders = try deployedPlaceholders(ctx, manifest, config, data_dir);
 
     var exported: std.ArrayList([]const u8) = .empty;
     var from_runs: std.ArrayList([]const u8) = .empty;
     var added: std.ArrayList([]const u8) = .empty;
-    var shim_exe: ?[]const u8 = null;
-    const names = try std.mem.concat(arena, []const u8, &.{ config.exports.map.keys(), found });
-    for (names, 0..) |name, i| {
-        const is_export = i < config.exports.map.count();
+    var shim_exes: std.EnumArray(ShimKind, ?[]const u8) = .initFill(null);
+    const export_count = config.exports.map.count();
+    for (0..export_count + found.len) |i| {
+        const is_export = i < export_count;
+        const name = if (is_export) config.exports.map.keys()[i] else found[i - export_count].name;
         if (!is_export and exportsName(config, name)) continue;
         const owner = find(installed, name);
         if (owner) |o| if (!std.mem.eql(u8, o.sidecar.app, config.id)) {
@@ -110,12 +120,18 @@ fn syncLocked(ctx: *Context, config: oci.AppConfig, when: When) !void {
             }
             continue;
         };
-        const sidecar: Sidecar = .{ .zigsaw = zigsaw, .home = ctx.store.root, .app = config.id, .command = name };
+        const target = if (is_export)
+            try placeholders.commandPath(arena, config.exports.map.values()[i].command)
+        else
+            found[i - export_count].path;
+        const kind = shimKind(io, target);
+        const sidecar: Sidecar = .{ .zigsaw = zigsaw, .home = ctx.store.root, .app = config.id, .command = name, .gui = kind == .gui };
         try (if (is_export) &exported else &from_runs).append(arena, name);
         // After a run, a shim that's there already is left as it is.
         if (when == .run and owner != null and owner.?.sidecar.eql(sidecar)) continue;
-        if (shim_exe == null) shim_exe = try shimExe(ctx, zigsaw);
-        writeShim(ctx, name, shim_exe.?, sidecar) catch |err| switch (when) {
+        const shim_exe = shim_exes.getPtr(kind);
+        if (shim_exe.* == null) shim_exe.* = try shimExe(ctx, zigsaw, kind);
+        writeShim(ctx, name, shim_exe.*.?, sidecar) catch |err| switch (when) {
             .install => return fail("writing the shim for {s} in {s} (is it running?): {t}", .{ name, try binDir(ctx), err }),
             .run => {
                 note("warning: couldn't add {s} to {s}: {t}", .{ name, try binDir(ctx), err });
@@ -200,33 +216,70 @@ fn isDataEntry(entry: []const u8) bool {
     return std.mem.startsWith(u8, entry, "${data}");
 }
 
+pub const Found = struct {
+    /// The file name without extension.
+    name: []const u8,
+    path: []const u8,
+};
+
 /// The commands in `dirs`: the executables and batch files directly in them,
 /// by file name without extension, sorted within each directory. Of two with
 /// the same name, the one in the earlier directory wins, as on PATH.
-pub fn findCommands(io: Io, arena: Allocator, dirs: []const []const u8) ![]const []const u8 {
-    var names: std.ArrayList([]const u8) = .empty;
+pub fn findCommands(io: Io, arena: Allocator, dirs: []const []const u8) ![]const Found {
+    var found: std.ArrayList(Found) = .empty;
     for (dirs) |dir_path| {
         var dir = Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| switch (err) {
             error.FileNotFound, error.NotDir => continue,
             else => |e| return e,
         };
         defer dir.close(io);
-        var here: std.ArrayList([]const u8) = .empty;
+        const before = found.items.len;
         var it = dir.iterate();
         while (try it.next(io)) |entry| {
             if (entry.kind != .file) continue;
             const name = commandName(entry.name) orelse continue;
-            if (containsIgnoreCase(names.items, name) or containsIgnoreCase(here.items, name)) continue;
-            try here.append(arena, try arena.dupe(u8, name));
+            if (findName(found.items, name)) continue;
+            try found.append(arena, .{
+                .name = try arena.dupe(u8, name),
+                .path = try std.fs.path.join(arena, &.{ dir_path, entry.name }),
+            });
         }
-        std.mem.sort([]const u8, here.items, {}, struct {
-            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-                return std.ascii.lessThanIgnoreCase(a, b);
+        std.mem.sort(Found, found.items[before..], {}, struct {
+            fn lessThan(_: void, a: Found, b: Found) bool {
+                return std.ascii.lessThanIgnoreCase(a.name, b.name);
             }
         }.lessThan);
-        try names.appendSlice(arena, here.items);
     }
-    return names.items;
+    return found.items;
+}
+
+fn findName(found: []const Found, name: []const u8) bool {
+    for (found) |f| if (std.ascii.eqlIgnoreCase(f.name, name)) return true;
+    return false;
+}
+
+pub const ShimKind = enum { console, gui };
+
+/// The shim for a command whose file is `path`: the GUI one for GUI
+/// programs, the console one for anything else, batch files and files that
+/// can't be read included.
+fn shimKind(io: Io, path: []const u8) ShimKind {
+    const subsystem = pe.subsystem(io, path) catch return .console;
+    return if (subsystem == .gui) .gui else .console;
+}
+
+/// The placeholders of the app's exports: its deployment and its runtimes'.
+fn deployedPlaceholders(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, data_dir: []const u8) !oci.Placeholders {
+    const arena = ctx.arena;
+    const layers = manifest.layers;
+    const runtimes = try arena.alloc(oci.Placeholders.Dir, config.runtimes.map.count());
+    for (runtimes, config.runtimes.map.keys(), layers[0..runtimes.len]) |*r, alias, l|
+        r.* = .{ .alias = alias, .path = try ctx.store.deployPath(arena, l.digest) };
+    return .{
+        .app = try ctx.store.deployPath(arena, oci.ownLayer(manifest).digest),
+        .data = data_dir,
+        .runtimes = runtimes,
+    };
 }
 
 /// The command a file in a command directory is: an executable or batch
@@ -245,9 +298,14 @@ fn binDir(ctx: *Context) ![]const u8 {
     return ctx.store.path(ctx.arena, &.{"bin"});
 }
 
-/// zigsaw-shim.exe's bytes. It is installed next to zigsaw.exe.
-pub fn shimExe(ctx: *Context, zigsaw: []const u8) ![]const u8 {
-    const path = try std.fs.path.join(ctx.arena, &.{ std.fs.path.dirname(zigsaw).?, "zigsaw-shim.exe" });
+/// The bytes of zigsaw-shim.exe, or of zigsaw-shimw.exe for GUI commands.
+/// They are installed next to zigsaw.exe.
+pub fn shimExe(ctx: *Context, zigsaw: []const u8, kind: ShimKind) ![]const u8 {
+    const name = switch (kind) {
+        .console => "zigsaw-shim.exe",
+        .gui => "zigsaw-shimw.exe",
+    };
+    const path = try std.fs.path.join(ctx.arena, &.{ std.fs.path.dirname(zigsaw).?, name });
     return Io.Dir.cwd().readFileAlloc(ctx.io, path, ctx.arena, .limited(16 << 20)) catch |err|
         fail("reading {s}, which should be installed next to zigsaw.exe: {t}", .{ path, err });
 }
@@ -369,8 +427,10 @@ test findCommands {
         try std.fs.path.join(arena, &.{ root, "missing" }),
         try std.fs.path.join(arena, &.{ root, "two" }),
     };
-    const names = try findCommands(io, arena, dirs);
+    const found = try findCommands(io, arena, dirs);
     const want: []const []const u8 = &.{ "a", "b", "Semver", "tsc", "c" };
-    try std.testing.expectEqual(want.len, names.len);
-    for (want, names) |w, n| try std.testing.expectEqualStrings(w, n);
+    try std.testing.expectEqual(want.len, found.len);
+    for (want, found) |w, f| try std.testing.expectEqualStrings(w, f.name);
+    try std.testing.expectEqualStrings(try std.fs.path.join(arena, &.{ root, "one", "tsc.cmd" }), found[3].path);
+    try std.testing.expectEqualStrings(try std.fs.path.join(arena, &.{ root, "two", "c.com" }), found[4].path);
 }

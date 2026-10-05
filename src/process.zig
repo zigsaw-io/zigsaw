@@ -137,6 +137,10 @@ pub const SpawnSpec = struct {
     security: ?*const win32.SECURITY_CAPABILITIES = null,
     /// The child's token, such as `lowIntegrityToken`'s; null gives it ours.
     token: ?win32.HANDLE = null,
+    /// More CreateProcess flags, such as DETACHED_PROCESS.
+    creation_flags: win32.DWORD = 0,
+    /// The child's stdin, stdout and stderr; null hands it ours.
+    stdio: ?[3]?win32.HANDLE = null,
 };
 
 /// A copy of zigsaw's token labelled low integrity, which a process can make
@@ -161,22 +165,49 @@ pub fn lowIntegrityToken(arena: Allocator) !win32.HANDLE {
 }
 
 /// Runs a process to completion and returns its exit code. The child gets
-/// our stdio handles and nothing else, and runs in a job object, so its whole
-/// process tree ends when it does, or when we do.
+/// our stdio handles (or `spec.stdio`) and nothing else, and runs in a job
+/// object, so its whole process tree ends when it does, or when we do.
 pub fn spawn(arena: Allocator, spec: SpawnSpec) !u32 {
+    const child = try start(arena, spec);
+    return child.wait();
+}
+
+/// A process `start` started, in its job object.
+pub const Child = struct {
+    job: win32.HANDLE,
+    process: win32.HANDLE,
+
+    /// Waits for the process to exit, ends what's left of its tree, and
+    /// returns its exit code.
+    pub fn wait(child: Child) !u32 {
+        defer _ = win32.CloseHandle(child.job);
+        defer _ = win32.CloseHandle(child.process);
+        if (win32.WaitForSingleObject(child.process, win32.INFINITE) != win32.WAIT_OBJECT_0)
+            return win32.lastErrorFail("WaitForSingleObject");
+        var code: win32.DWORD = 0;
+        if (win32.GetExitCodeProcess(child.process, &code) == 0)
+            return win32.lastErrorFail("GetExitCodeProcess");
+        endJob(child.job);
+        return code;
+    }
+};
+
+/// Starts a process as `spawn` does, without waiting for it.
+pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
     const job = win32.CreateJobObjectW(null, null) orelse return win32.lastErrorFail("CreateJobObjectW");
-    defer _ = win32.CloseHandle(job);
+    errdefer _ = win32.CloseHandle(job);
     var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
     limits.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (win32.SetInformationJobObject(job, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits))) == 0)
         return win32.lastErrorFail("SetInformationJobObject");
 
-    // Hand the app our stdio handles and nothing else.
+    // Hand the app our stdio handles, or the ones given, and nothing else.
     var std_handles: [3]?win32.HANDLE = .{ null, null, null };
     var inherit: [3]win32.HANDLE = undefined;
     var inherit_count: usize = 0;
     for ([_]win32.DWORD{ win32.STD_INPUT_HANDLE, win32.STD_OUTPUT_HANDLE, win32.STD_ERROR_HANDLE }, 0..) |which, i| {
-        const h = win32.GetStdHandle(which) orelse continue;
+        const given = if (spec.stdio) |s| s[i] else win32.GetStdHandle(which);
+        const h = given orelse continue;
         if (h == win32.INVALID_HANDLE_VALUE) continue;
         if (win32.SetHandleInformation(h, win32.HANDLE_FLAG_INHERIT, win32.HANDLE_FLAG_INHERIT) == 0) continue;
         std_handles[i] = h;
@@ -228,7 +259,7 @@ pub fn spawn(arena: Allocator, spec: SpawnSpec) !u32 {
     const exe = try win32.wide(arena, spec.exe);
     const command_line = try win32.wide(arena, spec.command_line);
     const inherit_handles: win32.BOOL = @intFromBool(inherit_count > 0);
-    const flags = win32.EXTENDED_STARTUPINFO_PRESENT | win32.CREATE_UNICODE_ENVIRONMENT;
+    const flags = win32.EXTENDED_STARTUPINFO_PRESENT | win32.CREATE_UNICODE_ENVIRONMENT | spec.creation_flags;
     const env: ?*const anyopaque = if (spec.env_block) |b| b.ptr else null;
     const cwd: ?win32.LPCWSTR = if (spec.cwd) |c| try win32.wide(arena, c) else null;
     if (spec.token) |token| {
@@ -239,15 +270,7 @@ pub fn spawn(arena: Allocator, spec: SpawnSpec) !u32 {
             return win32.lastErrorFail("CreateProcessW");
     }
     _ = win32.CloseHandle(info.hThread);
-    defer _ = win32.CloseHandle(info.hProcess);
-
-    if (win32.WaitForSingleObject(info.hProcess, win32.INFINITE) != win32.WAIT_OBJECT_0)
-        return win32.lastErrorFail("WaitForSingleObject");
-    var code: win32.DWORD = 0;
-    if (win32.GetExitCodeProcess(info.hProcess, &code) == 0)
-        return win32.lastErrorFail("GetExitCodeProcess");
-    endJob(job);
-    return code;
+    return .{ .job = job, .process = info.hProcess };
 }
 
 /// Ends whatever is left in the job, and waits a while for it to be gone.

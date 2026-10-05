@@ -32,6 +32,8 @@ pub const CTRL_BREAK_EVENT: DWORD = 1;
 // ---------------------------------------------------------------------------
 // Processes
 
+/// The child gets no console, rather than ours or a new one.
+pub const DETACHED_PROCESS: DWORD = 0x00000008;
 pub const CREATE_UNICODE_ENVIRONMENT: DWORD = 0x00000400;
 pub const EXTENDED_STARTUPINFO_PRESENT: DWORD = 0x00080000;
 pub const STARTF_USESTDHANDLES: DWORD = 0x00000100;
@@ -94,6 +96,24 @@ pub extern "kernel32" fn CreateFileW(
 ) callconv(.winapi) HANDLE;
 pub extern "kernel32" fn WriteFile(file: HANDLE, buffer: [*]const u8, to_write: DWORD, written: ?*DWORD, overlapped: ?*anyopaque) callconv(.winapi) BOOL;
 pub extern "kernel32" fn ReadFile(file: HANDLE, buffer: [*]u8, to_read: DWORD, read: ?*DWORD, overlapped: ?*anyopaque) callconv(.winapi) BOOL;
+pub const SECURITY_ATTRIBUTES = extern struct {
+    nLength: DWORD = @sizeOf(SECURITY_ATTRIBUTES),
+    lpSecurityDescriptor: ?*anyopaque = null,
+    bInheritHandle: BOOL = FALSE,
+};
+pub extern "kernel32" fn CreatePipe(read: *HANDLE, write: *HANDLE, attributes: ?*const SECURITY_ATTRIBUTES, size: DWORD) callconv(.winapi) BOOL;
+pub const ERROR_BROKEN_PIPE: DWORD = 109;
+pub const FILE_TYPE_UNKNOWN: DWORD = 0;
+pub const FILE_TYPE_DISK: DWORD = 1;
+pub const FILE_TYPE_CHAR: DWORD = 2;
+pub const FILE_TYPE_PIPE: DWORD = 3;
+pub extern "kernel32" fn GetFileType(file: HANDLE) callconv(.winapi) DWORD;
+pub extern "kernel32" fn GetEnvironmentVariableW(name: LPCWSTR, buffer: ?[*]u16, size: DWORD) callconv(.winapi) DWORD;
+pub const CREATE_ALWAYS: DWORD = 2;
+pub const GENERIC_WRITE: DWORD = 0x40000000;
+pub const MB_OK: c_uint = 0x0;
+pub const MB_ICONERROR: c_uint = 0x10;
+pub extern "user32" fn MessageBoxW(window: ?HANDLE, text: LPCWSTR, caption: LPCWSTR, kind: c_uint) callconv(.winapi) c_int;
 pub extern "kernel32" fn GetModuleFileNameW(module: ?*anyopaque, file_name: [*]u16, size: DWORD) callconv(.winapi) DWORD;
 pub extern "kernel32" fn SetEnvironmentVariableW(name: LPCWSTR, value: ?LPCWSTR) callconv(.winapi) BOOL;
 pub extern "kernel32" fn SetConsoleCtrlHandler(
@@ -457,6 +477,80 @@ pub extern "advapi32" fn CredReadW(target: LPCWSTR, type: DWORD, flags: DWORD, c
 pub extern "advapi32" fn CredWriteW(credential: *const CREDENTIALW, flags: DWORD) callconv(.winapi) BOOL;
 pub extern "advapi32" fn CredDeleteW(target: LPCWSTR, type: DWORD, flags: DWORD) callconv(.winapi) BOOL;
 pub extern "advapi32" fn CredFree(buffer: ?*anyopaque) callconv(.winapi) void;
+
+// ---------------------------------------------------------------------------
+// COM and the shell: shortcuts (.lnk files) and known folders
+
+pub const GUID = extern struct {
+    Data1: u32,
+    Data2: u16,
+    Data3: u16,
+    Data4: [8]u8,
+};
+
+pub const S_OK: HRESULT = 0;
+pub const S_FALSE: HRESULT = 1;
+pub const COINIT_APARTMENTTHREADED: DWORD = 0x2;
+pub const CLSCTX_INPROC_SERVER: DWORD = 0x1;
+pub const STGM_READ: DWORD = 0x0;
+/// IShellLinkW.GetPath: the path as stored, without expanding variables.
+pub const SLGP_RAWPATH: DWORD = 0x4;
+pub const MAX_PATH = 260;
+pub const INFOTIPSIZE = 1024;
+
+pub const CLSID_ShellLink: GUID = .{ .Data1 = 0x00021401, .Data2 = 0, .Data3 = 0, .Data4 = .{ 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+pub const IID_IShellLinkW: GUID = .{ .Data1 = 0x000214F9, .Data2 = 0, .Data3 = 0, .Data4 = .{ 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+pub const IID_IPersistFile: GUID = .{ .Data1 = 0x0000010B, .Data2 = 0, .Data3 = 0, .Data4 = .{ 0xC0, 0, 0, 0, 0, 0, 0, 0x46 } };
+/// The user's Start menu Programs folder.
+pub const FOLDERID_Programs: GUID = .{ .Data1 = 0xA77F5D77, .Data2 = 0x2E2B, .Data3 = 0x44C3, .Data4 = .{ 0xA6, 0xA2, 0xAB, 0xA6, 0x01, 0x05, 0x4A, 0x51 } };
+
+/// IShellLinkW's methods, in vtable order. Only those zigsaw calls are typed.
+pub const IShellLinkW = extern struct {
+    vtable: *const extern struct {
+        QueryInterface: *const fn (*IShellLinkW, *const GUID, *?*anyopaque) callconv(.winapi) HRESULT,
+        AddRef: *const fn (*IShellLinkW) callconv(.winapi) u32,
+        Release: *const fn (*IShellLinkW) callconv(.winapi) u32,
+        GetPath: *const fn (*IShellLinkW, [*]u16, c_int, ?*anyopaque, DWORD) callconv(.winapi) HRESULT,
+        GetIDList: *const anyopaque,
+        SetIDList: *const anyopaque,
+        GetDescription: *const anyopaque,
+        SetDescription: *const fn (*IShellLinkW, LPCWSTR) callconv(.winapi) HRESULT,
+        GetWorkingDirectory: *const anyopaque,
+        SetWorkingDirectory: *const fn (*IShellLinkW, LPCWSTR) callconv(.winapi) HRESULT,
+        GetArguments: *const anyopaque,
+        SetArguments: *const anyopaque,
+        GetHotkey: *const anyopaque,
+        SetHotkey: *const anyopaque,
+        GetShowCmd: *const anyopaque,
+        SetShowCmd: *const anyopaque,
+        GetIconLocation: *const anyopaque,
+        SetIconLocation: *const fn (*IShellLinkW, LPCWSTR, c_int) callconv(.winapi) HRESULT,
+        SetRelativePath: *const anyopaque,
+        Resolve: *const anyopaque,
+        SetPath: *const fn (*IShellLinkW, LPCWSTR) callconv(.winapi) HRESULT,
+    },
+};
+
+/// IPersistFile's methods, in vtable order.
+pub const IPersistFile = extern struct {
+    vtable: *const extern struct {
+        QueryInterface: *const anyopaque,
+        AddRef: *const anyopaque,
+        Release: *const fn (*IPersistFile) callconv(.winapi) u32,
+        GetClassID: *const anyopaque,
+        IsDirty: *const anyopaque,
+        Load: *const fn (*IPersistFile, LPCWSTR, DWORD) callconv(.winapi) HRESULT,
+        Save: *const fn (*IPersistFile, ?LPCWSTR, BOOL) callconv(.winapi) HRESULT,
+        SaveCompleted: *const anyopaque,
+        GetCurFile: *const anyopaque,
+    },
+};
+
+pub extern "ole32" fn CoInitializeEx(reserved: ?*anyopaque, flags: DWORD) callconv(.winapi) HRESULT;
+pub extern "ole32" fn CoUninitialize() callconv(.winapi) void;
+pub extern "ole32" fn CoCreateInstance(clsid: *const GUID, outer: ?*anyopaque, context: DWORD, iid: *const GUID, object: *?*anyopaque) callconv(.winapi) HRESULT;
+pub extern "ole32" fn CoTaskMemFree(mem: ?*anyopaque) callconv(.winapi) void;
+pub extern "shell32" fn SHGetKnownFolderPath(id: *const GUID, flags: DWORD, token: ?HANDLE, path: *?LPWSTR) callconv(.winapi) HRESULT;
 
 // ---------------------------------------------------------------------------
 // Helpers

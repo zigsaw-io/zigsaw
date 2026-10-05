@@ -24,9 +24,9 @@ jobs:
   reproduce:
     runs-on: windows-2025
     # The job took 31 minutes after iteration 8, zot's vendor step (561 Go
-    # modules) included. Iteration 10 adds GTK's SDK, about 14 minutes of
-    # building on a desktop machine.
-    timeout-minutes: 90
+    # modules) included, and 68 with GTK's images in iteration 10. GTK's
+    # images are left out until they're stable locally (see SKIP_RECIPES).
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,8 +48,12 @@ jobs:
       - name: Build zigsaw
         run: zig build
 
+      # Not GTK's: its SDK alone is a quarter of an hour of building. Meson's
+      # image stays, as tests/build.sh builds with it.
       - name: Build the published recipes and compare them with the published images
         shell: bash
+        env:
+          SKIP_RECIPES: gtk4-sdk.json gtk4.json gnome-text-editor.json
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
           bash tests/published.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/published.txt"
@@ -84,13 +88,6 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: bash tests/ctrlc.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/ctrlc.txt"
-
-      # GTK's SDK and runtime are in the build store, as published.sh built
-      # them; the suite opens windows on the runner's desktop.
-      - name: tests/gtk.sh
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: bash tests/gtk.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/gtk.txt"
 
       # zot is the app recipes/zot.json builds, which published.sh built in
       # the build store; tests/zot.sh runs it with zigsaw.

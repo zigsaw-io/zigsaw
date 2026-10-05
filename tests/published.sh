@@ -19,7 +19,8 @@
 # Needs Git Bash and network access. Pulls into a temporary store. Builds the
 # recipes in BUILD_HOME if set, e.g. a store that already has their downloads,
 # otherwise in a temporary store. Keeps the build and pull logs in LOG_DIR if
-# set.
+# set. Skips the recipes SKIP_RECIPES lists (file names, separated by spaces),
+# as CI does with GTK's.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -81,7 +82,15 @@ host_built() {
 }
 
 ids=()
+skipped=0
 for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); do
+    case " ${SKIP_RECIPES:-} " in
+    *" $name "*)
+        printf 'skip  %s\n' "$name"
+        skipped=$((skipped + 1))
+        continue
+        ;;
+    esac
     recipe="$root\\recipes\\$name"
     id=$(grep -o '"id": *"[^"]*"' "$recipe" | cut -d'"' -f4)
     ids+=("$id")
@@ -157,5 +166,5 @@ if [ -z "${BUILD_HOME:-}" ]; then
 fi
 rm -rf "$work"
 echo
-echo "$failures check(s) failed; $unpublished version(s) not published yet."
+echo "$failures check(s) failed; $unpublished version(s) not published yet; $skipped recipe(s) skipped."
 exit $((failures > 0))

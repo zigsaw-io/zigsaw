@@ -1,0 +1,21 @@
+{
+  "id": "test.shims.gui",
+  "version": "1",
+  "command": "gui.exe",
+  "exports": {
+    "gui-app": { "command": "gui.exe" },
+    "console-app": { "command": "argv.exe" }
+  },
+  "shortcuts": {
+    "Zigsaw GUI Test": { "command": "gui-app", "description": "Records that it ran" }
+  },
+  "modules": [
+    {
+      "name": "programs",
+      "sources": [
+        { "path": "../../zig-out/test/zigsaw-gui.exe", "dest": "gui.exe" },
+        { "path": "../../zig-out/test/zigsaw-argv.exe", "dest": "argv.exe" }
+      ]
+    }
+  ]
+}

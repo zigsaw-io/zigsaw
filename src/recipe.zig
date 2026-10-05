@@ -119,6 +119,8 @@ pub const Recipe = struct {
     exports: ?std.json.ArrayHashMap(oci.Export) = null,
     /// Commands the image gives builds that use it (see oci.AppConfig).
     aliases: ?std.json.ArrayHashMap(oci.Export) = null,
+    /// Start menu shortcuts to exports (see oci.AppConfig).
+    shortcuts: ?std.json.ArrayHashMap(oci.Shortcut) = null,
     /// Images the build uses, by alias: references pinned with "@sha256:...".
     sdk: std.json.ArrayHashMap([]const u8) = .{},
     /// Images the app runs with, by alias, pinned the same way. Their
@@ -156,6 +158,7 @@ pub const Recipe = struct {
             .permissions = r.permissions,
             .exports = exports,
             .aliases = r.aliases,
+            .shortcuts = r.shortcuts,
             .runtimes = runtimes,
             .build = build,
         };
@@ -427,8 +430,29 @@ test "recipe checks" {
         ,
         \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "build": ["x"], "vendor": { "commands": ["x"], "dir": "v", "sha256": "ABC" } }] }
         ,
+        // Shortcuts: to an export, named so they can be file names, with an
+        // icon inside the app.
+        \\{ "id": "x", "version": "1", "command": "a.exe", "shortcuts": { "A": { "command": "b" } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "shortcuts": { "A/B": { "command": "a" } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "shortcuts": { "A": { "command": "a" }, "a": { "command": "a" } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "shortcuts": { "A": { "command": "a", "icon": "../a.ico" } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
     };
     for (bad) |text| try std.testing.expectError(error.Failed, parse(arena, "t.json", text));
+
+    // Shortcuts reach the config; configs without them don't mention them,
+    // so their images keep their digests.
+    const with = try parse(arena, "t.json",
+        \\{ "id": "x", "version": "1", "command": "a.exe", "shortcuts": { "Text Editor": { "command": "a", "description": "Edit" } },
+        \\  "modules": [{ "name": "m", "build": ["x"] }] }
+    );
+    const with_json = try oci.toJson(arena, try with.appConfig(arena, .{}, .{}));
+    try std.testing.expect(std.mem.indexOf(u8, with_json, "\"Text Editor\"") != null);
+    const without_json = try oci.toJson(arena, try vendored.appConfig(arena, .{}, .{}));
+    try std.testing.expect(std.mem.indexOf(u8, without_json, "shortcuts") == null);
 }
 
 test "archive kinds are inferred" {

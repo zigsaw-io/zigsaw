@@ -15,6 +15,10 @@ home: []const u8,
 app: []const u8,
 /// Export name, passed as `zigsaw run --command=<command>`.
 command: []const u8,
+/// Whether the command is a GUI program, so the shim next to this file is
+/// zigsaw-shimw.exe, which opens no console. Absent in sidecars written
+/// before iteration 11, whose shims are all console ones.
+gui: bool = false,
 
 pub const extension = ".shim";
 
@@ -24,6 +28,7 @@ pub fn parse(bytes: []const u8) error{InvalidShimFile}!Sidecar {
     var home: ?[]const u8 = null;
     var app: ?[]const u8 = null;
     var command: ?[]const u8 = null;
+    var gui = false;
     var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t");
@@ -35,18 +40,20 @@ pub fn parse(bytes: []const u8) error{InvalidShimFile}!Sidecar {
         if (std.mem.eql(u8, key, "home")) home = value;
         if (std.mem.eql(u8, key, "app")) app = value;
         if (std.mem.eql(u8, key, "command")) command = value;
+        if (std.mem.eql(u8, key, "gui")) gui = std.mem.eql(u8, value, "true");
     }
     return .{
         .zigsaw = zigsaw orelse return error.InvalidShimFile,
         .home = home orelse return error.InvalidShimFile,
         .app = app orelse return error.InvalidShimFile,
         .command = command orelse return error.InvalidShimFile,
+        .gui = gui,
     };
 }
 
 pub fn eql(a: Sidecar, b: Sidecar) bool {
     return std.mem.eql(u8, a.zigsaw, b.zigsaw) and std.mem.eql(u8, a.home, b.home) and
-        std.mem.eql(u8, a.app, b.app) and std.mem.eql(u8, a.command, b.command);
+        std.mem.eql(u8, a.app, b.app) and std.mem.eql(u8, a.command, b.command) and a.gui == b.gui;
 }
 
 pub fn format(s: Sidecar, w: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -57,8 +64,9 @@ pub fn format(s: Sidecar, w: *std.Io.Writer) std.Io.Writer.Error!void {
         \\home = {s}
         \\app = {s}
         \\command = {s}
+        \\gui = {}
         \\
-    , .{ s.zigsaw, s.home, s.app, s.command });
+    , .{ s.zigsaw, s.home, s.app, s.command, s.gui });
 }
 
 /// The sidecar of an alias shim, which a build puts on its PATH for a
@@ -122,4 +130,14 @@ test "round-trips" {
     try want.format(&w);
     try std.testing.expectEqualDeep(want, try parse(w.buffered()));
     try std.testing.expectError(error.InvalidShimFile, parse("app = x\r\n"));
+
+    var gui = want;
+    gui.gui = true;
+    w = .fixed(&buf);
+    try gui.format(&w);
+    try std.testing.expectEqualDeep(gui, try parse(w.buffered()));
+    try std.testing.expect(!gui.eql(want));
+    // Sidecars from before iteration 11 have no gui line.
+    const old = try parse("zigsaw = z.exe\r\nhome = h\r\napp = a\r\ncommand = c\r\n");
+    try std.testing.expect(!old.gui);
 }

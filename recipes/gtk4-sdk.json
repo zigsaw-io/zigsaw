@@ -304,6 +304,53 @@
         "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dwin32-backend=true -Dx11-backend=false -Dwayland-backend=false -Dmacos-backend=false -Dmedia-gstreamer=disabled -Dvulkan=disabled -Dintrospection=disabled -Daccesskit=disabled -Dprint-cpdb=disabled -Dcolord=disabled -Dsysprof=disabled -Dcloudproviders=disabled -Dtracker=disabled -Ddocumentation=false -Dman-pages=false -Dbuild-demos=true -Dbuild-examples=false -Dbuild-tests=false -Dbuild-testsuite=false",
         "meson install -C out"
       ]
+    },
+    {
+      "name": "hicolor-icon-theme",
+      "sources": [
+        {
+          "url": "https://icon-theme.freedesktop.org/releases/hicolor-icon-theme-0.18.tar.xz",
+          "sha256": "db0e50a80aa3bf64bb45cbca5cf9f75efd9348cf2ac690b907435238c3cf81d7",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\"",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "adwaita-icon-theme",
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/adwaita-icon-theme/51/adwaita-icon-theme-51.0.tar.xz",
+          "sha256": "ba561cf3c96305a47179fa5605856ad695c9238ea07f7093aebd9ba80c4e323b",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\"",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "libadwaita",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu", "CFLAGS": "-s" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/libadwaita/1.10/libadwaita-1.10.0.tar.xz",
+          "sha256": "b1bf56239269d101a6391ad4553c910eff9cc6170b803916405477ef60a66c84",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "sed -i -e 's/i18n[.]merge_file(/configure_file(copy: true,/' -e '/^ *po_dir:/d' -e '/^ *type:/d' demo/data/meson.build",
+        "! grep -q merge_file demo/data/meson.build",
+        "sed -i \"s/^demo_kwargs = {}$/demo_kwargs = { 'win_subsystem': 'windows' }/\" demo/meson.build",
+        "grep -q \"^demo_kwargs = { 'win_subsystem': 'windows' }$\" demo/meson.build",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dintrospection=disabled -Dvapi=false -Ddocumentation=false -Dtests=false -Dexamples=true",
+        "meson install -C out"
+      ]
     }
   ]
 }

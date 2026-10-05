@@ -19,17 +19,16 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     // Copied to <store>\bin\<name>.exe for every exported command, so it is
-    // always built small. zigsaw expects it next to zigsaw.exe.
-    const shim_mod = b.createModule(.{
-        .root_source_file = b.path("src/shim.zig"),
-        .target = target,
-        .optimize = .ReleaseSmall,
-        .strip = true,
-    });
-    b.installArtifact(b.addExecutable(.{
-        .name = "zigsaw-shim",
-        .root_module = shim_mod,
-    }));
+    // always built small. zigsaw expects it next to zigsaw.exe. zigsaw-shimw
+    // is the same program built as a GUI one, for GUI commands.
+    for ([_]bool{ false, true }) |gui| {
+        const shim = b.addExecutable(.{
+            .name = if (gui) "zigsaw-shimw" else "zigsaw-shim",
+            .root_module = shimModule(b, target, .ReleaseSmall, gui),
+        });
+        if (gui) shim.subsystem = .windows;
+        b.installArtifact(shim);
+    }
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -79,14 +78,34 @@ pub fn build(b: *std.Build) void {
     const acprobe_step = b.step("acprobe", "Build the AppContainer probe used by tests/matrix.sh");
     acprobe_step.dependOn(&b.addInstallArtifact(acprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // A GUI program that records how it was started and exits with the code
+    // it's given, for the GUI shim; see tests/shims.sh. Also installed under
+    // zig-out\test.
+    const gui_fixture = b.addExecutable(.{ .name = "zigsaw-gui", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/gui.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    gui_fixture.subsystem = .windows;
+    const gui_step = b.step("gui-fixture", "Build the GUI test program used by tests/shims.sh");
+    gui_step.dependOn(&b.addInstallArtifact(gui_fixture, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize) })).step);
-    const shim_test_mod = b.createModule(.{
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shimModule(b, target, optimize, true) })).step);
+}
+
+fn shimModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, gui: bool) *std.Build.Module {
+    const mod = b.createModule(.{
         .root_source_file = b.path("src/shim.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = if (optimize == .ReleaseSmall) true else null,
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shim_test_mod })).step);
+    const options = b.addOptions();
+    options.addOption(bool, "gui", gui);
+    mod.addOptions("options", options);
+    return mod;
 }
 
 fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
@@ -98,5 +117,9 @@ fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
     // AppContainer profiles live in userenv; ACL editing lives in advapi32.
     mod.linkSystemLibrary("userenv", .{});
     mod.linkSystemLibrary("advapi32", .{});
+    // Start menu shortcuts are COM objects (ole32), in the user's Programs
+    // folder (shell32).
+    mod.linkSystemLibrary("ole32", .{});
+    mod.linkSystemLibrary("shell32", .{});
     return mod;
 }

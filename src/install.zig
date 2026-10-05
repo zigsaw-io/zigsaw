@@ -54,5 +54,5 @@ pub fn install(ctx: *Context, image: Image) !void {
     note("  permits  {s}", .{if (permissions.items.len == 0) "nothing outside its own files" else try std.mem.join(arena, ", ", permissions.items)});
     const saved = try override.load(ctx.store, arena, cfg.id);
     if (!saved.isEmpty()) note("  override {f}", .{saved});
-    try exports.sync(ctx, cfg);
+    try exports.sync(ctx, image.manifest, cfg);
 }

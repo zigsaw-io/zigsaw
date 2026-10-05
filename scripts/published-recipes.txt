@@ -19,3 +19,4 @@ zstd.json
 meson.json
 gtk4-sdk.json
 gtk4.json
+gnome-text-editor.json

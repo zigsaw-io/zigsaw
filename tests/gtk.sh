@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 # GTK end to end: an app built against GTK's SDK image (org.gtk.Gtk4.Sdk),
-# with Meson and zig, runs on GTK's runtime image (org.gtk.Gtk4), opens a
-# window, draws a frame and quits, in each sandbox; the runtime's own tools
-# run too.
+# with Meson and zig, runs on GTK's runtime image (org.gtk.Gtk4), with
+# libadwaita, opens a window, draws a frame and quits, in each sandbox; the
+# runtime's own tools run too, its demos get the windowless shim and Start
+# menu shortcuts (in a temporary folder), and GNOME Text Editor
+# (recipes/gnome-text-editor.json) starts up in each sandbox.
+#
+# Not in CI: the SDK takes a quarter of an hour to build, and the runner has
+# no GPU for the OpenGL check.
 #
 #   GTK_HOME=path\to\store bash tests/gtk.sh [path\to\zigsaw.exe]
 #
 # Building GTK's SDK takes about 15 minutes, so this uses a store that has
 # both GTK images and the SDK images the app builds with (GTK_HOME, or
 # BUILD_HOME as tests/published.sh leaves it), and says so and stops if
-# neither has them. It installs its app there, and removes it afterwards.
-# The app opens a small window on the desktop for a moment, three times.
+# neither has them. It installs its app there, and removes it afterwards;
+# it builds Text Editor there too unless the store has it (a few minutes),
+# and then removes it. The apps open windows on the desktop for a moment.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -26,6 +32,10 @@ fi
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
 APP=test.gtk.hello
+EDITOR=org.gnome.TextEditor
+# Start menu shortcuts go here rather than the user's Start menu.
+links="$work\\links"
+export ZIGSAW_SHORTCUTS_DIR="$links"
 
 failures=0
 check() {
@@ -59,6 +69,8 @@ drew() {
 check "it runs on GTK's runtime: opens a window and draws a frame" drew
 check "with --sandbox=low" drew --sandbox=low
 check "with --sandbox=appcontainer" drew --sandbox=appcontainer
+adwaita() { timeout 120 "$zigsaw" run $APP 2>&1 | tr -d '\r' | grep -q '^libadwaita 1\.10\.0$'; }
+check "the runtime has libadwaita 1.10.0" adwaita
 check "with GDK_DEBUG=dcomp, GTK draws with OpenGL" sh -c "timeout 120 \"\$0\" run --env=GDK_DEBUG=dcomp $APP 2>&1 | grep -q '^drew a frame with GskGLRenderer'" "$zigsaw"
 settings() { timeout 60 "$zigsaw" run --command=gtk4-query-settings org.gtk.Gtk4 | grep -q 'gtk-theme-name: "Default"'; }
 check "the runtime's gtk4-query-settings reads GTK's settings" settings
@@ -74,7 +86,43 @@ xdg() {
 }
 check "GLib keeps its files in the app's data directory, and settings in a key file there" xdg
 
+# GUI programs get the shim that opens no console, and declared shortcuts.
+# Installing the runtime again (from the build cache) puts its shortcuts in
+# the test's folder.
+z build "$root\\recipes\\gtk4.json" >/dev/null 2>&1
+shim_dir=$(dirname "$zigsaw")
+shim_is() { cmp -s "$ZIGSAW_HOME\\bin\\$1.exe" "$shim_dir\\$2"; }
+gui_shims() { shim_is gtk4-demo zigsaw-shimw.exe && shim_is adwaita-1-demo zigsaw-shimw.exe && shim_is gtk4-query-settings zigsaw-shim.exe; }
+check "the demos get the windowless shim, gtk4-query-settings the console one" gui_shims
+check "the runtime's demos get shortcuts" test -f "$links\\GTK Demo.lnk" -a -f "$links\\Adwaita Demo.lnk"
+# stays_up <seconds> <zigsaw run arguments...>: the app is still running
+# when the time is up, rather than having crashed or failed a check.
+stays_up() {
+    local seconds=$1
+    shift
+    timeout "$seconds" "$zigsaw" run --env=G_DEBUG=fatal-criticals "$@" >/dev/null 2>&1
+    [ $? -eq 124 ]
+}
+check "the Adwaita demo runs" stays_up 15 --command=adwaita-1-demo org.gtk.Gtk4
+
+# GNOME Text Editor, on the runtime. Built here unless the store has it,
+# which takes a few minutes.
+installed_editor=false
+if [ ! -f "$ZIGSAW_HOME\\refs\\$EDITOR.json" ]; then
+    z build "$root\\recipes\\gnome-text-editor.json" >"$work\\editor.log" 2>&1 || echo "building $EDITOR failed: $(tail -1 "$work\\editor.log")"
+    installed_editor=true
+else
+    z build "$root\\recipes\\gnome-text-editor.json" >/dev/null 2>&1
+fi
+editor_version() { timeout 60 "$zigsaw" run $EDITOR --version | tr -d '\r' | grep -q '^Text Editor 51\.0 '; }
+check "Text Editor 51.0 is installed" editor_version
+check "it gets the windowless shim and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\gnome-text-editor.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\Text Editor.lnk'"
+check "it runs" stays_up 15 $EDITOR --standalone
+check "with --sandbox=low" stays_up 15 --sandbox=low $EDITOR --standalone
+check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $EDITOR --standalone
+
 cd "$root" || exit 1
+$installed_editor && z rm --delete-data $EDITOR >/dev/null 2>&1
 z rm --delete-data $APP >/dev/null 2>&1
 rm -rf "$work"
 echo

@@ -1,7 +1,7 @@
 {
   "id": "org.gtk.Gtk4",
   "version": "4.24.1",
-  "command": "bin/gtk4-widget-factory.exe",
+  "command": "bin/gtk4-demo.exe",
   "path": ["bin"],
   "env": {
     "XDG_CONFIG_HOME": "${data}\\config",
@@ -13,14 +13,21 @@
   "permissions": { "filesystem": ["cwd"] },
   "exports": {
     "gtk4-demo": { "command": "bin/gtk4-demo.exe" },
-    "gtk4-widget-factory": { "command": "bin/gtk4-widget-factory.exe" },
     "gtk4-node-editor": { "command": "bin/gtk4-node-editor.exe" },
     "gtk4-print-editor": { "command": "bin/gtk4-print-editor.exe" },
-    "gtk4-query-settings": { "command": "bin/gtk4-query-settings.exe" }
+    "gtk4-query-settings": { "command": "bin/gtk4-query-settings.exe" },
+    "adwaita-1-demo": { "command": "bin/adwaita-1-demo.exe" }
+  },
+  "shortcuts": {
+    "GTK Demo": { "command": "gtk4-demo", "description": "GTK's widgets and APIs at work" },
+    "Adwaita Demo": { "command": "adwaita-1-demo", "description": "libadwaita's widgets at work" }
   },
   "cleanup": [
     "/include",
     "/lib",
+    "/share/applications",
+    "/share/metainfo",
+    "/share/pkgconfig",
     "/share/aclocal",
     "/share/bash-completion",
     "/share/gettext",
@@ -47,7 +54,7 @@
   "modules": [
     {
       "name": "gtk",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:d1cb827d6b606b59d5570f93ff4b388e14dde2520d429652022a727b2f9955d0" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:ef47240f616d07c97856e002a7d0360abe92b4ed6b13075d63e13a612cbb7f1f" }]
     }
   ]
 }

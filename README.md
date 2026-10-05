@@ -60,7 +60,7 @@ zigsaw login [--username=<user>] [--password-stdin] <registry>
                                        check and save a login for a registry
 zigsaw logout <registry>               delete a registry's saved login
 zigsaw run [options] <app-id> [args]   run an installed app
-zigsaw list                            list installed apps and their commands
+zigsaw list                            list installed apps, their commands and shortcuts
 zigsaw update [<app-id>...]            rebuild or re-pull apps from where they came from
 zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
 zigsaw prune [--dry-run] [--downloads] [--data]
@@ -92,7 +92,8 @@ with `zigsaw pull <id>`:
 | zstd (built from source) | `com.github.facebook.zstd` | 1.5.7 | `zstd`, `unzstd`, `zstdcat` |
 | Meson, with Ninja and pkgconf | `com.mesonbuild.meson` | 1.12.1 | `meson` |
 | GTK SDK (built from source) | `org.gtk.Gtk4.Sdk` | 4.24.1 | none |
-| GTK (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings` |
+| GTK, with libadwaita (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo` |
+| GNOME Text Editor (built from source, on GTK) | `org.gnome.TextEditor` | 51.0 | `gnome-text-editor` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -101,7 +102,10 @@ and BusyBox, ripgrep and bat with [Rust](#rust), zig and BusyBox, fzf and
 zot with [Go](#go) and BusyBox, zstd with [CMake](#cmake), zig and BusyBox,
 whose images are their SDK. bat's C libraries (oniguruma, libgit2, zlib) are
 compiled by zig. Pulling them doesn't need those. [GTK](#gtk)'s SDK is built
-with Meson, CMake and zig, and its runtime is made from the SDK's image.
+with Meson, CMake and zig, and its runtime is made from the SDK's image. GNOME
+Text Editor runs on GTK's runtime, with GtkSourceView, libspelling and
+libxml2 built into its own image. GTK's demos and Text Editor are GUI apps:
+they open no console, and get [Start menu shortcuts](#start-menu-shortcuts).
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -294,6 +298,43 @@ tsc --version
 
 Rust's image keeps cargo's home in its data directory, so what
 `cargo install` installs gets a shim too.
+
+### GUI apps
+
+A command whose executable is a GUI program (its PE header says so, as
+`gtk4-demo.exe`'s does) gets a shim that is one too, `zigsaw-shimw.exe`, as
+Python has `pythonw.exe`. Started from Explorer or the Start menu, it opens no
+console window, and neither does the zigsaw it starts. Started from a
+terminal, it returns at once, as GUI programs do in cmd and PowerShell.
+
+Without a console, error messages would go nowhere, so when whoever started
+the shim gave it no file or pipe for stderr, it keeps the end of what zigsaw
+and the app write there, and if the app fails, shows it in a message box
+with the exit code. With a pipe or file for stderr, as in Git Bash or with
+`2>log.txt`, the output goes there instead.
+
+### Start menu shortcuts
+
+A recipe can declare shortcuts to its exports, as Flatpak apps export
+`.desktop` files:
+
+```json
+"shortcuts": {
+  "Text Editor": { "command": "gnome-text-editor", "description": "View and edit text files" }
+}
+```
+
+Installing the app puts `Text Editor.lnk` in a `Zigsaw` folder of your
+Start menu. It runs the export's shim, from the app's home in its data
+directory, with the icon of `icon` (an `.ico`, or an `.exe` or `.dll` with
+one, in the app or a runtime) or of the export's executable. Updating the
+app rewrites its shortcuts and removes those it no longer declares, and
+`zigsaw rm` removes them; `zigsaw list` shows them.
+
+Only the default store (`%LOCALAPPDATA%\zigsaw`) adds to the Start menu, so
+test stores don't. `ZIGSAW_SHORTCUTS_DIR` names a folder to use instead, for
+any store. zigsaw only changes `.lnk` files that run a shim of its own store,
+and leaves any other file of the same name alone, with a warning.
 
 ### Changing an app's options
 
@@ -714,15 +755,17 @@ GTK 4 comes as two images, as Flatpak's GNOME runtime does:
   everything it needs from source with Meson, CMake and zig: zlib, libpng,
   libjpeg-turbo, libtiff, PCRE2, libffi, GLib 2.90, pixman, FriBidi,
   HarfBuzz, cairo, Pango, graphene, libepoxy, gdk-pixbuf, Microsoft's
-  DirectX headers, and GTK, with its demos. It keeps their headers, import
-  libraries and pkg-config files, so apps build against it by listing it in
-  their `sdk`. It takes about 14 minutes to build from scratch.
+  DirectX headers, and GTK, with its demos, then the hicolor and Adwaita
+  icon themes and libadwaita 1.10, with its demo. It keeps their headers,
+  import libraries and pkg-config files, so apps build against it by listing
+  it in their `sdk`. It takes about 15 minutes to build from scratch.
 - **[`org.gtk.Gtk4`](recipes/gtk4.json)** is the runtime: the SDK's files
   as an [image source](#images-as-sources), without the headers, libraries
   and build tools, so it builds in seconds once the SDK is there. Apps list
-  it in their `runtimes`. As an app, it runs `gtk4-widget-factory`, and
-  exports `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`,
-  `gtk4-print-editor` and `gtk4-query-settings`.
+  it in their `runtimes`. As an app, it runs `gtk4-demo`, exports
+  `gtk4-demo`, `gtk4-node-editor`, `gtk4-print-editor`,
+  `gtk4-query-settings` and `adwaita-1-demo`, and adds "GTK Demo" and
+  "Adwaita Demo" to the Start menu.
 
 An app built against GTK, as [`tests/gtk`](tests/gtk) is:
 
@@ -1014,7 +1057,12 @@ next to `zigsaw.exe`. A shim reads its `.shim` file and runs
 `zigsaw run --command=<name> <app>` with the caller's arguments exactly as
 typed, and exits with the app's exit code. Shims are real executables rather
 than `.cmd` scripts, so programs that start `node` or `git` directly find
-them, and Ctrl+C doesn't ask "Terminate batch job?".
+them, and Ctrl+C doesn't ask "Terminate batch job?". Commands that are GUI
+programs get `zigsaw-shimw.exe` instead, the same program built as a GUI
+one, which starts zigsaw without a console (`DETACHED_PROCESS`); zigsaw
+reads the subsystem from the executable's PE header when it writes the
+shim. [Start menu shortcuts](#start-menu-shortcuts) are `.lnk` files that
+run these shims.
 
 **Runs** get an environment built from scratch: `PATH` is the app's
 directories, then its runtimes', then System32. `USERPROFILE`, `APPDATA`,
@@ -1080,10 +1128,10 @@ it runs on allows, and prints it.
 zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash, network)
 bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes
-bash tests/shims.sh     # command shims end to end, also for commands installed at run time
+bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, reproducibility
-bash tests/gtk.sh       # a GTK app built against GTK's SDK, on its runtime, in each sandbox (needs GTK_HOME or BUILD_HOME; opens windows)
+bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim and shortcuts; Text Editor (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update, mounts, logins and sources next to images, through local registries (see its header)
@@ -1198,11 +1246,23 @@ a fresh runner, after `published.sh`, with its build store as
 - DLLs that zig links without any `dllexport` export the C runtime's
   `atexit`, `_CRT_INIT` and `__mingw_module_is_dll` too, unless the link
   includes an object that excludes them, as GTK's SDK recipe does.
-- GTK apps' commands are shims, which are console programs, so a GTK app
-  started through one from Explorer opens a console window too. zigsaw
-  doesn't make Start menu shortcuts.
+- A GUI app whose executable is built as a console program, as
+  libadwaita's demo is upstream, gets a console shim, and a console window
+  from the Start menu; its recipe has to build it as a GUI program
+  (libadwaita's sets Meson's `win_subsystem`).
+- Start menu shortcuts show the icon of the export's executable, and none
+  of GTK's or Text Editor's has one: their icons are SVGs, which a `.lnk`
+  can't use. A recipe can point `icon` at an `.ico`. Pinning a running GTK
+  app's window to the taskbar pins its executable in the store, not the
+  shortcut, since zigsaw sets no AppUserModelID.
+- GTK's widget factory aborts at startup: its window loads an SVG through
+  gdk-pixbuf, which has no SVG loader without librsvg. GTK's own SVG
+  renderer covers icon themes only. The runtime doesn't export it.
+- Text Editor has no spell checking (libspelling is built without enchant),
+  no translations (no gettext tools in the SDK) and no help pages (no yelp
+  on Windows).
 - Under `--sandbox=appcontainer`, DirectWrite can't open fonts installed
   for the user only, rather than for the machine; GTK warns, and draws
   with the others.
 
-[docs/iteration-10.md](docs/iteration-10.md) lists what hasn't been tested yet.
+[docs/iteration-11.md](docs/iteration-11.md) lists what hasn't been tested yet.

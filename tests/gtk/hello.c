@@ -1,9 +1,10 @@
 /* A GTK app for tests/gtk.sh: says where GLib keeps its files and settings,
- * opens a window, waits for GTK to draw its first frame, says which renderer
- * drew it, and quits. */
+ * and which libadwaita it has, opens a window, waits for GTK to draw its
+ * first frame, says which renderer drew it, and quits. */
 #define G_SETTINGS_ENABLE_BACKEND
 #include <gio/gsettingsbackend.h>
 #include <gtk/gtk.h>
+#include <adwaita.h>
 
 static gboolean drawn(GtkWidget *window, GdkFrameClock *clock, gpointer app) {
     GskRenderer *renderer = gtk_native_get_renderer(GTK_NATIVE(window));
@@ -19,6 +20,8 @@ static void activate(GtkApplication *app, gpointer data) {
     gtk_widget_add_tick_callback(window, drawn, app, NULL);
     gtk_window_present(GTK_WINDOW(window));
     g_print("GTK %u.%u.%u\n", gtk_get_major_version(), gtk_get_minor_version(), gtk_get_micro_version());
+    adw_init();
+    g_print("libadwaita %u.%u.%u\n", adw_get_major_version(), adw_get_minor_version(), adw_get_micro_version());
 }
 
 int main(int argc, char **argv) {

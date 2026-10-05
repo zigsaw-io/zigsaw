@@ -382,28 +382,17 @@ fn resolveCommand(
 ) !Command {
     const deploy_dir = placeholders.app;
     const name = requested orelse
-        return .init(try commandPath(arena, placeholders, config.command), try expandAll(arena, placeholders, config.args));
+        return .init(try placeholders.commandPath(arena, config.command), try expandAll(arena, placeholders, config.args));
 
     var exported = config.exports.map.iterator();
     while (exported.next()) |e| {
         if (!std.ascii.eqlIgnoreCase(e.key_ptr.*, name)) continue;
-        return .init(try commandPath(arena, placeholders, e.value_ptr.command), try expandAll(arena, placeholders, e.value_ptr.args));
+        return .init(try placeholders.commandPath(arena, e.value_ptr.command), try expandAll(arena, placeholders, e.value_ptr.args));
     }
 
     const resolved = try findCommand(io, arena, deploy_dir, name, app_path, system_root) orelse
         return fail("command \"{s}\" is not an export of the app, or an executable or batch file in it or in System32", .{name});
     return .init(resolved, &.{});
-}
-
-/// A config's command: relative to the app's directory, or starting with a
-/// placeholder.
-fn commandPath(arena: Allocator, placeholders: oci.Placeholders, command: []const u8) ![]u8 {
-    const p = if (oci.isPlaceholderPath(command))
-        try placeholders.expand(arena, command)
-    else
-        try std.fs.path.join(arena, &.{ placeholders.app, command });
-    std.mem.replaceScalar(u8, p, '/', '\\');
-    return p;
 }
 
 fn expandAll(arena: Allocator, placeholders: oci.Placeholders, templates: []const []const u8) ![]const []const u8 {

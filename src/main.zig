@@ -13,6 +13,7 @@ const override = @import("override.zig");
 const prune = @import("prune.zig");
 const remote = @import("remote.zig");
 const runtime = @import("run.zig");
+const shortcuts = @import("shortcuts.zig");
 const update = @import("update.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
@@ -33,7 +34,7 @@ const usage =
     \\                                  check and save a login for a registry
     \\  logout <registry>               delete a registry's saved login
     \\  run [options] <app-id> [args]   run an installed app
-    \\  list                            list installed apps and their commands
+    \\  list                            list installed apps, their commands and shortcuts
     \\  override [options] <app-id>     save run options that every run of the app gets;
     \\                                  --show shows them, --reset removes them
     \\  update [<app-id>...]            rebuild or re-pull apps from where they came from
@@ -394,6 +395,7 @@ fn list(ctx: *Context) !void {
         try w.print("{s:<32} {s:<20} {s:<20} {s}", .{ ref.id, ref.version, oci.shortDigest(ref.manifest), try std.mem.join(arena, ", ", names.items) });
         const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
         for (image.config.runtimes.map.values()) |r| try w.print("  (runtime {s} {s})", .{ r.id, r.version });
+        for (try shortcuts.names(ctx, ref.id)) |name| try w.print("  (shortcut \"{s}\")", .{name});
         const saved = try override.load(ctx.store, arena, ref.id);
         if (!saved.isEmpty()) try w.print("  (override {f})", .{saved});
         try w.writeByte('\n');
@@ -411,6 +413,9 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     // can't give it shims again.
     const shims_lock = try store.lockShims(arena);
     defer shims_lock.release(io);
+    // Shortcuts first: the shims' sidecars say which app each one is for.
+    const removed_shortcuts = try shortcuts.removeAll(ctx, id);
+    if (removed_shortcuts.len > 0) note("removed shortcuts {s}", .{try std.mem.join(arena, ", ", removed_shortcuts)});
     const removed_exports = try exports.removeAll(ctx, id);
     if (removed_exports.len > 0) note("removed commands {s}", .{try std.mem.join(arena, ", ", removed_exports)});
 
@@ -469,6 +474,7 @@ test {
     _ = @import("msvc.zig");
     _ = @import("oci.zig");
     _ = @import("override.zig");
+    _ = @import("pe.zig");
     _ = @import("process.zig");
     _ = @import("prune.zig");
     _ = @import("recipe.zig");
@@ -476,6 +482,7 @@ test {
     _ = @import("remote.zig");
     _ = @import("layer.zig");
     _ = @import("run.zig");
+    _ = @import("shortcuts.zig");
     _ = @import("Sidecar.zig");
     _ = @import("Store.zig");
     _ = @import("Tree.zig");
