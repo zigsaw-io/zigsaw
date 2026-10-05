@@ -344,25 +344,33 @@ fn decompress(gpa: Allocator, kind: recipe.Source.Kind, in: *Io.Reader, out: *Io
 /// The tree of the files and directories below `dir`, as a build step left
 /// them. Links and other reparse points are refused: a layer can't hold them.
 pub fn fromDir(io: Io, arena: Allocator, dir_path: []const u8) !Tree {
+    var t: Tree = .{};
+    try t.addDirFiles(io, arena, dir_path, "");
+    return t;
+}
+
+/// Adds the files and directories below `dir_path` under `base`
+/// ('/'-separated, "" for the top), as another image's deployed files.
+pub fn addDirFiles(t: *Tree, io: Io, arena: Allocator, dir_path: []const u8, base: []const u8) !void {
     var dir = try Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
     var walker = try dir.walk(arena);
     defer walker.deinit();
-    var t: Tree = .{};
+    if (base.len > 0) try t.addDir(arena, base);
     while (try walker.next(io)) |entry| {
         const rel = try arena.dupe(u8, entry.path);
         std.mem.replaceScalar(u8, rel, '\\', '/');
+        const p = if (base.len == 0) rel else try std.fmt.allocPrint(arena, "{s}/{s}", .{ base, rel });
         switch (entry.kind) {
-            .directory => try t.addDir(arena, rel),
+            .directory => try t.addDir(arena, p),
             .file => {
                 const stat = try entry.dir.statFile(io, entry.basename, .{});
                 const full = try std.fs.path.join(arena, &.{ dir_path, rel });
-                try t.addFile(arena, rel, .{ .file = .{ .path = full, .size = stat.size } });
+                try t.addFile(arena, p, .{ .file = .{ .path = full, .size = stat.size } });
             },
             else => return fail("{s}\\{s} is a {t}; an app's files can only be files and directories", .{ dir_path, entry.path, entry.kind }),
         }
     }
-    return t;
 }
 
 /// Creates the tree's files and directories below `dest_path`, which must

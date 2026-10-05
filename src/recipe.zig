@@ -14,12 +14,16 @@ pub const Source = struct {
     url: ?[]const u8 = null,
     /// Local file, relative to the recipe.
     path: ?[]const u8 = null,
+    /// Another image's own files, by reference pinned with "@sha256:...",
+    /// as an SDK is: how a runtime is made from its SDK without building
+    /// again.
+    image: ?[]const u8 = null,
     /// Required for URLs. A URL without one fails the build and reports the hash to pin.
     sha256: ?[]const u8 = null,
     /// Inferred from the file name when omitted.
     type: ?Kind = null,
     /// For `file`: destination path (default: the source's file name).
-    /// For archives: directory to extract into (default: the top).
+    /// For archives and images: directory to put their files in (default: the top).
     dest: ?[]const u8 = null,
     /// For archives: leading directory levels to drop, like `tar --strip-components`.
     strip: u32 = 0,
@@ -231,8 +235,16 @@ fn validateVendor(file_name: []const u8, m: Module, v: Vendor) error{Failed}!voi
 }
 
 fn validateSource(file_name: []const u8, module: []const u8, n: usize, s: Source) error{Failed}!void {
-    if ((s.url == null) == (s.path == null))
-        return fail("{s}: module {s} source {d} needs exactly one of \"url\" or \"path\"", .{ file_name, module, n });
+    const given = @as(u8, @intFromBool(s.url != null)) + @intFromBool(s.path != null) + @intFromBool(s.image != null);
+    if (given != 1)
+        return fail("{s}: module {s} source {d} needs exactly one of \"url\", \"path\" or \"image\"", .{ file_name, module, n });
+    if (s.image != null) {
+        if (s.sha256 != null or s.type != null or s.strip != 0)
+            return fail("{s}: module {s} source {d} is an image, pinned by its digest; \"sha256\", \"type\" and \"strip\" don't apply", .{ file_name, module, n });
+        if (s.dest) |d| if (!oci.isSafeRelPath(d))
+            return fail("{s}: module {s} source {d} dest \"{s}\" must be a relative path inside the app", .{ file_name, module, n, d });
+        return;
+    }
     if (s.sha256) |h| if (!oci.isSha256Hex(h))
         return fail("{s}: module {s} source {d} sha256 must be 64 lowercase hex characters", .{ file_name, module, n });
     if (s.dest) |d| if (!oci.isSafeRelPath(d))
@@ -346,6 +358,12 @@ test "recipe checks" {
     );
     try std.testing.expectEqualStrings("vendor/crates", vendored.modules[0].vendor.?.dir);
 
+    const from_image = try parse(arena, "t.json",
+        \\{ "id": "x", "version": "1", "command": "bin/a.exe", "cleanup": ["/include", "*.a"],
+        \\  "modules": [{ "name": "m", "sources": [{ "image": "x.sdk@sha256:0000000000000000000000000000000000000000000000000000000000000000", "dest": "sdk" }] }] }
+    );
+    try std.testing.expectEqualStrings("sdk", from_image.modules[0].sources[0].dest.?);
+
     const bad = [_][]const u8{
         // A command in a runtime needs exports.
         \\{ "id": "x", "version": "1", "command": "${node}\\node.exe", "runtimes": { "node": "n" }, "modules": [{ "name": "m", "build": ["x"] }] }
@@ -372,6 +390,15 @@ test "recipe checks" {
         ,
         // strip on a file.
         \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "path": "a.exe", "strip": 1 }] }] }
+        ,
+        // An image source: on its own, pinned by digest only, inside the app.
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "image": "x.sdk@sha256:00", "path": "a.exe" }] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "image": "x.sdk@sha256:00", "sha256": "00" }] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "image": "x.sdk@sha256:00", "strip": 1 }] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "image": "x.sdk@sha256:00", "dest": "../up" }] }] }
         ,
         // Cleanup patterns.
         \\{ "id": "x", "version": "1", "command": "a.exe", "cleanup": ["/../x"], "modules": [{ "name": "m", "build": ["x"] }] }

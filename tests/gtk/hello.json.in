@@ -1,0 +1,20 @@
+{
+  "id": "test.gtk.hello",
+  "version": "1",
+  "command": "bin/hello-gtk.exe",
+  "path": ["bin"],
+  "runtimes": { "gtk": "org.gtk.Gtk4@@GTK@" },
+  "sdk": {
+    "gtksdk": "org.gtk.Gtk4.Sdk@@GTKSDK@",
+    "meson": "com.mesonbuild.meson@@MESON@",
+    "zig": "org.ziglang.zig@@ZIG@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "modules": [
+    {
+      "name": "hello",
+      "sources": [{ "path": "meson.build" }, { "path": "hello.c" }],
+      "build": ["meson setup out --prefix=\"$PREFIX\"", "meson install -C out"]
+    }
+  ]
+}

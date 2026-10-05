@@ -1,0 +1,53 @@
+{
+  "id": "org.gtk.Gtk4",
+  "version": "4.24.1",
+  "command": "bin/gtk4-widget-factory.exe",
+  "path": ["bin"],
+  "env": {
+    "XDG_CONFIG_HOME": "${data}\\config",
+    "XDG_DATA_HOME": "${data}\\share",
+    "XDG_STATE_HOME": "${data}\\state",
+    "XDG_CACHE_HOME": "${data}\\cache",
+    "GSETTINGS_BACKEND": "keyfile"
+  },
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "gtk4-demo": { "command": "bin/gtk4-demo.exe" },
+    "gtk4-widget-factory": { "command": "bin/gtk4-widget-factory.exe" },
+    "gtk4-node-editor": { "command": "bin/gtk4-node-editor.exe" },
+    "gtk4-print-editor": { "command": "bin/gtk4-print-editor.exe" },
+    "gtk4-query-settings": { "command": "bin/gtk4-query-settings.exe" }
+  },
+  "cleanup": [
+    "/include",
+    "/lib",
+    "/share/aclocal",
+    "/share/bash-completion",
+    "/share/gettext",
+    "/share/man",
+    "/share/doc/libjpeg-turbo/example.c",
+    "/share/doc/libjpeg-turbo/tjcomp.c",
+    "/share/doc/libjpeg-turbo/tjdecomp.c",
+    "/share/glib-2.0/codegen",
+    "/share/glib-2.0/gdb",
+    "/share/gtk-4.0/gtk4builder.rng",
+    "/bin/gdbus-codegen",
+    "/bin/glib-genmarshal",
+    "/bin/glib-mkenums",
+    "/bin/gtester-report",
+    "*-config",
+    "cjpeg.exe",
+    "djpeg.exe",
+    "jpegtran.exe",
+    "rdjpgcom.exe",
+    "wrjpgcom.exe",
+    "gi-*.exe",
+    "libgirepository-*"
+  ],
+  "modules": [
+    {
+      "name": "gtk",
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:d1cb827d6b606b59d5570f93ff4b388e14dde2520d429652022a727b2f9955d0" }]
+    }
+  ]
+}

@@ -16,3 +16,6 @@ fzf.json
 zot.json
 cmake.json
 zstd.json
+meson.json
+gtk4-sdk.json
+gtk4.json

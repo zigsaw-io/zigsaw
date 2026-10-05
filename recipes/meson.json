@@ -1,0 +1,74 @@
+{
+  "id": "com.mesonbuild.meson",
+  "version": "1.12.1",
+  "command": "python.exe",
+  "args": ["${app}\\meson\\meson.py"],
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "meson": { "command": "python.exe", "args": ["${app}\\meson\\meson.py"] }
+  },
+  "aliases": {
+    "meson": { "command": "python.exe", "args": ["${app}\\meson\\meson.py"] },
+    "ninja": { "command": "ninja.exe" },
+    "pkg-config": { "command": "bin/pkgconf.exe" },
+    "pkgconf": { "command": "bin/pkgconf.exe" }
+  },
+  "sdk": {
+    "zig": "org.ziglang.zig:0.16.0@sha256:c6e3e4af90343370ce3ea59c42112d930e05ba801da238aea92d623a19a27ae7",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "cleanup": ["/include", "/lib", "/share", "/bin/bomtool.exe", "/bin/pccritic.exe", "/bin/spdxtool.exe", "/meson/test cases", "/meson/manual tests", "/meson/unittests", "__pycache__"],
+  "modules": [
+    {
+      "name": "python",
+      "sources": [
+        {
+          "url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip",
+          "sha256": "d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15"
+        }
+      ]
+    },
+    {
+      "name": "meson",
+      "sources": [
+        {
+          "url": "https://github.com/mesonbuild/meson/releases/download/1.12.1/meson-1.12.1.tar.gz",
+          "sha256": "ab0a6ca09f8ef70c564c8241fb5a23957886a0b53fb58412b5e07eaf07dba743",
+          "strip": 1,
+          "dest": "meson"
+        }
+      ]
+    },
+    {
+      "name": "meson-paths",
+      "build": [
+        "cd \"$PREFIX/meson/mesonbuild\" && sed -i 's/os\\.path\\.abspath(os\\.path\\.realpath(/os.path.abspath((/g' utils/universal.py msetup.py mconf.py",
+        "! grep -q 'abspath(os.path.realpath(' \"$PREFIX/meson/mesonbuild/utils/universal.py\""
+      ]
+    },
+    {
+      "name": "ninja",
+      "sources": [
+        {
+          "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip",
+          "sha256": "07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65"
+        }
+      ]
+    },
+    {
+      "name": "pkgconf",
+      "sources": [
+        {
+          "url": "https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.7.tar.xz",
+          "sha256": "c926ff491cbd9a331a589160811bd97ab1749b4d5198a519338f2cdfabe6940a",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "PATH=\"$PREFIX;$PATH\" \"$PREFIX/python.exe\" \"$PREFIX/meson/meson.py\" setup out --prefix=\"$PREFIX\" --buildtype=release --default-library=static -Dwith-system-libdir=/usr/lib -Dwith-system-includedir=/usr/include",
+        "PATH=\"$PREFIX;$PATH\" \"$PREFIX/python.exe\" \"$PREFIX/meson/meson.py\" install -C out",
+        "cp COPYING \"$PREFIX/bin/pkgconf-COPYING\""
+      ]
+    }
+  ]
+}

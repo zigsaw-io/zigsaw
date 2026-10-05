@@ -206,6 +206,9 @@ pub const Build = struct {
     /// What each module's vendor step made, by module name: its sha256.
     /// Absent unless a module has one.
     vendor: ?std.json.ArrayHashMap([]const u8) = null,
+    /// The manifest digests of the images whose files sources took, in
+    /// recipe order. Absent unless a source is an image.
+    images: ?[]const []const u8 = null,
     /// Whether a build step had network access. Then the image depends on
     /// more than its pinned inputs.
     network: bool = false,

@@ -6,19 +6,20 @@ Think Flatpak for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
-Status: [iteration 9](docs/iteration-9.md) is complete. Zigsaw builds
-command-line apps from source or from official binaries, runs them on shared
+Status: [iteration 10](docs/iteration-10.md) is complete. Zigsaw builds
+command-line apps, and GTK 4 with its SDK and runtime, from source or from
+official binaries, runs them on shared
 runtimes, installs, updates and cleans them up, shares them through
 registries as compressed images, and puts their commands on PATH, also those
 they install while they run. Runs can be kept from writing anywhere but
 their data and the paths they're granted, at low integrity, or confined to
 their permissions in an AppContainer. Builds run with pinned toolchain
-images (zig, BusyBox, CMake, Rust, Go with cgo), or the machine's MSVC, and
+images (zig, BusyBox, CMake, Meson, Rust, Go with cgo), or the machine's MSVC, and
 reproduce: CI checks that the recipes build the same images on a fresh
 machine, and runs the end-to-end tests there, against a registry zigsaw
 builds and runs itself. Registries keep the files images were built from,
 so recipes build even when a download is gone. Git, Node, Python, SQLite,
-ripgrep, bat, fzf, zot, zstd and the zig, CMake, Rust and Go toolchains are
+ripgrep, bat, fzf, zot, zstd, GTK apps and the zig, CMake, Meson, Rust and Go toolchains are
 tested.
 
 ## Quick start
@@ -89,6 +90,9 @@ with `zigsaw pull <id>`:
 | zot, minimal (built from source) | `dev.zotregistry.zot` | 2.1.21 | `zot` |
 | CMake, with Ninja 1.13.2 | `org.cmake.cmake` | 4.4.4 | `cmake`, `ctest`, `cpack`, `ninja` |
 | zstd (built from source) | `com.github.facebook.zstd` | 1.5.7 | `zstd`, `unzstd`, `zstdcat` |
+| Meson, with Ninja and pkgconf | `com.mesonbuild.meson` | 1.12.1 | `meson` |
+| GTK SDK (built from source) | `org.gtk.Gtk4.Sdk` | 4.24.1 | none |
+| GTK (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -96,7 +100,8 @@ zot and zstd are [built from source](#building-from-source): SQLite with zig
 and BusyBox, ripgrep and bat with [Rust](#rust), zig and BusyBox, fzf and
 zot with [Go](#go) and BusyBox, zstd with [CMake](#cmake), zig and BusyBox,
 whose images are their SDK. bat's C libraries (oniguruma, libgit2, zlib) are
-compiled by zig. Pulling them doesn't need those.
+compiled by zig. Pulling them doesn't need those. [GTK](#gtk)'s SDK is built
+with Meson, CMake and zig, and its runtime is made from the SDK's image.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -340,11 +345,13 @@ that make up its files, each with pinned sources:
 
 Modules go into the app's files in order, so a later one can overlay an
 earlier one. Sources are either a `url` (a `sha256` is required; leave it out
-once and the build error prints the hash to pin) or a local `path`. A source
+once and the build error prints the hash to pin), a local `path`, or another
+`image` (see [images as sources](#images-as-sources)). A source
 is a single `file`, or an archive (`zip`, `tar`, `tar.gz`/`tgz` or `tar.xz`)
 extracted into `dest` with optional `strip`. The type is inferred from the
-file name. A link in a tar to a file in the same archive becomes a copy of
-that file; a link to a directory, or out of the archive, fails the build.
+file name, or given as `type` for a URL that doesn't end in one. A link in a
+tar to a file in the same archive becomes a copy of that file; a link to a
+directory, or out of the archive, fails the build.
 `cleanup` leaves files out of the app: `"/include"` is a path from
 the top, and `"*.pdb"` a file name pattern that matches anywhere. Building the
 same recipe always produces the same image digest.
@@ -415,6 +422,26 @@ Node's do. Runtimes can't have runtimes of their own.
 A pinned runtime doesn't change by itself: moving Prettier to a newer Node
 is an edit to its recipe, like a new source hash.
 
+### Images as sources
+
+A module can take another image's own files, as Flatpak makes a runtime
+from its SDK. [GTK's](#gtk) runtime is its SDK's files, without what only
+builds need:
+
+```json
+"cleanup": ["/include", "/lib/pkgconfig", "*.a"],
+"modules": [
+  { "name": "gtk", "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:..." }] }
+]
+```
+
+The image is pinned like a runtime, found the same way (the store, then
+its registry), and kept like an SDK; `dest` puts its files in a directory.
+Its layer isn't unpacked again: the files stream from its deployment into
+the new layer. The config records the image's digest under `build.images`,
+so the runtime depends only on the SDK image, and builds again with the same
+digest without building the SDK.
+
 ### Building from source
 
 A module with `build` commands compiles its sources instead of placing them.
@@ -460,6 +487,15 @@ zig's C compiler:
   Whatever the modules install into `$PREFIX` is the app's files, after
   `cleanup`. A later module sees what earlier ones installed, as SQLite finds
   zlib above. A module without `build` puts its sources into `$PREFIX`.
+- **Programs earlier modules installed run by name:** `B:\prefix\bin` is on
+  PATH, after the [aliases](#building-from-source) and before the SDK, as
+  `/app/bin` is in Flatpak's builds. That's how GTK's modules run the
+  `glib-compile-resources` that GLib's module built.
+- **Libraries are found** where pkg-config and CMake look:
+  `PKG_CONFIG_PATH` is `B:\prefix\lib\pkgconfig;B:\prefix\share\pkgconfig`,
+  then the `lib\pkgconfig` and `share\pkgconfig` of each SDK or runtime image
+  that has them, such as [GTK's SDK](#gtk), and `CMAKE_PREFIX_PATH` is
+  `B:\prefix` and those images' directories.
 - **Commands** run in BusyBox's `sh`, or with `"shell": "cmd"` in cmd.exe
   (then `%PREFIX%`). `env` adds variables for a module's commands.
 - **The build sandbox** is like a run's: an environment built from scratch,
@@ -630,6 +666,121 @@ GNU's `windres` to compile resources; with it, CMake uses zig's `rc`, with
 the options of Microsoft's `rc.exe`. Builds reproduce without anything
 more: CMake writes the paths of the sources on `B:` into what it builds,
 which are the same everywhere.
+
+### Meson
+
+The Meson image, [`com.mesonbuild.meson`](recipes/meson.json), is Python's
+embeddable distribution with Meson's source release, Ninja, and pkgconf,
+which the recipe builds from source with that Meson and zig. Builds get
+`meson`, `ninja` and `pkg-config` as [aliases](#building-from-source); run
+as an app, it's `meson`. With zig in the SDK too, Meson takes zig's
+compilers from `CC` and `CXX`, sees zig as Clang with its own linker
+(`ld.zigcc`), and compiles resources with zig's `rc`, whose help says it's a
+drop-in for Microsoft's:
+
+```json
+"sdk": {
+  "meson": "com.mesonbuild.meson:1.12.1@sha256:...",
+  "zig": "org.ziglang.zig:0.16.0@sha256:...",
+  "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
+},
+"modules": [
+  {
+    "name": "greet",
+    "sources": [...],
+    "build": ["meson setup out --prefix=\"$PREFIX\"", "meson install -C out"]
+  }
+]
+```
+
+Shared libraries are DLLs in `bin`, with import libraries in `lib`, and a
+later module finds them through their pkg-config files in `B:\prefix`.
+pkgconf treats no directory as the system's, so it keeps `-IB:/prefix/include`
+in the flags it prints, and it relocates a `.pc` file's `prefix` to where
+the file is, so an SDK image's work from wherever it's deployed.
+
+Meson's own release resolves the directories it's given to their real
+paths, which takes them off `B:`, to the build's directory in the store.
+Paths it writes into what it builds, such as the absolute ones in its unity
+builds' sources (GTK's SVG code, whose asserts name their files), would
+then differ from store to store. The image's Meson keeps the paths as given
+instead (the recipe changes its `realpath` calls with `sed`), so they stay on `B:`.
+
+### GTK
+
+GTK 4 comes as two images, as Flatpak's GNOME runtime does:
+
+- **[`org.gtk.Gtk4.Sdk`](recipes/gtk4-sdk.json)** builds GTK 4.24.1 and
+  everything it needs from source with Meson, CMake and zig: zlib, libpng,
+  libjpeg-turbo, libtiff, PCRE2, libffi, GLib 2.90, pixman, FriBidi,
+  HarfBuzz, cairo, Pango, graphene, libepoxy, gdk-pixbuf, Microsoft's
+  DirectX headers, and GTK, with its demos. It keeps their headers, import
+  libraries and pkg-config files, so apps build against it by listing it in
+  their `sdk`. It takes about 14 minutes to build from scratch.
+- **[`org.gtk.Gtk4`](recipes/gtk4.json)** is the runtime: the SDK's files
+  as an [image source](#images-as-sources), without the headers, libraries
+  and build tools, so it builds in seconds once the SDK is there. Apps list
+  it in their `runtimes`. As an app, it runs `gtk4-widget-factory`, and
+  exports `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`,
+  `gtk4-print-editor` and `gtk4-query-settings`.
+
+An app built against GTK, as [`tests/gtk`](tests/gtk) is:
+
+```json
+"command": "bin/hello-gtk.exe",
+"path": ["bin"],
+"runtimes": { "gtk": "org.gtk.Gtk4:4.24.1@sha256:..." },
+"sdk": {
+  "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:...",
+  "meson": "com.mesonbuild.meson:1.12.1@sha256:...",
+  "zig": "org.ziglang.zig:0.16.0@sha256:...",
+  "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
+},
+"modules": [
+  {
+    "name": "hello",
+    "sources": [{ "path": "meson.build" }, { "path": "hello.c" }],
+    "build": ["meson setup out --prefix=\"$PREFIX\"", "meson install -C out"]
+  }
+]
+```
+
+Meson finds `gtk4` through the SDK's pkg-config files. When the app runs,
+Windows finds GTK's DLLs on PATH, in the runtime's `bin`. The runtime's
+variables keep GLib's files in the app's data directory (`XDG_CONFIG_HOME`
+and the rest; otherwise GLib asks Windows for the user's AppData folder,
+bypassing zigsaw's), and its settings in a key file there
+(`GSETTINGS_BACKEND=keyfile`; otherwise the registry). GTK draws with cairo
+by default on Windows; `--env=GDK_DEBUG=dcomp` turns on DirectComposition,
+and with it OpenGL. GTK apps run in all three sandboxes.
+
+Building the stack with zig took a few workarounds, which the SDK's recipe
+spells out:
+
+- Its first module assembles an object that every module links, asking
+  lld not to export the C runtime's `atexit`, `_CRT_INIT` and
+  `__mingw_module_is_dll`. A DLL with no `dllexport`, such as HarfBuzz's or
+  FriBidi's, exports all its symbols, and zig names its C runtime's objects
+  so that lld doesn't recognise them to leave them out; an executable linking
+  such a DLL then has `atexit` twice.
+- zig's MinGW headers leave out the WinRT ones (`windows.storage.h` and
+  more) that GLib uses, so a module copies them from the mingw-w64 release
+  zig's headers come from.
+- The static libraries the SDK keeps (libffi's, the DirectX headers') are
+  compiled with `-s`. zig writes debug records into objects even with
+  `-g0`, naming the temporary file it compiled to, whose name is random.
+  Executables and DLLs lose them when linked with `-s`; static libraries
+  aren't linked.
+- GLib's Python tools leave `__pycache__` when the build runs them; the
+  SDK leaves it out, as the bytecode records when sources were unpacked.
+- `rc` gets `/:auto-includes gnu`, as `RC` for Meson and
+  `CMAKE_RC_FLAGS` for CMake (see [known gaps](#known-gaps)), and GTK's
+  `rc` writes COFF objects, since GTK puts its resources in a static
+  library first.
+- cairo's script tool prints `__DATE__`, which zig refuses when optimizing
+  (`-Wno-error=date-time`; builds fix the date with `SOURCE_DATE_EPOCH`),
+  and CRoaring in GTK leaves out its AVX-512 code, which zig's generic
+  x86-64 target can't compile.
 
 ### Rust
 
@@ -931,7 +1082,8 @@ bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash,
 bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time
 bash tests/store.sh     # update, prune, and what they keep while apps run
-bash tests/build.sh     # building apps: runtimes, build commands on B:, tool caches, aliases, vendor steps, CMake, Rust, Go, cgo, reproducibility
+bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, reproducibility
+bash tests/gtk.sh       # a GTK app built against GTK's SDK, on its runtime, in each sandbox (needs GTK_HOME or BUILD_HOME; opens windows)
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update, mounts, logins and sources next to images, through local registries (see its header)
@@ -1038,5 +1190,19 @@ a fresh runner, after `published.sh`, with its build store as
 - A Go vendor step downloads every module its `go.mod` names, whatever the
   build uses: zot's takes 14 minutes and 5 GB of temporary space, for the
   68 MB it keeps.
+- zig's `rc` alias runs `zig rc` as it is, which includes Visual Studio's
+  headers when the machine has Visual Studio, and zig's MinGW headers
+  otherwise. A resource script that includes a header only one of them has
+  builds on some machines and not others. GTK's recipe passes
+  `/:auto-includes gnu`; zig's image doesn't, yet.
+- DLLs that zig links without any `dllexport` export the C runtime's
+  `atexit`, `_CRT_INIT` and `__mingw_module_is_dll` too, unless the link
+  includes an object that excludes them, as GTK's SDK recipe does.
+- GTK apps' commands are shims, which are console programs, so a GTK app
+  started through one from Explorer opens a console window too. zigsaw
+  doesn't make Start menu shortcuts.
+- Under `--sandbox=appcontainer`, DirectWrite can't open fonts installed
+  for the user only, rather than for the machine; GTK warns, and draws
+  with the others.
 
-[docs/iteration-9.md](docs/iteration-9.md) lists what hasn't been tested yet.
+[docs/iteration-10.md](docs/iteration-10.md) lists what hasn't been tested yet.

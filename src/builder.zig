@@ -19,8 +19,9 @@
 //!                     store's cache\tools\<id>, and moved here for the build
 //!   B:\bin\           shims for the commands the tools' images alias, first on PATH
 //!
-//! Commands run in an environment built from scratch, as apps do, with the
-//! SDK's and runtimes' directories on PATH, and in a job object that ends
+//! Commands run in an environment built from scratch, as apps do, with
+//! B:\prefix\bin and the SDK's and runtimes' directories on PATH (after the
+//! aliases' B:\bin), and in a job object that ends
 //! whatever they leave running.
 
 const std = @import("std");
@@ -138,7 +139,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         // Every download first, so a missing or wrong hash fails the build
         // before anything is built.
         for (r.modules) |m| for (m.sources) |src| {
-            _ = try sources.fetcher.fetch(src);
+            if (src.image == null) _ = try sources.fetcher.fetch(src);
         };
         root = try .init(ctx, r, tools.items);
         if (root.?.msvc) |tc| {
@@ -157,6 +158,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         for (r.modules) |m| try sources.add(&tree, m, recipe_path);
     }
     build_info.sources = sources.hashes.items;
+    if (sources.images.items.len > 0) build_info.images = sources.images.items;
     tree.cleanup(r.cleanup);
 
     const config = try r.appConfig(arena, runtimes, build_info);
@@ -205,12 +207,14 @@ fn checkCommand(ctx: *Context, tree: *const Tree, placeholders: oci.Placeholders
 }
 
 /// Fetches modules' sources and indexes them into trees, keeping their
-/// archives open and noting each source's hash for the record of the build.
+/// archives open and noting each source's hash for the record of the build,
+/// or for an image, its digest.
 const Sources = struct {
     ctx: *Context,
     fetcher: Fetcher,
     archives: std.ArrayList(*Tree.Archive) = .empty,
     hashes: std.ArrayList([]const u8) = .empty,
+    images: std.ArrayList([]const u8) = .empty,
 
     fn deinit(s: *Sources) void {
         for (s.archives.items) |a| a.close(s.ctx.io);
@@ -222,6 +226,18 @@ const Sources = struct {
         const ctx = s.ctx;
         const arena = ctx.arena;
         for (m.sources) |src| {
+            if (src.image) |reference| {
+                // Its own files, as deployed: pulled if the store doesn't
+                // have the image, and kept like an SDK's.
+                const dep = try deps.resolve(ctx, recipe_path, .source, m.name, reference);
+                try s.images.append(arena, dep.manifest_digest);
+                const dir = (try ctx.store.useLayers(arena, &.{dep.layer()}))[0];
+                tree.addDirFiles(ctx.io, arena, dir, try Tree.normalizePath(arena, src.dest orelse ".")) catch |err| switch (err) {
+                    error.PathConflict => return fail("{s}: {s} is a file in one source and a directory in another", .{ recipe_path, tree.conflict }),
+                    else => |e| return e,
+                };
+                continue;
+            }
             var start = ctx.now();
             const file = try s.fetcher.fetch(src);
             const hash = src.sha256 orelse hash: {
@@ -305,10 +321,15 @@ const BuildRoot = struct {
         // The aliases come first: a tool's image says what they are. BusyBox's
         // sh runs its own applets before anything on PATH, so they win over
         // those too (zig's ar over BusyBox's).
+        // What earlier modules installed comes next, as /app/bin does in
+        // Flatpak's builds: programs a later module runs (GLib's
+        // glib-compile-resources), and the DLLs they need.
+        try path_dirs.insert(arena, 0, letter ++ "\\prefix\\bin");
         if (aliases.items.len > 0) {
             try path_dirs.insert(arena, 0, letter ++ "\\bin");
             try environment.set(arena, &tool_vars, "BB_OVERRIDE_APPLETS", try std.mem.join(arena, " ", aliases.items));
         }
+        try setSearchPaths(ctx, &tool_vars, tools);
         const msvc: ?msvc_host.Toolchain = if (r.host.len > 0) try msvc_host.find(ctx, path) else null;
         if (msvc) |tc| {
             try path_dirs.appendSlice(arena, tc.path);
@@ -329,6 +350,31 @@ const BuildRoot = struct {
         errdefer b.drive.release();
         for (b.caches) |id| try b.takeCache(ctx, id);
         return b;
+    }
+
+    /// Points pkg-config and CMake at the libraries a build can use: what
+    /// earlier modules installed into the prefix, then the SDK and runtime
+    /// images that have pkg-config files, such as a library's SDK. Set here
+    /// rather than in those images' env, which would join no lists and
+    /// would be in their runs too.
+    fn setSearchPaths(ctx: *Context, vars: *std.ArrayList(environment.Var), tools: []const Tool) !void {
+        const arena = ctx.arena;
+        var pkg_config: std.ArrayList([]const u8) = .empty;
+        var cmake: std.ArrayList([]const u8) = .empty;
+        try pkg_config.appendSlice(arena, &.{ letter ++ "\\prefix\\lib\\pkgconfig", letter ++ "\\prefix\\share\\pkgconfig" });
+        try cmake.append(arena, letter ++ "\\prefix");
+        for (tools) |t| {
+            var any = false;
+            for ([_][]const u8{ "lib\\pkgconfig", "share\\pkgconfig" }) |sub| {
+                const dir = try std.fs.path.join(arena, &.{ t.dir, sub });
+                if (!try Store.exists(ctx.io, dir)) continue;
+                try pkg_config.append(arena, dir);
+                any = true;
+            }
+            if (any) try cmake.append(arena, t.dir);
+        }
+        try environment.set(arena, vars, "PKG_CONFIG_PATH", try std.mem.join(arena, ";", pkg_config.items));
+        try environment.set(arena, vars, "CMAKE_PREFIX_PATH", try std.mem.join(arena, ";", cmake.items));
     }
 
     /// Moves a tool's cache from the store into the build root, or starts

@@ -15,7 +15,9 @@ const oci = @import("oci.zig");
 const remote = @import("remote.zig");
 const fail = Context.fail;
 
-pub const Kind = enum { runtime, sdk };
+/// What the recipe uses the image as: a runtime, an SDK, or a module's
+/// source of files (then its alias is the module's name).
+pub const Kind = enum { runtime, sdk, source };
 
 pub const Dependency = struct {
     alias: []const u8,
@@ -75,5 +77,6 @@ fn failUnpinned(ctx: *Context, recipe: []const u8, kind: Kind, alias: []const u8
             else => return fail("{s}: {t} {s} \"{s}\" must be pinned with \"@sha256:...\", and zigsaw can't find the digest: build or pull the image first", .{ recipe, kind, alias, reference }),
         };
     };
-    return fail("{s}: {t} {s} isn't pinned to a digest. Pin it with:\n  \"{s}\": \"{s}@{s}\"", .{ recipe, kind, alias, alias, reference, digest });
+    const key = if (kind == .source) "image" else alias;
+    return fail("{s}: {t} {s} isn't pinned to a digest. Pin it with:\n  \"{s}\": \"{s}@{s}\"", .{ recipe, kind, alias, key, reference, digest });
 }

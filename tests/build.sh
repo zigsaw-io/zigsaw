@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end checks for building apps: runtimes, which an app runs with and
 # whose layers travel in its image, and build commands, which build an app
-# from source with SDK images (zig, busybox, CMake, Rust, and Go with and
+# from source with SDK images (zig, busybox, CMake, Meson, Rust, and Go with and
 # without C), tools' caches and aliases, and vendor steps.
 #
 #   tests/build.sh [path\to\zigsaw.exe]
@@ -60,6 +60,10 @@ manifest_of() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$1.json"; }
 # Builds a recipe and prints its manifest digest.
 built_manifest() { z build "$1" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2; }
 same_image() { [ "$(built_manifest "$1")" = "$2" ]; }
+own_layer() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of "$1" | cut -d: -f2)" | tail -1 | cut -d: -f2; }
+config_of() { cat "$ZIGSAW_HOME\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of "$1" | cut -d: -f2)" | head -1 | cut -d: -f2)"; }
+drive_free() { ! subst | grep -q '^B:'; }
+no_build_root() { ! ls "$ZIGSAW_HOME\\tmp" | grep -q '^zigsaw-build-'; }
 
 # --- runtimes ---------------------------------------------------------------------
 
@@ -124,6 +128,54 @@ check "a command the runtime doesn't have fails the build" sh -c "\"\$0\" build 
 app_recipe "$APP@$app_digest" busybox.exe test.runtime.nested >"$work\\nested.json"
 check "a runtime with runtimes of its own is refused" sh -c "\"\$0\" build '$work\\nested.json' 2>&1 | grep -q 'has runtimes of its own'" "$zigsaw"
 
+# --- images as sources -------------------------------------------------------------
+
+# A runtime made from its SDK without building again: a module takes the SDK
+# image's own files, and cleanup leaves out what only builds need. The SDK
+# here is busybox with a header, a library and a pkg-config file.
+SDK=test.image.sdk
+RT=test.image.runtime
+mkdir -p "$work\\sdk\\include" "$work\\sdk\\lib\\pkgconfig" && cp "$ZIGSAW_HOME\\deploy\\$(own_layer $BB)\\busybox.exe" "$work\\sdk\\" &&
+    echo '#define X 1' >"$work\\sdk\\include\\x.h" && echo lib >"$work\\sdk\\lib\\libx.a" && echo 'Name: x' >"$work\\sdk\\lib\\pkgconfig\\x.pc"
+printf '{ "id": "%s", "version": "1", "command": "bin/busybox.exe", "exports": {},\n  "modules": [{ "name": "m", "sources": [{ "path": "busybox.exe", "dest": "bin/busybox.exe" }, { "path": "include/x.h", "dest": "include/x.h" }, { "path": "lib/libx.a", "dest": "lib/libx.a" }, { "path": "lib/pkgconfig/x.pc", "dest": "lib/pkgconfig/x.pc" }] }] }\n' \
+    $SDK >"$work\\sdk\\sdk.json"
+check "an SDK image builds" z build "$work\\sdk\\sdk.json"
+sdk_digest=$(manifest_of $SDK)
+image_recipe() {
+    printf '{ "id": "%s", "version": "1", "command": "bin/busybox.exe", "exports": {}, "cleanup": ["/include", "/lib"],\n  "modules": [{ "name": "files", "sources": [{ "image": "%s" }] }] }\n' $RT "$1"
+}
+image_recipe "$SDK@$sdk_digest" >"$work\\sdk\\runtime.json"
+check "a runtime takes the SDK image's files" z build "$work\\sdk\\runtime.json"
+rt_digest=$(manifest_of $RT)
+rt_files() {
+    local dir="$ZIGSAW_HOME\\deploy\\$(own_layer $RT)"
+    [ -f "$dir\\bin\\busybox.exe" ] && [ ! -e "$dir\\include" ] && [ ! -e "$dir\\lib" ] || { echo "files: $(cd "$dir" && find .)"; return 1; }
+    [ "$(z run $RT echo from the sdk | tr -d '\r')" = "from the sdk" ]
+}
+check "it has the SDK's program without its headers and libraries, and runs it" rt_files
+records_image() { config_of $RT | tr -d ' \r\n' | grep -q "\"images\":\[\"$sdk_digest\"\]"; }
+check "its config records the SDK image's digest" records_image
+check "the same recipe builds the same image" same_image "$work\\sdk\\runtime.json" "$rt_digest"
+image_recipe "$SDK" >"$work\\sdk\\unpinned.json"
+check "an unpinned image source names the digest to pin" sh -c "\"\$0\" build '$work\\sdk\\unpinned.json' 2>&1 | grep -qF '\"image\": \"$SDK@$sdk_digest\"'" "$zigsaw"
+# A module with build commands gets the image's files in its directory, under
+# dest. As an SDK, an image with pkg-config files is where pkg-config and
+# CMake look, after the prefix.
+printf '{ "id": "test.image.built", "version": "1", "command": "x.h", "exports": {}, "sdk": { "busybox": "%s@%s", "x": "%s@%s" },\n  "modules": [{ "name": "m", "sources": [{ "image": "%s@%s", "dest": "sdk" }], "build": ["cp sdk/include/x.h \\"$PREFIX/\\"", "echo \\"$PKG_CONFIG_PATH\\" > \\"$PREFIX/pc.txt\\"", "echo \\"$CMAKE_PREFIX_PATH\\" > \\"$PREFIX/cmake.txt\\"", "echo \\"$PATH\\" > \\"$PREFIX/path.txt\\""] }] }\n' \
+    $BB "$bb_digest" $SDK "$sdk_digest" $SDK "$sdk_digest" >"$work\\sdk\\built.json"
+search_paths() {
+    z build "$work\\sdk\\built.json" >/dev/null 2>&1 || { z build "$work\\sdk\\built.json" 2>&1 | tail -1; return 1; }
+    local dir="$ZIGSAW_HOME\\deploy\\$(own_layer test.image.built)" sdk_dir="$ZIGSAW_HOME\\deploy\\$(own_layer $SDK)"
+    [ -f "$dir\\x.h" ] || { echo "no x.h"; return 1; }
+    [ "$(tr -d '\r' <"$dir\\pc.txt" | tr '/' '\\')" = "B:\\prefix\\lib\\pkgconfig;B:\\prefix\\share\\pkgconfig;$sdk_dir\\lib\\pkgconfig" ] || { echo "PKG_CONFIG_PATH: $(cat "$dir\\pc.txt")"; return 1; }
+    [ "$(tr -d '\r' <"$dir\\cmake.txt" | tr '/' '\\')" = "B:\\prefix;$sdk_dir" ] || { echo "CMAKE_PREFIX_PATH: $(cat "$dir\\cmake.txt")"; return 1; }
+    case "$(tr -d '\r' <"$dir\\path.txt" | tr '/' '\\')" in
+    "B:\\prefix\\bin;"*) ;;
+    *) echo "PATH: $(cat "$dir\\path.txt")"; return 1 ;;
+    esac
+}
+check "a building module gets them under dest; PATH starts with B:\\prefix\\bin, PKG_CONFIG_PATH and CMAKE_PREFIX_PATH name the prefix, then the SDK" search_paths
+
 # --- prettier on node --------------------------------------------------------------
 
 z build "$root\\recipes\\node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
@@ -160,10 +212,6 @@ sh_recipe() {
     printf '{ "id": "%s", "version": "1", "command": "x.txt", "exports": {}, "sdk": { "busybox": "%s@%s" },\n  "modules": [{ "name": "m", %s "build": [%s] }] }\n' \
         "$id" $BB "$bb_digest" "$extra" "$commands"
 }
-own_layer() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of "$1" | cut -d: -f2)" | tail -1 | cut -d: -f2; }
-config_of() { cat "$ZIGSAW_HOME\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of "$1" | cut -d: -f2)" | head -1 | cut -d: -f2)"; }
-drive_free() { ! subst | grep -q '^B:'; }
-no_build_root() { ! ls "$ZIGSAW_HOME\\tmp" | grep -q '^zigsaw-build-'; }
 
 start=$SECONDS
 check "a recipe with build commands builds with zig's aliases (cc, c++, ar, ranlib, rc) and busybox" z build "$work\\c\\hello.json"
@@ -233,6 +281,38 @@ start=$SECONDS
 cmake_again() { [ "$(rebuilt_manifest "$work\\cmake\\hello.json")" = "$cmake_app_digest" ]; }
 check "built again, it's the same image" cmake_again
 printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$cmake_time"
+
+# The same sources with Meson, from meson's image (Python, Meson, Ninja,
+# pkgconf), and zig's compilers: one module installs a DLL of C and C++ with a
+# pkg-config file, and the next finds it with pkg-config, in B:\prefix, and
+# links it into a program with resources (zig's rc, which Meson takes for
+# Microsoft's).
+MESONAPP=test.build.meson
+check "meson.json builds Meson's image, with Ninja and pkgconf" z build "$root\\recipes\\meson.json"
+mkdir -p "$work\\meson\\greet" "$work\\meson\\hello" &&
+    cp "$(cygpath -u "$root")"/tests/build/c/*.{c,h,cpp,rc} "$(cygpath -u "$work")/meson/" &&
+    cp "$(cygpath -u "$root")/tests/build/meson/greet/meson.build" "$(cygpath -u "$work")/meson/greet/" &&
+    cp "$(cygpath -u "$root")/tests/build/meson/hello/meson.build" "$(cygpath -u "$work")/meson/hello/" &&
+    sed -e "s/@MESON@/$(manifest_of com.mesonbuild.meson)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\meson\\hello.json.in" >"$work\\meson\\hello.json"
+start=$SECONDS
+check "a Meson project linking an earlier module's DLL through pkg-config builds" z build "$work\\meson\\hello.json"
+meson_time=$((SECONDS - start))
+meson_app_digest=$(manifest_of $MESONAPP)
+meson_runs() {
+    local out dir="$ZIGSAW_HOME\\deploy\\$(own_layer $MESONAPP)"
+    out=$(z run $MESONAPP zigsaw | tr -d '\r')
+    [ "$out" = "hello, zigsaw
+built from ../main.c
+twice 21 is 42
+a string from its resources" ] || { echo "got: $out"; return 1; }
+    [ -f "$dir\\bin\\libgreet.dll" ] && [ ! -e "$dir\\lib" ] || { echo "want bin\\libgreet.dll and no lib"; return 1; }
+}
+check "it runs, with the DLL next to it" meson_runs
+start=$SECONDS
+meson_again() { [ "$(rebuilt_manifest "$work\\meson\\hello.json")" = "$meson_app_digest" ]; }
+check "built again, it's the same image" meson_again
+printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$meson_time"
 
 # A tool of our own whose image declares a cache: each build sees what
 # earlier ones left there. It also gives builds a command, greet, which
@@ -522,7 +602,7 @@ check "built again, it's the same image" cgo_again
 # Removing the apps also deletes their AppContainer profiles. The images
 # builds use stay until prune --downloads, and only zigsaw can delete their
 # protected deployments.
-for id in $APP io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP org.sqlite.sqlite3 \
+for id in $APP $SDK $RT test.image.built io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP com.mesonbuild.meson $MESONAPP org.sqlite.sqlite3 \
     test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
     test.build.vendored org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO; do z rm --delete-data $id >/dev/null 2>&1; done
 z prune --downloads --data >/dev/null 2>&1

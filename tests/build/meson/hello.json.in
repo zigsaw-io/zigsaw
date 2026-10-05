@@ -1,0 +1,38 @@
+{
+  "id": "test.build.meson",
+  "version": "1",
+  "command": "bin/hello.exe",
+  "sdk": {
+    "meson": "com.mesonbuild.meson@@MESON@",
+    "zig": "org.ziglang.zig@@ZIG@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "cleanup": ["/include", "/lib"],
+  "modules": [
+    {
+      "name": "greet",
+      "sources": [
+        { "path": "greet/meson.build", "dest": "meson.build" },
+        { "path": "greet.c" },
+        { "path": "greet.h" },
+        { "path": "twice.cpp" }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\"",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "hello",
+      "sources": [
+        { "path": "hello/meson.build", "dest": "meson.build" },
+        { "path": "main.c" },
+        { "path": "hello.rc" }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\"",
+        "meson install -C out"
+      ]
+    }
+  ]
+}
