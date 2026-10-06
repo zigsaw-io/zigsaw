@@ -25,7 +25,8 @@ jobs:
     runs-on: windows-2025
     # The job took 31 minutes after iteration 8, zot's vendor step (561 Go
     # modules) included, and 68 with GTK's images in iteration 10. GTK's
-    # images are left out until they're stable locally (see SKIP_RECIPES).
+    # images, and the Perl and cargo-c images only they build with, are left
+    # out until they're stable locally (see SKIP_RECIPES).
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,7 +54,7 @@ jobs:
       - name: Build the published recipes and compare them with the published images
         shell: bash
         env:
-          SKIP_RECIPES: gtk4-sdk.json gtk4.json gnome-text-editor.json
+          SKIP_RECIPES: perl.json cargo-c.json gtk4-sdk.json gtk4.json gnome-text-editor.json
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
           bash tests/published.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/published.txt"

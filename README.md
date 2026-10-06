@@ -91,8 +91,10 @@ with `zigsaw pull <id>`:
 | CMake, with Ninja 1.13.2 | `org.cmake.cmake` | 4.4.4 | `cmake`, `ctest`, `cpack`, `ninja` |
 | zstd (built from source) | `com.github.facebook.zstd` | 1.5.7 | `zstd`, `unzstd`, `zstdcat` |
 | Meson, with Ninja and pkgconf | `com.mesonbuild.meson` | 1.12.1 | `meson` |
+| Perl (Strawberry Perl, for building OpenSSL) | `org.perl.perl` | 5.42.3.1 | `perl` |
+| cargo-c (for building librsvg) | `com.github.lu-zero.cargo-c` | 0.10.25 | `cargo-cbuild`, `cargo-cinstall` |
 | GTK SDK (built from source) | `org.gtk.Gtk4.Sdk` | 4.24.1 | none |
-| GTK, with libadwaita (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo` |
+| GTK, with libadwaita, libsoup and librsvg (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo` |
 | GNOME Text Editor (built from source, on GTK) | `org.gnome.TextEditor` | 51.0 | `gnome-text-editor` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
@@ -102,9 +104,9 @@ and BusyBox, ripgrep and bat with [Rust](#rust), zig and BusyBox, fzf and
 zot with [Go](#go) and BusyBox, zstd with [CMake](#cmake), zig and BusyBox,
 whose images are their SDK. bat's C libraries (oniguruma, libgit2, zlib) are
 compiled by zig. Pulling them doesn't need those. [GTK](#gtk)'s SDK is built
-with Meson, CMake and zig, and its runtime is made from the SDK's image. GNOME
-Text Editor runs on GTK's runtime, with GtkSourceView, libspelling and
-libxml2 built into its own image. GTK's demos and Text Editor are GUI apps:
+with Meson, CMake, zig, Perl (for OpenSSL), Rust and cargo-c (for librsvg),
+and its runtime is made from the SDK's image. GNOME Text Editor runs on GTK's
+runtime, with GtkSourceView and libspelling built into its own image. GTK's demos and Text Editor are GUI apps:
 they open no console, and get [Start menu shortcuts](#start-menu-shortcuts).
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
@@ -756,16 +758,19 @@ GTK 4 comes as two images, as Flatpak's GNOME runtime does:
   libjpeg-turbo, libtiff, PCRE2, libffi, GLib 2.90, pixman, FriBidi,
   HarfBuzz, cairo, Pango, graphene, libepoxy, gdk-pixbuf, Microsoft's
   DirectX headers, and GTK, with its demos, then the hicolor and Adwaita
-  icon themes and libadwaita 1.10, with its demo. It keeps their headers,
+  icon themes and libadwaita 1.10, with its demo; then libsoup 3.8 with
+  OpenSSL 3.5 (static), SQLite, nghttp2, libpsl and glib-networking, and
+  librsvg 2.63 with FreeType, libxml2 and its GdkPixbuf loader. It keeps their headers,
   import libraries and pkg-config files, so apps build against it by listing
-  it in their `sdk`. It takes about 15 minutes to build from scratch.
+  it in their `sdk`. It takes about 20 minutes to build from scratch.
 - **[`org.gtk.Gtk4`](recipes/gtk4.json)** is the runtime: the SDK's files
   as an [image source](#images-as-sources), without the headers, libraries
   and build tools, so it builds in seconds once the SDK is there. Apps list
-  it in their `runtimes`. As an app, it runs `gtk4-demo`, exports
-  `gtk4-demo`, `gtk4-node-editor`, `gtk4-print-editor`,
-  `gtk4-query-settings` and `adwaita-1-demo`, and adds "GTK Demo" and
-  "Adwaita Demo" to the Start menu.
+  it in their `runtimes`. It keeps GIO's modules and GdkPixbuf's loaders
+  from the SDK's `lib`. As an app, it runs `gtk4-demo`, exports
+  `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`,
+  `gtk4-print-editor`, `gtk4-query-settings` and `adwaita-1-demo`, and adds
+  "GTK Demo", "GTK Widget Factory" and "Adwaita Demo" to the Start menu.
 
 An app built against GTK, as [`tests/gtk`](tests/gtk) is:
 
@@ -797,6 +802,15 @@ bypassing zigsaw's), and its settings in a key file there
 by default on Windows; `--env=GDK_DEBUG=dcomp` turns on DirectComposition,
 and with it OpenGL. GTK apps run in all three sandboxes.
 
+Apps get HTTP from libsoup, whose TLS comes from GIO: glib-networking's
+OpenSSL module, which GLib finds in the runtime's `lib\gio\modules` and
+which trusts the certificates in Windows' certificate stores (as browsers
+do), not a bundled list. libsoup speaks HTTP/2 (nghttp2) and knows the
+Public Suffix List (libpsl, built in). GdkPixbuf loads SVGs with librsvg's
+loader, which the runtime's `loaders.cache` names by a path relative to the
+runtime, so GtkBuilder files with SVG images work (GTK's widget factory has
+one).
+
 Building the stack with zig took a few workarounds, which the SDK's recipe
 spells out:
 
@@ -820,6 +834,27 @@ spells out:
   `CMAKE_RC_FLAGS` for CMake (see [known gaps](#known-gaps)), and GTK's
   `rc` writes COFF objects, since GTK puts its resources in a static
   library first.
+- OpenSSL's `Configure` needs a Perl that makes Unix paths for its
+  `mingw64` target; Strawberry Perl makes Windows ones, so its build loads
+  [a small module](recipes/gtk4-sdk/openssl-unixspec.pm) into each Perl it
+  runs that gives `File::Spec` Unix paths with drive letters. BusyBox's
+  `make` runs one job at a time, so the recipe compiles OpenSSL's objects
+  with `xargs -P` from `make -n`'s list, and `make` only archives them:
+  75 seconds instead of 16 minutes. OpenSSL is static, linked into
+  glib-networking's module.
+- glib-networking opens Windows' certificate stores for writing, which a
+  low-integrity process may not; the recipe opens them read-only, so HTTPS
+  works under `--sandbox=low`.
+- librsvg's Rust code is built by cargo-c as a static library, which Meson
+  links into `librsvg-2-2.dll` with zig. The recipe tells Meson the Rust
+  target (`-Dtriplet=x86_64-pc-windows-gnu`; it would guess `gnullvm` for a
+  clang), links the static library rather than all of it (each crate's
+  import libraries define the same import descriptors), drops the `nm`
+  step that only feeds a version script Windows doesn't use, and leaves out
+  `rsvg-convert` (see [known gaps](#known-gaps)). Its crates come from a
+  pinned [vendor step](#vendor-steps), and it fixes Python's hash seed
+  (`PYTHONHASHSEED=0`), as its script for the libraries Rust needs dedupes
+  them with a `set` and would write them in another order each build.
 - cairo's script tool prints `__DATE__`, which zig refuses when optimizing
   (`-Wno-error=date-time`; builds fix the date with `SOURCE_DATE_EPOCH`),
   and CRoaring in GTK leaves out its AVX-512 code, which zig's generic
@@ -1176,6 +1211,10 @@ a fresh runner, after `published.sh`, with its build store as
 - Under `--sandbox=appcontainer`, access granted to a host path lasts until
   the app is removed, even after the permission or override that granted it
   is gone, and so does a low integrity label under `--sandbox=low`.
+- `--sandbox=low` needs a store on a drive whose permissions let you
+  change the owner of what you create, as your user profile's do. On a
+  second drive whose root gives users only Modify, such as a fresh `D:`,
+  labelling the data directory fails with access denied.
 - `--sandbox=low` confines writing only: the app can read whatever you can,
   and use the network whatever its permissions say. At low integrity,
   writing to the registry fails outside `HKCU\Software\AppDataLow`, and the
@@ -1219,6 +1258,16 @@ a fresh runner, after `published.sh`, with its build store as
   fixed flags rather than the profile's, against zig's UCRT headers but
   linked with Rust's `msvcrt.dll` libraries; C code that needs what only UCRT
   has would fail to link.
+- Rust programs that GNU ld links (any Rust executable or DLL that cargo
+  links itself) can come out broken when their crates call Windows through
+  `raw-dylib` (windows-sys 0.60 and later): zig's `dlltool`, which rustc
+  runs to make their import libraries, makes LLVM-style ones, which GNU ld
+  doesn't lay out correctly, so some imports are never bound and the
+  program crashes when it calls one. ripgrep and bat aren't affected (every
+  import is bound); cargo-c built this way and librsvg's `rsvg-convert`
+  are, which is why cargo-c's image is its upstream release and GTK's SDK
+  leaves `rsvg-convert` out. librsvg's DLL is linked by zig instead, and its
+  GdkPixbuf loader has all its imports bound.
 - Rust builds need the store's path to be shorter than about 100
   characters: rustc starts its linker from the Rust image's deployment, and
   can't start a program whose path is longer than Windows' 260 characters.

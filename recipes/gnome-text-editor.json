@@ -11,10 +11,10 @@
     "Text Editor": { "command": "gnome-text-editor", "description": "View and edit text files" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:2a869bf2513579234ae8f75888b8a4e4a883fd4e6e62176d743066b973ee324f"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:8437fc8676b90066a7490632af3c5d740e7bdfd29d9fb9c5a1917829030ac39f"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:ef47240f616d07c97856e002a7d0360abe92b4ed6b13075d63e13a612cbb7f1f",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:d0a0326339e5c5e7ab6d8a650a7df3378174d1b0cbd1d41bb49ca83652202bdd",
     "meson": "com.mesonbuild.meson:1.12.1@sha256:04fac7c7365f01bbe9c6dfa5f95741b5a2140c10ccb7e9bde5ed99e2feb69041",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
     "zig": "org.ziglang.zig:0.16.0@sha256:c6e3e4af90343370ce3ea59c42112d930e05ba801da238aea92d623a19a27ae7",
@@ -27,8 +27,6 @@
     "/share/gtk-doc",
     "/share/man",
     "/share/aclocal",
-    "/bin/xmllint.exe",
-    "/bin/xmlcatalog.exe",
     "/bin/editorconfig.exe",
     "/bin/editorconfig-*.exe",
     "*-config"
@@ -39,23 +37,6 @@
       "build": [
         "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
         "cc -c noexport.s -o noexport.o"
-      ]
-    },
-    {
-      "name": "libxml2",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
-      "sources": [
-        {
-          "url": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz",
-          "sha256": "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821",
-          "strip": 1
-        }
-      ],
-      "build": [
-        "sed -i \"/^r = run_command('git', 'describe', check: false)$/,/^endif$/d\" meson.build",
-        "! grep -q \"run_command('git'\" meson.build",
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Ddocs=disabled -Dpython=disabled -Dhttp=disabled -Dicu=disabled -Diconv=disabled -Dreadline=disabled -Dhistory=disabled -Dzlib=disabled",
-        "meson install -C out"
       ]
     },
     {

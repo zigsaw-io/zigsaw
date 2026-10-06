@@ -17,6 +17,8 @@ zot.json
 cmake.json
 zstd.json
 meson.json
+perl.json
+cargo-c.json
 gtk4-sdk.json
 gtk4.json
 gnome-text-editor.json

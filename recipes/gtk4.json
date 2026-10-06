@@ -13,6 +13,7 @@
   "permissions": { "filesystem": ["cwd"] },
   "exports": {
     "gtk4-demo": { "command": "bin/gtk4-demo.exe" },
+    "gtk4-widget-factory": { "command": "bin/gtk4-widget-factory.exe" },
     "gtk4-node-editor": { "command": "bin/gtk4-node-editor.exe" },
     "gtk4-print-editor": { "command": "bin/gtk4-print-editor.exe" },
     "gtk4-query-settings": { "command": "bin/gtk4-query-settings.exe" },
@@ -20,11 +21,22 @@
   },
   "shortcuts": {
     "GTK Demo": { "command": "gtk4-demo", "description": "GTK's widgets and APIs at work" },
+    "GTK Widget Factory": { "command": "gtk4-widget-factory", "description": "GTK's widgets in every state" },
     "Adwaita Demo": { "command": "adwaita-1-demo", "description": "libadwaita's widgets at work" }
   },
   "cleanup": [
     "/include",
-    "/lib",
+    "/lib/cmake",
+    "/lib/glib-2.0",
+    "/lib/graphene-1.0",
+    "/lib/libpng",
+    "/lib/libpng.dll",
+    "/lib/pkgconfig",
+    "*.a",
+    "/share/thumbnailers",
+    "/bin/psl-make-dafsa",
+    "xmlcatalog.exe",
+    "xmllint.exe",
     "/share/applications",
     "/share/metainfo",
     "/share/pkgconfig",
@@ -54,7 +66,7 @@
   "modules": [
     {
       "name": "gtk",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:ef47240f616d07c97856e002a7d0360abe92b4ed6b13075d63e13a612cbb7f1f" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:d0a0326339e5c5e7ab6d8a650a7df3378174d1b0cbd1d41bb49ca83652202bdd" }]
     }
   ]
 }

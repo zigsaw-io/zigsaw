@@ -8,6 +8,9 @@
   "sdk": {
     "meson": "com.mesonbuild.meson:1.12.1@sha256:04fac7c7365f01bbe9c6dfa5f95741b5a2140c10ccb7e9bde5ed99e2feb69041",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
+    "perl": "org.perl.perl:5.42.3.1@sha256:4459f0a9487860f976ef170b4e55c10e4889b2eff314c9eaacf4c42135406773",
+    "rust": "org.rust-lang.rust:1.99.0@sha256:9767e1e00829d60e9e3f87f734c08c8888d00b4d027540565b431234fba5f507",
+    "cargo-c": "com.github.lu-zero.cargo-c:0.10.25@sha256:e92c43863472092bbb24fb5fe0c9974ac795bd698dfa1aea62dc222c286a8f80",
     "zig": "org.ziglang.zig:0.16.0@sha256:c6e3e4af90343370ce3ea59c42112d930e05ba801da238aea92d623a19a27ae7",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
@@ -350,6 +353,167 @@
         "grep -q \"^demo_kwargs = { 'win_subsystem': 'windows' }$\" demo/meson.build",
         "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dintrospection=disabled -Dvapi=false -Ddocumentation=false -Dtests=false -Dexamples=true",
         "meson install -C out"
+      ]
+    },
+    {
+      "name": "openssl",
+      "env": { "CFLAGS": "-s -O2", "PERL": "perl", "PERL5OPT": "-IB:/src/openssl/zigsaw -Munixspec" },
+      "sources": [
+        {
+          "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+          "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/openssl-unixspec.pm", "dest": "zigsaw/unixspec.pm" }
+      ],
+      "build": [
+        "perl Configure mingw64 no-shared no-asm no-tests no-docs no-apps no-module --prefix=\"$PREFIX\" --libdir=lib",
+        "make build_generated $(sed -n '/^GENERATED=/,/[^\\\\]$/p' Makefile | tr ' ' '\\n' | grep '[.][ch]$')",
+        "make -n build_libs | grep -e ' -c -o ' | tr '\\n' '\\0' | xargs -0 -P \"$(nproc)\" -n 1 sh -c",
+        "make build_sw",
+        "make install_dev"
+      ]
+    },
+    {
+      "name": "sqlite",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "sources": [
+        {
+          "url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+          "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+          "strip": 1
+        },
+        {
+          "url": "https://wrapdb.mesonbuild.com/v2/sqlite3_3.53.4-1/get_patch",
+          "sha256": "fe8033e209d350fa74e52ce1398253b373e7cfdd6809bc9f304e409e76f108af",
+          "type": "zip",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "nghttp2",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o" },
+      "sources": [
+        {
+          "url": "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.xz",
+          "sha256": "e05cb1388eaca3830aded4ccf20044b6e1ac1a61411dcca11b0437c4285c8bc2",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DENABLE_LIB_ONLY=ON -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=OFF -DENABLE_DOC=OFF -DBUILD_TESTING=OFF",
+        "cmake --build out",
+        "cmake --install out"
+      ]
+    },
+    {
+      "name": "libpsl",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "sources": [
+        {
+          "url": "https://github.com/rockdaboot/libpsl/releases/download/0.23.3/libpsl-0.23.3.tar.gz",
+          "sha256": "93941f85a1e7bd593fa94f299233cb5dfc91cd144fd9a78a6ceb75001c5b03be",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Druntime=no -Dbuiltin=true -Dtests=false -Ddocs=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "glib-networking",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/glib-networking/2.90/glib-networking-2.90.0.tar.xz",
+          "sha256": "83a75e3d9c36b66ee86d3281c2fc997816101968a5126ba322b2acb9a74dd8c0",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "sed -i 's/CertOpenSystemStoreW (0, source_cert_store_name)/CertOpenStore (CERT_STORE_PROV_SYSTEM_W, 0, 0, CERT_SYSTEM_STORE_CURRENT_USER | CERT_STORE_READONLY_FLAG, source_cert_store_name)/' tls/openssl/gtlsdatabase-openssl.c",
+        "grep -q CERT_STORE_READONLY_FLAG tls/openssl/gtlsdatabase-openssl.c",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dgnutls=disabled -Dopenssl=enabled -Dlibproxy=disabled -Dgnome_proxy=disabled -Denvironment_proxy=enabled -Dtests=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "libsoup",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/libsoup/3.8/libsoup-3.8.0.tar.xz",
+          "sha256": "bbf08fa3e03a88c31a3d27a0d87cb422e9490f2d08e149211103df6d638a2238",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtls_check=false -Dgssapi=disabled -Dntlm=disabled -Dbrotli=disabled -Dzstd=disabled -Dintrospection=disabled -Dvapi=disabled -Ddocs=disabled -Ddoc_tests=false -Dtests=false -Dautobahn=disabled -Dsysprof=disabled -Dpkcs11_tests=disabled",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "freetype",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "sources": [
+        {
+          "url": "https://downloads.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.xz",
+          "sha256": "36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dbrotli=disabled -Dbzip2=disabled -Dharfbuzz=disabled -Dpng=disabled -Dzlib=disabled -Dtests=disabled",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "libxml2",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz",
+          "sha256": "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "sed -i \"/^r = run_command('git', 'describe', check: false)$/,/^endif$/d\" meson.build",
+        "! grep -q \"run_command('git'\" meson.build",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Ddocs=disabled -Dpython=disabled -Dhttp=disabled -Dicu=disabled -Diconv=disabled -Dreadline=disabled -Dhistory=disabled -Dzlib=disabled",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "librsvg",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu", "PYTHONHASHSEED": "0" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/librsvg/2.63/librsvg-2.63.2.tar.xz",
+          "sha256": "852b18e1a00b8605528825a27dc7748bff2a5dd254028f59dc22a34ea57e81b6",
+          "strip": 1
+        }
+      ],
+      "vendor": {
+        "commands": ["cargo vendor --locked vendor >/dev/null"],
+        "dir": "vendor",
+        "sha256": "5afe2e967193302735afeb9878e3bdb77982dd5ac07f777d6e0af7bace573d9c"
+      },
+      "build": [
+        "mkdir -p .cargo && printf '%s\\n' '[source.crates-io]' 'replace-with = \"vendored\"' '[source.vendored]' 'directory = \"vendor\"' '[net]' 'offline = true' > .cargo/config.toml",
+        "sed -i -e \"s/^    nm = find_program('nm')$/    nm = find_program('nm', required: false, disabler: true)/\" -e '/^    link_depends: librsvg_ver,$/d' rsvg/meson.build",
+        "grep -q \"find_program('nm', required: false, disabler: true)\" rsvg/meson.build && ! grep -q 'link_depends: librsvg_ver' rsvg/meson.build",
+        "sed -i 's/^    link_whole: librsvg_c_lib,$/    link_with: librsvg_c_lib,/' rsvg/meson.build",
+        "grep -q '^    link_with: librsvg_c_lib,$' rsvg/meson.build",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtriplet=x86_64-pc-windows-gnu -Dpixbuf=enabled -Dpixbuf-loader=enabled -Drsvg-convert=disabled -Dintrospection=disabled -Dvala=disabled -Ddocs=disabled -Dtests=false -Davif=disabled",
+        "meson install -C out",
+        "grep -q 'pixbufloader_svg[.]dll' \"$PREFIX/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache\" && ! grep -q '^\"B:' \"$PREFIX/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache\""
       ]
     }
   ]

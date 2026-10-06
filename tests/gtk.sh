@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # GTK end to end: an app built against GTK's SDK image (org.gtk.Gtk4.Sdk),
 # with Meson and zig, runs on GTK's runtime image (org.gtk.Gtk4), with
-# libadwaita, opens a window, draws a frame and quits, in each sandbox; the
+# libadwaita, opens a window, draws a frame and quits, in each sandbox; it
+# gets HTTPS URLs with libsoup and loads an SVG with librsvg's loader; the
 # runtime's own tools run too, its demos get the windowless shim and Start
 # menu shortcuts (in a temporary folder), and GNOME Text Editor
 # (recipes/gnome-text-editor.json) starts up in each sandbox.
@@ -53,7 +54,7 @@ check() {
 z() { "$zigsaw" "$@"; }
 manifest_of() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$1.json"; }
 
-cp "$root\\tests\\gtk\\hello.c" "$root\\tests\\gtk\\meson.build" "$work\\"
+cp "$root\\tests\\gtk\\hello.c" "$root\\tests\\gtk\\soup.c" "$root\\tests\\gtk\\svg.c" "$root\\tests\\gtk\\meson.build" "$work\\"
 sed -e "s/@GTK@/$(manifest_of org.gtk.Gtk4)/" -e "s/@GTKSDK@/$(manifest_of org.gtk.Gtk4.Sdk)/" \
     -e "s/@MESON@/$(manifest_of com.mesonbuild.meson)/" -e "s/@ZIG@/$(manifest_of org.ziglang.zig)/" \
     -e "s/@BUSYBOX@/$(manifest_of net.frippery.busybox)/" "$root\\tests\\gtk\\hello.json.in" >"$work\\hello.json"
@@ -86,6 +87,33 @@ xdg() {
 }
 check "GLib keeps its files in the app's data directory, and settings in a key file there" xdg
 
+# libsoup, with GIO's TLS from glib-networking's OpenSSL module, which trusts
+# Windows' root certificates. ghcr.io answers 401 to anonymous requests.
+soup() {
+    local out
+    out=$(timeout 120 "$zigsaw" run "$@" --command=bin/soup-get.exe $APP https://ghcr.io/v2/ https://untrusted-root.badssl.com/ 2>&1 | tr -d '\r')
+    grep -q '^libsoup 3\.8\.0$' <<<"$out" && grep -q '^tls backend GTlsBackendOpenssl$' <<<"$out" &&
+        grep -qF 'GET https://ghcr.io/v2/: 401 over HTTP/2' <<<"$out" &&
+        grep -qF 'GET https://untrusted-root.badssl.com/: error: Unacceptable TLS certificate' <<<"$out" || { echo "got: $out"; return 1; }
+}
+check "libsoup 3.8.0 gets an HTTPS URL over HTTP/2, trusting Windows' root certificates, and refuses an untrusted root" soup
+check "with --sandbox=low" soup --sandbox=low
+check "with --sandbox=appcontainer" soup --sandbox=appcontainer
+psl() { timeout 60 "$zigsaw" run --command=bin/soup-get.exe $APP 2>&1 | tr -d '\r' | grep -q '^base domain of www\.example\.co\.uk is example\.co\.uk$'; }
+check "libsoup knows the Public Suffix List (libpsl)" psl
+# An SVG through GdkPixbuf, as GtkBuilder loads images: librsvg's loader.
+printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="32"><rect width="48" height="32" fill="teal"/></svg>' >"$work\\t.svg"
+check "GdkPixbuf loads an SVG with librsvg's loader" sh -c "timeout 60 \"\$0\" run --command=bin/svg-size.exe $APP t.svg | grep -q '^loaded 48x32'" "$zigsaw"
+# The runtime keeps GIO's modules and GdkPixbuf's loaders from the SDK's lib
+# directory, and none of its libraries for linking.
+runtime_manifest="$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of org.gtk.Gtk4 | cut -d: -f2)"
+runtime="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$runtime_manifest" | tail -1 | cut -d: -f2)"
+runtime_lib() {
+    test -f "$runtime\\lib\\gio\\modules\\libgioopenssl.dll" && test -f "$runtime\\lib\\gdk-pixbuf-2.0\\2.10.0\\loaders\\pixbufloader_svg.dll" || return 1
+    [ -z "$(find "$(cygpath -u "$runtime")" -name '*.a' -o -name '*.pc' -o -name '*.h' | head -1)" ]
+}
+check "the runtime has GIO's modules and GdkPixbuf's loaders, and no headers or libraries for linking" runtime_lib
+
 # GUI programs get the shim that opens no console, and declared shortcuts.
 # Installing the runtime again (from the build cache) puts its shortcuts in
 # the test's folder.
@@ -104,6 +132,9 @@ stays_up() {
     [ $? -eq 124 ]
 }
 check "the Adwaita demo runs" stays_up 15 --command=adwaita-1-demo org.gtk.Gtk4
+# It aborted at startup without an SVG loader (iteration 11).
+check "GTK's widget factory runs" stays_up 15 --command=gtk4-widget-factory org.gtk.Gtk4
+check "it gets the windowless shim and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\gtk4-widget-factory.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\GTK Widget Factory.lnk'"
 
 # GNOME Text Editor, on the runtime. Built here unless the store has it,
 # which takes a few minutes.

@@ -1,0 +1,24 @@
+{
+  "id": "com.github.lu-zero.cargo-c",
+  "version": "0.10.25",
+  "command": "bin/cargo-cbuild.exe",
+  "path": ["bin"],
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "cargo-cbuild": { "command": "bin/cargo-cbuild.exe" },
+    "cargo-cinstall": { "command": "bin/cargo-cinstall.exe" }
+  },
+  "cleanup": ["/bin/cargo-capi.exe", "/bin/cargo-ctest.exe"],
+  "modules": [
+    {
+      "name": "cargo-c",
+      "sources": [
+        {
+          "url": "https://github.com/lu-zero/cargo-c/releases/download/v0.10.25/cargo-c-windows-gnu.zip",
+          "sha256": "da2d44a3ad325ee6155071d7966176aa72e1df40819374825d8c56e3e0533d00",
+          "dest": "bin"
+        }
+      ]
+    }
+  ]
+}
