@@ -598,7 +598,7 @@ is still fresh in each build.
 
 **Images can give builds commands.** An SDK or runtime image can provide a
 command under a name that other tools look for. zig's provides a C compiler
-under the names build scripts and makefiles expect, and `dlltool`, which
+under the names build scripts and makefiles expect, and an assembler, which
 Rust needs:
 
 ```json
@@ -608,14 +608,16 @@ Rust needs:
   "ar": { "command": "zig.exe", "args": ["ar"] },
   "ranlib": { "command": "zig.exe", "args": ["ranlib"] },
   "rc": { "command": "zig.exe", "args": ["rc"] },
-  "dlltool": { "command": "zig.exe", "args": ["dlltool"] }
+  "as": { "command": "zig.exe", "args": ["cc", "-target", "x86_64-windows-gnu", "-c", "-x", "assembler"], "drop": ["--64"] }
 }
 ```
 
 Aliases are like exports, but for builds rather than for you: each one is
 `B:\bin\<name>.exe` while a build that uses the image runs, first on its
 PATH. It runs the command with the alias's arguments, then its caller's, in
-the caller's environment. If two images alias the same name, the one listed
+the caller's environment. `drop` leaves out the caller's arguments that
+equal one of its values: GNU `dlltool` passes its assembler `--64`, which
+zig's cc doesn't take. If two images alias the same name, the one listed
 first in the recipe wins. Aliases also win over BusyBox's applets of the
 same name, which its sh would otherwise run instead of anything on PATH
 (zig's `ar` over BusyBox's): builds list them in `BB_OVERRIDE_APPLETS`.
@@ -850,8 +852,8 @@ spells out:
   target (`-Dtriplet=x86_64-pc-windows-gnu`; it would guess `gnullvm` for a
   clang), links the static library rather than all of it (each crate's
   import libraries define the same import descriptors), drops the `nm`
-  step that only feeds a version script Windows doesn't use, and leaves out
-  `rsvg-convert` (see [known gaps](#known-gaps)). Its crates come from a
+  step that only feeds a version script Windows doesn't use. `rsvg-convert`
+  is in the SDK, not the runtime. Its crates come from a
   pinned [vendor step](#vendor-steps), and it fixes Python's hash seed
   (`PYTHONHASHSEED=0`), as its script for the libraries Rust needs dedupes
   them with a `set` and would write them in another order each build.
@@ -895,11 +897,15 @@ completions as its releases do.
 
 **Rust builds need zig in the SDK as well.** The `windows-sys` crate, which
 nearly every Rust program for Windows uses, links Windows' functions in a
-way that makes rustc run `dlltool`. The `dlltool` Rust ships needs an
-assembler that Rust doesn't ship
-([rust-lang/rust#103939](https://github.com/rust-lang/rust/issues/103939)).
-zig's image gives builds its own `dlltool` as an alias, and that one needs
-none.
+way that makes rustc run `dlltool`. Rust's image gives builds the GNU
+`dlltool` Rust ships as an alias, but it needs an assembler that Rust
+doesn't ship
+([rust-lang/rust#103939](https://github.com/rust-lang/rust/issues/103939)):
+zig's `as` alias. (LLVM's `dlltool`, which needs none, makes import
+libraries that GNU ld, Rust's linker here, lays out wrongly: some imports
+are never bound, and the program crashes when it calls one.
+`zig build imports` builds a checker for that, which `tests/build.sh` and
+`tests/published.sh` run.)
 
 **Crates that compile C**, with the [cc crate](https://docs.rs/cc), use
 zig's `cc`, `c++` and `ar` aliases too. For the `x86_64-pc-windows-gnu`
@@ -926,6 +932,10 @@ binaries have them.
 
 Rust builds reproduce without further flags: crates' paths are relative to
 the project, and the linker takes its timestamp from `SOURCE_DATE_EPOCH`.
+The image sets `CARGO_PROFILE_RELEASE_STRIP=symbols`, as GNU `dlltool`
+names the symbols of the import libraries it makes after rustc's temporary
+directories, whose names are random; release builds leave the symbol table
+out.
 
 The image sets `CARGO_HOME` to `${data}\cargo`. Run as an app, cargo keeps
 its home in its data directory, and what `cargo install` installs is a
@@ -1211,10 +1221,12 @@ a fresh runner, after `published.sh`, with its build store as
 - Under `--sandbox=appcontainer`, access granted to a host path lasts until
   the app is removed, even after the permission or override that granted it
   is gone, and so does a low integrity label under `--sandbox=low`.
-- `--sandbox=low` needs a store on a drive whose permissions let you
-  change the owner of what you create, as your user profile's do. On a
-  second drive whose root gives users only Modify, such as a fresh `D:`,
-  labelling the data directory fails with access denied.
+- `--sandbox=low` labels only paths whose permissions you may change, which
+  you may for what you own. Labelling needs the right to change a path's
+  owner, which a second drive whose root gives users only Modify (a fresh
+  `D:`) withholds; zigsaw then grants it to you for the change, and puts the
+  permissions back as they were. A writable grant of a path you neither own
+  nor may change the permissions of fails.
 - `--sandbox=low` confines writing only: the app can read whatever you can,
   and use the network whatever its permissions say. At low integrity,
   writing to the registry fails outside `HKCU\Software\AppDataLow`, and the
@@ -1253,21 +1265,11 @@ a fresh runner, after `published.sh`, with its build store as
 - Vendor steps run their commands with network access and nothing more
   confining than a build's sandbox; only what they leave in their directory
   is pinned.
-- Rust builds need zig in their SDK, for `dlltool` and C. Only the
+- Rust builds need zig in their SDK, for an assembler and C. Only the
   `x86_64-pc-windows-gnu` target is set up. Crates' C code is compiled with
   fixed flags rather than the profile's, against zig's UCRT headers but
   linked with Rust's `msvcrt.dll` libraries; C code that needs what only UCRT
   has would fail to link.
-- Rust programs that GNU ld links (any Rust executable or DLL that cargo
-  links itself) can come out broken when their crates call Windows through
-  `raw-dylib` (windows-sys 0.60 and later): zig's `dlltool`, which rustc
-  runs to make their import libraries, makes LLVM-style ones, which GNU ld
-  doesn't lay out correctly, so some imports are never bound and the
-  program crashes when it calls one. ripgrep and bat aren't affected (every
-  import is bound); cargo-c built this way and librsvg's `rsvg-convert`
-  are, which is why cargo-c's image is its upstream release and GTK's SDK
-  leaves `rsvg-convert` out. librsvg's DLL is linked by zig instead, and its
-  GdkPixbuf loader has all its imports bound.
 - Rust builds need the store's path to be shorter than about 100
   characters: rustc starts its linker from the Rust image's deployment, and
   can't start a program whose path is longer than Windows' 260 characters.

@@ -390,6 +390,8 @@ pub const INHERITED_ACE: u8 = 0x10;
 /// FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_DELETE_CHILD |
 /// FILE_WRITE_ATTRIBUTES | DELETE: everything that changes a file or a directory's entries.
 pub const FILE_MODIFY: DWORD = 0x00010156;
+pub const WRITE_OWNER: DWORD = 0x00080000;
+pub const ERROR_ACCESS_DENIED: DWORD = 5;
 
 pub const TOKEN_QUERY: DWORD = 0x0008;
 pub const TokenUser: c_int = 1;

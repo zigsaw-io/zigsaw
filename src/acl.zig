@@ -129,7 +129,8 @@ pub fn currentUserSid(arena: Allocator) !win32.PSID {
 /// the label changed.
 ///
 /// Like a grant, the first label of a large tree is slow. It needs the right
-/// to change the path's owner, which the user has for their own files.
+/// to change the path's owner, which the user has for their own files in
+/// their profile; see `writeLabel` for files that don't give it.
 pub fn labelLow(arena: Allocator, path: []const u8) !bool {
     if (try ownLabel(arena, path)) |rid| if (rid <= win32.SECURITY_MANDATORY_LOW_RID) return false;
     const low = try lowIntegritySid(arena);
@@ -176,9 +177,34 @@ pub fn ownLabel(arena: Allocator, path: []const u8) !?win32.DWORD {
     return null;
 }
 
+/// Sets `path`'s label, which needs WRITE_OWNER. Files whose ACL gives the
+/// user less, such as those on a drive whose root grants users only Modify,
+/// still let their owner change the ACL: then the user is granted
+/// WRITE_OWNER for the change, and the ACL is put back as it was. The label
+/// stays.
 fn writeLabel(arena: Allocator, path: []const u8, sacl: *win32.ACL) !void {
-    const rc = win32.SetNamedSecurityInfoW(try win32.wide(arena, path), win32.SE_FILE_OBJECT, win32.LABEL_SECURITY_INFORMATION, null, null, null, sacl);
-    if (rc != 0) return labelFail("changing", path, rc);
+    const path_w = try win32.wide(arena, path);
+    const rc = win32.SetNamedSecurityInfoW(path_w, win32.SE_FILE_OBJECT, win32.LABEL_SECURITY_INFORMATION, null, null, null, sacl);
+    if (rc == 0) return;
+    if (rc != win32.ERROR_ACCESS_DENIED) return labelFail("changing", path, rc);
+
+    const user = try currentUserSid(arena);
+    var dacl = try Dacl.read(arena, path);
+    defer dacl.deinit();
+    if (dacl.find(win32.ACCESS_ALLOWED_ACE_TYPE, user, win32.WRITE_OWNER, .any) != null) return labelFail("changing", path, rc);
+    var entries = [1]win32.EXPLICIT_ACCESS_W{.{
+        .grfAccessPermissions = win32.WRITE_OWNER,
+        .grfAccessMode = win32.GRANT_ACCESS,
+        .grfInheritance = win32.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        .Trustee = .{ .ptstrName = user },
+    }};
+    dacl.addEntries(&entries) catch
+        return fail("changing the integrity label of {s} needs the right to change its owner, which you don't have, nor the right to give it to yourself", .{path});
+    const again = win32.SetNamedSecurityInfoW(path_w, win32.SE_FILE_OBJECT, win32.LABEL_SECURITY_INFORMATION, null, null, null, sacl);
+    // The ACL read before the grant, back as it was, for the label as well as
+    // after a failure.
+    try dacl.write(dacl.acl);
+    if (again != 0) return labelFail("changing", path, again);
 }
 
 fn lowIntegritySid(arena: Allocator) !win32.PSID {

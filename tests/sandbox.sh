@@ -87,6 +87,23 @@ refuses_profile() {
 check "low: won't label the user profile" refuses_profile
 check "low: --ephemeral writes its own data directory" z run --sandbox=low --ephemeral $BB sh -c 'echo x > "$APPDATA/f"'
 
+# A directory that gives its owner Modify, not WRITE_OWNER, which labelling
+# needs, as a fresh drive's root does (D:\ on Windows 11). zigsaw grants it
+# for the change, and puts the ACL back.
+mkdir -p "$work\\modify\\rw"
+icacls "$work\\modify" /inheritance:r /grant:r "$USERNAME:(OI)(CI)M" >/dev/null
+acl_before=$(icacls "$work\\modify\\rw" | grep -v '^Successfully')
+if icacls "$work\\modify\\rw" /setintegritylevel '(OI)(CI)low' >/dev/null 2>&1; then
+    # An administrator's token can take ownership; CI runs as one.
+    echo "skip  low: a path that withholds WRITE_OWNER (this user can label it anyway)"
+    modify_fixture=false
+else
+    modify_fixture=true
+    check "low: writes a path that withholds WRITE_OWNER" writes $BB low "$work\\modify\\rw\\f" --filesystem="$work\\modify\\rw"
+    check "  which is labelled low" low_label "$work\\modify\\rw"
+    check "  with its ACL as it was" sh -c "[ \"\$(icacls '$work\\modify\\rw' | grep -v -e '^Successfully' -e 'Mandatory Label')\" = \"\$0\" ]" "$acl_before"
+fi
+
 # --- AppContainer grants, and a low run after one ------------------------------
 
 check "appcontainer: writes a granted path" writes $BB appcontainer "$work\\ac\\f" --filesystem="$work\\ac"
@@ -114,6 +131,10 @@ check "  removes its own labels" no_label "$work\\cwd"
 check "  and what was below them inherited" sh -c "! icacls '$work\\cwd\\f' | grep -q 'Mandatory Label'"
 check "  revokes its AppContainer grants" sh -c "! icacls '$work\\ac' | grep -q 'S-1-15-'"
 check "  leaves a label it didn't make" low_label "$work\\mine"
+if $modify_fixture; then
+    check "  removes the label of a path that withholds WRITE_OWNER" no_label "$work\\modify\\rw"
+    check "  with its ACL as it was" sh -c "[ \"\$(icacls '$work\\modify\\rw' | grep -v '^Successfully')\" = \"\$0\" ]" "$acl_before"
+fi
 check "the second app's rm removes the shared label" sh -c "\"\$0\" rm $OTHER >/dev/null 2>&1 && ! icacls '$work\\rw' | grep -q 'Mandatory Label'" "$zigsaw"
 
 rm -rf "$ZIGSAW_HOME" "$work"

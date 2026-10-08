@@ -37,6 +37,7 @@
     "/bin/psl-make-dafsa",
     "xmlcatalog.exe",
     "xmllint.exe",
+    "rsvg-convert.exe",
     "/share/applications",
     "/share/metainfo",
     "/share/pkgconfig",
@@ -66,7 +67,7 @@
   "modules": [
     {
       "name": "gtk",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:d0a0326339e5c5e7ab6d8a650a7df3378174d1b0cbd1d41bb49ca83652202bdd" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:c5756c4806e9718c173a3478bfbd9a60ff0fa3d5da5c7aa847d0d6faabc41cb7" }]
     }
   ]
 }

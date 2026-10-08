@@ -593,7 +593,8 @@ const BuildRoot = struct {
 };
 
 /// Puts one of a tool's aliases into the build root's bin\, as a shim that
-/// runs its command with its arguments, then the caller's.
+/// runs its command with its arguments, then the caller's, less those it
+/// drops.
 fn writeAlias(ctx: *Context, root: []const u8, shim_exe: []const u8, t: Tool, p: oci.Placeholders, name: []const u8, e: oci.Export) !void {
     const io = ctx.io;
     const arena = ctx.arena;
@@ -607,7 +608,7 @@ fn writeAlias(ctx: *Context, root: []const u8, shim_exe: []const u8, t: Tool, p:
     const bin = try std.fs.path.join(arena, &.{ root, "bin" });
     try Io.Dir.cwd().createDirPath(io, bin);
     try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.allocPrint(arena, "{s}\\{s}.exe", .{ bin, name }), .data = shim_exe });
-    const alias: Sidecar.Alias = .{ .exe = exe, .command_line = try process.buildCommandLine(arena, exe, args) };
+    const alias: Sidecar.Alias = .{ .exe = exe, .command_line = try process.buildCommandLine(arena, exe, args), .drop = e.drop orelse &.{} };
     var text: Io.Writer.Allocating = .init(arena);
     try alias.format(&text.writer);
     try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.allocPrint(arena, "{s}\\{s}{s}", .{ bin, name, Sidecar.extension }), .data = text.written() });

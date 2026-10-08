@@ -90,6 +90,17 @@ pub fn build(b: *std.Build) void {
     const gui_step = b.step("gui-fixture", "Build the GUI test program used by tests/shims.sh");
     gui_step.dependOn(&b.addInstallArtifact(gui_fixture, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // Counts imports the loader wouldn't bind, in Rust programs GNU ld links;
+    // see tests/build.sh and tests/published.sh. Also installed under
+    // zig-out\test.
+    const imports = b.addExecutable(.{ .name = "zigsaw-imports", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/imports.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const imports_step = b.step("imports", "Build the import checker used by tests/build.sh and tests/published.sh");
+    imports_step.dependOn(&b.addInstallArtifact(imports, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize) })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shimModule(b, target, optimize, true) })).step);

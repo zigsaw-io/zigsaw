@@ -25,6 +25,9 @@ ZIGSAW_HOME=$(cygpath -w "$(mktemp -d)")
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
 bin="$ZIGSAW_HOME\\bin"
+# tests/imports.zig: whether the loader binds every import of a program.
+(cd "$root" && zig build imports) || { echo "building the import checker failed"; exit 1; }
+imports="$root\\zig-out\\test\\zigsaw-imports.exe"
 
 # seed <store>: puts SEED_DOWNLOADS's files into the store's download cache,
 # as hard links if it's on the same drive.
@@ -519,7 +522,7 @@ cargo_installed() {
     [ "$("$bin\\zigsaw-tiny.exe" hi | tr -d '\r')" = "tiny hi" ]
 }
 check "cargo install gives what it installs a shim" cargo_installed
-# A program whose windows-sys crate needs dlltool, which zig's image
+# A program whose windows-sys crate needs dlltool, which Rust's image
 # provides, and whose build.rs compiles C with the cc crate, which finds
 # zig's cc through the variables zig's image sets; its crates come from
 # crates.io through a vendor step.
@@ -527,7 +530,7 @@ RUST=test.build.rust
 mkdir -p "$work\\rust" && cp "$(cygpath -u "$root")"/tests/build/rust/{Cargo.toml,Cargo.lock,build.rs,greet.c,main.rs} "$(cygpath -u "$work")/rust/" &&
     sed -e "s/@RUST@/$(manifest_of org.rust-lang.rust)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
         "$root\\tests\\build\\rust\\hello.json.in" >"$work\\rust\\hello.json"
-check "a Rust program builds, its crates vendored, with zig's dlltool, and C through zig's cc" z build "$work\\rust\\hello.json"
+check "a Rust program builds, its crates vendored, with GNU dlltool and zig's as, and C through zig's cc" z build "$work\\rust\\hello.json"
 rust_app_digest=$(manifest_of $RUST)
 rust_runs() {
     local out
@@ -539,6 +542,11 @@ Windows is up: true" ] || { echo "got: $out"; return 1; }
     [ "$(z run --env=GREET_DEBUG=1 $RUST x 2>&1 >/dev/null | tr -d '\r')" = "greet_c(x)" ]
 }
 check "it runs, calling its C, and Windows through windows-sys" rust_runs
+# windows-sys's raw-dylib imports come from import libraries rustc makes
+# with dlltool: Rust's own (GNU), whose libraries GNU ld links correctly;
+# llvm-dlltool's left imports unbound (docs/iteration-12.md).
+rust_bound() { "$imports" "$ZIGSAW_HOME\\deploy\\$(own_layer $RUST)\\hello.exe"; }
+check "the loader binds all its imports" rust_bound
 # Each build root has a new random name, so a real path or a time in the
 # executable would show.
 rust_again() { [ "$(rebuilt_manifest "$work\\rust\\hello.json")" = "$rust_app_digest" ]; }

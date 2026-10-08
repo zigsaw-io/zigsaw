@@ -3,11 +3,14 @@
   "version": "1.99.0",
   "command": "bin/cargo.exe",
   "path": ["bin", "${data}\\cargo\\bin"],
-  "env": { "CARGO_HOME": "${data}\\cargo" },
+  "env": { "CARGO_HOME": "${data}\\cargo", "CARGO_PROFILE_RELEASE_STRIP": "symbols" },
   "permissions": { "network": true, "filesystem": ["cwd"] },
   "exports": {
     "cargo": { "command": "bin/cargo.exe" },
     "rustc": { "command": "bin/rustc.exe" }
+  },
+  "aliases": {
+    "dlltool": { "command": "lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained/dlltool.exe", "args": ["--as", "as"] }
   },
   "cleanup": [
     "/manifest.in",

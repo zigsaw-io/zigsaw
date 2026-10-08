@@ -6,12 +6,12 @@
   "exports": {},
   "cleanup": ["__pycache__"],
   "sdk": {
-    "meson": "com.mesonbuild.meson:1.12.1@sha256:04fac7c7365f01bbe9c6dfa5f95741b5a2140c10ccb7e9bde5ed99e2feb69041",
+    "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
     "perl": "org.perl.perl:5.42.3.1@sha256:4459f0a9487860f976ef170b4e55c10e4889b2eff314c9eaacf4c42135406773",
-    "rust": "org.rust-lang.rust:1.99.0@sha256:9767e1e00829d60e9e3f87f734c08c8888d00b4d027540565b431234fba5f507",
-    "cargo-c": "com.github.lu-zero.cargo-c:0.10.25@sha256:e92c43863472092bbb24fb5fe0c9974ac795bd698dfa1aea62dc222c286a8f80",
-    "zig": "org.ziglang.zig:0.16.0@sha256:c6e3e4af90343370ce3ea59c42112d930e05ba801da238aea92d623a19a27ae7",
+    "rust": "org.rust-lang.rust:1.99.0@sha256:e7e9706485bba88759915d9509993d0e41d340d7d8dfec6426fce1feda9a10e2",
+    "cargo-c": "com.github.lu-zero.cargo-c:0.10.25@sha256:5c3ab8267b4c4a8f4a1628ef7f0d8f62f9838a28f46df2800a13f542e71bed71",
+    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [
@@ -511,7 +511,7 @@
         "grep -q \"find_program('nm', required: false, disabler: true)\" rsvg/meson.build && ! grep -q 'link_depends: librsvg_ver' rsvg/meson.build",
         "sed -i 's/^    link_whole: librsvg_c_lib,$/    link_with: librsvg_c_lib,/' rsvg/meson.build",
         "grep -q '^    link_with: librsvg_c_lib,$' rsvg/meson.build",
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtriplet=x86_64-pc-windows-gnu -Dpixbuf=enabled -Dpixbuf-loader=enabled -Drsvg-convert=disabled -Dintrospection=disabled -Dvala=disabled -Ddocs=disabled -Dtests=false -Davif=disabled",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtriplet=x86_64-pc-windows-gnu -Dpixbuf=enabled -Dpixbuf-loader=enabled -Drsvg-convert=enabled -Dintrospection=disabled -Dvala=disabled -Ddocs=disabled -Dtests=false -Davif=disabled",
         "meson install -C out",
         "grep -q 'pixbufloader_svg[.]dll' \"$PREFIX/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache\" && ! grep -q '^\"B:' \"$PREFIX/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache\""
       ]

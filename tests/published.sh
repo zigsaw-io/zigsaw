@@ -11,6 +11,8 @@
 #   expected to match a build elsewhere.
 # - The pulled app must run, `latest` must be the same image, and the app must
 #   then be up to date.
+# - The programs of an image built with Rust must have all their imports
+#   bound (tests/imports.zig).
 # CI runs this on a fresh Windows runner (.github/workflows/reproduce.yml), so
 # it also shows that the recipes build the same images on another machine.
 #
@@ -33,6 +35,9 @@ logs=${LOG_DIR:-$work\\logs}
 mkdir -p "$logs"
 pull_store="$work\\pulled"
 build_store=${BUILD_HOME:-$work\\built}
+# tests/imports.zig: whether the loader binds every import of a program.
+(cd "$root" && zig build imports) || { echo "building the import checker failed"; exit 1; }
+imports="$root\\zig-out\\test\\zigsaw-imports.exe"
 zp() { ZIGSAW_HOME="$pull_store" "$zigsaw" "$@"; }
 zb() { ZIGSAW_HOME="$build_store" "$zigsaw" "$@"; }
 
@@ -70,6 +75,14 @@ smoke_args() {
     esac
 }
 ref_digest() { grep -o 'sha256:[0-9a-f]*' "$1\\refs\\$2.json"; }
+# all_bound <store> <manifest digest>: tests/imports.zig on the executables
+# and DLLs of the image's own layer, the last, deployed by a run.
+all_bound() {
+    local layer
+    layer=$(manifest "$1" "$2" | tr -d ' \r\n' | grep -o '"layers":.*' | grep -o 'sha256:[0-9a-f]*' | tail -1 | cut -d: -f2)
+    find "$(cygpath -u "$1\\deploy\\$layer")" -iname '*.exe' -o -iname '*.dll' | cygpath -w -f - | xargs -d '\n' "$imports" | grep -v -e ', 0 unbound$' -e ', skipped$'
+    [ "${PIPESTATUS[2]}" -eq 0 ]
+}
 manifest() { cat "$1\\blobs\\sha256\\${2#sha256:}"; }
 # The digests a manifest lists: <store> <manifest digest> config|layers
 listed() { manifest "$1" "$2" | tr -d ' \r\n' | grep -o "\"$3\":\(\[[^]]*\]\|{[^}]*}\)" | grep -o 'sha256:[0-9a-f]*'; }
@@ -142,6 +155,11 @@ for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); 
 
     # shellcheck disable=SC2046 # The arguments are meant to split.
     check "$id: runs" zp run "$id" $(smoke_args "$id")
+    # What Rust's toolchain links, GNU ld, must leave no import unbound
+    # (docs/iteration-12.md).
+    if grep -q '"org\.rust-lang\.rust[:@]' "$recipe"; then
+        check "$id: the loader binds all its programs' imports" all_bound "$pull_store" "$published"
+    fi
     latest_is_version() {
         zp -v pull "$id" >>"$pull_log" 2>&1 || { last_line "$pull_log"; return 1; }
         local latest

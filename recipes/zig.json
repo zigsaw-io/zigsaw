@@ -22,7 +22,7 @@
     "ar": { "command": "zig.exe", "args": ["ar"] },
     "ranlib": { "command": "zig.exe", "args": ["ranlib"] },
     "rc": { "command": "zig.exe", "args": ["rc"] },
-    "dlltool": { "command": "zig.exe", "args": ["dlltool"] }
+    "as": { "command": "zig.exe", "args": ["cc", "-target", "x86_64-windows-gnu", "-c", "-x", "assembler"], "drop": ["--64"] }
   },
   "permissions": { "filesystem": ["cwd"] },
   "modules": [

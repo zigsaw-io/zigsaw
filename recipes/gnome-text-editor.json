@@ -11,13 +11,13 @@
     "Text Editor": { "command": "gnome-text-editor", "description": "View and edit text files" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:8437fc8676b90066a7490632af3c5d740e7bdfd29d9fb9c5a1917829030ac39f"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:f7df3f771a48452eba015e81f6fc31590f790f48af80d73420e7139e69c637e3"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:d0a0326339e5c5e7ab6d8a650a7df3378174d1b0cbd1d41bb49ca83652202bdd",
-    "meson": "com.mesonbuild.meson:1.12.1@sha256:04fac7c7365f01bbe9c6dfa5f95741b5a2140c10ccb7e9bde5ed99e2feb69041",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:c5756c4806e9718c173a3478bfbd9a60ff0fa3d5da5c7aa847d0d6faabc41cb7",
+    "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
-    "zig": "org.ziglang.zig:0.16.0@sha256:c6e3e4af90343370ce3ea59c42112d930e05ba801da238aea92d623a19a27ae7",
+    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "cleanup": [

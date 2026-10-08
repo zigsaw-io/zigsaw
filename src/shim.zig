@@ -16,7 +16,9 @@
 //!
 //! Builds also copy it, as `B:\bin\<name>.exe`, for each alias their tools
 //! provide. Its `.shim` then holds an alias (Sidecar.Alias), and the shim runs
-//! the alias's command line and the caller's arguments directly.
+//! the alias's command line and the caller's arguments directly. An alias
+//! that drops some of the caller's arguments is the one case where they're
+//! split and quoted again.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -70,7 +72,7 @@ fn shim(arena: Allocator, report_failures: bool) !u32 {
     const bytes = try readSmallFile(arena, sidecar_path);
     const args = try argumentsAsTyped(arena, std.mem.span(win32.GetCommandLineW()));
     const sidecar = Sidecar.parse(bytes) catch {
-        if (Sidecar.Alias.parse(bytes)) |alias| return runAlias(arena, alias, args) else |_| {}
+        if (Sidecar.Alias.parse(arena, bytes)) |alias| return runAlias(arena, alias, args) else |_| {}
         std.log.err("zigsaw shim: {s} is missing zigsaw, home, app or command", .{sidecar_path});
         return error.Failed;
     };
@@ -243,8 +245,44 @@ fn lastLines(text: []const u8, n: usize) []const u8 {
 fn runAlias(arena: Allocator, alias: Sidecar.Alias, args: []const u8) !u32 {
     var command_line: std.ArrayList(u8) = .empty;
     try command_line.appendSlice(arena, alias.command_line);
-    try appendArguments(arena, &command_line, args);
+    if (alias.drop.len == 0) {
+        try appendArguments(arena, &command_line, args);
+    } else {
+        try appendKept(arena, &command_line, args, alias.drop);
+    }
     return process.spawn(arena, .{ .exe = alias.exe, .command_line = command_line.items });
+}
+
+/// Appends the caller's arguments, split as the C runtime splits them, less
+/// those equal to one in `drop`, quoted again.
+fn appendKept(arena: Allocator, command_line: *std.ArrayList(u8), args: []const u8, drop: []const []const u8) !void {
+    // The iterator reads its first argument as a program name, by other rules.
+    const line = try std.unicode.wtf8ToWtf16LeAlloc(arena, try std.mem.concat(arena, u8, &.{ "x ", args }));
+    var it: std.process.Args.Iterator.Windows = try .init(arena, line);
+    _ = it.next();
+    next: while (it.next()) |arg| {
+        for (drop) |d| if (std.mem.eql(u8, arg, d)) continue :next;
+        try command_line.append(arena, ' ');
+        try process.appendQuoted(arena, command_line, arg);
+    }
+}
+
+test appendKept {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const cases = [_]struct { args: []const u8, want: []const u8 }{
+        .{ .args = " --64 -o x.o x.s", .want = "as -o x.o x.s" },
+        .{ .args = "", .want = "as" },
+        .{ .args = " --64", .want = "as" },
+        .{ .args = "\t\"--64\"  \"a b\" --640 c\\\"d \"e\\\\\"", .want = "as \"a b\" --640 \"c\\\"d\" e\\" },
+    };
+    for (cases) |c| {
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(arena, "as");
+        try appendKept(arena, &out, c.args, &.{"--64"});
+        try std.testing.expectEqualStrings(c.want, out.items);
+    }
 }
 
 /// Appends the caller's arguments as typed, separated by a space.

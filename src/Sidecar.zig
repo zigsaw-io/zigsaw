@@ -71,17 +71,21 @@ pub fn format(s: Sidecar, w: *std.Io.Writer) std.Io.Writer.Error!void {
 
 /// The sidecar of an alias shim, which a build puts on its PATH for a
 /// command one of its tools provides (see `aliases` in oci.AppConfig). The
-/// shim runs `command_line` and then the caller's arguments, in the caller's
-/// environment, without zigsaw in between.
+/// shim runs `command_line` and then the caller's arguments, less those in
+/// `drop`, in the caller's environment, without zigsaw in between.
 pub const Alias = struct {
     /// Absolute path of the executable.
     exe: []const u8,
     /// The executable, quoted, and the alias's own arguments.
     command_line: []const u8,
+    /// The caller's arguments to leave out, one `drop` line each. Values
+    /// can't start or end with spaces or tabs, which parsing trims.
+    drop: []const []const u8 = &.{},
 
-    pub fn parse(bytes: []const u8) error{InvalidShimFile}!Alias {
+    pub fn parse(arena: std.mem.Allocator, bytes: []const u8) error{ InvalidShimFile, OutOfMemory }!Alias {
         var exe: ?[]const u8 = null;
         var command_line: ?[]const u8 = null;
+        var drop: std.ArrayList([]const u8) = .empty;
         var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
         while (lines.next()) |raw| {
             const line = std.mem.trim(u8, raw, " \t");
@@ -91,31 +95,42 @@ pub const Alias = struct {
             const value = std.mem.trim(u8, line[eq + 1 ..], " \t");
             if (std.mem.eql(u8, key, "exe")) exe = value;
             if (std.mem.eql(u8, key, "command_line")) command_line = value;
+            if (std.mem.eql(u8, key, "drop")) try drop.append(arena, value);
         }
         return .{
             .exe = exe orelse return error.InvalidShimFile,
             .command_line = command_line orelse return error.InvalidShimFile,
+            .drop = drop.items,
         };
     }
 
     pub fn format(a: Alias, w: *std.Io.Writer) std.Io.Writer.Error!void {
         try w.print(
             \\# Written by zigsaw for a build. The .exe next to this file runs
-            \\# command_line, then the caller's arguments.
+            \\# command_line, then the caller's arguments, less any it drops.
             \\exe = {s}
             \\command_line = {s}
             \\
         , .{ a.exe, a.command_line });
+        for (a.drop) |d| try w.print("drop = {s}\n", .{d});
     }
 };
 
 test "aliases round-trip" {
-    const want: Alias = .{ .exe = "C:\\z\\deploy\\ab\\zig.exe", .command_line = "C:\\z\\deploy\\ab\\zig.exe dlltool" };
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const want: Alias = .{ .exe = "C:\\z\\deploy\\ab\\zig.exe", .command_line = "C:\\z\\deploy\\ab\\zig.exe ar" };
     var buf: [512]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
     try want.format(&w);
-    try std.testing.expectEqualDeep(want, try Alias.parse(w.buffered()));
+    try std.testing.expectEqualDeep(want, try Alias.parse(arena, w.buffered()));
     try std.testing.expectError(error.InvalidShimFile, parse(w.buffered()));
+
+    const dropping: Alias = .{ .exe = want.exe, .command_line = "C:\\z\\deploy\\ab\\zig.exe cc -c", .drop = &.{ "--64", "-x c" } };
+    w = .fixed(&buf);
+    try dropping.format(&w);
+    try std.testing.expectEqualDeep(dropping, try Alias.parse(arena, w.buffered()));
 }
 
 test "round-trips" {

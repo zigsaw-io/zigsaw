@@ -8,16 +8,31 @@
     "cargo-cbuild": { "command": "bin/cargo-cbuild.exe" },
     "cargo-cinstall": { "command": "bin/cargo-cinstall.exe" }
   },
-  "cleanup": ["/bin/cargo-capi.exe", "/bin/cargo-ctest.exe"],
+  "sdk": {
+    "rust": "org.rust-lang.rust:1.99.0@sha256:e7e9706485bba88759915d9509993d0e41d340d7d8dfec6426fce1feda9a10e2",
+    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
   "modules": [
     {
       "name": "cargo-c",
+      "env": { "CFLAGS_x86_64_pc_windows_gnu": "-O3 -ffunction-sections -fdata-sections -D__MSVCRT_VERSION__=0x700" },
       "sources": [
         {
-          "url": "https://github.com/lu-zero/cargo-c/releases/download/v0.10.25/cargo-c-windows-gnu.zip",
-          "sha256": "da2d44a3ad325ee6155071d7966176aa72e1df40819374825d8c56e3e0533d00",
-          "dest": "bin"
+          "url": "https://static.crates.io/crates/cargo-c/cargo-c-0.10.25%2Bcargo-0.99.0.crate",
+          "sha256": "6b2ddde58a8a773ccce4b6384acacd3ce01373f52717dd2424633ed46755c627",
+          "strip": 1
         }
+      ],
+      "vendor": {
+        "commands": ["cargo vendor --locked vendor >/dev/null"],
+        "dir": "vendor",
+        "sha256": "f34cfd29c3d1d255dfabbfe6723b003300783893ed5bf6c704b2f54bb7f647fc"
+      },
+      "build": [
+        "cargo build --offline --locked --release --bin cargo-cbuild --bin cargo-cinstall --config 'source.crates-io.replace-with=\"vendored\"' --config 'source.vendored.directory=\"vendor\"'",
+        "mkdir -p \"$PREFIX/bin\"",
+        "cp target/release/cargo-cbuild.exe target/release/cargo-cinstall.exe LICENSE README.md \"$PREFIX/bin/\""
       ]
     }
   ]

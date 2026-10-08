@@ -4,8 +4,8 @@
   "command": "rg.exe",
   "permissions": { "filesystem": ["cwd:ro"] },
   "sdk": {
-    "rust": "org.rust-lang.rust:1.99.0@sha256:9767e1e00829d60e9e3f87f734c08c8888d00b4d027540565b431234fba5f507",
-    "zig": "org.ziglang.zig:0.16.0@sha256:c6e3e4af90343370ce3ea59c42112d930e05ba801da238aea92d623a19a27ae7",
+    "rust": "org.rust-lang.rust:1.99.0@sha256:e7e9706485bba88759915d9509993d0e41d340d7d8dfec6426fce1feda9a10e2",
+    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [

@@ -78,6 +78,10 @@ pub const Export = struct {
     /// Arguments placed before the caller's. They may use placeholders, e.g.
     /// "${app}" to run a script that ships with the app.
     args: []const []const u8 = &.{},
+    /// Aliases only: the caller's arguments to leave out, by value. zig's
+    /// `as` alias drops the `--64` that GNU dlltool passes its assembler,
+    /// which zig's cc doesn't take. Absent unless there are some.
+    drop: ?[]const []const u8 = null,
 };
 
 /// A Start menu shortcut, like a Flatpak's .desktop file. It runs one of the
@@ -259,8 +263,8 @@ pub const AppConfig = struct {
     exports: std.json.ArrayHashMap(Export) = .{},
     /// Commands the image gives builds that use it as an SDK or runtime, by
     /// name: like exports, but on the build's PATH rather than the user's.
-    /// zig's image makes `dlltool` run `zig dlltool`, for instance. Absent
-    /// unless there are some.
+    /// zig's image makes `cc` run `zig cc`, for instance. Absent unless
+    /// there are some.
     aliases: ?std.json.ArrayHashMap(Export) = null,
     /// Start menu shortcuts, by the name they show. Absent unless there are
     /// some.
@@ -382,6 +386,8 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
             return fail("{s}: export name \"{s}\" must be letters, digits, '.', '-', '_', '+' (and not zigsaw's own)", .{ what, e.key_ptr.* });
         if (!isValidCommand(e.value_ptr.command, aliases))
             return fail("{s}: export {s} command \"{s}\" must be a relative path inside the app, or start with a runtime's ${{alias}}\\", .{ what, e.key_ptr.*, e.value_ptr.command });
+        if (e.value_ptr.drop != null)
+            return fail("{s}: export {s} has \"drop\", which only aliases may have", .{ what, e.key_ptr.* });
     }
     // Builds run an image's aliases from the image itself, whose runtimes
     // they don't have.
@@ -392,6 +398,11 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
                 return fail("{s}: alias name \"{s}\" must be letters, digits, '.', '-', '_', '+' (and not zigsaw's own)", .{ what, e.key_ptr.* });
             if (!isValidCommand(e.value_ptr.command, &.{}))
                 return fail("{s}: alias {s} command \"{s}\" must be a relative path inside the app", .{ what, e.key_ptr.*, e.value_ptr.command });
+            // Shims keep them one per line, trimmed.
+            if (e.value_ptr.drop) |drop| for (drop) |d| {
+                if (d.len == 0 or std.mem.indexOfAny(u8, d, "\r\n") != null or std.mem.trim(u8, d, " \t").len != d.len)
+                    return fail("{s}: alias {s} drops \"{s}\": arguments to drop must be non-empty, on one line, without spaces or tabs at either end", .{ what, e.key_ptr.*, d });
+            };
         }
     }
     if (c.shortcuts) |s| {

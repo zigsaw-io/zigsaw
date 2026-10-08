@@ -104,6 +104,18 @@ check "libsoup knows the Public Suffix List (libpsl)" psl
 # An SVG through GdkPixbuf, as GtkBuilder loads images: librsvg's loader.
 printf '%s\n' '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="32"><rect width="48" height="32" fill="teal"/></svg>' >"$work\\t.svg"
 check "GdkPixbuf loads an SVG with librsvg's loader" sh -c "timeout 60 \"\$0\" run --command=bin/svg-size.exe $APP t.svg | grep -q '^loaded 48x32'" "$zigsaw"
+# The SDK's rsvg-convert, a Rust program GNU ld links: all its imports bound
+# (tests/imports.zig), it makes a PNG of the SVG.
+sdk_manifest="$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of org.gtk.Gtk4.Sdk | cut -d: -f2)"
+sdk="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$sdk_manifest" | tail -1 | cut -d: -f2)"
+rsvg_convert() {
+    (cd "$root" && zig build imports) >/dev/null || return 1
+    "$root\\zig-out\\test\\zigsaw-imports.exe" "$sdk\\bin\\rsvg-convert.exe" || return 1
+    # Piped: given a file as stdin, rsvg-convert reads only its first two
+    # bytes, run by zigsaw or not.
+    cat "$work\\t.svg" | timeout 60 "$zigsaw" run --command=bin/rsvg-convert.exe org.gtk.Gtk4.Sdk | head -c 8 | od -A n -t x1 | tr -d ' \n' | grep -qx '89504e470d0a1a0a'
+}
+check "the SDK's rsvg-convert binds all its imports and converts an SVG to PNG" rsvg_convert
 # The runtime keeps GIO's modules and GdkPixbuf's loaders from the SDK's lib
 # directory, and none of its libraries for linking.
 runtime_manifest="$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of org.gtk.Gtk4 | cut -d: -f2)"

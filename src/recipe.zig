@@ -418,6 +418,13 @@ test "recipe checks" {
         ,
         \\{ "id": "x", "version": "1", "command": "a.exe", "aliases": { "ab": { "command": "${node}\\node.exe" } }, "runtimes": { "node": "n" }, "modules": [{ "name": "m", "build": ["x"] }] }
         ,
+        // Dropped arguments: only for aliases, one trimmed line each.
+        \\{ "id": "x", "version": "1", "command": "a.exe", "exports": { "a": { "command": "a.exe", "drop": ["-x"] } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "aliases": { "a": { "command": "a.exe", "drop": [" -x"] } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "aliases": { "a": { "command": "a.exe", "drop": [""] } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
         // Vendor steps: only with build commands, with commands, into a
         // directory inside the module's, pinned by a well-formed hash.
         \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "path": "a.exe" }], "vendor": { "commands": ["x"], "dir": "v" } }] }
