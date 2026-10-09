@@ -93,8 +93,8 @@ with `zigsaw pull <id>`:
 | Meson, with Ninja and pkgconf | `com.mesonbuild.meson` | 1.12.1 | `meson` |
 | Perl (Strawberry Perl, for building OpenSSL) | `org.perl.perl` | 5.42.3.1 | `perl` |
 | cargo-c (for building librsvg) | `com.github.lu-zero.cargo-c` | 0.10.25 | `cargo-cbuild`, `cargo-cinstall` |
-| GTK SDK (built from source) | `org.gtk.Gtk4.Sdk` | 4.24.1 | none |
-| GTK, with libadwaita, libsoup and librsvg (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo` |
+| GTK SDK (built from source; with zig, Meson and BusyBox) | `org.gtk.Gtk4.Sdk` | 4.24.1 | `cc`, `c++`, `ar`, `rc`, `pkg-config`, `meson`, `ninja`, `sh`, `make`, `glib-compile-resources`, `glib-compile-schemas`, `gtk4-builder-tool` |
+| GTK, with libadwaita, libsoup, librsvg and enchant (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo`, `gio`, `pango-view`, `pango-list` |
 | GNOME Text Editor (built from source, on GTK) | `org.gnome.TextEditor` | 51.0 | `gnome-text-editor` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
@@ -105,9 +105,12 @@ zot with [Go](#go) and BusyBox, zstd with [CMake](#cmake), zig and BusyBox,
 whose images are their SDK. bat's C libraries (oniguruma, libgit2, zlib) are
 compiled by zig. Pulling them doesn't need those. [GTK](#gtk)'s SDK is built
 with Meson, CMake, zig, Perl (for OpenSSL), Rust and cargo-c (for librsvg),
-and its runtime is made from the SDK's image. GNOME Text Editor runs on GTK's
-runtime, with GtkSourceView and libspelling built into its own image. GTK's demos and Text Editor are GUI apps:
-they open no console, and get [Start menu shortcuts](#start-menu-shortcuts).
+and has zig, Meson and BusyBox as runtimes, so that it builds GTK programs
+[without a recipe](#building-without-a-recipe) too; its runtime is made from
+the SDK's image. GNOME Text Editor runs on GTK's runtime, with GtkSourceView
+and libspelling built into its own image, and checks spelling. GTK's demos
+and Text Editor are GUI apps: they open no console, and get
+[Start menu shortcuts](#start-menu-shortcuts).
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -253,7 +256,7 @@ to finish.
 
 | Option | Effect |
 |---|---|
-| `--command=<name>` | Run one of the app's exported commands, or another executable or batch file from the app's PATH or System32 (e.g. `--command=cmd`) |
+| `--command=<name>` | Run one of the app's exported commands, or another executable or batch file from the app's PATH (its aliases included) or System32 (e.g. `--command=cmd`), or one of yours by its absolute path |
 | `--sandbox=soft\|low\|appcontainer` | `soft` (default) shapes the environment only; `low` also keeps the app from writing anywhere but its data directory and the paths granted; `appcontainer` enforces all permissions |
 | `--filesystem=<cwd\|path>[:ro]` | Grant access to a host location |
 | `--share=network` / `--unshare=network` | Override the app's network permission |
@@ -459,8 +462,10 @@ pulling Prettier brings Node's files without installing Node as an app, and
 removing Node as an app doesn't affect Prettier. Each layer is unpacked once
 and shared, so Node as an app and Node as Prettier's runtime use the same
 files on disk. Every run gets the runtime's `path` entries after the app's,
-and its `env` before the app's, so Prettier's runs have npm's settings as
-Node's do. Runtimes can't have runtimes of their own.
+its `env` before the app's, so Prettier's runs have npm's settings as
+Node's do, and its [aliases](#building-from-source) after the app's. A
+runtime can't have runtimes of its own; an [SDK](#building-from-source) and
+an [image source](#images-as-sources) can.
 
 A pinned runtime doesn't change by itself: moving Prettier to a newer Node
 is an edit to its recipe, like a new source hash.
@@ -480,6 +485,8 @@ builds need:
 
 The image is pinned like a runtime, found the same way (the store, then
 its registry), and kept like an SDK; `dest` puts its files in a directory.
+Only the image's own files are taken, not its runtimes', as GTK's SDK has
+zig, Meson and BusyBox.
 Its layer isn't unpacked again: the files stream from its deployment into
 the new layer. The config records the image's digest under `build.images`,
 so the runtime depends only on the SDK image, and builds again with the same
@@ -524,7 +531,11 @@ zig's C compiler:
   image; its config records their digests. zig gives C and C++ compilers
   (`zig cc`, `zig c++`, `zig ar`, also as `cc`, `c++`, `ar`, `ranlib` and
   `rc`), and BusyBox gives sh, make, sed, awk, patch, tar and the rest of a
-  Unix toolbox.
+  Unix toolbox. An SDK image may have runtimes of its own, as
+  [GTK's](#gtk) has zig, Meson and BusyBox: they come with it, right after
+  it on PATH, without the recipe naming them, and its digest pins them. An
+  image the recipe names too is used once; two versions of one app in a
+  build fail it.
 - **Modules** build in order. A module's sources are unpacked into its own
   directory, and its commands run there one after another, until one fails.
   Whatever the modules install into `$PREFIX` is the app's files, after
@@ -612,15 +623,20 @@ Rust needs:
 }
 ```
 
-Aliases are like exports, but for builds rather than for you: each one is
-`B:\bin\<name>.exe` while a build that uses the image runs, first on its
-PATH. It runs the command with the alias's arguments, then its caller's, in
-the caller's environment. `drop` leaves out the caller's arguments that
-equal one of its values: GNU `dlltool` passes its assembler `--64`, which
-zig's cc doesn't take. If two images alias the same name, the one listed
-first in the recipe wins. Aliases also win over BusyBox's applets of the
+Aliases are like exports, but for what runs with the image rather than for
+you. In a build that uses the image, each one is `B:\bin\<name>.exe`, first
+on its PATH. In runs of the image itself, and of apps that have it as a
+runtime, they're in the store's `aliases\<app id>\`, first on the run's
+PATH, so a Meson run finds the C compiler of a zig runtime. An alias runs
+its command with its arguments, then its caller's, in the caller's
+environment. `drop` leaves out the caller's arguments that equal one of its
+values: GNU `dlltool` passes its assembler `--64`, which zig's cc doesn't
+take. Arguments can't use `${data}` or `${cache}`. If two images alias the
+same name, the one listed first in the recipe wins; in runs, the app's own,
+then its runtimes' in order. Aliases also win over BusyBox's applets of the
 same name, which its sh would otherwise run instead of anything on PATH
-(zig's `ar` over BusyBox's): builds list them in `BB_OVERRIDE_APPLETS`.
+(zig's `ar` over BusyBox's): builds and runs list them in
+`BB_OVERRIDE_APPLETS`.
 
 zig's image also sets the variables most build tools read to find a C
 toolchain, and to link with it reproducibly:
@@ -718,7 +734,7 @@ The Meson image, [`com.mesonbuild.meson`](recipes/meson.json), is Python's
 embeddable distribution with Meson's source release, Ninja, and pkgconf,
 which the recipe builds from source with that Meson and zig. Builds get
 `meson`, `ninja` and `pkg-config` as [aliases](#building-from-source); run
-as an app, it's `meson`. With zig in the SDK too, Meson takes zig's
+as an app, it's `meson`, with the same aliases. With zig in the SDK too, Meson takes zig's
 compilers from `CC` and `CXX`, sees zig as Clang with its own linker
 (`ld.zigcc`), and compiles resources with zig's `rc`, whose help says it's a
 drop-in for Microsoft's:
@@ -758,20 +774,25 @@ GTK 4 comes as two images, as Flatpak's GNOME runtime does:
 - **[`org.gtk.Gtk4.Sdk`](recipes/gtk4-sdk.json)** builds GTK 4.24.1 and
   everything it needs from source with Meson, CMake and zig: zlib, libpng,
   libjpeg-turbo, libtiff, PCRE2, libffi, GLib 2.90, pixman, FriBidi,
-  HarfBuzz, cairo, Pango, graphene, libepoxy, gdk-pixbuf, Microsoft's
+  HarfBuzz (with DirectWrite), cairo, Pango, graphene, libepoxy, gdk-pixbuf, Microsoft's
   DirectX headers, and GTK, with its demos, then the hicolor and Adwaita
   icon themes and libadwaita 1.10, with its demo; then libsoup 3.8 with
-  OpenSSL 3.5 (static), SQLite, nghttp2, libpsl and glib-networking, and
-  librsvg 2.63 with FreeType, libxml2 and its GdkPixbuf loader. It keeps their headers,
+  OpenSSL 3.5 (static), SQLite, nghttp2, libpsl and glib-networking,
+  librsvg 2.63 with FreeType, libxml2 and its GdkPixbuf loader, and enchant
+  2.8 with hunspell 1.7 and an en_US dictionary. It keeps their headers,
   import libraries and pkg-config files, so apps build against it by listing
-  it in their `sdk`. It takes about 20 minutes to build from scratch.
+  it in their `sdk`. Its runtimes are zig, Meson and BusyBox, which it builds
+  with and which builds that use it get too, and it exports their commands,
+  so it builds programs [without a recipe](#building-without-a-recipe). It
+  takes about 20 minutes to build from scratch.
 - **[`org.gtk.Gtk4`](recipes/gtk4.json)** is the runtime: the SDK's files
   as an [image source](#images-as-sources), without the headers, libraries
   and build tools, so it builds in seconds once the SDK is there. Apps list
-  it in their `runtimes`. It keeps GIO's modules and GdkPixbuf's loaders
-  from the SDK's `lib`. As an app, it runs `gtk4-demo`, exports
+  it in their `runtimes`. It keeps GIO's modules, GdkPixbuf's loaders and
+  enchant's providers from the SDK's `lib`. As an app, it runs `gtk4-demo`, exports
   `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`,
-  `gtk4-print-editor`, `gtk4-query-settings` and `adwaita-1-demo`, and adds
+  `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo`, `gio`,
+  `pango-view` and `pango-list`, and adds
   "GTK Demo", "GTK Widget Factory" and "Adwaita Demo" to the Start menu.
 
 An app built against GTK, as [`tests/gtk`](tests/gtk) is:
@@ -780,12 +801,7 @@ An app built against GTK, as [`tests/gtk`](tests/gtk) is:
 "command": "bin/hello-gtk.exe",
 "path": ["bin"],
 "runtimes": { "gtk": "org.gtk.Gtk4:4.24.1@sha256:..." },
-"sdk": {
-  "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:...",
-  "meson": "com.mesonbuild.meson:1.12.1@sha256:...",
-  "zig": "org.ziglang.zig:0.16.0@sha256:...",
-  "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
-},
+"sdk": { "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:..." },
 "modules": [
   {
     "name": "hello",
@@ -795,7 +811,7 @@ An app built against GTK, as [`tests/gtk`](tests/gtk) is:
 ]
 ```
 
-Meson finds `gtk4` through the SDK's pkg-config files. When the app runs,
+The SDK brings Meson, zig and BusyBox. Meson finds `gtk4` through the SDK's pkg-config files. When the app runs,
 Windows finds GTK's DLLs on PATH, in the runtime's `bin`. The runtime's
 variables keep GLib's files in the app's data directory (`XDG_CONFIG_HOME`
 and the rest; otherwise GLib asks Windows for the user's AppData folder,
@@ -812,6 +828,40 @@ Public Suffix List (libpsl, built in). GdkPixbuf loads SVGs with librsvg's
 loader, which the runtime's `loaders.cache` names by a path relative to the
 runtime, so GtkBuilder files with SVG images work (GTK's widget factory has
 one).
+
+Text is shaped by HarfBuzz with DirectWrite, so a font file an app adds to
+Pango, as GtkSourceView does, shapes like the system's fonts. Spelling comes
+from enchant, which libspelling uses: Windows' own spell checker (enchant's
+WinSpell provider) for the languages Windows has, and hunspell with the
+runtime's en_US dictionary (LibreOffice's) where it has none, in that order
+(the runtime's `share\enchant-2\enchant.ordering`). A user's own word list
+is in the app's data directory.
+
+#### Building without a recipe
+
+GTK's SDK exports the commands a build needs, from its runtimes and its
+own: `cc` and `c++` (zig's, for the same target as builds), `ar`, `rc`,
+`pkg-config` (which finds the SDK's libraries), `meson`, `ninja`, `sh`,
+`make`, and GLib's and GTK's tools. Like other exports, they run in the
+SDK's environment, with the working directory (the SDK has the `cwd`
+permission), and inside it Meson finds the compiler and the rest through
+the runtimes' aliases. With the store's `bin` on PATH:
+
+```
+zigsaw pull org.gtk.Gtk4.Sdk
+cd C:\work\hello
+cc hello.c -o hello.exe $(pkg-config --cflags --libs gtk4)
+meson setup out && meson compile -C out
+zigsaw run --command=C:\work\hello\hello.exe org.gtk.Gtk4
+```
+
+The program runs on the runtime, which has GTK's DLLs on PATH:
+`--command` takes the absolute path of a program of yours (a relative one
+is in the app). `sh` is a shell with all of it, as builds have. Meson's
+builds are stripped, as zig's `LDFLAGS` asks; `cc` itself takes `-s` for
+that. The SDK has each import library
+twice, as `libgtk-4.dll.a` and as `gtk-4.lib`: zig's linker looks for
+`-lgtk-4` under the second name, and Meson and libtool give the first.
 
 Building the stack with zig took a few workarounds, which the SDK's recipe
 spells out:
@@ -861,6 +911,24 @@ spells out:
   (`-Wno-error=date-time`; builds fix the date with `SOURCE_DATE_EPOCH`),
   and CRoaring in GTK leaves out its AVX-512 code, which zig's generic
   x86-64 target can't compile.
+- hunspell and enchant build with their release's `configure` and
+  BusyBox's make, which took most of the rest. Autoconf looks for `sed`,
+  `grep` and `pkg-config` as files on PATH, where BusyBox's applets and the
+  `.exe` aliases aren't, so the modules name them (`SED=sed` and so on).
+  libtool decides how to make DLLs from `$LD --help`, which zig has no `ld`
+  for: [a small script](recipes/gtk4-sdk/autotools-ld.sh) runs lld's MinGW
+  driver (`zig ld.lld -m i386pep`) and says it auto-imports, as lld does.
+  libtool would link C++ with `-nostdlib` and the runtime libraries it reads
+  from `c++ -v`, which zig doesn't print, so the recipe drops `-nostdlib` and
+  zig's `c++` links its own; and it checks libraries with `objdump`, which
+  isn't there (`lt_cv_deplibs_check_method=pass_all`). Release tarballs
+  give `configure`, `aclocal.m4` and `Makefile.in` the same time to the
+  second as their sources, and BusyBox's make remakes a target whose
+  prerequisite is as new as it, where GNU make doesn't, so
+  [a script](recipes/gtk4-sdk/autotools-mtimes.sh) orders their times first.
+  enchant's library exports what its headers declare, from a `.def` file
+  made from them, as libtool's own way needs `nm`; its providers export only
+  `init_enchant_provider`.
 
 ### Rust
 
@@ -1089,6 +1157,7 @@ data\<id>\             per-app writable state, kept across runs
 grants\<id>.txt        host paths granted to the app's AppContainer, or labelled low for its runs
 overrides\<id>.json    run options saved with `zigsaw override`
 bin\<name>.exe         command shims, with a <name>.shim file saying what each runs
+aliases\<id>\          shims for the aliases an app's runs have: its own and its runtimes'
 cache\downloads\<hex>  fetched sources, by sha256 (and decompressed tars)
 cache\images\<hex>     marks images that builds use as runtimes or SDKs, kept like downloads
 cache\builds\<hex>     the image of an earlier build, by a hash of its inputs
@@ -1246,7 +1315,20 @@ a fresh runner, after `published.sh`, with its build store as
 - zigsaw keeps its own registry logins; it doesn't read Docker's
   `config.json` or credential helpers.
 - Multi-platform image indexes aren't supported.
-- Runtimes can't have runtimes of their own.
+- Runtimes can't have runtimes of their own (SDKs and image sources can).
+- Under `--sandbox=appcontainer`, BusyBox's sh doesn't wait for the last
+  command of `sh -c`, which then ends with the run, having printed nothing,
+  and the run's exit code is 0: in an AppContainer, sh doesn't see its
+  parent, zigsaw, and takes itself for an orphan. A command after it
+  (`sh -c "cc x.c; true"`) avoids that. Low-integrity runs had the same
+  problem until zigsaw let them read its process.
+- An app's alias shims are by app, not by version: an update while the app
+  runs switches its later alias calls to the new version's tools. A Meson
+  build directory set up with the GTK SDK's `meson` names the SDK's
+  deployment, so after an update it needs `meson setup --wipe`.
+- `$(pkg-config ...)` in a shell splits the paths it prints at spaces: a
+  store whose path has a space (a user name with one) breaks
+  `cc ... $(pkg-config --libs gtk4)`.
 - Pushing mounts a runtime's layer only from the runtime's repository in the
   default layout, and an app's blobs only from where it was pulled. A blob
   the registry holds elsewhere is uploaded again.
@@ -1274,9 +1356,9 @@ a fresh runner, after `published.sh`, with its build store as
   characters: rustc starts its linker from the Rust image's deployment, and
   can't start a program whose path is longer than Windows' 260 characters.
   The default store, `%LOCALAPPDATA%\zigsaw`, is well within that.
-- cgo works only in builds that list zig in their SDK. `go build` run as an
-  app has no C compiler: aliases are only for builds, and Go's image can't
-  have zig as a runtime. Until zig's `cc -###` succeeds, recipes that use
+- cgo works only in builds that list zig in their SDK. `go build` run as
+  Go's app has no C compiler: Go's image doesn't have zig as a runtime, as
+  GTK's SDK has. Until zig's `cc -###` succeeds, recipes that use
   cgo have to leave out Go's build ID (`-ldflags=-buildid=`), and their
   executables are stripped.
 - CMake run as an app has no compiler either, for the same reason; it's
@@ -1306,14 +1388,14 @@ a fresh runner, after `published.sh`, with its build store as
   can't use. A recipe can point `icon` at an `.ico`. Pinning a running GTK
   app's window to the taskbar pins its executable in the store, not the
   shortcut, since zigsaw sets no AppUserModelID.
-- GTK's widget factory aborts at startup: its window loads an SVG through
-  gdk-pixbuf, which has no SVG loader without librsvg. GTK's own SVG
-  renderer covers icon themes only. The runtime doesn't export it.
-- Text Editor has no spell checking (libspelling is built without enchant),
-  no translations (no gettext tools in the SDK) and no help pages (no yelp
-  on Windows).
+- Text Editor has no translations (no gettext tools in the SDK) and no
+  help pages (no yelp on Windows). Its spell checking has the languages
+  Windows has, through WinSpell, and English (US) from hunspell; other
+  hunspell dictionaries aren't in the runtime.
 - Under `--sandbox=appcontainer`, DirectWrite can't open fonts installed
   for the user only, rather than for the machine; GTK warns, and draws
   with the others.
+- Pango doesn't fall back to another font for scripts its font lacks:
+  Devanagari in Segoe UI shows as boxes, where Windows would use Nirmala UI.
 
 [docs/iteration-11.md](docs/iteration-11.md) lists what hasn't been tested yet.

@@ -21,6 +21,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const win32 = @import("win32.zig");
 const acl = @import("acl.zig");
+const aliases = @import("aliases.zig");
 const appcontainer = @import("appcontainer.zig");
 const oci = @import("oci.zig");
 const Context = @import("Context.zig");
@@ -72,6 +73,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // Per-app writable state, laid out like a Windows user profile.
     const run_dir: ?Store.RunDir = if (settings.ephemeral orelse false) try ctx.store.makeRunDir(arena) else null;
     defer if (run_dir) |d| d.delete(ctx.store, arena);
+    const app_aliases = try syncAliases(ctx, image);
     store_lock.release(io);
     const data_dir = if (run_dir) |d| d.path else try ctx.store.path(arena, &.{ "data", cfg.id });
     const profile: environment.Profile = try .init(arena, data_dir);
@@ -86,8 +88,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
     const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir, cache_dir);
     const placeholders: oci.Placeholders = .{ .app = image.deploy_dir, .data = data_dir, .cache = cache_dir, .runtimes = runtimes.dirs };
-    // The app's directories first, then each runtime's.
+    // The aliases first, as in builds, then the app's directories, then each
+    // runtime's.
     var app_path: std.ArrayList([]const u8) = .empty;
+    if (app_aliases) |a| try app_path.append(arena, a.dir);
     try app_path.appendSlice(arena, try environment.pathDirs(arena, placeholders, cfg.path));
     for (runtimes.own, cfg.runtimes.map.values()) |p, r| try app_path.appendSlice(arena, try environment.pathDirs(arena, p, r.path));
     const command = try resolveCommand(io, arena, placeholders, cfg, opts.command, app_path.items, system_root);
@@ -106,6 +110,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     var app_env: std.ArrayList(environment.Var) = .empty;
     for (runtimes.own, cfg.runtimes.map.values()) |p, r| try environment.expand(arena, &app_env, p, r.env);
     try environment.expand(arena, &app_env, placeholders, cfg.env);
+    if (app_aliases) |a| try environment.set(arena, &app_env, "BB_OVERRIDE_APPLETS", a.names);
     const env = try environment.build(arena, ctx.env, .{
         .id = cfg.id,
         .profile = profile,
@@ -119,6 +124,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         note("app      {s} {s} ({s})", .{ cfg.id, cfg.version, image.ref.manifest });
         for (cfg.runtimes.map.keys(), cfg.runtimes.map.values(), image.runtime_dirs) |alias, r, dir|
             note("runtime  {s}: {s} {s} ({s})", .{ alias, r.id, r.version, dir });
+        if (app_aliases) |a| note("aliases  {s} ({s})", .{ a.names, a.dir });
         if (!saved.isEmpty()) note("override {f}", .{saved});
         note("sandbox  {t}, network {s}", .{ sandbox, if (network) "on" else "off" });
         note("exe      {s}", .{exe});
@@ -144,6 +150,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .appcontainer => security = try setUpAppContainer(ctx, cfg.id, .{
             .deploy_dir = image.deploy_dir,
             .runtime_dirs = image.runtime_dirs,
+            .alias_dir = if (app_aliases) |a| a.dir else null,
             .data_dir = data_dir,
             .local_app_data = profile.local,
             .host_cwd = host_cwd,
@@ -167,11 +174,81 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
 }
 
 // ---------------------------------------------------------------------------
+// Aliases
+
+const AppAliases = struct {
+    /// The store's aliases\<id>\, first on the run's PATH.
+    dir: []const u8,
+    /// For BB_OVERRIDE_APPLETS.
+    names: []const u8,
+};
+
+/// Brings the shims of the app's aliases, and its runtimes', up to date in
+/// the store (see aliases.zig); null if it has none. Runs with the store
+/// lock held, so prune doesn't delete them meanwhile.
+fn syncAliases(ctx: *Context, image: Store.Image) !?AppAliases {
+    const arena = ctx.arena;
+    const cfg = image.config;
+    const dir = try ctx.store.aliasDir(arena, cfg.id);
+    const resolved = try aliases.resolve(ctx, try aliasProviders(arena, image), .skip);
+    if (resolved.len == 0) {
+        // Left by a version of the app that had some.
+        if (try Store.exists(ctx.io, dir)) {
+            const l = try ctx.store.lockAliases(arena, cfg.id);
+            defer l.release(ctx.io);
+            Store.deleteTree(ctx.io, arena, dir) catch {};
+        }
+        return null;
+    }
+    const l = try ctx.store.lockAliases(arena, cfg.id);
+    defer l.release(ctx.io);
+    const start = ctx.now();
+    const written = try aliases.sync(ctx, dir, resolved);
+    if (written > 0) ctx.timed(start, "update {d} alias file(s)", .{written});
+    return .{ .dir = dir, .names = try aliases.names(arena, resolved) };
+}
+
+/// The app first, then its runtimes in order: the first to have an alias
+/// of a name wins it.
+fn aliasProviders(arena: Allocator, image: Store.Image) ![]const aliases.Provider {
+    const cfg = image.config;
+    var out: std.ArrayList(aliases.Provider) = .empty;
+    try out.append(arena, .{ .id = cfg.id, .dir = image.deploy_dir, .aliases = cfg.aliases });
+    for (cfg.runtimes.map.values(), image.runtime_dirs) |r, dir| try out.append(arena, .{ .id = r.id, .dir = dir, .aliases = r.aliases });
+    return out.items;
+}
+
+test aliasProviders {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const digest = "sha256:" ++ "a" ** 64;
+    var cfg: oci.AppConfig = .{ .id = "app", .version = "1", .command = "x.exe" };
+    try cfg.runtimes.map.put(arena, "b", .{ .id = "rt.b", .version = "1", .image = digest, .layer = digest });
+    try cfg.runtimes.map.put(arena, "a", .{ .id = "rt.a", .version = "1", .image = digest, .layer = digest });
+    const image: Store.Image = .{
+        .ref = .{ .id = "app", .version = "1", .manifest = digest },
+        .manifest = .{ .config = .{ .mediaType = "", .digest = digest, .size = 0 }, .layers = &.{} },
+        .config = cfg,
+        .deploy_dir = "D:\\app",
+        .runtime_dirs = &.{ "D:\\b", "D:\\a" },
+    };
+    const p = try aliasProviders(arena, image);
+    try std.testing.expectEqual(3, p.len);
+    for ([_][]const u8{ "app", "rt.b", "rt.a" }, [_][]const u8{ "D:\\app", "D:\\b", "D:\\a" }, p) |id, dir, got| {
+        try std.testing.expectEqualStrings(id, got.id);
+        try std.testing.expectEqualStrings(dir, got.dir);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AppContainer
 
 const AppContainerSetup = struct {
     deploy_dir: []const u8,
     runtime_dirs: []const []const u8,
+    /// The app's alias shims, if it has aliases.
+    alias_dir: ?[]const u8,
     data_dir: []const u8,
     /// The run's LOCALAPPDATA, in its data directory.
     local_app_data: []const u8,
@@ -193,6 +270,7 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     var wanted: std.ArrayList(Grant) = .empty;
     try wanted.append(arena, .{ .path = setup.deploy_dir, .access = .read_execute, .host = false });
     for (setup.runtime_dirs) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
+    if (setup.alias_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     try wanted.append(arena, .{ .path = setup.data_dir, .access = .full, .host = false });
     for (setup.grants) |g| try wanted.append(arena, .{
         .path = g.path orelse setup.host_cwd,
@@ -280,6 +358,7 @@ fn setUpLow(ctx: *Context, id: []const u8, setup: LowSetup) !win32.HANDLE {
         note("note: low sandbox doesn't keep the app from reading what you can", .{});
         if (!setup.network) note("note: low sandbox doesn't enforce network permissions", .{});
     }
+    try acl.letChildrenQueryUs(arena);
     return process.lowIntegrityToken(arena);
 }
 
@@ -390,8 +469,12 @@ fn resolveCommand(
         return .init(try placeholders.commandPath(arena, e.value_ptr.command), try expandAll(arena, placeholders, e.value_ptr.args));
     }
 
-    const resolved = try findCommand(io, arena, deploy_dir, name, app_path, system_root) orelse
+    const resolved = try findCommand(io, arena, deploy_dir, name, app_path, system_root) orelse {
+        // A relative path is the app's; one of yours is absolute.
+        if (std.mem.indexOfAny(u8, name, "/\\") != null and !std.fs.path.isAbsolute(name))
+            return fail("command \"{s}\" is not a file in the app; for a program of yours, give its absolute path (e.g. --command=%CD%\\{s})", .{ name, std.fs.path.basename(name) });
         return fail("command \"{s}\" is not an export of the app, or an executable or batch file in it or in System32", .{name});
+    };
     return .init(resolved, &.{});
 }
 

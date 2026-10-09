@@ -135,7 +135,7 @@ pub fn labelLow(arena: Allocator, path: []const u8) !bool {
     if (try ownLabel(arena, path)) |rid| if (rid <= win32.SECURITY_MANDATORY_LOW_RID) return false;
     const low = try lowIntegritySid(arena);
     const size = @sizeOf(win32.ACL) + @sizeOf(win32.ACCESS_ALLOWED_ACE) + win32.GetLengthSid(low);
-    const buf = try arena.alignedAlloc(u8, .of(win32.ACL), size);
+    const buf = try arena.alignedAlloc(u8, .of(u64), size);
     const sacl: *win32.ACL = @ptrCast(buf.ptr);
     if (win32.InitializeAcl(sacl, @intCast(size), win32.ACL_REVISION) == 0) return win32.lastErrorFail("InitializeAcl");
     const inherit = win32.OBJECT_INHERIT_ACE | win32.CONTAINER_INHERIT_ACE;
@@ -205,6 +205,32 @@ fn writeLabel(arena: Allocator, path: []const u8, sacl: *win32.ACL) !void {
     // after a failure.
     try dacl.write(dacl.acl);
     if (again != 0) return labelFail("changing", path, again);
+}
+
+/// Lets the low-integrity processes a run starts look zigsaw up as their
+/// parent. A process is labelled medium integrity with NO_READ_UP, which
+/// keeps low-integrity processes from even reading its start time; BusyBox's
+/// sh then takes itself for an orphan, and stops waiting for the last
+/// command of `sh -c`, which zigsaw's job then ends with nothing printed. So
+/// zigsaw's own label drops NO_READ_UP: still nothing below medium can write
+/// to it, and a low-integrity process may read what the user can anyway.
+/// (An AppContainer doesn't see processes outside it at all, so this doesn't
+/// help there.)
+pub fn letChildrenQueryUs(arena: Allocator) !void {
+    const self = win32.GetCurrentProcess();
+    var medium: ?win32.PSID = null;
+    if (win32.ConvertStringSidToSidW(try win32.wide(arena, win32.medium_integrity_sid), &medium) == 0)
+        return win32.lastErrorFail("ConvertStringSidToSidW");
+    const size = @sizeOf(win32.ACL) + @sizeOf(win32.ACCESS_ALLOWED_ACE) + win32.GetLengthSid(medium.?);
+    // ACLs are DWORD-aligned; the kernel refuses one that isn't (998,
+    // ERROR_NOACCESS), and an ACL's own alignment is only 2.
+    const buf = try arena.alignedAlloc(u8, .of(u64), size);
+    const sacl: *win32.ACL = @ptrCast(buf.ptr);
+    if (win32.InitializeAcl(sacl, @intCast(size), win32.ACL_REVISION) == 0) return win32.lastErrorFail("InitializeAcl");
+    if (win32.AddMandatoryAce(sacl, win32.ACL_REVISION, 0, win32.SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, medium.?) == 0)
+        return win32.lastErrorFail("AddMandatoryAce");
+    const rc = win32.SetSecurityInfo(self, win32.SE_KERNEL_OBJECT, win32.LABEL_SECURITY_INFORMATION, null, null, null, sacl);
+    if (rc != 0) return fail("changing zigsaw's own integrity label: error {d}", .{rc});
 }
 
 fn lowIntegritySid(arena: Allocator) !win32.PSID {

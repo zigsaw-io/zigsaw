@@ -222,6 +222,9 @@ pub const Runtime = struct {
     /// ${cache} are the app's.
     path: []const []const u8 = &.{"."},
     env: std.json.ArrayHashMap([]const u8) = .{},
+    /// The runtime's aliases, which runs of the app get too. In them, ${app}
+    /// is the runtime's directory. Absent unless it has some.
+    aliases: ?std.json.ArrayHashMap(Export) = null,
 };
 
 /// How an image was built, for anyone checking where it came from.
@@ -261,10 +264,11 @@ pub const AppConfig = struct {
     permissions: Permissions = .{},
     /// Commands the app provides, by name.
     exports: std.json.ArrayHashMap(Export) = .{},
-    /// Commands the image gives builds that use it as an SDK or runtime, by
-    /// name: like exports, but on the build's PATH rather than the user's.
-    /// zig's image makes `cc` run `zig cc`, for instance. Absent unless
-    /// there are some.
+    /// Commands on the PATH of whatever runs with the image, by name: builds
+    /// that use it as an SDK or runtime, its own runs, and runs of apps that
+    /// have it as a runtime. Like exports, but not on the user's PATH. zig's
+    /// image makes `cc` run `zig cc`, for instance. Absent unless there are
+    /// some.
     aliases: ?std.json.ArrayHashMap(Export) = null,
     /// Start menu shortcuts, by the name they show. Absent unless there are
     /// some.
@@ -389,22 +393,7 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
         if (e.value_ptr.drop != null)
             return fail("{s}: export {s} has \"drop\", which only aliases may have", .{ what, e.key_ptr.* });
     }
-    // Builds run an image's aliases from the image itself, whose runtimes
-    // they don't have.
-    if (c.aliases) |a| {
-        var it_aliases = a.map.iterator();
-        while (it_aliases.next()) |e| {
-            if (!isValidExportName(e.key_ptr.*))
-                return fail("{s}: alias name \"{s}\" must be letters, digits, '.', '-', '_', '+' (and not zigsaw's own)", .{ what, e.key_ptr.* });
-            if (!isValidCommand(e.value_ptr.command, &.{}))
-                return fail("{s}: alias {s} command \"{s}\" must be a relative path inside the app", .{ what, e.key_ptr.*, e.value_ptr.command });
-            // Shims keep them one per line, trimmed.
-            if (e.value_ptr.drop) |drop| for (drop) |d| {
-                if (d.len == 0 or std.mem.indexOfAny(u8, d, "\r\n") != null or std.mem.trim(u8, d, " \t").len != d.len)
-                    return fail("{s}: alias {s} drops \"{s}\": arguments to drop must be non-empty, on one line, without spaces or tabs at either end", .{ what, e.key_ptr.*, d });
-            };
-        }
-    }
+    if (c.aliases) |a| try validateAliases(what, "", a);
     if (c.shortcuts) |s| {
         const names = s.map.keys();
         for (names, s.map.values(), 0..) |name, shortcut, i| {
@@ -419,6 +408,27 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
             if (shortcut.description) |d| if (d.len > 256)
                 return fail("{s}: shortcut \"{s}\" description is longer than 256 bytes", .{ what, name });
         }
+    }
+}
+
+/// Checks an image's aliases, or (`owner` "runtime x's ") those an app's
+/// config copied from a runtime. Builds run an image's aliases from the image
+/// itself, whose runtimes they don't have. And an app's runs share one set of
+/// alias shims, ephemeral runs too, so they can't name a run's ${data} or
+/// ${cache}.
+fn validateAliases(what: []const u8, owner: []const u8, aliases: std.json.ArrayHashMap(Export)) error{Failed}!void {
+    for (aliases.map.keys(), aliases.map.values()) |name, e| {
+        if (!isValidExportName(name))
+            return fail("{s}: {s}alias name \"{s}\" must be letters, digits, '.', '-', '_', '+' (and not zigsaw's own)", .{ what, owner, name });
+        if (!isValidCommand(e.command, &.{}))
+            return fail("{s}: {s}alias {s} command \"{s}\" must be a relative path inside the image", .{ what, owner, name, e.command });
+        for (e.args) |arg| if (std.mem.indexOf(u8, arg, "${data}") != null or std.mem.indexOf(u8, arg, "${cache}") != null)
+            return fail("{s}: {s}alias {s} argument \"{s}\" can't use ${{data}} or ${{cache}}", .{ what, owner, name, arg });
+        // Shims keep them one per line, trimmed.
+        if (e.drop) |drop| for (drop) |d| {
+            if (d.len == 0 or std.mem.indexOfAny(u8, d, "\r\n") != null or std.mem.trim(u8, d, " \t").len != d.len)
+                return fail("{s}: {s}alias {s} drops \"{s}\": arguments to drop must be non-empty, on one line, without spaces or tabs at either end", .{ what, owner, name, d });
+        };
     }
 }
 
@@ -451,6 +461,11 @@ fn validateRuntimes(what: []const u8, runtimes: std.json.ArrayHashMap(Runtime)) 
             return fail("{s}: runtime {s}'s path entry \"{s}\" must be inside it, or start with ${{app}}, ${{data}} or ${{cache}}", .{ what, alias, p });
         for (aliases[0..i], values[0..i]) |earlier_alias, earlier| if (std.ascii.eqlIgnoreCase(earlier.id, r.id))
             return fail("{s}: runtimes {s} and {s} are both {s}", .{ what, earlier_alias, alias, r.id });
+        if (r.aliases) |a| {
+            var owner_buf: [64]u8 = undefined;
+            const owner = std.fmt.bufPrint(&owner_buf, "runtime {s}'s ", .{alias}) catch "a runtime's ";
+            try validateAliases(what, owner, a);
+        }
     }
 }
 
@@ -672,6 +687,49 @@ test "layers must match the runtimes" {
     try std.testing.expectEqual(.none, layerCompression(media_type.layer_tar).?);
 
     try c.runtimes.map.put(arena, "node2", .{ .id = "org.nodejs.NODE", .version = "22", .image = digest, .layer = other });
+    try std.testing.expectError(error.Failed, validateConfig("test", c));
+}
+
+test "runtimes' aliases" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const digest = "sha256:" ++ "a" ** 64;
+    var c: AppConfig = .{ .id = "x", .version = "1", .command = "x.exe" };
+    try c.runtimes.map.put(arena, "zig", .{ .id = "org.ziglang.zig", .version = "1", .image = digest, .layer = digest });
+    // Without aliases a runtime's JSON is as before, so configs don't change.
+    try std.testing.expect(std.mem.indexOf(u8, try toJson(arena, c), "aliases") == null);
+
+    var aliases: std.json.ArrayHashMap(Export) = .{};
+    try aliases.map.put(arena, "cc", .{ .command = "zig.exe", .args = &.{ "cc", "${app}\\lib" } });
+    c.runtimes.map.getPtr("zig").?.aliases = aliases;
+    try validateConfig("test", c);
+    const json = try toJson(arena, c);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"aliases\"") != null);
+    const back = try std.json.parseFromSliceLeaky(AppConfig, arena, json, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqualStrings("zig.exe", back.runtimes.map.get("zig").?.aliases.?.map.get("cc").?.command);
+
+    const bad = [_]Export{
+        .{ .command = "../zig.exe" },
+        .{ .command = "${zig}\\zig.exe" },
+        .{ .command = "zig.exe", .args = &.{"${data}\\x"} },
+        .{ .command = "zig.exe", .args = &.{"--cache=${cache}"} },
+        .{ .command = "zig.exe", .drop = &.{" --64"} },
+    };
+    for (bad) |e| {
+        var a: std.json.ArrayHashMap(Export) = .{};
+        try a.map.put(arena, "cc", e);
+        c.runtimes.map.getPtr("zig").?.aliases = a;
+        try std.testing.expectError(error.Failed, validateConfig("test", c));
+        // The image's own aliases have the same rules.
+        var own: AppConfig = .{ .id = "x", .version = "1", .command = "x.exe", .aliases = a };
+        try std.testing.expectError(error.Failed, validateConfig("test", own));
+        own.aliases = null;
+        try validateConfig("test", own);
+    }
+    var a: std.json.ArrayHashMap(Export) = .{};
+    try a.map.put(arena, "zigsaw", .{ .command = "x.exe" });
+    c.runtimes.map.getPtr("zig").?.aliases = a;
     try std.testing.expectError(error.Failed, validateConfig("test", c));
 }
 

@@ -150,6 +150,19 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         if (opts.data and !opts.dry_run) try Store.deleteTree(io, arena, p);
     }
 
+    // The alias shims of apps that aren't installed, unless one is running.
+    // (Tiny files, so not reported.)
+    const aliases_dir = try store.path(arena, &.{"aliases"});
+    if (!opts.dry_run) {
+        for (try listDir(io, arena, aliases_dir)) |entry| {
+            if (entry.kind != .directory or isInstalled(refs, entry.name)) continue;
+            const l = try store.lockAliases(arena, entry.name);
+            defer l.release(io);
+            Store.deleteTree(io, arena, try std.fs.path.join(arena, &.{ aliases_dir, entry.name })) catch {};
+        }
+        try deleteStaleLocks(io, arena, aliases_dir);
+    }
+
     // Report.
     var removed: std.ArrayList([]const u8) = .empty;
     var freed: u64 = 0;

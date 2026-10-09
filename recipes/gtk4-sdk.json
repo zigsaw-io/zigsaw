@@ -3,14 +3,34 @@
   "version": "4.24.1",
   "command": "bin/gtk4-demo.exe",
   "path": ["bin"],
-  "exports": {},
+  "env": {
+    "PKG_CONFIG_PATH": "${app}\\lib\\pkgconfig;${app}\\share\\pkgconfig",
+    "RC": "rc /:auto-includes gnu"
+  },
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "cc": { "command": "${zig}/zig.exe", "args": ["cc", "-target", "x86_64-windows-gnu"] },
+    "c++": { "command": "${zig}/zig.exe", "args": ["c++", "-target", "x86_64-windows-gnu"] },
+    "ar": { "command": "${zig}/zig.exe", "args": ["ar"] },
+    "rc": { "command": "${zig}/zig.exe", "args": ["rc", "/:auto-includes", "gnu"] },
+    "pkg-config": { "command": "${meson}/bin/pkgconf.exe" },
+    "meson": { "command": "${meson}/python.exe", "args": ["${meson}\\meson\\meson.py"] },
+    "ninja": { "command": "${meson}/ninja.exe" },
+    "sh": { "command": "${busybox}/busybox.exe", "args": ["sh"] },
+    "make": { "command": "${busybox}/busybox.exe", "args": ["make"] },
+    "glib-compile-resources": { "command": "bin/glib-compile-resources.exe" },
+    "glib-compile-schemas": { "command": "bin/glib-compile-schemas.exe" },
+    "gtk4-builder-tool": { "command": "bin/gtk4-builder-tool.exe" }
+  },
   "cleanup": ["__pycache__"],
   "sdk": {
-    "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
     "perl": "org.perl.perl:5.42.3.1@sha256:4459f0a9487860f976ef170b4e55c10e4889b2eff314c9eaacf4c42135406773",
     "rust": "org.rust-lang.rust:1.99.0@sha256:e7e9706485bba88759915d9509993d0e41d340d7d8dfec6426fce1feda9a10e2",
-    "cargo-c": "com.github.lu-zero.cargo-c:0.10.25@sha256:5c3ab8267b4c4a8f4a1628ef7f0d8f62f9838a28f46df2800a13f542e71bed71",
+    "cargo-c": "com.github.lu-zero.cargo-c:0.10.25@sha256:5c3ab8267b4c4a8f4a1628ef7f0d8f62f9838a28f46df2800a13f542e71bed71"
+  },
+  "runtimes": {
+    "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
     "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
@@ -199,7 +219,7 @@
         }
       ],
       "build": [
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dglib=enabled -Dgobject=disabled -Dcairo=disabled -Dchafa=disabled -Dicu=disabled -Dfreetype=disabled -Dgdi=disabled -Ddirectwrite=disabled -Dtests=disabled -Dintrospection=disabled -Ddocs=disabled -Dutilities=disabled -Dbenchmark=disabled",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dglib=enabled -Dgobject=disabled -Dcairo=disabled -Dchafa=disabled -Dicu=disabled -Dfreetype=disabled -Dgdi=enabled -Ddirectwrite=enabled -Dtests=disabled -Dintrospection=disabled -Ddocs=disabled -Dutilities=disabled -Dbenchmark=disabled",
         "meson install -C out"
       ]
     },
@@ -515,6 +535,72 @@
         "meson install -C out",
         "grep -q 'pixbufloader_svg[.]dll' \"$PREFIX/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache\" && ! grep -q '^\"B:' \"$PREFIX/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache\""
       ]
+    },
+    {
+      "name": "hunspell",
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "CFLAGS": "-O2", "CXXFLAGS": "-O2", "LD": "sh B:/src/hunspell/zigsaw/ld.sh", "LDFLAGS": "-Wl,-s -Wl,-Brepro" },
+      "sources": [
+        {
+          "url": "https://github.com/hunspell/hunspell/releases/download/v1.7.5/hunspell-1.7.5.tar.gz",
+          "sha256": "2e559f0c2a592ba48e421477f58e9bf7e01062277a4a7821afb52fc9401010ae",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
+        { "path": "gtk4-sdk/autotools-ld.sh", "dest": "zigsaw/ld.sh" }
+      ],
+      "build": [
+        "sh zigsaw/mtimes.sh",
+        "sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --disable-nls --without-ui --without-readline lt_cv_deplibs_check_method=pass_all > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
+        "sed -i 's/ -shared -nostdlib / -shared /' libtool",
+        "make -C src/hunspell -j\"$(nproc)\"",
+        "make -C src/hunspell install",
+        "make install-pkgconfDATA"
+      ]
+    },
+    {
+      "name": "enchant",
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2", "CXXFLAGS": "-O2", "LD": "sh B:/src/enchant/zigsaw/ld.sh", "LDFLAGS": "-Wl,-s -Wl,-Brepro", "PKG_CONFIG": "pkg-config", "DOXYGEN": "true" },
+      "sources": [
+        {
+          "url": "https://github.com/rrthomas/enchant/releases/download/v2.8.21/enchant-2.8.21.tar.gz",
+          "sha256": "dd2a762697c463148a8f59867089a5ebf2dd1449d869f93764b76c12bcf8acc0",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
+        { "path": "gtk4-sdk/autotools-ld.sh", "dest": "zigsaw/ld.sh" },
+        { "path": "gtk4-sdk/implibs.sh", "dest": "zigsaw/implibs.sh" },
+        { "path": "gtk4-sdk/enchant.ordering", "dest": "zigsaw/enchant.ordering" }
+      ],
+      "build": [
+        "sh zigsaw/mtimes.sh",
+        "sh zigsaw/implibs.sh \"$PREFIX/lib\"",
+        "sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-gcc-warnings --with-hunspell --with-winspell --without-aspell --without-nuspell --without-hspell --without-voikko --without-applespell --without-zemberek lt_cv_deplibs_check_method=pass_all > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
+        "grep -q '^#define ENABLE_RELOCATABLE 1' config.h && grep -q '^HUNSPELL_LIBS = .*hunspell' providers/Makefile && grep -q '^WINSPELL_CFLAGS = ..' providers/Makefile",
+        "sed -i 's/ -shared -nostdlib / -shared /' libtool",
+        "{ echo EXPORTS; sed -n 's/^.*[^a-z0-9_]\\(enchant_[a-z0-9_]*\\) *(.*$/\\1/p' lib/enchant.h lib/enchant-provider.h | sort -u | while read -r f; do grep -q \"^$f (\" lib/*.c && echo \"$f\"; done; } > zigsaw/enchant.def",
+        "printf '%s\\n' EXPORTS init_enchant_provider > zigsaw/provider.def",
+        "make -C libgnu -j\"$(nproc)\"",
+        "make -C lib -j\"$(nproc)\" nodist_doc_DATA= libenchant_2_la_LDFLAGS='-no-undefined -export-symbols B:/src/enchant/zigsaw/enchant.def -version-info $(VERSION_INFO)'",
+        "make -C providers -j\"$(nproc)\" LDFLAGS=\"$LDFLAGS -export-symbols B:/src/enchant/zigsaw/provider.def\"",
+        "make -C lib install nodist_doc_DATA= libenchant_2_la_LDFLAGS='-no-undefined -export-symbols B:/src/enchant/zigsaw/enchant.def -version-info $(VERSION_INFO)'",
+        "make -C providers install",
+        "make install-pkgconfigDATA",
+        "cp zigsaw/enchant.ordering \"$PREFIX/share/enchant-2/enchant.ordering\""
+      ]
+    },
+    {
+      "name": "hunspell-en-us",
+      "sources": [
+        { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/en/en_US.aff", "sha256": "e746c882dd6f303c2c46e7452804b9201115a6942cfeb15f18f8edf774d2e24e", "dest": "share/hunspell/en_US.aff" },
+        { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/en/en_US.dic", "sha256": "f0b1a234bd178bdd01875b2a392a9647f888b8fe879f79c52aae62c2759b3647", "dest": "share/hunspell/en_US.dic" },
+        { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/en/README_en_US.txt", "sha256": "168b4c01cb841f766a72f310b065c04d09cff46376c37a81d799593ce751c371", "dest": "share/doc/hunspell-en-us/README_en_US.txt" }
+      ],
+      "build": ["mkdir -p \"$PREFIX/share/hunspell\" \"$PREFIX/share/doc/hunspell-en-us\"", "cp -r share \"$PREFIX/\""]
+    },
+    {
+      "name": "implibs",
+      "sources": [{ "path": "gtk4-sdk/implibs.sh" }],
+      "build": ["sh implibs.sh \"$PREFIX/lib\""]
     }
   ]
 }

@@ -86,6 +86,13 @@ refuses_profile() {
 }
 check "low: won't label the user profile" refuses_profile
 check "low: --ephemeral writes its own data directory" z run --sandbox=low --ephemeral $BB sh -c 'echo x > "$APPDATA/f"'
+# BusyBox's sh waits for the last command of sh -c only if it can see its
+# parent, zigsaw, which a low-integrity process could not read.
+check "low: sh sees zigsaw as its parent" sh -c '[ "$("$0" run --sandbox=low '$BB' sh -c "echo \$PPID" </dev/null | tr -d "\r")" != 1 ]' "$zigsaw"
+check "low: sh -c's last command runs to the end, and its exit code comes through" sh -c '
+    out=$("$0" run --sandbox=low '$BB' sh -c "busybox.exe sh -c \"sleep 1; echo late; exit 7\"" </dev/null | tr -d "\r"; echo "code ${PIPESTATUS[0]}")
+    [ "$out" = "late
+code 7" ]' "$zigsaw"
 
 # A directory that gives its owner Modify, not WRITE_OWNER, which labelling
 # needs, as a fresh drive's root does (D:\ on Windows 11). zigsaw grants it

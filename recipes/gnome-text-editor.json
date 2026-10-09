@@ -11,14 +11,11 @@
     "Text Editor": { "command": "gnome-text-editor", "description": "View and edit text files" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:f7df3f771a48452eba015e81f6fc31590f790f48af80d73420e7139e69c637e3"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:5299a617d4569d05217c6285989ecc184959121d0f521f54f1fa2f24543339b5"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:c5756c4806e9718c173a3478bfbd9a60ff0fa3d5da5c7aa847d0d6faabc41cb7",
-    "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
-    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
-    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
-    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:1ea0edab447f9a3975b66c321e2b76f4c501662ccbf3795bfb3de800eb509f42",
+    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
   },
   "cleanup": [
     "/include",
@@ -56,16 +53,19 @@
     },
     {
       "name": "libspelling",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu", "CFLAGS": "-IB:/src/libspelling/zigsaw" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/libspelling/0.4/libspelling-0.4.10.tar.xz",
           "sha256": "56e3f01a3a18b575beea4c34349f99cdaba316e1f7c271b1231f7bcf5d9af73b",
           "strip": 1
-        }
+        },
+        { "path": "gnome-text-editor/icu-uloc.h", "dest": "zigsaw/unicode/uloc.h" }
       ],
       "build": [
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Denchant=disabled -Ddocs=false -Dintrospection=disabled -Dvapi=false -Dsysprof=false",
+        "sed -i \"s/^libicu_dep = dependency('icu-uc')$/libicu_dep = declare_dependency(link_args: ['-licu'])/\" lib/enchant/meson.build",
+        "grep -q \"^libicu_dep = declare_dependency(link_args: \\['-licu'\\])$\" lib/enchant/meson.build",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Denchant=enabled -Ddocs=false -Dintrospection=disabled -Dvapi=false -Dsysprof=false",
         "meson install -C out"
       ]
     },

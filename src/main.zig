@@ -454,6 +454,12 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     try appcontainer.deleteProfile(arena, id);
 
     try store.deleteRef(arena, id);
+    {
+        const aliases_lock = try store.lockAliases(arena, id);
+        defer aliases_lock.release(io);
+        Store.deleteTree(io, arena, try store.aliasDir(arena, id)) catch
+            note("kept {s}'s alias shims, which are in use; `zigsaw prune` removes them later", .{id});
+    }
     if (try store.deleteUnusedDeployments(arena, ref.manifest))
         note("kept {s}'s files, which are still in use; `zigsaw prune` removes them later", .{id});
     if (delete_data) {
@@ -465,6 +471,7 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
 }
 
 test {
+    _ = @import("aliases.zig");
     _ = @import("builder.zig");
     _ = @import("credentials.zig");
     _ = @import("deps.zig");

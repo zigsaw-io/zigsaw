@@ -179,6 +179,128 @@ search_paths() {
 }
 check "a building module gets them under dest; PATH starts with B:\\prefix\\bin, PKG_CONFIG_PATH and CMAKE_PREFIX_PATH name the prefix, then the SDK" search_paths
 
+# --- aliases in runs, and SDKs with runtimes ------------------------------------------
+
+# A tool image with aliases, all BusyBox: greet echoes "tool:", ar echoes
+# (over BusyBox's own ar applet), fail exits 7, shout drops --quiet. An app
+# that has it as a runtime and an alias greet of its own, and runs BusyBox's
+# sh from the runtime. And an SDK that has the tool as its runtime.
+TOOL=test.alias.tool
+AAPP=test.alias.app
+ASDK=test.alias.sdk
+mkdir -p "$work\\alias" && cp "$ZIGSAW_HOME\\deploy\\$(own_layer $BB)\\busybox.exe" "$work\\alias\\" &&
+    echo '#define Y 1' >"$work\\alias\\y.h"
+tool_recipe() {
+    local version=${1:-1}
+    cat <<EOF
+{ "id": "$TOOL", "version": "$version", "command": "busybox.exe", "exports": {},
+  "env": { "ALIAS_TOOL": "\${app}" },
+  "aliases": {
+    "greet": { "command": "busybox.exe", "args": ["echo", "tool:"] },
+    "ar": { "command": "busybox.exe", "args": ["echo", "tool ar"] },
+    "fail": { "command": "busybox.exe", "args": ["sh", "-c", "exit 7"] },
+    "shout": { "command": "busybox.exe", "args": ["echo", "shout"], "drop": ["--quiet"] }
+  },
+  "modules": [{ "name": "m", "sources": [{ "path": "busybox.exe" }, { "path": "y.h", "dest": "v$version.txt" }] }] }
+EOF
+}
+tool_recipe >"$work\\alias\\tool.json"
+check "a tool image with aliases builds" z build "$work\\alias\\tool.json"
+tool_digest=$(manifest_of $TOOL)
+alias_app_recipe() {
+    local aliases='"aliases": { "greet": { "command": "busybox.exe", "args": ["echo", "app:"] } },'
+    [ "${2:-}" = none ] && aliases=''
+    cat <<EOF
+{ "id": "$AAPP", "version": "1", "command": "\${tool}/busybox.exe", "args": ["sh"], "exports": {},
+  $aliases
+  "runtimes": { "tool": "$1" },
+  "modules": [{ "name": "m", "sources": [{ "path": "busybox.exe" }] }] }
+EOF
+}
+alias_app_recipe "$TOOL@$tool_digest" >"$work\\alias\\app.json"
+check "an app with it as a runtime builds" z build "$work\\alias\\app.json"
+alias_app_digest=$(manifest_of $AAPP)
+check "the app's alias wins over its runtime's" sh -c '[ "$("$0" run '$AAPP' -c "greet hi" | tr -d "\r")" = "app: hi" ]' "$zigsaw"
+check "a runtime's alias runs, dropping what it drops" sh -c '[ "$("$0" run '$AAPP' -c "shout --quiet x" | tr -d "\r")" = "shout x" ]' "$zigsaw"
+check "an alias wins over BusyBox's applet of the same name" sh -c '[ "$("$0" run '$AAPP' -c ar | tr -d "\r")" = "tool ar" ]' "$zigsaw"
+check "an alias's exit code comes through" sh -c '[ "$("$0" run '$AAPP' -c "fail; echo \$?" | tr -d "\r")" = 7 ]' "$zigsaw"
+check "--command finds an alias" sh -c '[ "$("$0" run --command=greet '$AAPP' there | tr -d "\r")" = "app: there" ]' "$zigsaw"
+check "the runtime's variables come with it" sh -c '[ "$("$0" run '$AAPP' -c "echo \$ALIAS_TOOL" | tr -d "\r" | tr / \\\\)" = "$1\\deploy\\$2" ]' "$zigsaw" "$ZIGSAW_HOME" "$(own_layer $TOOL)"
+records_aliases() { config_of $AAPP | tr -d ' \r\n' | grep -q '"runtimes":{"tool":{.*"aliases":{"greet":{"command":"busybox.exe","args":\["echo","tool:"\]}'; }
+check "the app's config records the runtime's aliases" records_aliases
+unchanged_shims() {
+    local dir="$ZIGSAW_HOME\\aliases\\$AAPP" before after
+    before=$(cd "$dir" && ls -l --time-style=full-iso)
+    z run $AAPP -c true && after=$(cd "$dir" && ls -l --time-style=full-iso)
+    [ "$before" = "$after" ] && [ "$(ls "$dir" | wc -l)" -eq 8 ] || { echo "$after"; return 1; }
+}
+check "a second run rewrites none of the 8 shim files (4 aliases)" unchanged_shims
+check "aliases work under --sandbox=low, the last of sh -c's commands too" sh -c '[ "$("$0" run --sandbox=low '$AAPP' -c "greet x; shout --quiet y" | tr -d "\r" | tr "\n" " ")" = "app: x shout y " ]' "$zigsaw"
+# In an AppContainer, BusyBox's sh doesn't see zigsaw, takes itself for an
+# orphan, and doesn't wait for its last command (README's known gaps).
+check "aliases work under --sandbox=appcontainer" sh -c '[ "$("$0" run --sandbox=appcontainer '$AAPP' -c "greet x; shout --quiet y; true" | tr -d "\r" | tr "\n" " ")" = "app: x shout y " ]' "$zigsaw"
+check "and in --ephemeral runs" sh -c '[ "$("$0" run --ephemeral '$AAPP' -c "greet e" | tr -d "\r")" = "app: e" ]' "$zigsaw"
+check "the same recipe builds the same image" same_image "$work\\alias\\app.json" "$alias_app_digest"
+no_aliases_left() {
+    alias_app_recipe "$BB@$bb_digest" none | sed 's/\${tool}/${bb}/; s/"tool"/"bb"/' >"$work\\alias\\plain.json"
+    z build "$work\\alias\\plain.json" >/dev/null 2>&1 && z run $AAPP -c true && [ ! -e "$ZIGSAW_HOME\\aliases\\$AAPP" ]
+}
+check "a version without aliases leaves no alias shims after its run" no_aliases_left
+rm_aliases() {
+    z build "$work\\alias\\app.json" >/dev/null 2>&1 && z run $AAPP -c true && [ -e "$ZIGSAW_HOME\\aliases\\$AAPP\\greet.exe" ] &&
+        z rm $AAPP >/dev/null 2>&1 && [ ! -e "$ZIGSAW_HOME\\aliases\\$AAPP" ]
+}
+check "rm removes the app's alias shims" rm_aliases
+prune_aliases() {
+    mkdir -p "$ZIGSAW_HOME\\aliases\\test.gone" && echo x >"$ZIGSAW_HOME\\aliases\\test.gone\\x.shim" &&
+        z prune >/dev/null 2>&1 && [ ! -e "$ZIGSAW_HOME\\aliases\\test.gone" ]
+}
+check "prune removes alias shims of apps that aren't installed" prune_aliases
+
+# The SDK: the tool is its runtime. A recipe that builds with it gets the
+# tool too, its aliases and variables, without naming it.
+cat >"$work\\alias\\sdk.json" <<EOF
+{ "id": "$ASDK", "version": "1", "command": "\${tool}/busybox.exe", "exports": {},
+  "runtimes": { "tool": "$TOOL@$tool_digest" },
+  "modules": [{ "name": "m", "sources": [{ "path": "y.h", "dest": "include/y.h" }] }] }
+EOF
+check "an SDK with the tool as its runtime builds" z build "$work\\alias\\sdk.json"
+asdk_digest=$(manifest_of $ASDK)
+with_sdk_recipe() {
+    local extra=${1:-}
+    printf '{ "id": "test.alias.built", "version": "1", "command": "b.txt", "exports": {}, "sdk": { "s": "%s@%s"%s },\n  "modules": [{ "name": "m", "build": ["greet built > \\"$PREFIX/b.txt\\"", "echo \\"$ALIAS_TOOL\\" > \\"$PREFIX/t.txt\\"", "echo \\"$PATH\\" > \\"$PREFIX/p.txt\\""] }] }\n' \
+        $ASDK "$asdk_digest" "$extra"
+}
+sdk_brings_tool() {
+    with_sdk_recipe >"$work\\alias\\built.json"
+    z build "$work\\alias\\built.json" >/dev/null 2>&1 || { z build "$work\\alias\\built.json" 2>&1 | tail -1; return 1; }
+    local dir="$ZIGSAW_HOME\\deploy\\$(own_layer test.alias.built)"
+    [ "$(tr -d '\r' <"$dir\\b.txt")" = "tool: built" ] || { echo "b.txt: $(cat "$dir\\b.txt")"; return 1; }
+    [ "$(tr -d '\r' <"$dir\\t.txt" | tr '/' '\\')" = "$ZIGSAW_HOME\\deploy\\$(own_layer $TOOL)" ] || { echo "t.txt: $(cat "$dir\\t.txt")"; return 1; }
+}
+check "a build with the SDK gets its runtime's aliases and variables" sdk_brings_tool
+tool_once() {
+    with_sdk_recipe ", \"t\": \"$TOOL@$tool_digest\"" >"$work\\alias\\both.json"
+    z build "$work\\alias\\both.json" >/dev/null 2>&1 || { z build "$work\\alias\\both.json" 2>&1 | tail -1; return 1; }
+    local n
+    n=$(tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer test.alias.built)\\p.txt" | tr '/;' '\\\n' | grep -cF "$(own_layer $TOOL)")
+    [ "$n" -eq 1 ] || { echo "the tool is $n times on PATH"; return 1; }
+}
+check "naming the SDK's runtime too uses it once" tool_once
+two_versions() {
+    tool_recipe 2 >"$work\\alias\\tool2.json" && z build "$work\\alias\\tool2.json" >/dev/null 2>&1 || return 1
+    with_sdk_recipe ", \"t\": \"$TOOL@$(manifest_of $TOOL)\"" >"$work\\alias\\two.json"
+    z build "$work\\alias\\two.json" 2>&1 | grep -q "a build can't use two versions of $TOOL"
+}
+check "another version of the SDK's runtime is refused" two_versions
+image_recipe "$ASDK@$asdk_digest" | sed "s/$RT/test.alias.files/; s/\"cleanup\": \[\"\/include\", \"\/lib\"\],//; s|bin/busybox.exe|include/y.h|" >"$work\\alias\\files.json"
+sdk_files_only() {
+    z build "$work\\alias\\files.json" >/dev/null 2>&1 || { z build "$work\\alias\\files.json" 2>&1 | tail -1; return 1; }
+    local dir="$ZIGSAW_HOME\\deploy\\$(own_layer test.alias.files)"
+    [ -f "$dir\\include\\y.h" ] && [ ! -e "$dir\\busybox.exe" ] || { echo "files: $(cd "$dir" && find .)"; return 1; }
+}
+check "an image source takes the SDK's own files, not its runtime's" sdk_files_only
+
 # --- prettier on node --------------------------------------------------------------
 
 z build "$root\\recipes\\node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
@@ -610,7 +732,7 @@ check "built again, it's the same image" cgo_again
 # Removing the apps also deletes their AppContainer profiles. The images
 # builds use stay until prune --downloads, and only zigsaw can delete their
 # protected deployments.
-for id in $APP $SDK $RT test.image.built io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP com.mesonbuild.meson $MESONAPP org.sqlite.sqlite3 \
+for id in $APP $SDK $RT test.image.built $AAPP $ASDK $TOOL test.alias.built test.alias.files io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP com.mesonbuild.meson $MESONAPP org.sqlite.sqlite3 \
     test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
     test.build.vendored org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO; do z rm --delete-data $id >/dev/null 2>&1; done
 z prune --downloads --data >/dev/null 2>&1

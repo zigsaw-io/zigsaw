@@ -28,18 +28,17 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
+const aliases = @import("aliases.zig");
 const Tree = @import("Tree.zig");
 const deps = @import("deps.zig");
 const drive = @import("drive.zig");
 const environment = @import("environment.zig");
-const exports = @import("exports.zig");
 const install = @import("install.zig");
 const Fetcher = @import("fetch.zig");
 const msvc_host = @import("msvc.zig");
 const oci = @import("oci.zig");
 const process = @import("process.zig");
 const recipe = @import("recipe.zig");
-const Sidecar = @import("Sidecar.zig");
 const Store = @import("Store.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
@@ -108,14 +107,25 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
 
     // Runtimes go into the image and are on PATH while building. The SDK is
     // only on PATH, ahead of the runtimes, and in the record of the build;
-    // it's only unpacked if there's something to build with it.
+    // it's only unpacked if there's something to build with it. An SDK's
+    // own runtimes come with it, right after it, as on its runs' PATH; its
+    // digest pins them.
     const building = r.hasBuildCommands();
-    var tools: std.ArrayList(Tool) = .empty;
+    var tools: Tools = .{ .recipe_path = recipe_path };
     var build_info: oci.Build = .{};
     for (r.sdk.map.keys(), r.sdk.map.values()) |alias, reference| {
         const dep = try deps.resolve(ctx, recipe_path, .sdk, alias, reference);
         try build_info.sdk.map.put(arena, alias, dep.manifest_digest);
-        if (building) try tools.append(arena, .{ .dir = (try ctx.store.useLayers(arena, &.{dep.layer()}))[0], .config = dep.config });
+        if (!building) continue;
+        const dirs = try ctx.store.useLayers(arena, dep.manifest.layers);
+        const what = try std.fmt.allocPrint(arena, "sdk {s}", .{alias});
+        const own = try runtimeDirs(arena, dep.config, dirs[0 .. dirs.len - 1]);
+        const sdk = try tools.add(arena, .ofConfig(what, dep.manifest_digest, dirs[dirs.len - 1], dep.config, own));
+        if (sdk == null) continue;
+        for (dep.config.runtimes.map.keys(), dep.config.runtimes.map.values(), dirs[0 .. dirs.len - 1]) |rt_alias, rt, dir| {
+            const rt_what = try std.fmt.allocPrint(arena, "{s}'s runtime {s}", .{ what, rt_alias });
+            if (try tools.add(arena, .ofRuntime(rt_what, dir, rt)) != null) tools.list.items[sdk.?].brings += 1;
+        }
     }
     var runtimes: std.json.ArrayHashMap(oci.Runtime) = .{};
     var layers: std.ArrayList(oci.Descriptor) = .empty;
@@ -126,7 +136,8 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         try runtimes.map.put(arena, alias, dep.runtime());
         try layers.append(arena, dep.layer());
         try runtime_dirs.append(arena, .{ .alias = alias, .path = dir });
-        try tools.append(arena, .{ .dir = dir, .config = dep.config });
+        // One an SDK brought already is on PATH, at the SDK's place.
+        _ = try tools.add(arena, .ofConfig(try std.fmt.allocPrint(arena, "runtime {s}", .{alias}), dep.manifest_digest, dir, dep.config, &.{}));
     }
     for (r.modules) |m| build_info.network = build_info.network or m.network;
 
@@ -141,7 +152,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         for (r.modules) |m| for (m.sources) |src| {
             if (src.image == null) _ = try sources.fetcher.fetch(src);
         };
-        root = try .init(ctx, r, tools.items);
+        root = try .init(ctx, r, tools.list.items);
         if (root.?.msvc) |tc| {
             try build_info.host.map.put(arena, "msvc", tc.tools_version);
             try build_info.host.map.put(arena, "windows-sdk", tc.sdk_version);
@@ -167,6 +178,8 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
     try checkCommand(ctx, &tree, placeholders, "command runs", config.command);
     var exported = config.exports.map.iterator();
     while (exported.next()) |e| try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "export {s} runs", .{e.key_ptr.*}), e.value_ptr.command);
+    if (config.aliases) |a| for (a.map.keys(), a.map.values()) |name, e|
+        try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "alias {s} runs", .{name}), e.command);
     if (config.shortcuts) |s| for (s.map.keys(), s.map.values()) |name, shortcut| if (shortcut.icon) |icon|
         try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "shortcut \"{s}\" has the icon", .{name}), icon);
 
@@ -259,11 +272,86 @@ const Sources = struct {
     }
 };
 
-/// An SDK image or runtime that builds run with.
+/// An image a build runs with: an SDK, a runtime, or a runtime an SDK
+/// brings.
 const Tool = struct {
+    /// Its manifest digest: the same image is used once.
+    image: []const u8,
+    id: []const u8,
+    version: []const u8,
+    /// Names it in messages: "sdk gtksdk", "sdk gtksdk's runtime zig".
+    what: []const u8,
     dir: []const u8,
-    config: oci.AppConfig,
+    path: []const []const u8,
+    env: std.json.ArrayHashMap([]const u8),
+    aliases: ?std.json.ArrayHashMap(oci.Export),
+    /// An SDK's own runtimes, by alias, for ${<alias>} in its entries.
+    runtimes: []const oci.Placeholders.Dir = &.{},
+    /// How many of the tools right after it are runtimes it brought.
+    brings: usize = 0,
+
+    fn ofConfig(what: []const u8, image: []const u8, dir: []const u8, c: oci.AppConfig, runtimes: []const oci.Placeholders.Dir) Tool {
+        return .{ .image = image, .id = c.id, .version = c.version, .what = what, .dir = dir, .path = c.path, .env = c.env, .aliases = c.aliases, .runtimes = runtimes };
+    }
+
+    fn ofRuntime(what: []const u8, dir: []const u8, r: oci.Runtime) Tool {
+        return .{ .image = r.image, .id = r.id, .version = r.version, .what = what, .dir = dir, .path = r.path, .env = r.env, .aliases = r.aliases };
+    }
+
+    /// What its own entries' placeholders stand for in a build: ${app} is
+    /// its directory, ${data} where the build keeps runtimes' data, and
+    /// ${cache} its cache, if it uses one.
+    fn placeholders(t: Tool, arena: Allocator) !oci.Placeholders {
+        const cache = oci.usesCache(t.path, t.env);
+        return .{
+            .app = t.dir,
+            .data = BuildRoot.letter ++ "\\data",
+            .cache = if (cache) try std.fmt.allocPrint(arena, "{s}\\cache\\{s}", .{ BuildRoot.letter, t.id }) else null,
+            .runtimes = t.runtimes,
+        };
+    }
 };
+
+/// The tools of a build, in order.
+const Tools = struct {
+    recipe_path: []const u8,
+    list: std.ArrayList(Tool) = .empty,
+
+    /// Adds `t` and returns its index, or null if the build has the image
+    /// already. Two versions of one app can't both be in a build: their
+    /// commands, aliases and variables would clash, and only one would win.
+    fn add(tools: *Tools, arena: Allocator, t: Tool) !?usize {
+        for (tools.list.items) |other| {
+            if (std.mem.eql(u8, other.image, t.image)) return null;
+            if (std.ascii.eqlIgnoreCase(other.id, t.id))
+                return fail("{s}: {s} is {s} {s} ({s}), and {s} is {s} {s} ({s}); a build can't use two versions of {s}", .{
+                    tools.recipe_path, other.what, other.id,  other.version,            oci.shortDigest(other.image),
+                    t.what,            t.id,       t.version, oci.shortDigest(t.image), t.id,
+                });
+        }
+        try tools.list.append(arena, t);
+        return tools.list.items.len - 1;
+    }
+};
+
+/// The tools' variables. Later tools' win, but an SDK's own win over its
+/// runtimes', as in its runs.
+fn toolVars(arena: Allocator, tools: []const Tool) !std.ArrayList(environment.Var) {
+    var vars: std.ArrayList(environment.Var) = .empty;
+    var i: usize = 0;
+    while (i < tools.len) : (i += 1 + tools[i].brings) {
+        for (tools[i + 1 ..][0..tools[i].brings]) |rt| try environment.expand(arena, &vars, try rt.placeholders(arena), rt.env);
+        try environment.expand(arena, &vars, try tools[i].placeholders(arena), tools[i].env);
+    }
+    return vars;
+}
+
+/// An image's runtimes by alias, deployed in `dirs`.
+fn runtimeDirs(arena: Allocator, c: oci.AppConfig, dirs: []const []const u8) ![]const oci.Placeholders.Dir {
+    const out = try arena.alloc(oci.Placeholders.Dir, dirs.len);
+    for (out, c.runtimes.map.keys(), dirs) |*o, alias, dir| o.* = .{ .alias = alias, .path = dir };
+    return out;
+}
 
 /// The directory a build happens in, mapped to the build drive.
 const BuildRoot = struct {
@@ -293,33 +381,19 @@ const BuildRoot = struct {
         const profile: environment.Profile = try .init(arena, letter ++ "\\");
 
         var path_dirs: std.ArrayList([]const u8) = .empty;
-        var tool_vars: std.ArrayList(environment.Var) = .empty;
+        var tool_vars = try toolVars(arena, tools);
         var caches: std.ArrayList([]const u8) = .empty;
-        var aliases: std.ArrayList([]const u8) = .empty;
-        var shim_exe: ?[]const u8 = null;
+        var providers: std.ArrayList(aliases.Provider) = .empty;
         for (tools) |t| {
-            // In a tool's own entries, ${app} is its directory; ${data} is
-            // where the build keeps runtimes' data, and ${cache} the tool's
-            // cache, if it uses one.
-            const id = t.config.id;
-            const cache = oci.usesCache(t.config.path, t.config.env);
-            if (cache and !containsIgnoreCase(caches.items, id)) try caches.append(arena, id);
-            const p: oci.Placeholders = .{
-                .app = t.dir,
-                .data = letter ++ "\\data",
-                .cache = if (cache) try std.fmt.allocPrint(arena, "{s}\\cache\\{s}", .{ letter, id }) else null,
-            };
-            try path_dirs.appendSlice(arena, try environment.pathDirs(arena, p, t.config.path));
-            try environment.expand(arena, &tool_vars, p, t.config.env);
-            // Of two tools with an alias of the same name, the first's wins,
-            // as on PATH.
-            if (t.config.aliases) |a| for (a.map.keys(), a.map.values()) |name, e| {
-                if (containsIgnoreCase(aliases.items, name)) continue;
-                try aliases.append(arena, name);
-                if (shim_exe == null) shim_exe = try exports.shimExe(ctx, try win32.selfExePath(arena), .console);
-                try writeAlias(ctx, path, shim_exe.?, t, p, name, e);
-            };
+            const p = try t.placeholders(arena);
+            if (p.cache != null and !containsIgnoreCase(caches.items, t.id)) try caches.append(arena, t.id);
+            try path_dirs.appendSlice(arena, try environment.pathDirs(arena, p, t.path));
+            try providers.append(arena, .{ .id = t.id, .dir = t.dir, .aliases = t.aliases });
         }
+        // Of two tools with an alias of the same name, the first's wins, as
+        // on PATH.
+        const resolved = try aliases.resolve(ctx, providers.items, .fail);
+        try aliases.writeAll(ctx, try std.fs.path.join(arena, &.{ path, "bin" }), resolved);
         // The aliases come first: a tool's image says what they are. BusyBox's
         // sh runs its own applets before anything on PATH, so they win over
         // those too (zig's ar over BusyBox's).
@@ -327,9 +401,9 @@ const BuildRoot = struct {
         // Flatpak's builds: programs a later module runs (GLib's
         // glib-compile-resources), and the DLLs they need.
         try path_dirs.insert(arena, 0, letter ++ "\\prefix\\bin");
-        if (aliases.items.len > 0) {
+        if (resolved.len > 0) {
             try path_dirs.insert(arena, 0, letter ++ "\\bin");
-            try environment.set(arena, &tool_vars, "BB_OVERRIDE_APPLETS", try std.mem.join(arena, " ", aliases.items));
+            try environment.set(arena, &tool_vars, "BB_OVERRIDE_APPLETS", try aliases.names(arena, resolved));
         }
         try setSearchPaths(ctx, &tool_vars, tools);
         const msvc: ?msvc_host.Toolchain = if (r.host.len > 0) try msvc_host.find(ctx, path) else null;
@@ -592,28 +666,6 @@ const BuildRoot = struct {
     }
 };
 
-/// Puts one of a tool's aliases into the build root's bin\, as a shim that
-/// runs its command with its arguments, then the caller's, less those it
-/// drops.
-fn writeAlias(ctx: *Context, root: []const u8, shim_exe: []const u8, t: Tool, p: oci.Placeholders, name: []const u8, e: oci.Export) !void {
-    const io = ctx.io;
-    const arena = ctx.arena;
-    const exe = if (oci.isPlaceholderPath(e.command)) try p.expand(arena, e.command) else try std.fs.path.join(arena, &.{ t.dir, e.command });
-    std.mem.replaceScalar(u8, exe, '/', '\\');
-    if (!try Store.exists(io, exe))
-        return fail("{s}'s alias {s} runs {s}, which isn't in it", .{ t.config.id, name, e.command });
-    const args = try arena.alloc([]const u8, e.args.len);
-    for (args, e.args) |*arg, template| arg.* = try p.expand(arena, template);
-
-    const bin = try std.fs.path.join(arena, &.{ root, "bin" });
-    try Io.Dir.cwd().createDirPath(io, bin);
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.allocPrint(arena, "{s}\\{s}.exe", .{ bin, name }), .data = shim_exe });
-    const alias: Sidecar.Alias = .{ .exe = exe, .command_line = try process.buildCommandLine(arena, exe, args), .drop = e.drop orelse &.{} };
-    var text: Io.Writer.Allocating = .init(arena);
-    try alias.format(&text.writer);
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.allocPrint(arena, "{s}\\{s}{s}", .{ bin, name, Sidecar.extension }), .data = text.written() });
-}
-
 /// Creates a module's indexed sources in `dest`.
 fn writeSources(io: Io, arena: Allocator, tree: *const Tree, m: recipe.Module, dest: []const u8) !void {
     try Io.Dir.cwd().createDirPath(io, dest);
@@ -661,6 +713,54 @@ const Shell = struct {
         };
     }
 };
+
+test "a build's tools: each image once, one version of each app" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const a = "sha256:" ++ "a" ** 64;
+    const b = "sha256:" ++ "b" ** 64;
+    const tool = struct {
+        fn of(what: []const u8, image: []const u8, id: []const u8) Tool {
+            return .{ .image = image, .id = id, .version = "1", .what = what, .dir = "C:\\d", .path = &.{}, .env = .{}, .aliases = null };
+        }
+    }.of;
+    var tools: Tools = .{ .recipe_path = "r.json" };
+    try std.testing.expectEqual(0, (try tools.add(arena, tool("sdk x", a, "org.x"))).?);
+    try std.testing.expectEqual(null, try tools.add(arena, tool("runtime x", a, "org.x")));
+    try std.testing.expectError(error.Failed, tools.add(arena, tool("sdk y", b, "ORG.X")));
+    try std.testing.expectEqual(1, (try tools.add(arena, tool("sdk y", b, "org.y"))).?);
+    try std.testing.expectEqual(2, tools.list.items.len);
+}
+
+test "tool variables: later tools win, but an SDK over its runtimes" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const tool = struct {
+        fn of(gpa: Allocator, id: []const u8, value: []const u8, brings: usize) !Tool {
+            var env: std.json.ArrayHashMap([]const u8) = .{};
+            try env.map.put(gpa, "X", value);
+            try env.map.put(gpa, id, "${app}");
+            return .{ .image = id, .id = id, .version = "1", .what = id, .dir = id, .path = &.{}, .env = env, .aliases = null, .brings = brings };
+        }
+    }.of;
+    const get = struct {
+        fn of(vars: []const environment.Var, name: []const u8) []const u8 {
+            for (vars) |v| if (std.mem.eql(u8, v.name, name)) return v.value;
+            return "";
+        }
+    }.of;
+    // Two plain tools: the later wins.
+    var vars = try toolVars(arena, &.{ try tool(arena, "a", "a", 0), try tool(arena, "b", "b", 0) });
+    try std.testing.expectEqualStrings("b", get(vars.items, "X"));
+    // An SDK and the runtime it brings, then another tool.
+    vars = try toolVars(arena, &.{ try tool(arena, "sdk", "sdk", 1), try tool(arena, "rt", "rt", 0) });
+    try std.testing.expectEqualStrings("sdk", get(vars.items, "X"));
+    try std.testing.expectEqualStrings("rt", get(vars.items, "rt"));
+    vars = try toolVars(arena, &.{ try tool(arena, "sdk", "sdk", 1), try tool(arena, "rt", "rt", 0), try tool(arena, "c", "c", 0) });
+    try std.testing.expectEqualStrings("c", get(vars.items, "X"));
+}
 
 test "shell command lines" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);

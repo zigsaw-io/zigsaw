@@ -440,6 +440,18 @@ pub extern "advapi32" fn SetNamedSecurityInfoW(
     dacl: ?*ACL,
     sacl: ?*ACL,
 ) callconv(.winapi) DWORD;
+pub const SE_KERNEL_OBJECT: c_int = 6;
+/// The medium integrity level's SID, every process's of a standard user.
+pub const medium_integrity_sid = "S-1-16-8192";
+pub extern "advapi32" fn SetSecurityInfo(
+    handle: HANDLE,
+    object_type: c_int,
+    security_info: DWORD,
+    owner: ?PSID,
+    group: ?PSID,
+    dacl: ?*ACL,
+    sacl: ?*ACL,
+) callconv(.winapi) DWORD;
 pub extern "advapi32" fn SetEntriesInAclW(
     count: u32,
     entries: [*]EXPLICIT_ACCESS_W,

@@ -5,16 +5,11 @@
   "path": ["bin"],
   "permissions": { "network": true, "filesystem": ["cwd"] },
   "runtimes": { "gtk": "org.gtk.Gtk4@@GTK@" },
-  "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk@@GTKSDK@",
-    "meson": "com.mesonbuild.meson@@MESON@",
-    "zig": "org.ziglang.zig@@ZIG@",
-    "busybox": "net.frippery.busybox@@BUSYBOX@"
-  },
+  "sdk": { "gtksdk": "org.gtk.Gtk4.Sdk@@GTKSDK@" },
   "modules": [
     {
       "name": "hello",
-      "sources": [{ "path": "meson.build" }, { "path": "hello.c" }, { "path": "soup.c" }, { "path": "svg.c" }],
+      "sources": [{ "path": "meson.build" }, { "path": "hello.c" }, { "path": "soup.c" }, { "path": "svg.c" }, { "path": "spell.c" }, { "path": "font.c" }],
       "build": ["meson setup out --prefix=\"$PREFIX\"", "meson install -C out"]
     }
   ]

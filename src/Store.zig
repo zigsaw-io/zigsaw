@@ -9,6 +9,8 @@
 //!                                 grants to its AppContainer, low integrity labels
 //!   <root>\overrides\<id>.json    run options saved for the app (see override.zig)
 //!   <root>\bin\                   command shims for exported commands (see exports.zig)
+//!   <root>\aliases\<id>\          shims for the aliases an app's runs have on PATH:
+//!                                 its own and its runtimes' (see aliases.zig)
 //!   <root>\cache\downloads\<hex>  fetched build sources, by sha256
 //!   <root>\cache\images\<hex>     marks a manifest that builds use (see deps.zig)
 //!   <root>\cache\builds\<hex>     the manifest a build with these inputs made (see builder.zig)
@@ -37,7 +39,7 @@ root: []const u8,
 /// Report step timings, as `zigsaw -v` asks for.
 verbose: bool = false,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "overrides", "bin", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "overrides", "bin", "aliases", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|
@@ -120,6 +122,8 @@ fn discard(s: Store, arena: Allocator, p: []const u8) !void {
 // - tmp\run-<hex>.lock is held by an --ephemeral run for its data directory.
 // - bin.lock is held exclusively while an app's command shims change: as it
 //   is installed or removed, and after its runs (see exports.zig).
+// - aliases\<id>.lock is held exclusively while a run brings the app's alias
+//   shims up to date, and while `rm` or `prune` deletes them.
 //
 // Locks end when zigsaw exits, however it exits.
 
@@ -164,6 +168,16 @@ pub fn lock(s: Store, arena: Allocator, mode: Io.File.Lock) !Lock {
 /// take it again.
 pub fn lockShims(s: Store, arena: Allocator) !Lock {
     return openLock(s.io, try s.path(arena, &.{"bin.lock"}), .exclusive, .wait);
+}
+
+/// Where an app's runs keep the shims of their aliases.
+pub fn aliasDir(s: Store, arena: Allocator, id: []const u8) ![]u8 {
+    return s.path(arena, &.{ "aliases", id });
+}
+
+/// Takes aliases\<id>.lock, waiting for whoever has it.
+pub fn lockAliases(s: Store, arena: Allocator, id: []const u8) !Lock {
+    return openLock(s.io, try lockPathFor(arena, try s.aliasDir(arena, id)), .exclusive, .wait);
 }
 
 /// Whether the lock file at `p`, if there is one, is held by a running zigsaw.

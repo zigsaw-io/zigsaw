@@ -17,7 +17,10 @@
     "gtk4-node-editor": { "command": "bin/gtk4-node-editor.exe" },
     "gtk4-print-editor": { "command": "bin/gtk4-print-editor.exe" },
     "gtk4-query-settings": { "command": "bin/gtk4-query-settings.exe" },
-    "adwaita-1-demo": { "command": "bin/adwaita-1-demo.exe" }
+    "adwaita-1-demo": { "command": "bin/adwaita-1-demo.exe" },
+    "gio": { "command": "bin/gio.exe" },
+    "pango-view": { "command": "bin/pango-view.exe" },
+    "pango-list": { "command": "bin/pango-list.exe" }
   },
   "shortcuts": {
     "GTK Demo": { "command": "gtk4-demo", "description": "GTK's widgets and APIs at work" },
@@ -33,6 +36,8 @@
     "/lib/libpng.dll",
     "/lib/pkgconfig",
     "*.a",
+    "*.la",
+    "*.lib",
     "/share/thumbnailers",
     "/bin/psl-make-dafsa",
     "xmlcatalog.exe",
@@ -67,7 +72,7 @@
   "modules": [
     {
       "name": "gtk",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:c5756c4806e9718c173a3478bfbd9a60ff0fa3d5da5c7aa847d0d6faabc41cb7" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:1ea0edab447f9a3975b66c321e2b76f4c501662ccbf3795bfb3de800eb509f42" }]
     }
   ]
 }

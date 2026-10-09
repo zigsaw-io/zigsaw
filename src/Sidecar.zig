@@ -69,10 +69,11 @@ pub fn format(s: Sidecar, w: *std.Io.Writer) std.Io.Writer.Error!void {
     , .{ s.zigsaw, s.home, s.app, s.command, s.gui });
 }
 
-/// The sidecar of an alias shim, which a build puts on its PATH for a
-/// command one of its tools provides (see `aliases` in oci.AppConfig). The
-/// shim runs `command_line` and then the caller's arguments, less those in
-/// `drop`, in the caller's environment, without zigsaw in between.
+/// The sidecar of an alias shim, which builds and runs put on their PATH for
+/// a command an image provides (see `aliases` in oci.AppConfig and
+/// aliases.zig). The shim runs `command_line` and then the caller's
+/// arguments, less those in `drop`, in the caller's environment, without
+/// zigsaw in between.
 pub const Alias = struct {
     /// Absolute path of the executable.
     exe: []const u8,
@@ -106,7 +107,7 @@ pub const Alias = struct {
 
     pub fn format(a: Alias, w: *std.Io.Writer) std.Io.Writer.Error!void {
         try w.print(
-            \\# Written by zigsaw for a build. The .exe next to this file runs
+            \\# Written by zigsaw for an alias. The .exe next to this file runs
             \\# command_line, then the caller's arguments, less any it drops.
             \\exe = {s}
             \\command_line = {s}

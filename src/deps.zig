@@ -39,6 +39,7 @@ pub const Dependency = struct {
             .layer = d.layer().digest,
             .path = d.config.path,
             .env = d.config.env,
+            .aliases = if (d.config.aliases) |a| (if (a.map.count() > 0) a else null) else null,
         };
     }
 };
@@ -57,8 +58,10 @@ pub fn resolve(ctx: *Context, recipe: []const u8, kind: Kind, alias: []const u8,
     };
     if (target.app_id) |id| if (!std.ascii.eqlIgnoreCase(id, image.config.id))
         return fail("{s}: {t} {s}: {s} is {s}, not {s}", .{ recipe, kind, alias, digest, image.config.id, id });
-    // Like Flatpak's runtimes, so a runtime is always one layer.
-    if (image.config.runtimes.map.count() > 0)
+    // Like Flatpak's runtimes, so a runtime is always one layer. An SDK may
+    // have runtimes, which join the build with it, and a source takes only
+    // the image's own files.
+    if (kind == .runtime and image.config.runtimes.map.count() > 0)
         return fail("{s}: {t} {s} is {s}, which has runtimes of its own; zigsaw doesn't support that", .{ recipe, kind, alias, image.config.id });
     try ctx.store.markBuildImage(arena, digest);
     return .{ .alias = alias, .manifest_digest = digest, .manifest = image.manifest, .config = image.config };
