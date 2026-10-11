@@ -1,0 +1,26 @@
+--- a/crates/rnote-ui/src/env.rs
++++ b/crates/rnote-ui/src/env.rs
+@@ -64,19 +64,10 @@
+ /// depending on the target platform we need to set some env vars on startup
+ pub(crate) fn setup_env() -> anyhow::Result<()> {
+     if cfg!(target_os = "windows") {
+-        let data_dir = data_dir()?;
+-        let lib_dir = lib_dir()?;
+-
+-        // SAFETY: this setup only happens while still being single-threaded
+-        unsafe {
+-            std::env::set_var("XDG_DATA_DIRS", data_dir);
+-            std::env::set_var(
+-                "GDK_PIXBUF_MODULEDIR",
+-                lib_dir.join("gdk-pixbuf-2.0\\2.10.0\\loaders"),
+-            );
+-
+-            //std::env::set_var("RUST_LOG", "rnote=debug,rnote-cli=debug,rnote-engine=debug,rnote-compose=debug");
+-        }
++        // GLib already looks in the share directories next to the executable
++        // and next to its own DLL, and gdk-pixbuf for its loaders next to its
++        // DLL, which may be elsewhere (zigsaw's GTK runtime). Setting them
++        // here would hide GTK's icons, schemas and SVG loader.
+     } else if cfg!(target_os = "macos") {
+         let canonicalized_exec_dir = exec_parent_dir()?.canonicalize()?;
+ 

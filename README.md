@@ -6,22 +6,6 @@ Think Flatpak for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
-Status: [iteration 10](docs/iteration-10.md) is complete. Zigsaw builds
-command-line apps, and GTK 4 with its SDK and runtime, from source or from
-official binaries, runs them on shared
-runtimes, installs, updates and cleans them up, shares them through
-registries as compressed images, and puts their commands on PATH, also those
-they install while they run. Runs can be kept from writing anywhere but
-their data and the paths they're granted, at low integrity, or confined to
-their permissions in an AppContainer. Builds run with pinned toolchain
-images (zig, BusyBox, CMake, Meson, Rust, Go with cgo), or the machine's MSVC, and
-reproduce: CI checks that the recipes build the same images on a fresh
-machine, and runs the end-to-end tests there, against a registry zigsaw
-builds and runs itself. Registries keep the files images were built from,
-so recipes build even when a download is gone. Git, Node, Python, SQLite,
-ripgrep, bat, fzf, zot, zstd, GTK apps and the zig, CMake, Meson, Rust and Go toolchains are
-tested.
-
 ## Quick start
 
 Requires Zig 0.16.
@@ -93,9 +77,11 @@ with `zigsaw pull <id>`:
 | Meson, with Ninja and pkgconf | `com.mesonbuild.meson` | 1.12.1 | `meson` |
 | Perl (Strawberry Perl, for building OpenSSL) | `org.perl.perl` | 5.42.3.1 | `perl` |
 | cargo-c (for building librsvg) | `com.github.lu-zero.cargo-c` | 0.10.25 | `cargo-cbuild`, `cargo-cinstall` |
-| GTK SDK (built from source; with zig, Meson and BusyBox) | `org.gtk.Gtk4.Sdk` | 4.24.1 | `cc`, `c++`, `ar`, `rc`, `pkg-config`, `meson`, `ninja`, `sh`, `make`, `glib-compile-resources`, `glib-compile-schemas`, `gtk4-builder-tool` |
+| GNU gettext, with libiconv (built from source, for GTK's SDK) | `org.gnu.gettext` | 1.0 | `gettext`, `ngettext`, `msgfmt`, `msgmerge`, `msginit`, `msgcat`, `msgunfmt`, `xgettext`, `iconv` |
+| GTK SDK (built from source; with zig, Meson and BusyBox) | `org.gtk.Gtk4.Sdk` | 4.24.1 | `cc`, `c++`, `ar`, `rc`, `windres`, `pkg-config`, `meson`, `ninja`, `sh`, `make`, `glib-compile-resources`, `glib-compile-schemas`, `gtk4-builder-tool`, `msgfmt`, `msgmerge`, `xgettext` |
 | GTK, with libadwaita, libsoup, librsvg and enchant (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo`, `gio`, `pango-view`, `pango-list` |
 | GNOME Text Editor (built from source, on GTK) | `org.gnome.TextEditor` | 51.0 | `gnome-text-editor` |
+| Rnote (built from source, on GTK) | `com.github.flxzt.rnote` | 0.14.2 | `rnote`, `rnote-cli` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -105,12 +91,14 @@ zot with [Go](#go) and BusyBox, zstd with [CMake](#cmake), zig and BusyBox,
 whose images are their SDK. bat's C libraries (oniguruma, libgit2, zlib) are
 compiled by zig. Pulling them doesn't need those. [GTK](#gtk)'s SDK is built
 with Meson, CMake, zig, Perl (for OpenSSL), Rust and cargo-c (for librsvg),
-and has zig, Meson and BusyBox as runtimes, so that it builds GTK programs
+takes gettext's files from its image, and has zig, Meson and BusyBox as
+runtimes, so that it builds GTK programs
 [without a recipe](#building-without-a-recipe) too; its runtime is made from
 the SDK's image. GNOME Text Editor runs on GTK's runtime, with GtkSourceView
-and libspelling built into its own image, and checks spelling. GTK's demos
-and Text Editor are GUI apps: they open no console, and get
-[Start menu shortcuts](#start-menu-shortcuts).
+and libspelling built into its own image, and checks spelling. Rnote, a
+drawing and note-taking app written in Rust, runs on it too. GTK, Text Editor
+and Rnote are translated. GTK's demos, Text Editor and Rnote are GUI apps:
+they open no console, and get [Start menu shortcuts](#start-menu-shortcuts).
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -779,17 +767,23 @@ GTK 4 comes as two images, as Flatpak's GNOME runtime does:
   icon themes and libadwaita 1.10, with its demo; then libsoup 3.8 with
   OpenSSL 3.5 (static), SQLite, nghttp2, libpsl and glib-networking,
   librsvg 2.63 with FreeType, libxml2 and its GdkPixbuf loader, and enchant
-  2.8 with hunspell 1.7 and an en_US dictionary. It keeps their headers,
-  import libraries and pkg-config files, so apps build against it by listing
-  it in their `sdk`. Its runtimes are zig, Meson and BusyBox, which it builds
-  with and which builds that use it get too, and it exports their commands,
-  so it builds programs [without a recipe](#building-without-a-recipe). It
-  takes about 20 minutes to build from scratch.
+  2.8 with hunspell 1.7 and an en_US dictionary. Its first modules take GNU
+  gettext 1.0 and libiconv from their own image,
+  **[`org.gnu.gettext`](recipes/gettext.json)**, as an
+  [image source](#images-as-sources): gettext takes three quarters of an
+  hour to build, which the SDK's builds don't repeat. It keeps their
+  headers, import libraries and pkg-config files, so apps build against it
+  by listing it in their `sdk`. Its runtimes are zig, Meson and BusyBox,
+  which it builds with and which builds that use it get too, and it exports
+  their commands, so it builds programs
+  [without a recipe](#building-without-a-recipe). It takes about 35 minutes
+  to build from scratch, once gettext's image is there.
 - **[`org.gtk.Gtk4`](recipes/gtk4.json)** is the runtime: the SDK's files
   as an [image source](#images-as-sources), without the headers, libraries
   and build tools, so it builds in seconds once the SDK is there. Apps list
   it in their `runtimes`. It keeps GIO's modules, GdkPixbuf's loaders and
-  enchant's providers from the SDK's `lib`. As an app, it runs `gtk4-demo`, exports
+  enchant's providers from the SDK's `lib`, and the translations and
+  gettext's libintl, without gettext's tools. As an app, it runs `gtk4-demo`, exports
   `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`,
   `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo`, `gio`,
   `pango-view` and `pango-list`, and adds
@@ -837,12 +831,30 @@ runtime's en_US dictionary (LibreOffice's) where it has none, in that order
 (the runtime's `share\enchant-2\enchant.ordering`). A user's own word list
 is in the app's data directory.
 
+GLib, GTK, libadwaita, GdkPixbuf, libsoup and glib-networking are
+translated, through GNU gettext's libintl: the runtime has their
+translations into 124 languages (28 MB). Apps speak Windows' display
+language, or the one `LANGUAGE` names, which a run passes on only when it's
+given, as zigsaw's runs don't take your variables:
+
+```powershell
+zigsaw run --env=LANGUAGE=de org.gnome.TextEditor   # or once: zigsaw override --env=LANGUAGE=de ...
+```
+
+Emoji are drawn in color with Segoe UI Emoji: Pango asks for a color font
+for an emoji that wants one (followed by U+FE0F, as GTK's emoji chooser
+shows them), and its Windows font map, which can't tell color fonts from
+others, matched no font at all for that; the SDK's Pango lets any font
+match.
+
 #### Building without a recipe
 
 GTK's SDK exports the commands a build needs, from its runtimes and its
 own: `cc` and `c++` (zig's, for the same target as builds), `ar`, `rc`,
-`pkg-config` (which finds the SDK's libraries), `meson`, `ninja`, `sh`,
-`make`, and GLib's and GTK's tools. Like other exports, they run in the
+`windres` (GNU windres's command line, for zig's `rc`, as Rust's
+winresource and embed-resource crates run it), `pkg-config` (which finds
+the SDK's libraries), `meson`, `ninja`, `sh`, `make`, gettext's `msgfmt`,
+`msgmerge` and `xgettext`, and GLib's and GTK's tools. Like other exports, they run in the
 SDK's environment, with the working directory (the SDK has the `cwd`
 permission), and inside it Meson finds the compiler and the rest through
 the runtimes' aliases. With the store's `bin` on PATH:
@@ -929,6 +941,55 @@ spells out:
   enchant's library exports what its headers declare, from a `.def` file
   made from them, as libtool's own way needs `nm`; its providers export only
   `init_enchant_provider`.
+- gettext and libiconv ([`recipes/gettext.json`](recipes/gettext.json))
+  build the same way, with a few more. gnulib looks for grep as
+  `EGREP_TRADITIONAL` too. libtool runs `$RC` and `$WINDRES` as GNU windres,
+  so they're [a script](recipes/gtk4-sdk/autotools-windres.sh) that turns
+  its command line into zig `rc`'s. Their headers export with a `visibility`
+  attribute when the compiler takes one, which clang does and GCC for
+  MinGW doesn't, and which Windows DLLs don't heed: configure is told the
+  compiler doesn't (`gl_cv_cc_visibility=no`), so they use `dllexport`.
+  Some functions are `dllexport` only for MSVC, relying otherwise on GNU
+  ld's `--export-all-symbols` or on a `.def` that libtool makes with `nm`;
+  zig's linker ignores the first and there's no `nm`, so
+  [the recipe](recipes/gettext/exports.sh) exports them for any Windows
+  compiler and leaves the `nm` lists out. gettext's libtool keeps
+  `-nostdlib` in a variable of its own. Its manuals, man pages and
+  translations come built in the release, and the build leaves them be.
+- Pango's Windows font map gets a one-line patch so that it finds a font
+  for text that asks for color glyphs (see above).
+
+#### Rnote
+
+[Rnote](recipes/rnote.json) 0.14.2 is a GTK and libadwaita app in Rust,
+built from its release tarball, which vendors its crates, with GTK's SDK and
+Rust's image. Its Meson build runs cargo; the recipe adjusts what assumes
+MSYS2 or Linux:
+
+- Its build script runs `env` and `cp`, which cmd.exe doesn't have, and
+  Meson runs `cat` and `cp`: [a Python script](recipes/rnote/cargo_build.py)
+  and Meson's own functions do their jobs. Meson doesn't compile any Rust
+  itself, so `project()` names no languages; with zig as `CC`, Meson would
+  have rustc link its sanity check with zig.
+- It sets `XDG_DATA_DIRS` and GdkPixbuf's loader directory to the
+  directories next to its executable, which would hide GTK's icons, schemas
+  and SVG loader in the runtime; [a patch](recipes/rnote/data-dirs.patch)
+  leaves GLib's defaults, which have both.
+- Its fonts (Virgil, Grape Nuts, OpenDyslexic, TT2020) are found by
+  fontconfig on Linux. [A patch](recipes/rnote/fonts.patch) adds them to
+  Pango [itself](recipes/rnote/fonts.rs), on each thread that draws text, as
+  pangocairo has a font map per thread. Virgil's family is
+  "Virgil 3 YOFF".
+- gettext-rs links `-lintl` from `MINGW_PREFIX`, and from `C:\msys64\mingw64`
+  when that's unset, which would be the machine's MSYS2; the recipe sets it
+  to the SDK. The executable's icon is compiled by the SDK's `windres`.
+
+`rnote-cli` converts between formats without a window:
+
+```powershell
+rnote-cli create notes.rnote; rnote-cli import notes.rnote -i notes.xopp
+rnote-cli export doc --output-file notes.pdf notes.rnote
+```
 
 ### Rust
 
@@ -1245,7 +1306,7 @@ bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the 
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, reproducibility
-bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim and shortcuts; Text Editor (needs GTK_HOME or BUILD_HOME; opens windows; local only)
+bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim and shortcuts; translations; Text Editor; Rnote (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update, mounts, logins and sources next to images, through local registries (see its header)
@@ -1383,15 +1444,18 @@ a fresh runner, after `published.sh`, with its build store as
   libadwaita's demo is upstream, gets a console shim, and a console window
   from the Start menu; its recipe has to build it as a GUI program
   (libadwaita's sets Meson's `win_subsystem`).
-- Start menu shortcuts show the icon of the export's executable, and none
-  of GTK's or Text Editor's has one: their icons are SVGs, which a `.lnk`
-  can't use. A recipe can point `icon` at an `.ico`. Pinning a running GTK
-  app's window to the taskbar pins its executable in the store, not the
-  shortcut, since zigsaw sets no AppUserModelID.
-- Text Editor has no translations (no gettext tools in the SDK) and no
-  help pages (no yelp on Windows). Its spell checking has the languages
-  Windows has, through WinSpell, and English (US) from hunspell; other
-  hunspell dictionaries aren't in the runtime.
+- Start menu shortcuts show the icon of the export's executable. Rnote's
+  has one; none of GTK's or Text Editor's does: their icons are SVGs, which
+  a `.lnk` can't use. A recipe can point `icon` at an `.ico`. Pinning a
+  running GTK app's window to the taskbar pins its executable in the store,
+  not the shortcut, since zigsaw sets no AppUserModelID.
+- Text Editor has no help pages (no yelp on Windows). Its spell checking
+  has the languages Windows has, through WinSpell, and English (US) from
+  hunspell; other hunspell dictionaries aren't in the runtime.
+- GTK's SDK's `windres` takes what Rust's crates and libtool pass (`-i`,
+  `-o`, `-I`, `-D`, `--target`, COFF output); GNU windres's other options,
+  such as `--preprocessor-arg` or `.res` output, reach zig's `rc`, which
+  refuses them. Meson uses `rc`, as the SDK's `RC` says.
 - Under `--sandbox=appcontainer`, DirectWrite can't open fonts installed
   for the user only, rather than for the machine; GTK warns, and draws
   with the others.

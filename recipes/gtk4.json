@@ -67,12 +67,39 @@
     "rdjpgcom.exe",
     "wrjpgcom.exe",
     "gi-*.exe",
-    "libgirepository-*"
+    "libgirepository-*",
+    "msg*.exe",
+    "xgettext.exe",
+    "envsubst.exe",
+    "gettext.exe",
+    "ngettext.exe",
+    "printf_gettext.exe",
+    "printf_ngettext.exe",
+    "recode-sr-latin.exe",
+    "iconv.exe",
+    "windres.exe",
+    "/bin/autopoint",
+    "/bin/gettextize",
+    "/bin/gettext.sh",
+    "/bin/po-fetch",
+    "/bin/spit",
+    "libgettextlib-*",
+    "libgettextsrc-*",
+    "libgettextpo-*",
+    "libtextstyle-*",
+    "/libexec",
+    "/share/gettext-1.0",
+    "/share/info",
+    "/share/doc/gettext",
+    "/share/doc/libtextstyle",
+    "/share/doc/libiconv",
+    "gettext-runtime.mo",
+    "gettext-tools.mo"
   ],
   "modules": [
     {
       "name": "gtk",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:1ea0edab447f9a3975b66c321e2b76f4c501662ccbf3795bfb3de800eb509f42" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:f712124cd8e035d49542eb252b15a7f088a7be55dda59813f569952ea9d74c09" }]
     }
   ]
 }

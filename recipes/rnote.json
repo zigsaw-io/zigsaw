@@ -1,0 +1,61 @@
+{
+  "id": "com.github.flxzt.rnote",
+  "version": "0.14.2",
+  "command": "bin/rnote.exe",
+  "path": ["bin"],
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "rnote": { "command": "bin/rnote.exe" },
+    "rnote-cli": { "command": "bin/rnote-cli.exe" }
+  },
+  "shortcuts": {
+    "Rnote": { "command": "rnote", "description": "Sketch and take handwritten notes" }
+  },
+  "runtimes": {
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:e6cfbe23b4df55b9856c30331e1fe671ddc17f116c102398c1478da368f1f4f1"
+  },
+  "sdk": {
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:f712124cd8e035d49542eb252b15a7f088a7be55dda59813f569952ea9d74c09",
+    "rust": "org.rust-lang.rust:1.99.0@sha256:e7e9706485bba88759915d9509993d0e41d340d7d8dfec6426fce1feda9a10e2"
+  },
+  "cleanup": [
+    "/share/applications",
+    "/share/metainfo",
+    "/share/mime",
+    "/share/dbus-1",
+    "/share/thumbnailers"
+  ],
+  "modules": [
+    {
+      "name": "rnote",
+      "sources": [
+        {
+          "url": "https://github.com/flxzt/rnote/releases/download/v0.14.2/rnote-0.14.2.tar.xz",
+          "sha256": "2be53f2007944281ea3372248559e9338a0e5af1d64d173819dd4339d58ee210",
+          "strip": 1
+        },
+        { "path": "rnote/cargo_build.py", "dest": "zigsaw/cargo_build.py" },
+        { "path": "rnote/fonts.rs", "dest": "zigsaw/fonts.rs" },
+        { "path": "rnote/fonts.patch", "dest": "zigsaw/fonts.patch" },
+        { "path": "rnote/data-dirs.patch", "dest": "zigsaw/data-dirs.patch" }
+      ],
+      "build": [
+        "patch -p1 < zigsaw/data-dirs.patch",
+        "patch -p1 < zigsaw/fonts.patch",
+        "cp zigsaw/fonts.rs crates/rnote-engine/src/fonts.rs",
+        "cp zigsaw/cargo_build.py build-aux/cargo_build.py",
+        "sed -i \"s/^project('rnote', \\['rust', 'cpp'\\], /project('rnote', [], /\" meson.build",
+        "grep -q \"^project('rnote', \\[\\], \" meson.build",
+        "sed -i -e \"/^    dependency('appstream')$/d\" -e \"/^find_program('cmake', required: true)$/d\" -e \"/^app_authors = run_command($/,/^).stdout().strip()$/c\\\\app_authors = import('fs').read('AUTHORS').strip()\" meson.build",
+        "! grep -q -e \"dependency('appstream')\" -e \"find_program('cmake'\" -e \"run_command(\" meson.build",
+        "sed -i -e 's/^        update_desktop_database: true,$/        update_desktop_database: false,/' -e 's/^        update_mime_database: true,$/        update_mime_database: false,/' meson.build",
+        "grep -q '^        update_desktop_database: false,$' meson.build && grep -q '^        update_mime_database: false,$' meson.build",
+        "sed -i \"s/^    'cp',$/    find_program('python3'), '-c', 'import shutil, sys; shutil.copyfile(sys.argv[1], sys.argv[2])',/\" crates/rnote-ui/src/meson.build",
+        "! grep -q \"'cp'\" crates/rnote-ui/src/meson.build",
+        "sed -i 's/^        call(\\[\"fc-cache.exe\", \"-v\", \"-f\"\\])$/        pass/' build-aux/meson_post_install.py",
+        "! grep -q 'fc-cache.exe' build-aux/meson_post_install.py",
+        "export MINGW_PREFIX=\"$(pkg-config --variable=prefix glib-2.0)\" WINDRES=windres && meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dui=true -Dcli=true && meson install -C out"
+      ]
+    }
+  ]
+}

@@ -20,7 +20,11 @@
     "make": { "command": "${busybox}/busybox.exe", "args": ["make"] },
     "glib-compile-resources": { "command": "bin/glib-compile-resources.exe" },
     "glib-compile-schemas": { "command": "bin/glib-compile-schemas.exe" },
-    "gtk4-builder-tool": { "command": "bin/gtk4-builder-tool.exe" }
+    "gtk4-builder-tool": { "command": "bin/gtk4-builder-tool.exe" },
+    "msgfmt": { "command": "bin/msgfmt.exe" },
+    "msgmerge": { "command": "bin/msgmerge.exe" },
+    "xgettext": { "command": "bin/xgettext.exe" },
+    "windres": { "command": "bin/windres.exe" }
   },
   "cleanup": ["__pycache__"],
   "sdk": {
@@ -40,6 +44,14 @@
       "build": [
         "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
         "cc -c noexport.s -o noexport.o"
+      ]
+    },
+    {
+      "name": "windres",
+      "sources": [{ "path": "gtk4-sdk/windres.c" }],
+      "build": [
+        "mkdir -p \"$PREFIX/bin\"",
+        "cc -O2 -s -municode windres.c -o \"$PREFIX/bin/windres.exe\""
       ]
     },
     {
@@ -158,24 +170,23 @@
       ]
     },
     {
+      "name": "gettext",
+      "sources": [{ "image": "org.gnu.gettext:1.0@sha256:f3f85ba59c5cb8607358ae8c04ae78979772ce6e6df87080b0e77cd998387e8e" }]
+    },
+    {
       "name": "glib",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu", "CFLAGS": "-IB:/prefix/include/mingw-w64-winrt" },
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o -LB:/prefix/lib", "RC": "rc /:auto-includes gnu", "CFLAGS": "-IB:/prefix/include/mingw-w64-winrt", "CPPFLAGS": "-IB:/prefix/include" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/glib/2.90/glib-2.90.0.tar.xz",
           "sha256": "17d15cac2af80a33271127408e0abc2748eb297c595c2a26409e81e14e7d1b8f",
           "strip": 1
-        },
-        {
-          "url": "https://github.com/frida/proxy-libintl/archive/refs/tags/0.5.tar.gz",
-          "sha256": "f7a1cbd7579baaf575c66f9d99fb6295e9b0684a28b095967cfda17857595303",
-          "strip": 1,
-          "dest": "subprojects/proxy-libintl-0.5"
         }
       ],
       "build": [
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtests=false -Dintrospection=disabled -Dman-pages=disabled -Ddocumentation=false -Dsysprof=disabled -Dnls=disabled",
-        "meson install -C out"
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtests=false -Dintrospection=disabled -Dman-pages=disabled -Ddocumentation=false -Dsysprof=disabled -Dnls=enabled",
+        "meson install -C out",
+        "grep -q libintl-8.dll \"$PREFIX/bin/libglib-2.0-0.dll\""
       ]
     },
     {
@@ -228,8 +239,8 @@
       "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu", "CFLAGS": "-Wno-error=date-time" },
       "sources": [
         {
-          "url": "https://cairographics.org/releases/cairo-1.18.4.tar.xz",
-          "sha256": "445ed8208a6e4823de1226a74ca319d3600e83f6369f99b14265006599c32ccb",
+          "url": "https://cairographics.org/releases/cairo-1.18.6.tar.xz",
+          "sha256": "1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4",
           "strip": 1
         }
       ],
@@ -249,6 +260,8 @@
         }
       ],
       "build": [
+        "sed -i 's/^\\(              pango_font_description_set_gravity (new_desc,\\)$/              pango_font_description_set_color (new_desc, pango_font_description_get_color (description));\\n\\1/' pango/pangowin32-fontmap.c",
+        "grep -q '^              pango_font_description_set_color (new_desc, pango_font_description_get_color (description));$' pango/pangowin32-fontmap.c",
         "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dcairo=enabled -Dfontconfig=disabled -Dfreetype=disabled -Dxft=disabled -Dlibthai=disabled -Dintrospection=disabled -Ddocumentation=false -Dman-pages=false -Dbuild-testsuite=false -Dbuild-examples=false -Dsysprof=disabled",
         "meson install -C out"
       ]

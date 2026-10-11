@@ -1,0 +1,32 @@
+--- a/crates/rnote-engine/src/lib.rs
++++ b/crates/rnote-engine/src/lib.rs
+@@ -17,6 +17,8 @@
+ pub mod engine;
+ pub mod ext;
+ pub mod fileformats;
++#[cfg(target_os = "windows")]
++pub mod fonts;
+ pub mod image;
+ pub mod pens;
+ pub mod selectioncollision;
+--- a/crates/rnote-ui/src/main.rs
++++ b/crates/rnote-ui/src/main.rs
+@@ -76,6 +76,8 @@
+     if let Err(e) = env::setup_env() {
+         eprintln!("failed to setup env, Err: {e:?}");
+     }
++    #[cfg(target_os = "windows")]
++    rnote_engine::fonts::setup();
+     if let Err(e) = setup_i18n() {
+         eprintln!("failed to setup i18n, Err: {e:?}");
+     }
+--- a/crates/rnote-cli/src/main.rs
++++ b/crates/rnote-cli/src/main.rs
+@@ -16,5 +16,7 @@
+ extern crate parry2d_f64 as p2d;
+ 
+ fn main() -> anyhow::Result<()> {
++    #[cfg(target_os = "windows")]
++    rnote_engine::fonts::setup();
+     smol::block_on(async { cli::run().await })
+ }

@@ -7,7 +7,10 @@
 # runtime's own tools run too (Pango's and GIO's among them), its demos get
 # the windowless shim and Start menu shortcuts (in a temporary folder); the
 # SDK's exports build GTK programs without a recipe, and GNOME Text Editor
-# (recipes/gnome-text-editor.json) starts up in each sandbox.
+# (recipes/gnome-text-editor.json) starts up in each sandbox. The runtime
+# speaks the language LANGUAGE names; the SDK has gettext's tools and a
+# windres. Rnote (recipes/rnote.json), a Rust app, converts a Xournal++
+# document with its command-line program and starts up in each sandbox.
 #
 # Not in CI: the SDK takes a quarter of an hour to build, and the runner has
 # no GPU for the OpenGL check.
@@ -36,6 +39,7 @@ export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
 APP=test.gtk.hello
 EDITOR=org.gnome.TextEditor
+RNOTE=com.github.flxzt.rnote
 # Start menu shortcuts go here rather than the user's Start menu.
 links="$work\\links"
 export ZIGSAW_SHORTCUTS_DIR="$links"
@@ -150,6 +154,19 @@ check "with --sandbox=low" pango_view --sandbox=low
 check "with --sandbox=appcontainer" pango_view --sandbox=appcontainer
 check "pango-list lists Windows' fonts" sh -c "timeout 60 \"\$0\" run --command=pango-list org.gtk.Gtk4 | tr -d '\r' | grep -q '^Segoe UI *$'" "$zigsaw"
 check "the runtime's gio runs" sh -c "timeout 60 \"\$0\" run --command=gio org.gtk.Gtk4 version | grep -q '^2\\.90\\.'" "$zigsaw"
+# Translations, through GNU gettext's libintl: in the language LANGUAGE
+# names, or Windows' own without it.
+check "the runtime speaks German with LANGUAGE=de (gio's help)" sh -c "timeout 60 \"\$0\" run --env=LANGUAGE=de --command=gio org.gtk.Gtk4 help 2>&1 | tr -d '\r' | grep -q '^Aufruf:'" "$zigsaw"
+# An emoji followed by U+FE0F asks Pango for a color font, which Pango's
+# Windows font map couldn't match to any font before GTK's SDK patched it
+# (GTK's emoji chooser showed nothing).
+printf '\xe2\x9d\xa4\xef\xb8\x8f \xf0\x9f\x98\x80\n' >"$work\\emoji.txt"
+color_emoji() {
+    local out
+    out=$(timeout 60 "$zigsaw" run --command=pango-view org.gtk.Gtk4 -q --font='Segoe UI 20' -o emoji.png emoji.txt 2>&1 | tr -d '\r')
+    ! grep -q -e 'fallbacks failed' -e "couldn't load font" <<<"$out" && test -s "$work\\emoji.png" || { echo "got: $out"; return 1; }
+}
+check "Pango finds a color font for emoji" color_emoji
 
 # Spelling: enchant in the runtime, with Windows' own spell checker
 # (WinSpell) first and hunspell with the runtime's en_US dictionary after.
@@ -193,6 +210,22 @@ loose_meson() {
     grep -q '^hunspell en_US: the ok, teh misspelled, suggests the$' <<<"$out" || { echo "got: $out"; return 1; }
 }
 check "the SDK's meson sets up and compiles a project, with the aliases of the SDK's runtimes" loose_meson
+# gettext's tools and windres, for translations and Windows resources (as
+# Rust's winresource crate runs it).
+loose_msgfmt() {
+    printf '%s\n' 'msgid ""' 'msgstr "Content-Type: text/plain; charset=UTF-8\n"' '' 'msgid "Hello"' 'msgstr "Hallo"' >"$work\\loose\\de.po"
+    (cd "$work\\loose" && "$bin\\msgfmt.exe" -o de.mo de.po) || return 1
+    head -c 4 "$work\\loose\\de.mo" | od -A n -t x1 | tr -d ' \n' | grep -qx 'de120495'
+}
+check "the SDK's msgfmt compiles a translation" loose_msgfmt
+loose_windres() {
+    printf '%s\n' '1 VERSIONINFO' 'FILEVERSION 1,2,3,4' 'BEGIN' 'BLOCK "StringFileInfo"' 'BEGIN' 'BLOCK "040904b0"' 'BEGIN' 'VALUE "FileDescription", "zigsaw windres"' 'END' 'END' 'BLOCK "VarFileInfo"' 'BEGIN' 'VALUE "Translation", 0x409, 1200' 'END' 'END' >"$work\\loose\\version.rc"
+    printf 'int main(void) { return 0; }\n' >"$work\\loose\\nothing.c"
+    (cd "$work\\loose" && "$bin\\windres.exe" "-I$work\\loose" --target pe-x86-64 version.rc version.o && "$bin\\cc.exe" -s nothing.c version.o -o versioned.exe) || return 1
+    # Its version strings are UTF-16 in the executable.
+    powershell -NoProfile -Command "[Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes('$work\\loose\\versioned.exe')).Contains('zigsaw windres')" | tr -d '\r' | grep -qx 'True'
+}
+check "the SDK's windres compiles a resource script that cc links" loose_windres
 check "a relative --command says how to name a program of yours" sh -c "\"\$0\" run --command=loose\\\\hello.exe org.gtk.Gtk4 2>&1 | grep -qF 'give its absolute path'" "$zigsaw"
 
 # GUI programs get the shim that opens no console, and declared shortcuts.
@@ -233,7 +266,60 @@ check "it runs" stays_up 15 $EDITOR --standalone
 check "with --sandbox=low" stays_up 15 --sandbox=low $EDITOR --standalone
 check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $EDITOR --standalone
 
+# Rnote (recipes/rnote.json), a Rust GTK app, on the runtime. Built here
+# unless the store has it, which takes about 20 minutes.
+installed_rnote=false
+if [ ! -f "$ZIGSAW_HOME\\refs\\$RNOTE.json" ]; then
+    z build "$root\\recipes\\rnote.json" >"$work\\rnote.log" 2>&1 || echo "building $RNOTE failed: $(tail -1 "$work\\rnote.log")"
+    installed_rnote=true
+else
+    z build "$root\\recipes\\rnote.json" >/dev/null 2>&1
+fi
+rnote_manifest="$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $RNOTE | cut -d: -f2)"
+rnote_dir="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$rnote_manifest" | tail -1 | cut -d: -f2)"
+rnote_imports() {
+    timeout 60 "$zigsaw" run --command=rnote-cli $RNOTE --version | tr -d '\r' | grep -qx 'rnote-cli 0\.14\.2' || return 1
+    (cd "$root" && zig build imports) >/dev/null || return 1
+    "$root\\zig-out\\test\\zigsaw-imports.exe" "$rnote_dir\\bin\\rnote.exe" "$rnote_dir\\bin\\rnote-cli.exe"
+}
+check "Rnote 0.14.2 is installed, and its programs bind all their imports" rnote_imports
+check "it gets the windowless shim and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\rnote.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\Rnote.lnk'"
+check "it has its translations" test -f "$rnote_dir\\share\\locale\\de\\LC_MESSAGES\\rnote.mo"
+# rnote-cli imports a Xournal++ document and exports it as a PDF, with
+# Virgil, one of Rnote's own fonts, which it adds to Pango itself (there's
+# no fontconfig to find them), and Segoe UI, from Windows.
+sh "$root\\tests\\gtk\\notes-xopp.sh" 2 >"$work\\notes.xopp"
+rnote_cli() {
+    rm -f "$work\\notes.rnote" "$work\\notes.pdf"
+    timeout 60 "$zigsaw" run "$@" --command=rnote-cli $RNOTE create notes.rnote >/dev/null 2>&1 &&
+        timeout 60 "$zigsaw" run "$@" --command=rnote-cli $RNOTE import notes.rnote -i notes.xopp >/dev/null 2>&1 &&
+        timeout 60 "$zigsaw" run "$@" --command=rnote-cli $RNOTE export doc --output-file notes.pdf --on-conflict overwrite notes.rnote >/dev/null 2>&1 || return 1
+    grep -a -q '/BaseFont /[A-Z]*+Virgil3YOFF' "$work\\notes.pdf" && grep -a -q '/BaseFont /[A-Z]*+SegoeUI' "$work\\notes.pdf"
+}
+check "rnote-cli turns a Xournal++ document into a PDF, with text in Rnote's own font" rnote_cli
+check "with --sandbox=low" rnote_cli --sandbox=low
+check "with --sandbox=appcontainer" rnote_cli --sandbox=appcontainer
+# Each page drawn on one of rayon's threads, text through cairo's DirectWrite
+# backend, whose thread safety cairo 1.18.6 fixed (Rnote's own Windows build
+# pins a cairo without DirectWrite for it).
+sh "$root\\tests\\gtk\\notes-xopp.sh" 40 >"$work\\many.xopp"
+rnote_pages() {
+    rm -rf "$work\\pages" "$work\\many.rnote" && mkdir "$work\\pages" || return 1
+    timeout 60 "$zigsaw" run --command=rnote-cli $RNOTE create many.rnote >/dev/null 2>&1 &&
+        timeout 60 "$zigsaw" run --command=rnote-cli $RNOTE import many.rnote -i many.xopp >/dev/null 2>&1 || return 1
+    local i
+    for i in 1 2 3; do
+        timeout 120 "$zigsaw" run --command=rnote-cli $RNOTE export doc-pages -o pages -f png --on-conflict overwrite many.rnote >/dev/null 2>&1 || return 1
+        [ "$(ls "$work\\pages" | wc -l)" -eq 40 ] || return 1
+    done
+}
+check "it draws 40 pages of text on rayon's threads, three times over" rnote_pages
+check "Rnote runs" stays_up 15 $RNOTE
+check "with --sandbox=low" stays_up 15 --sandbox=low $RNOTE
+check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $RNOTE
+
 cd "$root" || exit 1
+$installed_rnote && z rm --delete-data $RNOTE >/dev/null 2>&1
 $installed_editor && z rm --delete-data $EDITOR >/dev/null 2>&1
 z rm --delete-data $APP >/dev/null 2>&1
 rm -rf "$work"

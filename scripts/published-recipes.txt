@@ -19,6 +19,8 @@ zstd.json
 meson.json
 perl.json
 cargo-c.json
+gettext.json
 gtk4-sdk.json
 gtk4.json
 gnome-text-editor.json
+rnote.json

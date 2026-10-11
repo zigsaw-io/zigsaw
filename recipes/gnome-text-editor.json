@@ -11,10 +11,10 @@
     "Text Editor": { "command": "gnome-text-editor", "description": "View and edit text files" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:5299a617d4569d05217c6285989ecc184959121d0f521f54f1fa2f24543339b5"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:e6cfbe23b4df55b9856c30331e1fe671ddc17f116c102398c1478da368f1f4f1"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:1ea0edab447f9a3975b66c321e2b76f4c501662ccbf3795bfb3de800eb509f42",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:f712124cd8e035d49542eb252b15a7f088a7be55dda59813f569952ea9d74c09",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
   },
   "cleanup": [
