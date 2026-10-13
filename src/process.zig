@@ -141,6 +141,10 @@ pub const SpawnSpec = struct {
     creation_flags: win32.DWORD = 0,
     /// The child's stdin, stdout and stderr; null hands it ours.
     stdio: ?[3]?win32.HANDLE = null,
+    /// The shortcut (.lnk) the child counts as started from, as a program
+    /// Explorer starts from one does: Windows keeps it in the child's
+    /// start-up information, where the shell can tell what started it.
+    shortcut: ?[]const u8 = null,
 };
 
 /// A copy of zigsaw's token labelled low integrity, which a process can make
@@ -243,10 +247,14 @@ pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
         .lpAttributeList = attrs.ptr,
     };
     if (inherit_count > 0) {
-        startup.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
+        startup.StartupInfo.dwFlags |= win32.STARTF_USESTDHANDLES;
         startup.StartupInfo.hStdInput = std_handles[0];
         startup.StartupInfo.hStdOutput = std_handles[1];
         startup.StartupInfo.hStdError = std_handles[2];
+    }
+    if (spec.shortcut) |lnk| {
+        startup.StartupInfo.dwFlags |= win32.STARTF_TITLEISLINKNAME;
+        startup.StartupInfo.lpTitle = try win32.wide(arena, lnk);
     }
 
     // The app shares our console, so it receives Ctrl+C too and decides what

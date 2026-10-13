@@ -11,11 +11,15 @@
   "shortcuts": {
     "Rnote": { "command": "rnote", "description": "Sketch and take handwritten notes" }
   },
+  "associations": {
+    ".rnote": { "command": "rnote", "description": "Rnote document" },
+    ".xopp": { "command": "rnote", "description": "Xournal++ document" }
+  },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:e6cfbe23b4df55b9856c30331e1fe671ddc17f116c102398c1478da368f1f4f1"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:28c0ec8ecbe3b4c90b5dcb655d7cd73847669107934666722404b087494731fb"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:f712124cd8e035d49542eb252b15a7f088a7be55dda59813f569952ea9d74c09",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:306a050719faf5662f61c53db889fe5f4e488c6f2e0ec23958de3b56c464074d",
     "rust": "org.rust-lang.rust:1.99.0@sha256:e7e9706485bba88759915d9509993d0e41d340d7d8dfec6426fce1feda9a10e2"
   },
   "cleanup": [
@@ -37,11 +41,13 @@
         { "path": "rnote/cargo_build.py", "dest": "zigsaw/cargo_build.py" },
         { "path": "rnote/fonts.rs", "dest": "zigsaw/fonts.rs" },
         { "path": "rnote/fonts.patch", "dest": "zigsaw/fonts.patch" },
-        { "path": "rnote/data-dirs.patch", "dest": "zigsaw/data-dirs.patch" }
+        { "path": "rnote/data-dirs.patch", "dest": "zigsaw/data-dirs.patch" },
+        { "path": "rnote/save-in-place.patch", "dest": "zigsaw/save-in-place.patch" }
       ],
       "build": [
         "patch -p1 < zigsaw/data-dirs.patch",
         "patch -p1 < zigsaw/fonts.patch",
+        "patch -p1 < zigsaw/save-in-place.patch",
         "cp zigsaw/fonts.rs crates/rnote-engine/src/fonts.rs",
         "cp zigsaw/cargo_build.py build-aux/cargo_build.py",
         "sed -i \"s/^project('rnote', \\['rust', 'cpp'\\], /project('rnote', [], /\" meson.build",

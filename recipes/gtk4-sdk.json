@@ -334,9 +334,11 @@
           "url": "https://download.gnome.org/sources/gtk/4.24/gtk-4.24.1.tar.xz",
           "sha256": "e98abe720e16129c8c0f50761dee0a2e9ae2478055e31018f6cf977fcf6513e9",
           "strip": 1
-        }
+        },
+        { "path": "gtk4-sdk/gtk-ime-filter.patch", "dest": "zigsaw/ime-filter.patch" }
       ],
       "build": [
+        "patch -p1 < zigsaw/ime-filter.patch",
         "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dwin32-backend=true -Dx11-backend=false -Dwayland-backend=false -Dmacos-backend=false -Dmedia-gstreamer=disabled -Dvulkan=disabled -Dintrospection=disabled -Daccesskit=disabled -Dprint-cpdb=disabled -Dcolord=disabled -Dsysprof=disabled -Dcloudproviders=disabled -Dtracker=disabled -Ddocumentation=false -Dman-pages=false -Dbuild-demos=true -Dbuild-examples=false -Dbuild-tests=false -Dbuild-testsuite=false",
         "meson install -C out"
       ]

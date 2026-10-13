@@ -19,6 +19,7 @@ const Sidecar = @import("Sidecar.zig");
 const oci = @import("oci.zig");
 const pe = @import("pe.zig");
 const shortcuts = @import("shortcuts.zig");
+const associations = @import("associations.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -56,13 +57,15 @@ pub fn list(ctx: *Context) ![]Shim {
 
 /// Makes the store's shims match what the app provides, as it's installed,
 /// with its layers deployed (see `syncLocked`), and then its Start menu
-/// shortcuts, which run them.
+/// shortcuts, which run them, and its file associations.
 pub fn sync(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig) !void {
     const lock = try ctx.store.lockShims(ctx.arena);
     defer lock.release(ctx.io);
     try syncLocked(ctx, manifest, config, .install);
     const data_dir = try ctx.store.path(ctx.arena, &.{ "data", config.id });
-    try shortcuts.sync(ctx, config, try deployedPlaceholders(ctx, manifest, config, data_dir));
+    const placeholders = try deployedPlaceholders(ctx, manifest, config, data_dir);
+    try shortcuts.sync(ctx, config, placeholders);
+    try associations.sync(ctx, config, placeholders);
 }
 
 /// After a run of the app, gives the commands it installed shims, and
@@ -263,7 +266,7 @@ pub const ShimKind = enum { console, gui };
 /// The shim for a command whose file is `path`: the GUI one for GUI
 /// programs, the console one for anything else, batch files and files that
 /// can't be read included.
-fn shimKind(io: Io, path: []const u8) ShimKind {
+pub fn shimKind(io: Io, path: []const u8) ShimKind {
     const subsystem = pe.subsystem(io, path) catch return .console;
     return if (subsystem == .gui) .gui else .console;
 }
@@ -311,9 +314,13 @@ pub fn shimExe(ctx: *Context, zigsaw: []const u8, kind: ShimKind) ![]const u8 {
 }
 
 fn writeShim(ctx: *Context, name: []const u8, shim_exe: []const u8, sidecar: Sidecar) !void {
+    return writeShimIn(ctx, try binDir(ctx), name, shim_exe, sidecar);
+}
+
+/// Writes `<dir>\<name>.exe`, a copy of the shim, and its sidecar.
+pub fn writeShimIn(ctx: *Context, bin: []const u8, name: []const u8, shim_exe: []const u8, sidecar: Sidecar) !void {
     const io = ctx.io;
     const arena = ctx.arena;
-    const bin = try binDir(ctx);
     const exe_path = try std.fmt.allocPrint(arena, "{s}\\{s}.exe", .{ bin, name });
 
     // Leave an up-to-date shim alone: it may be running, and Windows can't

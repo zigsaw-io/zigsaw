@@ -161,6 +161,13 @@ pub fn prune(ctx: *Context, opts: Options) !void {
             Store.deleteTree(io, arena, try std.fs.path.join(arena, &.{ aliases_dir, entry.name })) catch {};
         }
         try deleteStaleLocks(io, arena, aliases_dir);
+        // And the shims of their file associations, which `rm` deletes
+        // unless one is running.
+        const open_dir = try store.path(arena, &.{"open"});
+        for (try listDir(io, arena, open_dir)) |entry| {
+            if (entry.kind != .directory or isInstalled(refs, entry.name)) continue;
+            Store.deleteTree(io, arena, try std.fs.path.join(arena, &.{ open_dir, entry.name })) catch {};
+        }
     }
 
     // Report.

@@ -40,13 +40,19 @@ const Choice = union(enum) { none, override: []const u8, start_menu };
 
 fn choose(override: ?[]const u8, local_app_data: ?[]const u8, root: []const u8) Choice {
     if (override) |d| if (d.len > 0) return .{ .override = d };
-    const local = local_app_data orelse return .none;
+    return if (isDefaultStore(local_app_data, root)) .start_menu else .none;
+}
+
+/// Whether the store at `root` is the user's own, %LOCALAPPDATA%\zigsaw:
+/// the one whose apps show on the desktop, in the Start menu and as what
+/// opens files (associations.zig).
+pub fn isDefaultStore(local_app_data: ?[]const u8, root: []const u8) bool {
+    const local = local_app_data orelse return false;
     const want = std.mem.trimEnd(u8, root, "\\/");
     const base = std.mem.trimEnd(u8, local, "\\/");
-    if (want.len != base.len + "\\zigsaw".len) return .none;
-    if (!std.os.windows.eqlIgnoreCaseWtf8(want[0..base.len], base)) return .none;
-    if (!std.os.windows.eqlIgnoreCaseWtf8(want[base.len..], "\\zigsaw")) return .none;
-    return .start_menu;
+    if (want.len != base.len + "\\zigsaw".len) return false;
+    if (!std.os.windows.eqlIgnoreCaseWtf8(want[0..base.len], base)) return false;
+    return std.os.windows.eqlIgnoreCaseWtf8(want[base.len..], "\\zigsaw");
 }
 
 test choose {

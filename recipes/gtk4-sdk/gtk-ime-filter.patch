@@ -1,0 +1,90 @@
+--- a/gtk/gtkimcontextime.c
++++ b/gtk/gtkimcontextime.c
+@@ -72,6 +72,12 @@
+    */
+   gboolean pretend_empty_preedit;
+   GtkWin32IMEFocusBehavior focus_behavior;
++
++  /* The display whose messages we filter while we have the focus, or NULL.
++   * Kept so that the filter can be removed when the client widget has no
++   * surface any more, or is gone.
++   */
++  GdkDisplay *filter_display;
+ };
+ 
+ 
+@@ -121,6 +127,24 @@
+                                                          "ime",
+                                                          0))
+ 
++/* Stops filtering the display's messages, if we are. The filter's data is
++ * the context, so it must not outlive it.
++ */
++static void
++gtk_im_context_ime_remove_filter (GtkIMContextIME *context_ime)
++{
++  GdkDisplay *display = context_ime->priv->filter_display;
++
++  if (display == NULL)
++    return;
++
++  context_ime->priv->filter_display = NULL;
++  gdk_win32_display_remove_filter (GDK_WIN32_DISPLAY (display),
++                                   gtk_im_context_ime_message_filter,
++                                   context_ime);
++  g_object_unref (display);
++}
++
+ static GdkSurface *
+ surface_from_widget (GtkIMContext *context)
+ {
+@@ -263,6 +287,7 @@
+ {
+   GtkIMContext *context = GTK_IM_CONTEXT (obj);
+ 
++  gtk_im_context_ime_remove_filter (GTK_IM_CONTEXT_IME (obj));
+   gtk_im_context_ime_set_client_widget (context, NULL);
+ 
+   G_OBJECT_CLASS (gtk_im_context_ime_parent_class)->dispose (obj);
+@@ -642,8 +667,12 @@
+   if (!himc)
+     return;
+ 
+-  gdk_win32_display_add_filter (GDK_WIN32_DISPLAY (gdk_surface_get_display (toplevel)),
+-                                gtk_im_context_ime_message_filter, context_ime);
++  if (context_ime->priv->filter_display == NULL)
++    {
++      context_ime->priv->filter_display = g_object_ref (gdk_surface_get_display (toplevel));
++      gdk_win32_display_add_filter (GDK_WIN32_DISPLAY (context_ime->priv->filter_display),
++                                    gtk_im_context_ime_message_filter, context_ime);
++    }
+ 
+   /* restore preedit context */
+   context_ime->opened = ImmGetOpenStatus (himc);
+@@ -693,7 +722,11 @@
+   surface = surface_from_widget (context);
+ 
+   if (!GDK_IS_SURFACE (surface))
+-    return;
++    {
++      /* The widget was unrealized, or removed, while it had the focus. */
++      gtk_im_context_ime_remove_filter (context_ime);
++      return;
++    }
+ 
+   /* switch current context */
+   was_preediting = context_ime->preediting;
+@@ -737,12 +770,7 @@
+     }
+ 
+   /* remove event filter */
+-  if (GDK_IS_SURFACE (surface))
+-    {
+-      gdk_win32_display_remove_filter (GDK_WIN32_DISPLAY (gdk_surface_get_display (surface)),
+-                                       gtk_im_context_ime_message_filter,
+-                                       context_ime);
+-    }
++  gtk_im_context_ime_remove_filter (context_ime);
+ 
+   if (was_preediting)
+     {

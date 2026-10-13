@@ -121,6 +121,8 @@ pub const Recipe = struct {
     aliases: ?std.json.ArrayHashMap(oci.Export) = null,
     /// Start menu shortcuts to exports (see oci.AppConfig).
     shortcuts: ?std.json.ArrayHashMap(oci.Shortcut) = null,
+    /// The kinds of file the app opens, by extension (see oci.AppConfig).
+    associations: ?std.json.ArrayHashMap(oci.Association) = null,
     /// Images the build uses, by alias: references pinned with "@sha256:...".
     sdk: std.json.ArrayHashMap([]const u8) = .{},
     /// Images the app runs with, by alias, pinned the same way. Their
@@ -159,6 +161,7 @@ pub const Recipe = struct {
             .exports = exports,
             .aliases = r.aliases,
             .shortcuts = r.shortcuts,
+            .associations = r.associations,
             .runtimes = runtimes,
             .build = build,
         };
@@ -447,6 +450,16 @@ test "recipe checks" {
         ,
         \\{ "id": "x", "version": "1", "command": "a.exe", "shortcuts": { "A": { "command": "a", "icon": "../a.ico" } }, "modules": [{ "name": "m", "build": ["x"] }] }
         ,
+        // Associations: an extension, opened by an export, once, with an
+        // icon inside the app.
+        \\{ "id": "x", "version": "1", "command": "a.exe", "associations": { ".a": { "command": "b" } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "associations": { "a": { "command": "a" } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "associations": { ".a": { "command": "a" }, ".A": { "command": "a" } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "associations": { ".a": { "command": "a", "icon": "C:\\a.ico" } }, "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
     };
     for (bad) |text| try std.testing.expectError(error.Failed, parse(arena, "t.json", text));
 
@@ -460,6 +473,15 @@ test "recipe checks" {
     try std.testing.expect(std.mem.indexOf(u8, with_json, "\"Text Editor\"") != null);
     const without_json = try oci.toJson(arena, try vendored.appConfig(arena, .{}, .{}));
     try std.testing.expect(std.mem.indexOf(u8, without_json, "shortcuts") == null);
+
+    // And so with associations.
+    const opening = try parse(arena, "t.json",
+        \\{ "id": "x", "version": "1", "command": "a.exe", "associations": { ".note": { "command": "a", "description": "Note" } },
+        \\  "modules": [{ "name": "m", "build": ["x"] }] }
+    );
+    const opening_json = try oci.toJson(arena, try opening.appConfig(arena, .{}, .{}));
+    try std.testing.expect(std.mem.indexOf(u8, opening_json, "\".note\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, without_json, "associations") == null);
 }
 
 test "archive kinds are inferred" {

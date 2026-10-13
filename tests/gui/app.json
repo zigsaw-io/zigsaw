@@ -9,6 +9,9 @@
   "shortcuts": {
     "Zigsaw GUI Test": { "command": "gui-app", "description": "Records that it ran" }
   },
+  "associations": {
+    ".zigsawtest": { "command": "gui-app", "description": "Zigsaw test note" }
+  },
   "modules": [
     {
       "name": "programs",

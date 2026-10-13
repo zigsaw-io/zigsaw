@@ -37,6 +37,8 @@ pub const DETACHED_PROCESS: DWORD = 0x00000008;
 pub const CREATE_UNICODE_ENVIRONMENT: DWORD = 0x00000400;
 pub const EXTENDED_STARTUPINFO_PRESENT: DWORD = 0x00080000;
 pub const STARTF_USESTDHANDLES: DWORD = 0x00000100;
+/// lpTitle is the path of the shortcut (.lnk) the process was started from.
+pub const STARTF_TITLEISLINKNAME: DWORD = 0x00000800;
 
 pub const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x00020002;
 pub const PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES: usize = 0x00020009;
@@ -116,6 +118,7 @@ pub const MB_ICONERROR: c_uint = 0x10;
 pub extern "user32" fn MessageBoxW(window: ?HANDLE, text: LPCWSTR, caption: LPCWSTR, kind: c_uint) callconv(.winapi) c_int;
 pub extern "kernel32" fn GetModuleFileNameW(module: ?*anyopaque, file_name: [*]u16, size: DWORD) callconv(.winapi) DWORD;
 pub extern "kernel32" fn SetEnvironmentVariableW(name: LPCWSTR, value: ?LPCWSTR) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetStartupInfoW(info: *STARTUPINFOW) callconv(.winapi) void;
 pub extern "kernel32" fn SetConsoleCtrlHandler(
     handler: ?*const fn (DWORD) callconv(.winapi) BOOL,
     add: BOOL,
@@ -565,6 +568,34 @@ pub extern "ole32" fn CoUninitialize() callconv(.winapi) void;
 pub extern "ole32" fn CoCreateInstance(clsid: *const GUID, outer: ?*anyopaque, context: DWORD, iid: *const GUID, object: *?*anyopaque) callconv(.winapi) HRESULT;
 pub extern "ole32" fn CoTaskMemFree(mem: ?*anyopaque) callconv(.winapi) void;
 pub extern "shell32" fn SHGetKnownFolderPath(id: *const GUID, flags: DWORD, token: ?HANDLE, path: *?LPWSTR) callconv(.winapi) HRESULT;
+/// Tells the shell that file associations changed.
+pub const SHCNE_ASSOCCHANGED: i32 = 0x08000000;
+pub const SHCNF_IDLIST: u32 = 0;
+pub extern "shell32" fn SHChangeNotify(event: i32, flags: u32, item1: ?*const anyopaque, item2: ?*const anyopaque) callconv(.winapi) void;
+
+// ---------------------------------------------------------------------------
+// The registry: file associations (associations.zig)
+
+pub const HKEY = *anyopaque;
+/// Registry functions return a Win32 error code rather than set the last error.
+pub const LSTATUS = DWORD;
+pub const HKEY_CURRENT_USER: HKEY = @ptrFromInt(0x80000001);
+pub const ERROR_SUCCESS: LSTATUS = 0;
+pub const ERROR_NO_MORE_ITEMS: LSTATUS = 259;
+pub const KEY_READ: DWORD = 0x20019;
+pub const KEY_WRITE: DWORD = 0x20006;
+pub const REG_SZ: DWORD = 1;
+
+pub extern "advapi32" fn RegCreateKeyExW(key: HKEY, sub_key: LPCWSTR, reserved: DWORD, class: ?LPCWSTR, options: DWORD, access: DWORD, security: ?*anyopaque, result: *HKEY, disposition: ?*DWORD) callconv(.winapi) LSTATUS;
+pub extern "advapi32" fn RegOpenKeyExW(key: HKEY, sub_key: ?LPCWSTR, options: DWORD, access: DWORD, result: *HKEY) callconv(.winapi) LSTATUS;
+pub extern "advapi32" fn RegCloseKey(key: HKEY) callconv(.winapi) LSTATUS;
+pub extern "advapi32" fn RegSetValueExW(key: HKEY, name: ?LPCWSTR, reserved: DWORD, type: DWORD, data: ?[*]const u8, size: DWORD) callconv(.winapi) LSTATUS;
+pub extern "advapi32" fn RegQueryValueExW(key: HKEY, name: ?LPCWSTR, reserved: ?*DWORD, type: ?*DWORD, data: ?[*]u8, size: ?*DWORD) callconv(.winapi) LSTATUS;
+pub extern "advapi32" fn RegEnumKeyExW(key: HKEY, index: DWORD, name: [*]u16, name_len: *DWORD, reserved: ?*DWORD, class: ?[*]u16, class_len: ?*DWORD, last_write: ?*anyopaque) callconv(.winapi) LSTATUS;
+pub extern "advapi32" fn RegQueryInfoKeyW(key: HKEY, class: ?[*]u16, class_len: ?*DWORD, reserved: ?*DWORD, sub_keys: ?*DWORD, max_sub_key_len: ?*DWORD, max_class_len: ?*DWORD, values: ?*DWORD, max_value_name_len: ?*DWORD, max_value_len: ?*DWORD, security_descriptor: ?*DWORD, last_write: ?*anyopaque) callconv(.winapi) LSTATUS;
+pub extern "advapi32" fn RegDeleteTreeW(key: HKEY, sub_key: ?LPCWSTR) callconv(.winapi) LSTATUS;
+pub extern "advapi32" fn RegDeleteKeyW(key: HKEY, sub_key: LPCWSTR) callconv(.winapi) LSTATUS;
+pub extern "advapi32" fn RegDeleteValueW(key: HKEY, name: ?LPCWSTR) callconv(.winapi) LSTATUS;
 
 // ---------------------------------------------------------------------------
 // Helpers

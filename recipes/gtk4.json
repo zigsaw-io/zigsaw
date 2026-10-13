@@ -23,9 +23,12 @@
     "pango-list": { "command": "bin/pango-list.exe" }
   },
   "shortcuts": {
-    "GTK Demo": { "command": "gtk4-demo", "description": "GTK's widgets and APIs at work" },
-    "GTK Widget Factory": { "command": "gtk4-widget-factory", "description": "GTK's widgets in every state" },
-    "Adwaita Demo": { "command": "adwaita-1-demo", "description": "libadwaita's widgets at work" }
+    "GTK Demo": { "command": "gtk4-demo", "description": "GTK's widgets and APIs at work", "icon": "share/icons/org.gtk.Demo4.ico" },
+    "GTK Widget Factory": { "command": "gtk4-widget-factory", "description": "GTK's widgets in every state", "icon": "share/icons/org.gtk.WidgetFactory4.ico" },
+    "Adwaita Demo": { "command": "adwaita-1-demo", "description": "libadwaita's widgets at work", "icon": "share/icons/org.gnome.Adwaita1.Demo.ico" }
+  },
+  "sdk": {
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:306a050719faf5662f61c53db889fe5f4e488c6f2e0ec23958de3b56c464074d"
   },
   "cleanup": [
     "/include",
@@ -99,7 +102,14 @@
   "modules": [
     {
       "name": "gtk",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:f712124cd8e035d49542eb252b15a7f088a7be55dda59813f569952ea9d74c09" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:306a050719faf5662f61c53db889fe5f4e488c6f2e0ec23958de3b56c464074d" }]
+    },
+    {
+      "name": "icons",
+      "sources": [{ "path": "gtk4-sdk/svg2ico.sh" }],
+      "build": [
+        "for app in org.gtk.Demo4 org.gtk.WidgetFactory4 org.gnome.Adwaita1.Demo; do sh svg2ico.sh \"$PREFIX/share/icons/hicolor/scalable/apps/$app.svg\" \"$PREFIX/share/icons/$app.ico\" || exit 1; done"
+      ]
     }
   ]
 }

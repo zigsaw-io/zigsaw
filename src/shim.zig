@@ -14,6 +14,11 @@
 //! stderr, it keeps the end of that output, and shows it in a message box if
 //! the app fails.
 //!
+//! A file association's shim, in `<root>\open\<app>` (see associations.zig),
+//! is what Explorer starts with the file someone opened. Its sidecar says
+//! `files = true`, and each of its arguments goes to zigsaw as
+//! `--file=<argument>`, which grants the app that file.
+//!
 //! Builds also copy it, as `B:\bin\<name>.exe`, for each alias their tools
 //! provide. Its `.shim` then holds an alias (Sidecar.Alias), and the shim runs
 //! the alias's command line and the caller's arguments directly. An alias
@@ -81,13 +86,23 @@ fn shim(arena: Allocator, report_failures: bool) !u32 {
     if (win32.SetEnvironmentVariableW(try win32.wide(arena, "ZIGSAW_HOME"), try win32.wide(arena, sidecar.home)) == 0)
         return win32.lastErrorFail("SetEnvironmentVariableW");
 
+    // Started from a shortcut, as from the Start menu, the app is to count as
+    // started from it too, as if Explorer had started it and not zigsaw: the
+    // shell tells from that which shortcut a program's windows belong to.
+    var startup: win32.STARTUPINFOW = .{ .cb = @sizeOf(win32.STARTUPINFOW) };
+    win32.GetStartupInfoW(&startup);
+    const shortcut: ?win32.LPCWSTR = if (startup.dwFlags & win32.STARTF_TITLEISLINKNAME != 0) startup.lpTitle else null;
+    if (win32.SetEnvironmentVariableW(try win32.wide(arena, "ZIGSAW_SHORTCUT"), shortcut) == 0 and shortcut != null)
+        return win32.lastErrorFail("SetEnvironmentVariableW");
+
     var command_line: std.ArrayList(u8) = .empty;
     try process.appendQuoted(arena, &command_line, sidecar.zigsaw);
     try command_line.appendSlice(arena, " run ");
     try process.appendQuoted(arena, &command_line, try std.fmt.allocPrint(arena, "--command={s}", .{sidecar.command}));
+    if (sidecar.files) try appendFiles(arena, &command_line, args);
     try command_line.append(arena, ' ');
     try process.appendQuoted(arena, &command_line, sidecar.app);
-    try appendArguments(arena, &command_line, args);
+    if (!sidecar.files) try appendArguments(arena, &command_line, args);
 
     const spec: process.SpawnSpec = .{ .exe = sidecar.zigsaw, .command_line = command_line.items };
     if (!gui) return process.spawn(arena, spec);
@@ -253,13 +268,49 @@ fn runAlias(arena: Allocator, alias: Sidecar.Alias, args: []const u8) !u32 {
     return process.spawn(arena, .{ .exe = alias.exe, .command_line = command_line.items });
 }
 
-/// Appends the caller's arguments, split as the C runtime splits them, less
-/// those equal to one in `drop`, quoted again.
-fn appendKept(arena: Allocator, command_line: *std.ArrayList(u8), args: []const u8, drop: []const []const u8) !void {
+/// The caller's arguments, split as the C runtime splits them.
+fn splitArguments(arena: Allocator, args: []const u8) !std.process.Args.Iterator.Windows {
     // The iterator reads its first argument as a program name, by other rules.
     const line = try std.unicode.wtf8ToWtf16LeAlloc(arena, try std.mem.concat(arena, u8, &.{ "x ", args }));
     var it: std.process.Args.Iterator.Windows = try .init(arena, line);
     _ = it.next();
+    return it;
+}
+
+/// Appends each of the caller's arguments as a `--file` option of
+/// `zigsaw run`: a file association's shim gets the files to open, as
+/// Explorer's `"%1"`.
+fn appendFiles(arena: Allocator, command_line: *std.ArrayList(u8), args: []const u8) !void {
+    var it = try splitArguments(arena, args);
+    while (it.next()) |arg| {
+        if (arg.len == 0) continue;
+        try command_line.append(arena, ' ');
+        try process.appendQuoted(arena, command_line, try std.fmt.allocPrint(arena, "--file={s}", .{arg}));
+    }
+}
+
+test appendFiles {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const cases = [_]struct { args: []const u8, want: []const u8 }{
+        .{ .args = " \"C:\\My Notes\\a b.rnote\"", .want = "run \"--file=C:\\My Notes\\a b.rnote\"" },
+        .{ .args = " C:\\n\\a.rnote \"D:\\x y\\b.rnote\"", .want = "run --file=C:\\n\\a.rnote \"--file=D:\\x y\\b.rnote\"" },
+        .{ .args = "", .want = "run" },
+        .{ .args = " \"\"", .want = "run" },
+    };
+    for (cases) |c| {
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(arena, "run");
+        try appendFiles(arena, &out, c.args);
+        try std.testing.expectEqualStrings(c.want, out.items);
+    }
+}
+
+/// Appends the caller's arguments, split as the C runtime splits them, less
+/// those equal to one in `drop`, quoted again.
+fn appendKept(arena: Allocator, command_line: *std.ArrayList(u8), args: []const u8, drop: []const []const u8) !void {
+    var it = try splitArguments(arena, args);
     next: while (it.next()) |arg| {
         for (drop) |d| if (std.mem.eql(u8, arg, d)) continue :next;
         try command_line.append(arena, ' ');

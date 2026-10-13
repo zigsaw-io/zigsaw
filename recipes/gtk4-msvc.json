@@ -1,0 +1,370 @@
+{
+  "id": "org.gtk.Gtk4.Msvc",
+  "version": "4.24.1",
+  "command": "bin/gtk4-demo.exe",
+  "path": ["bin"],
+  "env": {
+    "XDG_CONFIG_HOME": "${data}\\config",
+    "XDG_DATA_HOME": "${data}\\share",
+    "XDG_STATE_HOME": "${data}\\state",
+    "XDG_CACHE_HOME": "${data}\\cache",
+    "GSETTINGS_BACKEND": "keyfile"
+  },
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "gtk4-demo-msvc": { "command": "bin/gtk4-demo.exe" },
+    "adwaita-1-demo-msvc": { "command": "bin/adwaita-1-demo.exe" }
+  },
+  "host": ["msvc"],
+  "sdk": {
+    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
+    "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "cleanup": ["__pycache__", "*.pdb", "*.a"],
+  "modules": [
+    {
+      "name": "vcruntime",
+      "build": [
+        "mkdir -p \"$PREFIX/bin\"",
+        "cp \"$VCTOOLSREDISTDIR\"/x64/Microsoft.VC*.CRT/*.dll \"$PREFIX/bin/\"",
+        "test -f \"$PREFIX/bin/vcruntime140.dll\""
+      ]
+    },
+    {
+      "name": "zlib",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz",
+          "sha256": "d7a0654783a4da529d1bb793b7ad9c3318020af77667bcae35f95d0e42a792f3",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DZLIB_BUILD_TESTING=OFF -DZLIB_BUILD_STATIC=OFF",
+        "cmake --build out",
+        "cmake --install out"
+      ]
+    },
+    {
+      "name": "libpng",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://github.com/pnggroup/libpng/archive/v1.6.49.tar.gz",
+          "sha256": "e425762fdfb9bb30a5d2da29c0067570e96b5d41d79c659cf0dad861e9df738e",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DPNG_STATIC=OFF -DPNG_TESTS=OFF -DPNG_TOOLS=OFF",
+        "cmake --build out",
+        "cmake --install out",
+        "printf '%s\\n' 'prefix=${pcfiledir}/../..' 'libdir=${prefix}/lib' 'includedir=${prefix}/include/libpng16' 'Name: libpng' 'Description: Loads and saves PNG files' 'Version: 1.6.49' 'Requires.private: zlib' 'Libs: -L${libdir} -llibpng16' 'Cflags: -I${includedir}' > \"$PREFIX/lib/pkgconfig/libpng16.pc\"",
+        "cp \"$PREFIX/lib/pkgconfig/libpng16.pc\" \"$PREFIX/lib/pkgconfig/libpng.pc\""
+      ]
+    },
+    {
+      "name": "libjpeg-turbo",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.1/libjpeg-turbo-3.1.1.tar.gz",
+          "sha256": "aadc97ea91f6ef078b0ae3a62bba69e008d9a7db19b34e4ac973b19b71b4217c",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DENABLE_STATIC=OFF -DWITH_SIMD=OFF -DWITH_TURBOJPEG=OFF -DWITH_TESTS=OFF -DWITH_TOOLS=OFF",
+        "cmake --build out",
+        "cmake --install out"
+      ]
+    },
+    {
+      "name": "libtiff",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://download.osgeo.org/libtiff/tiff-4.7.0.tar.xz",
+          "sha256": "273a0a73b1f0bed640afee4a5df0337357ced5b53d3d5d1c405b936501f71017",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -Dtiff-tools=OFF -Dtiff-tests=OFF -Dtiff-contrib=OFF -Dtiff-docs=OFF -Dcxx=OFF -Djbig=OFF -Dlerc=OFF -Dlzma=OFF -Dzstd=OFF -Dwebp=OFF -Dlibdeflate=OFF",
+        "cmake --build out",
+        "cmake --install out"
+      ]
+    },
+    {
+      "name": "pcre2",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.46/pcre2-10.46.tar.gz",
+          "sha256": "8d28d7f2c3b970c3a4bf3776bcbb5adfc923183ce74bc8df1ebaad8c1985bd07",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=OFF -DPCRE2_BUILD_TESTS=OFF -DPCRE2_BUILD_PCRE2GREP=OFF -DPCRE2_SUPPORT_JIT=ON",
+        "cmake --build out",
+        "cmake --install out"
+      ]
+    },
+    {
+      "name": "libffi",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2.tar.gz",
+          "sha256": "f3a3082a23b37c293a4fcd1053147b371f2ff91fa7ea1b2a52e335676bac82dc",
+          "strip": 1
+        },
+        {
+          "url": "https://wrapdb.mesonbuild.com/v2/libffi_3.5.2-1/get_patch",
+          "sha256": "1ee3035d92e4df3541d0b2b8d192d2fa183b46e4a3d68c00d8f71ede354bee74",
+          "type": "zip",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtests=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "proxy-libintl",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://github.com/frida/proxy-libintl/archive/refs/tags/0.5.tar.gz",
+          "sha256": "f7a1cbd7579baaf575c66f9d99fb6295e9b0684a28b095967cfda17857595303",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --default-library=shared",
+        "meson install -C out",
+        "test -f \"$PREFIX/include/libintl.h\" -a -f \"$PREFIX/lib/intl.lib\""
+      ]
+    },
+    {
+      "name": "glib",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/glib/2.90/glib-2.90.0.tar.xz",
+          "sha256": "17d15cac2af80a33271127408e0abc2748eb297c595c2a26409e81e14e7d1b8f",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Dtests=false -Dintrospection=disabled -Dman-pages=disabled -Ddocumentation=false -Dsysprof=disabled -Dnls=disabled",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "pixman",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://cairographics.org/releases/pixman-0.46.4.tar.xz",
+          "sha256": "a098c33924754ad43f981b740f6d576c70f9ed1006e12221b1845431ebce1239",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Dtests=disabled -Ddemos=disabled -Dgtk=disabled -Dlibpng=disabled -Dopenmp=disabled -Dtimers=false -Dgnuplot=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "fribidi",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz",
+          "sha256": "1b1cde5b235d40479e91be2f0e88a309e3214c8ab470ec8a2744d82a5a9ea05c",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Ddocs=false -Dbin=false -Dtests=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "harfbuzz",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://github.com/harfbuzz/harfbuzz/releases/download/14.4.0/harfbuzz-14.4.0.tar.xz",
+          "sha256": "2357ed966c6ced7bfa720b0640c0231065af01158fbea215093ffa15aed44371",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Dglib=enabled -Dgobject=disabled -Dcairo=disabled -Dchafa=disabled -Dicu=disabled -Dfreetype=disabled -Dgdi=enabled -Ddirectwrite=enabled -Dtests=disabled -Dintrospection=disabled -Ddocs=disabled -Dutilities=disabled -Dbenchmark=disabled",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "cairo",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://cairographics.org/releases/cairo-1.18.6.tar.xz",
+          "sha256": "1c767308174337a74694da0f3ec069c271452163a1ef4540964c50c301f157d4",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Ddwrite=enabled -Dfontconfig=disabled -Dfreetype=disabled -Dpng=enabled -Dzlib=enabled -Dglib=enabled -Dquartz=disabled -Dxcb=disabled -Dxlib=disabled -Dxlib-xcb=disabled -Dtests=disabled -Dgtk2-utils=disabled -Dspectre=disabled -Dsymbol-lookup=disabled -Dgtk_doc=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "pango",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/pango/1.58/pango-1.58.2.tar.xz",
+          "sha256": "342385b6ca3b7c73455d7c80a13b7dbe4489e00bc3bd4c5bd6ed4dce421e374a",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "sed -i 's/^\\(              pango_font_description_set_gravity (new_desc,\\)$/              pango_font_description_set_color (new_desc, pango_font_description_get_color (description));\\n\\1/' pango/pangowin32-fontmap.c",
+        "grep -q '^              pango_font_description_set_color (new_desc, pango_font_description_get_color (description));$' pango/pangowin32-fontmap.c",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Dcairo=enabled -Dfontconfig=disabled -Dfreetype=disabled -Dxft=disabled -Dlibthai=disabled -Dintrospection=disabled -Ddocumentation=false -Dman-pages=false -Dbuild-testsuite=false -Dbuild-examples=false -Dsysprof=disabled",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "graphene",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/graphene/1.10/graphene-1.10.8.tar.xz",
+          "sha256": "a37bb0e78a419dcbeaa9c7027bcff52f5ec2367c25ec859da31dfde2928f279a",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Dgobject_types=true -Dintrospection=disabled -Dtests=false -Dinstalled_tests=false -Dgtk_doc=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "libepoxy",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/libepoxy/1.5/libepoxy-1.5.10.tar.xz",
+          "sha256": "072cda4b59dd098bba8c2363a6247299db1fa89411dc221c8b81b8ee8192e623",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Ddocs=false -Dglx=no -Degl=no -Dx11=false -Dtests=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "gdk-pixbuf",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/gdk-pixbuf/2.43/gdk-pixbuf-2.43.3.tar.xz",
+          "sha256": "ed4c5d16346a5b4e95326731de9700fad70d03bbd2f9324732e6c94f42d869d7",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Dpng=enabled -Djpeg=enabled -Dtiff=enabled -Dgif=enabled -Dglycin=disabled -Dothers=disabled -Dbuiltin_loaders=all -Drelocatable=true -Dintrospection=disabled -Dman=false -Dgtk_doc=false -Ddocumentation=false -Dtests=false -Dinstalled_tests=false -Dgio_sniffing=false -Dthumbnailer=disabled",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "directx-headers",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v1.611.0.tar.gz",
+          "sha256": "edb8b52b1379f841df5d0d5e11dde08e0c3912508179fb3711f163382e88865c",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Dbuild-test=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "gtk",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/gtk/4.24/gtk-4.24.1.tar.xz",
+          "sha256": "e98abe720e16129c8c0f50761dee0a2e9ae2478055e31018f6cf977fcf6513e9",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/gtk-ime-filter.patch", "dest": "zigsaw/ime-filter.patch" }
+      ],
+      "build": [
+        "patch -p1 < zigsaw/ime-filter.patch",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Dwin32-backend=true -Dx11-backend=false -Dwayland-backend=false -Dmacos-backend=false -Dmedia-gstreamer=disabled -Dvulkan=disabled -Dintrospection=disabled -Daccesskit=disabled -Dprint-cpdb=disabled -Dcolord=disabled -Dsysprof=disabled -Dcloudproviders=disabled -Dtracker=disabled -Ddocumentation=false -Dman-pages=false -Dbuild-demos=true -Dbuild-examples=false -Dbuild-tests=false -Dbuild-testsuite=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "hicolor-icon-theme",
+      "sources": [
+        {
+          "url": "https://icon-theme.freedesktop.org/releases/hicolor-icon-theme-0.18.tar.xz",
+          "sha256": "db0e50a80aa3bf64bb45cbca5cf9f75efd9348cf2ac690b907435238c3cf81d7",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\"",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "adwaita-icon-theme",
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/adwaita-icon-theme/51/adwaita-icon-theme-51.0.tar.xz",
+          "sha256": "ba561cf3c96305a47179fa5605856ad695c9238ea07f7093aebd9ba80c4e323b",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\"",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "libadwaita",
+      "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/libadwaita/1.10/libadwaita-1.10.0.tar.xz",
+          "sha256": "b1bf56239269d101a6391ad4553c910eff9cc6170b803916405477ef60a66c84",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "sed -i -e 's/i18n[.]merge_file(/configure_file(copy: true,/' -e '/^ *po_dir:/d' -e '/^ *type:/d' demo/data/meson.build",
+        "! grep -q merge_file demo/data/meson.build",
+        "sed -i \"s|^demo_kwargs = {}$|demo_kwargs = { 'win_subsystem': 'windows', 'link_args': ['/entry:mainCRTStartup'] }|\" demo/meson.build",
+        "grep -q \"^demo_kwargs = { 'win_subsystem': 'windows', 'link_args': \\['/entry:mainCRTStartup'\\] }$\" demo/meson.build",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --wrap-mode=nodownload -Dintrospection=disabled -Dvapi=false -Ddocumentation=false -Dtests=false -Dexamples=true",
+        "meson install -C out"
+      ]
+    }
+  ]
+}

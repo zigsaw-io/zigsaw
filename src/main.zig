@@ -14,6 +14,7 @@ const prune = @import("prune.zig");
 const remote = @import("remote.zig");
 const runtime = @import("run.zig");
 const shortcuts = @import("shortcuts.zig");
+const associations = @import("associations.zig");
 const update = @import("update.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
@@ -34,7 +35,8 @@ const usage =
     \\                                  check and save a login for a registry
     \\  logout <registry>               delete a registry's saved login
     \\  run [options] <app-id> [args]   run an installed app
-    \\  list                            list installed apps, their commands and shortcuts
+    \\  list                            list installed apps, their commands and shortcuts,
+    \\                                  and the kinds of file they open
     \\  override [options] <app-id>     save run options that every run of the app gets;
     \\                                  --show shows them, --reset removes them
     \\  update [<app-id>...]            rebuild or re-pull apps from where they came from
@@ -55,9 +57,11 @@ const usage =
     \\and scripts, ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD are used instead,
     \\but only for the default registry.
     \\
-    \\run options (override takes them too, except --command):
+    \\run options (override takes them too, except --command and --file):
     \\  --command=<name>                run one of the app's exported commands, or another
     \\                                  executable or batch file from the app or System32
+    \\  --file=<path>                   have the app open a file of yours: grants it that
+    \\                                  file, and adds its path to the app's arguments
     \\  --sandbox=soft|low|appcontainer soft (default) shapes the environment; low also keeps
     \\                                  the app from writing anywhere but its data directory
     \\                                  and the paths granted; appcontainer enforces all of
@@ -282,6 +286,7 @@ const SettingsParser = struct {
 fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
     var opts: runtime.Options = .{ .id = undefined };
     var settings: SettingsParser = .{};
+    var files: std.ArrayList([]const u8) = .empty;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--")) {
@@ -295,6 +300,9 @@ fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
             ctx.store.verbose = true;
         } else if (std.mem.eql(u8, opt.name, "command") and opt.value != null) {
             opts.command = opt.value;
+        } else if (std.mem.eql(u8, opt.name, "file") and opt.value != null) {
+            if (opt.value.?.len == 0) return fail("--file needs a file's path", .{});
+            try files.append(ctx.arena, opt.value.?);
         } else if (!try settings.apply(ctx.arena, opt)) {
             return fail("unknown run option --{s}", .{opt.name});
         }
@@ -303,6 +311,7 @@ fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
 
     opts.id = args[i];
     opts.args = @ptrCast(args[i + 1 ..]);
+    opts.files = files.items;
     opts.settings = settings.finish();
     return opts;
 }
@@ -396,6 +405,8 @@ fn list(ctx: *Context) !void {
         const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
         for (image.config.runtimes.map.values()) |r| try w.print("  (runtime {s} {s})", .{ r.id, r.version });
         for (try shortcuts.names(ctx, ref.id)) |name| try w.print("  (shortcut \"{s}\")", .{name});
+        const opens = try associations.names(ctx, ref.id);
+        if (opens.len > 0) try w.print("  (opens {s})", .{try std.mem.join(arena, ", ", opens)});
         const saved = try override.load(ctx.store, arena, ref.id);
         if (!saved.isEmpty()) try w.print("  (override {f})", .{saved});
         try w.writeByte('\n');
@@ -416,6 +427,8 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     // Shortcuts first: the shims' sidecars say which app each one is for.
     const removed_shortcuts = try shortcuts.removeAll(ctx, id);
     if (removed_shortcuts.len > 0) note("removed shortcuts {s}", .{try std.mem.join(arena, ", ", removed_shortcuts)});
+    const removed_associations = try associations.removeAll(ctx, id);
+    if (removed_associations.len > 0) note("no longer opens {s}", .{try std.mem.join(arena, ", ", removed_associations)});
     const removed_exports = try exports.removeAll(ctx, id);
     if (removed_exports.len > 0) note("removed commands {s}", .{try std.mem.join(arena, ", ", removed_exports)});
 
@@ -472,6 +485,7 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
 
 test {
     _ = @import("aliases.zig");
+    _ = @import("associations.zig");
     _ = @import("builder.zig");
     _ = @import("credentials.zig");
     _ = @import("deps.zig");

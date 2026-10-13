@@ -39,6 +39,10 @@ pub const Options = struct {
     /// Runs this executable instead of the app's command. Looked up in the
     /// app's PATH directories, then in System32.
     command: ?[]const u8 = null,
+    /// Host files for the app to open (`--file`): each is granted to it as
+    /// that one file, to read and write, and goes after `args` as an
+    /// absolute path. What opening a file from Explorer comes to.
+    files: []const []const u8 = &.{},
     /// From the command line. They go over the app's saved overrides.
     settings: override.Settings = .{},
 };
@@ -69,6 +73,9 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     for (grants.items) |g| {
         if (g.path == null) cwd_granted = true;
     }
+    const host_cwd = try std.process.currentPathAlloc(io, arena);
+    const files = try openedFiles(io, arena, host_cwd, opts.files);
+    for (files) |f| try grants.append(arena, .{ .path = f, .read_only = false });
 
     // Per-app writable state, laid out like a Windows user profile.
     const run_dir: ?Store.RunDir = if (settings.ephemeral orelse false) try ctx.store.makeRunDir(arena) else null;
@@ -79,7 +86,6 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const profile: environment.Profile = try .init(arena, data_dir);
     for ([_][]const u8{ profile.roaming, profile.temp }) |dir| try Io.Dir.cwd().createDirPath(io, dir);
 
-    const host_cwd = try std.process.currentPathAlloc(io, arena);
     const cwd = if (cwd_granted) host_cwd else profile.home;
 
     const cache_dir = try std.fs.path.join(arena, &.{ data_dir, "cache" });
@@ -95,7 +101,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     try app_path.appendSlice(arena, try environment.pathDirs(arena, placeholders, cfg.path));
     for (runtimes.own, cfg.runtimes.map.values()) |p, r| try app_path.appendSlice(arena, try environment.pathDirs(arena, p, r.path));
     const command = try resolveCommand(io, arena, placeholders, cfg, opts.command, app_path.items, system_root);
-    const args = try std.mem.concat(arena, []const u8, &.{ command.args, opts.args });
+    const args = try std.mem.concat(arena, []const u8, &.{ command.args, opts.args, files });
     // Batch files run through cmd.exe; System32's, not ComSpec's.
     const exe = if (command.batch) try std.fmt.allocPrint(arena, "{s}\\System32\\cmd.exe", .{system_root}) else command.exe;
     const command_line = if (command.batch)
@@ -166,11 +172,32 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .cwd = cwd,
         .security = if (security) |*s| s else null,
         .token = token,
+        // Set by a shim that a shortcut started (see shim.zig).
+        .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
     });
     // Commands the run installed, as `npm install -g` does, get shims. An
     // --ephemeral run's are gone with its data directory.
     if (run_dir == null and exports.hasCommandDirs(cfg)) exports.syncAfterRun(ctx, cfg.id);
     return code;
+}
+
+/// The absolute paths of the files `--file` names, which may be relative to
+/// the directory zigsaw was started from; the app's own working directory
+/// may be another. Each has to be a file that exists: there's nothing to
+/// grant otherwise, and a directory is `--filesystem`'s to give.
+fn openedFiles(io: Io, arena: Allocator, host_cwd: []const u8, named: []const []const u8) ![]const []const u8 {
+    const files = try arena.alloc([]const u8, named.len);
+    for (files, named) |*file, name| {
+        const p = try std.fs.path.resolve(arena, &.{ host_cwd, name });
+        const stat = Io.Dir.cwd().statFile(io, p, .{}) catch |err| switch (err) {
+            error.FileNotFound => return fail("--file={s}: there's no such file", .{name}),
+            else => return fail("--file={s}: {t}", .{ name, err }),
+        };
+        if (stat.kind == .directory)
+            return fail("--file={s} is a directory; --filesystem={s} grants one", .{ name, p });
+        file.* = p;
+    }
+    return files;
 }
 
 // ---------------------------------------------------------------------------

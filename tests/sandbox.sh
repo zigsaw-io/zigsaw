@@ -119,6 +119,34 @@ check "  and recorded for rm" granted $BB "$work\\ac"
 check "low after appcontainer: runs, and reads what that run wrote" z run --sandbox=low --filesystem="$work\\ac" $BB cat "$work\\ac\\f"
 check "appcontainer: can't write elsewhere" fails writes $BB appcontainer "$work\\outside\\f"
 
+# --- A file a run is to open (--file) ---------------------------------------------
+
+mkdir -p "$work\\docs"
+for f in soft low ac sibling; do echo old >"$work\\docs\\$f.txt"; done
+# rewrites <sandbox> <file>: the app gets the file as its last argument, and
+# reads and writes it.
+rewrites() {
+    z run --sandbox="$1" --file="$2" $BB sh -c 'grep -q old "$1" && echo new > "$1"' sh && grep -q new "$2"
+}
+file_low() { label_of "$1" | grep -q 'Low Mandatory Level:(NW)'; }
+check "soft: --file gives the app the file's path, to read and write" rewrites soft "$work\\docs\\soft.txt"
+relative_file() {
+    local got
+    got=$(cd "$work\\docs" && z run --file=soft.txt $BB sh -c 'echo "$1"' sh | tr -d '\r' | tr '/' '\\')
+    [ "$got" = "$work\\docs\\soft.txt" ] || { echo "$got"; return 1; }
+}
+check "  a relative one is the caller's, whatever the app's working directory" relative_file
+check "low: --file lets the app write that file" rewrites low "$work\\docs\\low.txt"
+check "  which alone is labelled low" sh -c "$(declare -f label_of file_low no_label); file_low '$work\\docs\\low.txt' && no_label '$work\\docs' && no_label '$work\\docs\\sibling.txt'"
+check "  and recorded for rm" granted $BB "low $work\\docs\\low.txt"
+check "  the file next to it stays out of reach" fails writes $BB low "$work\\docs\\sibling.txt" --file="$work\\docs\\low.txt"
+check "appcontainer: --file lets the app read and write that file" rewrites appcontainer "$work\\docs\\ac.txt"
+check "  recorded for rm" granted $BB "$work\\docs\\ac.txt"
+check "  the file next to it stays out of reach" fails z run --sandbox=appcontainer --file="$work\\docs\\ac.txt" $BB cat "$work\\docs\\sibling.txt"
+check "--file needs a file that exists" sh -c "\"\$0\" run --file='$work\\docs\\none.txt' $BB true 2>&1 | grep -q 'no such file'" "$zigsaw"
+check "  and not a directory" sh -c "\"\$0\" run --file='$work\\docs' $BB true 2>&1 | grep -q 'is a directory; --filesystem='" "$zigsaw"
+check "override doesn't take --file" sh -c "\"\$0\" override --file=x $BB 2>&1 | grep -q \"can't be saved as an override\"" "$zigsaw"
+
 # --- Labels two apps share, labels zigsaw didn't make, and rm ---------------------
 
 check "a second app's low run writes the same path" writes $OTHER low "$work\\rw\\g" --filesystem="$work\\rw"
@@ -137,6 +165,7 @@ check "rm keeps a label another app still needs" rm_keeps_shared
 check "  removes its own labels" no_label "$work\\cwd"
 check "  and what was below them inherited" sh -c "! icacls '$work\\cwd\\f' | grep -q 'Mandatory Label'"
 check "  revokes its AppContainer grants" sh -c "! icacls '$work\\ac' | grep -q 'S-1-15-'"
+check "  and those of the files it opened" sh -c "! icacls '$work\\docs\\low.txt' '$work\\docs\\ac.txt' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 check "  leaves a label it didn't make" low_label "$work\\mine"
 if $modify_fixture; then
     check "  removes the label of a path that withholds WRITE_OWNER" no_label "$work\\modify\\rw"

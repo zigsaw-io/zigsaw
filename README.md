@@ -44,7 +44,8 @@ zigsaw login [--username=<user>] [--password-stdin] <registry>
                                        check and save a login for a registry
 zigsaw logout <registry>               delete a registry's saved login
 zigsaw run [options] <app-id> [args]   run an installed app
-zigsaw list                            list installed apps, their commands and shortcuts
+zigsaw list                            list installed apps, their commands and shortcuts,
+                                       and the kinds of file they open
 zigsaw update [<app-id>...]            rebuild or re-pull apps from where they came from
 zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
 zigsaw prune [--dry-run] [--downloads] [--data]
@@ -98,7 +99,9 @@ the SDK's image. GNOME Text Editor runs on GTK's runtime, with GtkSourceView
 and libspelling built into its own image, and checks spelling. Rnote, a
 drawing and note-taking app written in Rust, runs on it too. GTK, Text Editor
 and Rnote are translated. GTK's demos, Text Editor and Rnote are GUI apps:
-they open no console, and get [Start menu shortcuts](#start-menu-shortcuts).
+they open no console, and get [Start menu shortcuts](#start-menu-shortcuts)
+with their icons. Explorer offers Rnote for `.rnote` and `.xopp` files and
+Text Editor for `.txt`, `.md` and `.log` ([file associations](#file-associations)).
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -247,10 +250,37 @@ to finish.
 | `--command=<name>` | Run one of the app's exported commands, or another executable or batch file from the app's PATH (its aliases included) or System32 (e.g. `--command=cmd`), or one of yours by its absolute path |
 | `--sandbox=soft\|low\|appcontainer` | `soft` (default) shapes the environment only; `low` also keeps the app from writing anywhere but its data directory and the paths granted; `appcontainer` enforces all permissions |
 | `--filesystem=<cwd\|path>[:ro]` | Grant access to a host location |
+| `--file=<path>` | Have the app open a file of yours: grants it that file, to read and write, and adds the file's path to the app's arguments (see [below](#opening-a-file)) |
 | `--share=network` / `--unshare=network` | Override the app's network permission |
 | `--env=NAME=VALUE` | Set an environment variable |
 | `--ephemeral` | Use a fresh data directory, deleted after the run |
 | `-v`, `--verbose` | Print the resolved command, environment and grants |
+
+### Opening a file
+
+`--file` is for handing an app one document, wherever it is, without giving
+it the folder the document is in:
+
+```powershell
+zigsaw run --file=notes.rnote com.github.flxzt.rnote
+zigsaw run --sandbox=low --file=D:\docs\todo.txt org.gnome.TextEditor
+```
+
+- The path may be relative to where you are; the app gets it absolute, after
+  its other arguments, as its own working directory may be elsewhere.
+- Under `soft` nothing more happens. Under `low`, that file alone is
+  labelled low integrity, so the app can save it; under `appcontainer`, the
+  app is granted that file alone. Either lasts until `zigsaw rm`, like other
+  grants.
+- The file has to exist, and be a file: `--filesystem` grants a directory.
+- With only the file, an app can't make other files next to it. One that
+  saves by writing a temporary file there and renaming it has to fall back
+  to writing in place, as GLib does (so GTK's Text Editor saves); a backup
+  copy next to the file fails. Rnote's recipe patches it to fall back too.
+- It can't be saved as an override: it's for one run.
+
+Files opened from Explorer come this way (see
+[File associations](#file-associations)).
 
 ### Batch files
 
@@ -313,7 +343,7 @@ A recipe can declare shortcuts to its exports, as Flatpak apps export
 
 ```json
 "shortcuts": {
-  "Text Editor": { "command": "gnome-text-editor", "description": "View and edit text files" }
+  "Text Editor": { "command": "gnome-text-editor", "description": "View and edit text files", "icon": "share/icons/org.gnome.TextEditor.ico" }
 }
 ```
 
@@ -328,6 +358,45 @@ Only the default store (`%LOCALAPPDATA%\zigsaw`) adds to the Start menu, so
 test stores don't. `ZIGSAW_SHORTCUTS_DIR` names a folder to use instead, for
 any store. zigsaw only changes `.lnk` files that run a shim of its own store,
 and leaves any other file of the same name alone, with a warning.
+
+An app started from its shortcut counts as started from it, as a program
+Explorer starts from one does, though zigsaw's shim and zigsaw are in
+between: the shortcut's path is in its start-up information.
+
+### File associations
+
+A recipe can declare the kinds of file its app opens, by extension, as
+Flatpak apps declare MIME types:
+
+```json
+"associations": {
+  ".rnote": { "command": "rnote", "description": "Rnote document" },
+  ".xopp": { "command": "rnote", "description": "Xournal++ document" }
+}
+```
+
+Installing the app registers it for those extensions, for your user only,
+which takes no administrator. Explorer then lists the app under "Open with",
+calls such a file what `description` says, and shows it with the icon of
+`icon` (as for shortcuts) or of the export's executable.
+
+- zigsaw only offers the app. It never makes it the default for an
+  extension: that's your choice, in Explorer, and Windows guards it. The
+  first time you open a file of a kind nothing else opens, Windows asks
+  whether to use the app.
+- Opening a file runs the export with [`--file`](#opening-a-file), through a
+  shim of its own in the store's `open` directory. So the app is granted
+  that file, and only that file, whatever sandbox its overrides choose.
+- Updating the app registers what it declares then, and `zigsaw rm` removes
+  it all. `zigsaw list` shows the extensions.
+- What's registered is a key of zigsaw's own for each extension
+  (`Zigsaw.<app id>.<extension>` under `HKCU\Software\Classes`) and its name
+  under the extension's `OpenWithProgids`. zigsaw changes nothing else
+  there, and removes only keys that name its store.
+
+As with shortcuts, only the default store registers.
+`ZIGSAW_CLASSES_KEY` names a key under `HKEY_CURRENT_USER` to use in place
+of `Software\Classes`, for any store; the tests use one.
 
 ### Changing an app's options
 
@@ -958,6 +1027,18 @@ spells out:
   translations come built in the release, and the build leaves them be.
 - Pango's Windows font map gets a one-line patch so that it finds a font
   for text that asks for color glyphs (see above).
+- GTK's input method for Windows (`gtkimcontextime.c`) listens to the
+  window's messages for the text widget that has the focus, and in 4.24.1
+  went on listening for one that was removed while it had it, reading freed
+  memory at the next message: Text Editor crashed opening a file in place of
+  an empty draft it had restored. [A patch](recipes/gtk4-sdk/gtk-ime-filter.patch)
+  has it remember where it listens, and stop when it loses the focus,
+  whatever has become of the widget, and when it's disposed of.
+- Shortcuts and file associations can't show an SVG, which is what GTK
+  apps' icons are. [A script](recipes/gtk4-sdk/svg2ico.sh) makes an `.ico`
+  of one: the SVG drawn by the SDK's `rsvg-convert` at six sizes, as PNGs,
+  which an `.ico` may hold. The runtime's recipe makes its demos' with it,
+  and Text Editor's its own.
 
 #### Rnote
 
@@ -983,6 +1064,14 @@ MSYS2 or Linux:
 - gettext-rs links `-lintl` from `MINGW_PREFIX`, and from `C:\msys64\mingw64`
   when that's unset, which would be the machine's MSYS2; the recipe sets it
   to the SDK. The executable's icon is compiled by the SDK's `windres`.
+- It saves a document by writing a temporary file next to it and renaming
+  that, and fails if it can't make one. [A patch](recipes/rnote/save-in-place.patch)
+  has it write the document in place then, so that it saves a file it was
+  given with [`--file`](#opening-a-file) in a sandbox.
+
+It's offered for `.rnote` and `.xopp` files (see
+[File associations](#file-associations)), and Text Editor for `.txt`, `.md`
+and `.log`.
 
 `rnote-cli` converts between formats without a window:
 
@@ -1184,6 +1273,66 @@ warns that it won't rebuild the same elsewhere. A machine with another
 Visual Studio builds something else, so these builds are never reused
 either. `/Brepro` keeps the compiler and linker from writing timestamps.
 
+#### GTK with MSVC
+
+[`recipes/gtk4-msvc.json`](recipes/gtk4-msvc.json) builds GLib through GTK
+4.24.1 and libadwaita with MSVC, as an experiment next to [GTK's SDK](#gtk),
+which zig builds: the same sources at the same versions, with Meson's and
+CMake's images and BusyBox for the commands. It isn't published, as it
+can't be rebuilt elsewhere, and has no SDK and runtime split: one image,
+`org.gtk.Gtk4.Msvc`, with `gtk4-demo-msvc` and `adwaita-1-demo-msvc`.
+
+```powershell
+zigsaw build recipes\gtk4-msvc.json   # nine minutes, with Visual Studio's C++ tools
+gtk4-demo-msvc
+```
+
+- Meson and CMake find `cl`, `link` and the Windows SDK's `rc` by
+  themselves, as nothing in the build sets `CC` (zig's image, which does,
+  isn't in it). The recipe passes `/Brepro` and the prefix's headers and
+  libraries in `CL` and `LINK`, which the compiler and linker read
+  themselves, whatever the build system.
+- What the zig recipe works around isn't needed: the object that keeps
+  DLLs from exporting the C runtime's symbols, MinGW's missing WinRT
+  headers, `rc`'s choice of headers, the import libraries under a second
+  name, and a few warning and CPU flags.
+- What it needs instead: GLib's `gi18n.h` includes `libintl.h`, and there's
+  no gettext for MSVC here, so proxy-libintl is built first, as a DLL (as a
+  static library Meson names it `libintl.a`, which the linker doesn't look
+  for); so the image has no translations. libpng's CMake build installs no
+  pkg-config file under MSVC, so the recipe writes one. libadwaita's demo
+  is a GUI program with a `main`, which MSVC's linker wants told
+  (`/entry:mainCRTStartup`). The Visual C++ runtime's DLLs are copied in
+  from Visual Studio's redistributable directory, so the image doesn't
+  count on one being installed.
+- It has no librsvg, so the widget factory, which loads an SVG with
+  GdkPixbuf, aborts, and isn't exported; nor libsoup, spell checking, or
+  Text Editor. Those need Rust for MSVC's target, and autotools, which MSVC
+  builds poorly.
+- BusyBox's sh passes variables on with their names in capitals
+  (`$VCTOOLSREDISTDIR`), and has a `link` of its own, which only a command
+  typed in a recipe would get: Meson and Ninja start the linker themselves.
+
+Against the same modules built with zig, on the same machine:
+
+| | zig | MSVC 19.51 |
+|---|---|---|
+| Build | 14.4 min | 8.9 min |
+| The stack's DLLs | 30, 26.9 MB | 31, 23.1 MB |
+| `gtk-4-1.dll` | 10.5 MB | 9.8 MB |
+| Image | 52.7 MB gzip, with gettext's tools and 27 MB of translations | 35.1 MB gzip, with 10 DLLs of the Visual C++ runtime |
+| `gtk4-demo` to its window | 0.7 s | 0.7 s |
+| Its memory then | 130 MB | 129 MB |
+| Sandboxes | soft, low, appcontainer | soft, low, appcontainer |
+| The same image from a second build | yes, on any machine | yes, in another store on this machine |
+
+The MSVC image came out the same from two stores once two static
+libraries were left out of it (DirectX-Headers'): the librarian stamps them
+with the time, and `LINK` doesn't reach it. Another Visual Studio would
+build another image, which zigsaw doesn't check; the config records which
+built it.
+
+
 ## How it works
 
 **Images** are standard OCI image manifests with a zigsaw config
@@ -1237,7 +1386,17 @@ programs get `zigsaw-shimw.exe` instead, the same program built as a GUI
 one, which starts zigsaw without a console (`DETACHED_PROCESS`); zigsaw
 reads the subsystem from the executable's PE header when it writes the
 shim. [Start menu shortcuts](#start-menu-shortcuts) are `.lnk` files that
-run these shims.
+run these shims. A shim that a shortcut started says so (Windows puts the
+shortcut's path in its `STARTUPINFO`, with `STARTF_TITLEISLINKNAME`), and
+zigsaw starts the app with the same.
+
+**File associations** are keys in `HKCU\Software\Classes`: one of zigsaw's
+per app and extension, with the command, and its name in the extension's
+`OpenWithProgids`. The command is a copy of the same shim in
+`open\<app id>\`, whose `.shim` file says its arguments are files: it runs
+`zigsaw run --command=<name> --file=<argument> <app>`. `--file` adds the
+file to the run's grants as if it were a directory: a low integrity label
+or an entry for the app's capability, on that file alone.
 
 **Runs** get an environment built from scratch: `PATH` is the app's
 directories, then its runtimes', then System32. `USERPROFILE`, `APPDATA`,
@@ -1302,11 +1461,11 @@ it runs on allows, and prints it.
 ```bash
 zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash, network)
-bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes
-bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts
+bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes; --file
+bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, reproducibility
-bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim and shortcuts; translations; Text Editor; Rnote (needs GTK_HOME or BUILD_HOME; opens windows; local only)
+bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor and Rnote, their file associations, and opening a file with --file; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update, mounts, logins and sources next to images, through local registries (see its header)
@@ -1444,11 +1603,29 @@ a fresh runner, after `published.sh`, with its build store as
   libadwaita's demo is upstream, gets a console shim, and a console window
   from the Start menu; its recipe has to build it as a GUI program
   (libadwaita's sets Meson's `win_subsystem`).
-- Start menu shortcuts show the icon of the export's executable. Rnote's
-  has one; none of GTK's or Text Editor's does: their icons are SVGs, which
-  a `.lnk` can't use. A recipe can point `icon` at an `.ico`. Pinning a
-  running GTK app's window to the taskbar pins its executable in the store,
-  not the shortcut, since zigsaw sets no AppUserModelID.
+- A shortcut or a kind of file shows the icon of an `.ico`, or of an
+  executable that has one: a recipe whose app has only an SVG has to make
+  the `.ico`, as GTK's and Text Editor's do with the SDK's `rsvg-convert`.
+- zigsaw sets no AppUserModelID. An app started from its shortcut counts
+  as started from it; whether pinning its window to the taskbar then pins
+  the shortcut, and not the app's executable in the store, hasn't been
+  checked: it takes pinning one by hand.
+- zigsaw offers an app for a kind of file, and can't make it the default:
+  Windows keeps that choice to the user. Only extensions are registered:
+  no MIME types, no URL schemes, no "New" menu entries, and no command
+  other than opening.
+- `--file` gives an app the file and nothing next to it. An app that
+  writes a backup or a temporary file beside the document, or reads files
+  the document names, needs `--filesystem` for the directory, or a
+  fallback of its own. Like other grants it lasts until `zigsaw rm`: under
+  `--sandbox=low`, a file opened once stays writable to every
+  low-integrity process until then.
+- Selecting several files in Explorer and opening them starts the app once
+  for each. Text Editor and Rnote hand a file to the instance that's
+  running already.
+- GTK built with MSVC ([`recipes/gtk4-msvc.json`](recipes/gtk4-msvc.json))
+  is an experiment: no translations, SVG loader, HTTP, spell checking or
+  apps, and it isn't published or checked in CI.
 - Text Editor has no help pages (no yelp on Windows). Its spell checking
   has the languages Windows has, through WinSpell, and English (US) from
   hunspell; other hunspell dictionaries aren't in the runtime.

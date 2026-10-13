@@ -8,13 +8,18 @@
     "gnome-text-editor": { "command": "bin/gnome-text-editor.exe" }
   },
   "shortcuts": {
-    "Text Editor": { "command": "gnome-text-editor", "description": "View and edit text files" }
+    "Text Editor": { "command": "gnome-text-editor", "description": "View and edit text files", "icon": "share/icons/org.gnome.TextEditor.ico" }
+  },
+  "associations": {
+    ".txt": { "command": "gnome-text-editor", "description": "Text document", "icon": "share/icons/org.gnome.TextEditor.ico" },
+    ".md": { "command": "gnome-text-editor", "description": "Markdown document", "icon": "share/icons/org.gnome.TextEditor.ico" },
+    ".log": { "command": "gnome-text-editor", "description": "Log file", "icon": "share/icons/org.gnome.TextEditor.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:e6cfbe23b4df55b9856c30331e1fe671ddc17f116c102398c1478da368f1f4f1"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:28c0ec8ecbe3b4c90b5dcb655d7cd73847669107934666722404b087494731fb"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:f712124cd8e035d49542eb252b15a7f088a7be55dda59813f569952ea9d74c09",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:306a050719faf5662f61c53db889fe5f4e488c6f2e0ec23958de3b56c464074d",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
   },
   "cleanup": [
@@ -93,13 +98,15 @@
           "url": "https://download.gnome.org/sources/gnome-text-editor/51/gnome-text-editor-51.0.tar.xz",
           "sha256": "2b76e6da1506346c54b36ba1a3aeedcd28f4cb7d6a8793d217f209456c92dd4c",
           "strip": 1
-        }
+        },
+        { "path": "gtk4-sdk/svg2ico.sh", "dest": "zigsaw/svg2ico.sh" }
       ],
       "build": [
         "sed -i \"/^subdir('help')$/d\" meson.build",
         "! grep -q \"subdir('help')\" meson.build",
         "meson setup out --prefix=\"$PREFIX\" --buildtype=release",
-        "meson install -C out"
+        "meson install -C out",
+        "sh zigsaw/svg2ico.sh \"$PREFIX/share/icons/hicolor/scalable/apps/org.gnome.TextEditor.svg\" \"$PREFIX/share/icons/org.gnome.TextEditor.ico\""
       ]
     }
   ]

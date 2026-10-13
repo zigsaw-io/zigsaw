@@ -96,6 +96,19 @@ pub const Shortcut = struct {
     icon: ?[]const u8 = null,
 };
 
+/// A kind of file the app opens, by extension, like a MimeType in a Flatpak's
+/// .desktop file. Windows then offers the app for such files; opening one
+/// runs the export with the file, which the app is granted.
+pub const Association = struct {
+    /// The export that opens the file, given as its argument.
+    command: []const u8,
+    /// What Explorer calls such a file, e.g. "Rnote document".
+    description: ?[]const u8 = null,
+    /// A file with the icon such files show, as a shortcut's. Without it,
+    /// the export's executable.
+    icon: ?[]const u8 = null,
+};
+
 /// What placeholders in a config stand for. They are expanded when the app
 /// runs, so images stay the same on every machine:
 ///   ${app}      the app's (read-only) directory
@@ -273,6 +286,9 @@ pub const AppConfig = struct {
     /// Start menu shortcuts, by the name they show. Absent unless there are
     /// some.
     shortcuts: ?std.json.ArrayHashMap(Shortcut) = null,
+    /// The kinds of file the app opens, by extension (".rnote"). Absent
+    /// unless there are some.
+    associations: ?std.json.ArrayHashMap(Association) = null,
     /// The images the app runs with, by alias, in the order of their layers.
     runtimes: std.json.ArrayHashMap(Runtime) = .{},
     /// Null in images made before iteration 4.
@@ -409,6 +425,39 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
                 return fail("{s}: shortcut \"{s}\" description is longer than 256 bytes", .{ what, name });
         }
     }
+    if (c.associations) |a| {
+        const extensions = a.map.keys();
+        for (extensions, a.map.values(), 0..) |ext, association, i| {
+            if (!isValidExtension(ext))
+                return fail("{s}: association \"{s}\" must be a file extension: a '.', then 1-32 letters, digits, '-', '_' or '+'", .{ what, ext });
+            for (extensions[0..i]) |earlier| if (std.ascii.eqlIgnoreCase(earlier, ext))
+                return fail("{s}: associations \"{s}\" and \"{s}\" are the same extension", .{ what, earlier, ext });
+            if (!c.exports.map.contains(association.command))
+                return fail("{s}: association \"{s}\" opens with \"{s}\", which isn't one of the app's exports", .{ what, ext, association.command });
+            if (association.icon) |icon| if (!isValidCommand(icon, aliases))
+                return fail("{s}: association \"{s}\" icon \"{s}\" must be a relative path inside the app, or start with a runtime's ${{alias}}\\", .{ what, ext, icon });
+            if (association.description) |d| if (d.len == 0 or d.len > 256 or std.mem.indexOfAny(u8, d, "\r\n") != null)
+                return fail("{s}: association \"{s}\" description must be 1-256 bytes on one line", .{ what, ext });
+        }
+    }
+}
+
+/// Extensions name registry keys, and end the name of the app's own
+/// (`Zigsaw.<id>.<extension>`), so they are plain.
+pub fn isValidExtension(ext: []const u8) bool {
+    if (ext.len < 2 or ext.len > 33 or ext[0] != '.') return false;
+    for (ext[1..]) |c| switch (c) {
+        'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '+' => {},
+        else => return false,
+    };
+    return true;
+}
+
+test isValidExtension {
+    for ([_][]const u8{ ".rnote", ".xopp", ".TXT", ".c++", ".tar-gz", ".7z" }) |ok|
+        try std.testing.expect(isValidExtension(ok));
+    for ([_][]const u8{ "", ".", "rnote", "..x", ".a.b", ".a b", ".a\\b", ".é", "." ++ "x" ** 33 }) |bad|
+        try std.testing.expect(!isValidExtension(bad));
 }
 
 /// Checks an image's aliases, or (`owner` "runtime x's ") those an app's

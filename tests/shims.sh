@@ -32,6 +32,9 @@ bin="$ZIGSAW_HOME\\bin"
 # Start menu shortcuts go here rather than the user's Start menu.
 links="$work\\links"
 export ZIGSAW_SHORTCUTS_DIR="$links"
+# File associations go under this key of HKCU rather than Software\Classes.
+classes="Software\\ZigsawTest\\shims-$$"
+export ZIGSAW_CLASSES_KEY="$classes"
 
 NODE=org.nodejs.node
 OTHER=test.shims.other
@@ -253,6 +256,9 @@ from_shortcut() {
     echo "the app didn't run"; return 1
 }
 check "starting the shortcut runs the app" from_shortcut
+# What the taskbar goes by when the app's window is pinned.
+check "  which counts as started from the shortcut, as the shim was" sh -c "tr -d '\r' <'$ZIGSAW_HOME\\data\\$GUI\\home\\gui-record.txt' | grep -qxF 'shortcut: $lnk'"
+check "  and from none when a command line started it" sh -c "cd '$work' && '$bin\\gui-app.exe' && sleep 1 && tr -d '\r' <'$ZIGSAW_HOME\\data\\$GUI\\home\\gui-record.txt' | grep -qx 'shortcut: none'"
 # variant <name> <sed script>: a copy of the test app's recipe, next to it.
 variant() { sed "$2" "$root\\tests\\gui\\app.json" >"$root\\tests\\gui\\$1.json"; }
 variant renamed 's/"Zigsaw GUI Test"/"Zigsaw GUI Renamed"/'
@@ -298,6 +304,72 @@ not_default_store() {
 }
 check "a store other than the default one adds no shortcuts" not_default_store
 rm -f "$root\\tests\\gui\\renamed.json"
+
+# File associations: the test app declares .zigsawtest for gui-app.
+"$zigsaw" build "$root\\tests\\gui\\app.json" >/dev/null 2>&1
+prog="Zigsaw.$GUI.zigsawtest"
+open_shim="$ZIGSAW_HOME\\open\\$GUI\\gui-app"
+# reg_value <key under the classes> [<value name>]: a value, or the key's default.
+reg_value() {
+    powershell -NoProfile -Command "(Get-ItemProperty -LiteralPath 'HKCU:\\$classes\\$1' -ErrorAction Stop).'${2:-(default)}'" | tr -d '\r'
+}
+reg_has() { reg query "HKCU\\$classes\\$1" ${2:+/v "$2"} >/dev/null 2>&1; }
+registered() {
+    local deploy
+    deploy="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$GUI.json" | cut -d: -f2)" | tail -1 | cut -d: -f2)"
+    [ "$(reg_value "$prog")" = "Zigsaw test note" ] || { echo "name: $(reg_value "$prog")"; return 1; }
+    [ "$(reg_value "$prog\\DefaultIcon")" = "$deploy\\gui.exe,0" ] || { echo "icon: $(reg_value "$prog\\DefaultIcon")"; return 1; }
+    [ "$(reg_value "$prog\\shell\\open\\command")" = "\"$open_shim.exe\" \"%1\"" ] || { echo "command: $(reg_value "$prog\\shell\\open\\command")"; return 1; }
+    [ "$(reg_value "$prog\\Application" ApplicationName)" = "Zigsaw GUI Test" ] || { echo "app name: $(reg_value "$prog\\Application" ApplicationName)"; return 1; }
+    [ "$(reg_value "$prog\\Application" ApplicationIcon)" = "$deploy\\gui.exe,0" ] || { echo "app icon: $(reg_value "$prog\\Application" ApplicationIcon)"; return 1; }
+    reg_has ".zigsawtest\\OpenWithProgids" "$prog"
+}
+check "a declared extension is registered: its name, icon and command, and the app's name and icon" registered
+check "  what it runs is the windowless shim, whose arguments are files" sh -c "cmp -s '$open_shim.exe' '$shim_dir\\zigsaw-shimw.exe' && grep -q '^files = true' '$open_shim.shim'"
+check "  the export's own shim isn't" sh -c "! grep -q '^files' '$bin\\gui-app.shim'"
+check "list shows it" sh -c "\"\$0\" list | grep '^$GUI ' | grep -q '(opens .zigsawtest)'" "$zigsaw"
+# What Explorer does with a double-clicked file: the registered command, with
+# the file for %1. A low run can only write the file if it was granted.
+mkdir -p "$work\\my notes"
+note="$work\\my notes\\a b.zigsawtest"
+opens_file() {
+    local command
+    echo "a note" >"$note"
+    command=$(reg_value "$prog\\shell\\open\\command")
+    printf '@%s\r\n' "${command//%1/$note}" >"$work\\open.cmd"
+    cmd /c "$work\\open.cmd" || { echo "exit code $?"; return 1; }
+    [ "$(tr -d '\r' <"$note")" = "$(printf 'opened %s\na note' "$note")" ] || { echo "the file: $(cat "$note")"; return 1; }
+}
+check "opening a file runs the app with the file" opens_file
+"$zigsaw" override --sandbox=low "$GUI" >/dev/null 2>&1
+check "  under --sandbox=low it may write that file" opens_file
+check "  which is labelled low, and its directory isn't" sh -c "icacls '$note' | grep -q 'Low Mandatory Level:(NW)' && ! icacls '$work\\my notes' | grep -q 'Mandatory Label'"
+"$zigsaw" override --reset "$GUI" >/dev/null 2>&1
+variant other 's/"\.zigsawtest"/".zigsawother"/'
+extension_changed() {
+    "$zigsaw" build "$root\\tests\\gui\\other.json" 2>&1 | grep -q 'no longer opens .zigsawtest' || return 1
+    ! reg_has "$prog" && ! reg_has ".zigsawtest" && reg_has "Zigsaw.$GUI.zigsawother" && reg_has ".zigsawother\\OpenWithProgids" "Zigsaw.$GUI.zigsawother"
+}
+check "an update registers what the app declares now, and removes the rest" extension_changed
+rm -f "$root\\tests\\gui\\other.json"
+"$zigsaw" build "$root\\tests\\gui\\app.json" >/dev/null 2>&1
+variant badicon 's/"description": "Zigsaw test note"/"icon": "missing.ico"/'
+check "an association's icon must be in the app" sh -c "\"\$0\" build '$root\\tests\\gui\\badicon.json' 2>&1 | grep -q 'association \".zigsawtest\" has the icon \"missing.ico\", which is not a file'" "$zigsaw"
+rm -f "$root\\tests\\gui\\badicon.json"
+not_default_classes() {
+    local out
+    out=$(ZIGSAW_CLASSES_KEY= "$zigsaw" build "$root\\tests\\gui\\app.json" 2>&1)
+    grep -q 'opens    nothing: only the default store registers file types' <<<"$out" || { echo "$out"; return 1; }
+}
+check "a store other than the default one registers nothing" not_default_classes
+"$zigsaw" build "$root\\tests\\gui\\app.json" >/dev/null 2>&1
+# Someone else's entry for the extension stays.
+reg add "HKCU\\$classes\\.zigsawtest\\OpenWithProgids" /v Other.App /t REG_SZ /d "" /f >/dev/null
+unregistered_by_rm() {
+    "$zigsaw" rm "$GUI" 2>&1 | grep -q 'no longer opens .zigsawtest' || return 1
+    ! reg_has "$prog" && ! reg_has ".zigsawtest\\OpenWithProgids" "$prog" && reg_has ".zigsawtest\\OpenWithProgids" Other.App && [ ! -e "$ZIGSAW_HOME\\open\\$GUI" ]
+}
+check "rm removes what it registered, with its shims, and only that" unregistered_by_rm
 "$zigsaw" rm --delete-data "$GUI" >/dev/null 2>&1
 
 "$zigsaw" rm "$NODE" >/dev/null 2>&1
@@ -307,6 +379,9 @@ for pkg in zigsaw-hello other-tool; do
     rm -rf "$ZIGSAW_HOME\\data\\$NODE\\npm\\node_modules\\$pkg"
     for ext in "" .cmd .ps1; do rm -f "$ZIGSAW_HOME\\data\\$NODE\\npm\\$pkg$ext"; done
 done
+# The scratch key, and the one above it unless another run has one in it.
+reg delete "HKCU\\$classes" /f >/dev/null 2>&1
+reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1
 $own_store && rm -rf "$ZIGSAW_HOME"
 rm -rf "$work"
 echo

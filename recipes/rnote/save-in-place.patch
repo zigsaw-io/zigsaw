@@ -1,0 +1,30 @@
+--- a/crates/rnote-engine/src/utils.rs
++++ b/crates/rnote-engine/src/utils.rs
+@@ -137,8 +137,25 @@
+     // We first create the named temporary file, specifically in the parent
+     // directory of the target filepath, as `.persist()` will not work
+     // if the temporary file is in a different filesystem than the target.
+-    let mut temp_file = tempfile::NamedTempFile::new_in(parent_directory)
+-        .with_context(|| "Failed to create a temporary file")?;
++    let mut temp_file = match tempfile::NamedTempFile::new_in(parent_directory) {
++        Ok(temp_file) => temp_file,
++        // The directory may not be ours to create files in while the file is
++        // ours to write: a sandbox that was given the one file to open.
++        // Then we write it in place, which is not atomic.
++        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && filepath.is_file() => {
++            let mut file = std::fs::OpenOptions::new()
++                .write(true)
++                .truncate(true)
++                .open(filepath)
++                .with_context(|| "Failed to open the target file to write it in place")?;
++            file.write_all(bytes)
++                .with_context(|| "Failed to write to the target file in place")?;
++            file.sync_all()
++                .with_context(|| "Failed to sync the contents and metadata of the target file")?;
++            return Ok(());
++        }
++        Err(e) => return Err(e).with_context(|| "Failed to create a temporary file"),
++    };
+ 
+     // We then write all of our bytes to the temporary file before syncing its contents.
+     temp_file

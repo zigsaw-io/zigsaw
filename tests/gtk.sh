@@ -11,6 +11,10 @@
 # speaks the language LANGUAGE names; the SDK has gettext's tools and a
 # windres. Rnote (recipes/rnote.json), a Rust app, converts a Xournal++
 # document with its command-line program and starts up in each sandbox.
+# The apps' shortcuts have icons made from their SVGs; Text Editor and Rnote
+# are registered for their kinds of file (in a scratch registry key) and open
+# one given with --file in each sandbox. GTK built with MSVC
+# (recipes/gtk4-msvc.json) runs its demos, if the store has it.
 #
 # Not in CI: the SDK takes a quarter of an hour to build, and the runner has
 # no GPU for the OpenGL check.
@@ -43,6 +47,9 @@ RNOTE=com.github.flxzt.rnote
 # Start menu shortcuts go here rather than the user's Start menu.
 links="$work\\links"
 export ZIGSAW_SHORTCUTS_DIR="$links"
+# File associations go under this key of HKCU rather than Software\Classes.
+classes="Software\\ZigsawTest\\gtk-$$"
+export ZIGSAW_CLASSES_KEY="$classes"
 
 failures=0
 check() {
@@ -199,6 +206,17 @@ loose_cc() {
     grep -q '^GTK 4\.24\.1$' <<<"$out" && grep -q '^drew a frame with Gsk' <<<"$out" || { echo "got: $out"; return 1; }
 }
 check "the SDK's cc and pkg-config build a GTK program, which runs on the runtime" loose_cc
+# A text view removed while it has the focus, as a page of Text Editor is
+# when a file opens in its place: GTK 4.24.1's input method for Windows went
+# on reading its memory, and the app crashed (patched in the SDK's recipe).
+cp "$root\\tests\\gtk\\ime.c" "$work\\loose\\"
+ime_survives() {
+    (cd "$work\\loose" && "$bin\\cc.exe" ime.c -o ime.exe $("$bin\\pkg-config.exe" --cflags --libs gtk4 | tr -d '\r')) || return 1
+    local out
+    out=$(cd "$work\\loose" && timeout 60 "$zigsaw" run --command="$work\\loose\\ime.exe" org.gtk.Gtk4 2>&1 | tr -d '\r')
+    grep -q '^the view has the focus: yes$' <<<"$out" && grep -q '^still here$' <<<"$out" || { echo "got: $(tr '\n' '|' <<<"$out")"; return 1; }
+}
+check "GTK's input method lets go of a text view removed while it has the focus" ime_survives
 # (Through `run` rather than the meson shim, which Meson's own app has when
 # it was installed first.)
 sdk_meson() { "$zigsaw" run --command=meson org.gtk.Gtk4.Sdk "$@"; }
@@ -237,6 +255,38 @@ shim_is() { cmp -s "$ZIGSAW_HOME\\bin\\$1.exe" "$shim_dir\\$2"; }
 gui_shims() { shim_is gtk4-demo zigsaw-shimw.exe && shim_is adwaita-1-demo zigsaw-shimw.exe && shim_is gtk4-query-settings zigsaw-shim.exe; }
 check "the demos get the windowless shim, gtk4-query-settings the console one" gui_shims
 check "the runtime's demos get shortcuts" test -f "$links\\GTK Demo.lnk" -a -f "$links\\Adwaita Demo.lnk"
+# Their icons are SVGs, which a shortcut can't show: the runtime's recipe
+# makes an .ico of each (recipes/gtk4-sdk/svg2ico.sh).
+lnk_icon() { powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).CreateShortcut('$1').IconLocation" | tr -d '\r'; }
+# is_ico <file>: an icon with six images, the first a 16-pixel PNG.
+is_ico() {
+    [ "$(od -A n -t u1 -N 8 "$1" | tr -s ' ' | sed 's/^ //')" = "0 0 1 0 6 0 16 16" ] && tail -c +103 "$1" | head -c 4 | grep -q PNG
+}
+# has_icon <shortcut name> <icon's name>: the shortcut shows that .ico of
+# share\icons, in whichever image has it.
+has_icon() {
+    local ico
+    ico=$(lnk_icon "$links\\$1.lnk")
+    case $ico in *"\\share\\icons\\$2.ico,0") ;; *) echo "$1: $ico"; return 1 ;; esac
+    is_ico "${ico%,0}" || { echo "${ico%,0} isn't an icon"; return 1; }
+}
+demo_icons() { has_icon "GTK Demo" org.gtk.Demo4 && has_icon "GTK Widget Factory" org.gtk.WidgetFactory4 && has_icon "Adwaita Demo" org.gnome.Adwaita1.Demo; }
+check "with icons made from the demos' SVGs" demo_icons
+# reg_value <key under the classes>: the key's default value.
+reg_value() {
+    powershell -NoProfile -Command "(Get-ItemProperty -LiteralPath 'HKCU:\\$classes\\$1' -ErrorAction Stop).'(default)'" | tr -d '\r'
+}
+# opens_with <app id> <export> <extension> <icon's file name>: the extension
+# is registered for the app, to open with the export's shim in open\.
+opens_with() {
+    local prog="Zigsaw.$1.${3#.}"
+    [ "$(reg_value "$prog\\shell\\open\\command")" = "\"$ZIGSAW_HOME\\open\\$1\\$2.exe\" \"%1\"" ] || { echo "$3: $(reg_value "$prog\\shell\\open\\command")"; return 1; }
+    case $(reg_value "$prog\\DefaultIcon") in *"\\$4,0") ;; *) echo "$3: icon $(reg_value "$prog\\DefaultIcon")"; return 1 ;; esac
+    reg query "HKCU\\$classes\\$3\\OpenWithProgids" /v "$prog" >/dev/null 2>&1
+}
+# A directory of documents that no run has been granted, unlike the work
+# directory, which runs with the cwd permission are.
+docs=$(cygpath -w "$(mktemp -d)")
 # stays_up <seconds> <zigsaw run arguments...>: the app is still running
 # when the time is up, rather than having crashed or failed a check.
 stays_up() {
@@ -265,6 +315,14 @@ check "it gets the windowless shim and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\
 check "it runs" stays_up 15 $EDITOR --standalone
 check "with --sandbox=low" stays_up 15 --sandbox=low $EDITOR --standalone
 check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $EDITOR --standalone
+check "its shortcut has an icon made from its SVG" has_icon "Text Editor" org.gnome.TextEditor
+editor_opens() { for ext in .txt .md .log; do opens_with $EDITOR gnome-text-editor $ext org.gnome.TextEditor.ico || return 1; done; }
+check "it's registered to open .txt, .md and .log files" editor_opens
+# As the shim of those does: the file granted, and nothing around it.
+echo "a note" >"$docs\\note.txt"
+check "it opens a file it's given with --file" stays_up 15 --command=gnome-text-editor --file="$docs\\note.txt" $EDITOR --standalone
+check "with --sandbox=low" stays_up 15 --sandbox=low --command=gnome-text-editor --file="$docs\\note.txt" $EDITOR --standalone
+check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer --command=gnome-text-editor --file="$docs\\note.txt" $EDITOR --standalone
 
 # Rnote (recipes/rnote.json), a Rust GTK app, on the runtime. Built here
 # unless the store has it, which takes about 20 minutes.
@@ -317,8 +375,39 @@ check "it draws 40 pages of text on rayon's threads, three times over" rnote_pag
 check "Rnote runs" stays_up 15 $RNOTE
 check "with --sandbox=low" stays_up 15 --sandbox=low $RNOTE
 check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $RNOTE
+rnote_opens() { opens_with $RNOTE rnote .rnote rnote.exe && opens_with $RNOTE rnote .xopp rnote.exe; }
+check "it's registered to open .rnote and .xopp files, which show its icon" rnote_opens
+cp "$work\\notes.rnote" "$docs\\notes.rnote"
+check "it opens a document it's given with --file" stays_up 20 --command=rnote --file="$docs\\notes.rnote" $RNOTE
+check "with --sandbox=low" stays_up 20 --sandbox=low --command=rnote --file="$docs\\notes.rnote" $RNOTE
+check "with --sandbox=appcontainer" stays_up 20 --sandbox=appcontainer --command=rnote --file="$docs\\notes.rnote" $RNOTE
+check "the documents' directory was granted to neither app" sh -c "! icacls '$docs' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
+
+# GTK built with the machine's MSVC (recipes/gtk4-msvc.json), if the store
+# has it: it isn't published, and needs Visual Studio to build.
+MSVC=org.gtk.Gtk4.Msvc
+if [ -f "$ZIGSAW_HOME\\refs\\$MSVC.json" ]; then
+    msvc_dir="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $MSVC | cut -d: -f2)" | tail -1 | cut -d: -f2)"
+    check "GTK built with MSVC: its gtk4-demo is GTK 4.24.1" sh -c "timeout 60 \"\$0\" run $MSVC --version | grep -q 'gtk4-demo.exe 4.24.1'" "$zigsaw"
+    msvc_self_contained() {
+        test -f "$msvc_dir\\bin\\vcruntime140.dll" || { echo "no vcruntime140.dll"; return 1; }
+        (cd "$root" && zig build imports) >/dev/null || return 1
+        "$root\\zig-out\\test\\zigsaw-imports.exe" "$msvc_dir\\bin\\gtk4-demo.exe" "$msvc_dir\\bin\\adwaita-1-demo.exe"
+    }
+    check "it has the Visual C++ runtime with it, and its demos bind all their imports" msvc_self_contained
+    check "its demo runs" stays_up 15 $MSVC
+    check "with --sandbox=low" stays_up 15 --sandbox=low $MSVC
+    check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $MSVC
+    check "its Adwaita demo runs" stays_up 15 --command=adwaita-1-demo-msvc $MSVC
+else
+    echo "skip  GTK built with MSVC: $MSVC isn't in the store (recipes\\gtk4-msvc.json builds it, with Visual Studio)"
+fi
 
 cd "$root" || exit 1
+# The scratch key, and the one above it unless another run has one in it.
+reg delete "HKCU\\$classes" /f >/dev/null 2>&1
+reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1
+rm -rf "$docs"
 $installed_rnote && z rm --delete-data $RNOTE >/dev/null 2>&1
 $installed_editor && z rm --delete-data $EDITOR >/dev/null 2>&1
 z rm --delete-data $APP >/dev/null 2>&1
