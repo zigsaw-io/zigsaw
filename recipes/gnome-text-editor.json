@@ -3,7 +3,7 @@
   "version": "51.0",
   "command": "bin/gnome-text-editor.exe",
   "path": ["bin"],
-  "permissions": { "filesystem": ["cwd"] },
+  "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "exports": {
     "gnome-text-editor": { "command": "bin/gnome-text-editor.exe" }
   },

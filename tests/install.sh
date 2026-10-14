@@ -16,7 +16,11 @@ set -u
 export MSYS_NO_PATHCONV=1
 
 root=$(cygpath -w "$(cd "$(dirname "$0")/.." && pwd)")
-work=$(cygpath -w "$(mktemp -d)")
+# The long form: the installer writes the directory to PATH as
+# GetFullPath gives it, long, and zigsaw names itself so in shims, while the
+# temporary directory may have a short (8.3) name in it, as on GitHub's
+# runners (C:\Users\RUNNER~1).
+work=$(cygpath -wl "$(mktemp -d)")
 export ZIGSAW_HOME="$work\\store"
 bin="$ZIGSAW_HOME\\bin"
 export ZIGSAW_SHORTCUTS_DIR="$work\\links"

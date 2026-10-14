@@ -6,7 +6,10 @@
 # settings; those must be in its data directory, not the real AppData or
 # registry. VLC also decodes a clip without a window. And each gets the GUI
 # shim, a Start menu shortcut and its file associations (in a temporary
-# folder and a scratch registry key).
+# folder and a scratch registry key), and the user's folders it may use
+# linked into its home: fake ones (ZIGSAW_USER_FOLDERS), so that no run
+# labels or grants yours. tests/hostprobe.zig, made an app, shows where a
+# desktop program finds Documents.
 #
 #   tests/guiapps.sh [path\to\zigsaw.exe]
 #
@@ -45,20 +48,24 @@ docs=$(cygpath -w "$(mktemp -d)")
 export ZIGSAW_SHORTCUTS_DIR="$work\\links"
 classes="Software\\ZigsawTest\\guiapps-$$"
 export ZIGSAW_CLASSES_KEY="$classes"
+folders="$work\\folders"
+for f in Desktop Documents Downloads Music Pictures Videos; do mkdir -p "$folders\\$f"; done
+export ZIGSAW_USER_FOLDERS="$folders"
 
 SEVENZIP=org.7_zip.7zip
 NPP=org.notepad_plus_plus.NotepadPlusPlus
 SUMATRA=org.sumatrapdfreader.SumatraPDF
 VLC=org.videolan.VLC
+HOSTPROBE=test.hostprobe
 
-(cd "$root" && zig build winwait) || { echo "building the window waiter failed"; exit 1; }
+(cd "$root" && zig build winwait hostprobe) || { echo "building the window waiter and the probe failed"; exit 1; }
 winwait="$root\\zig-out\\test\\zigsaw-winwait.exe"
 
 installed=()
-for recipe in 7zip notepad-plus-plus sumatrapdf vlc; do
-    id=$(grep -o '"id": *"[^"]*"' "$root\\recipes\\$recipe.json" | cut -d'"' -f4)
+for recipe in recipes\\7zip recipes\\notepad-plus-plus recipes\\sumatrapdf recipes\\vlc tests\\hostprobe\\app; do
+    id=$(grep -o '"id": *"[^"]*"' "$root\\$recipe.json" | cut -d'"' -f4)
     [ -f "$ZIGSAW_HOME\\refs\\$id.json" ] || installed+=("$id")
-    "$zigsaw" build "$root\\recipes\\$recipe.json" >"$work\\$recipe.log" 2>&1 || { echo "building $recipe failed: $(tail -1 "$work\\$recipe.log")"; exit 1; }
+    "$zigsaw" build "$root\\$recipe.json" >"$work\\build.log" 2>&1 || { echo "building $recipe failed: $(tail -1 "$work\\build.log")"; exit 1; }
 done
 
 failures=0
@@ -199,6 +206,28 @@ untouched() {
     for d in "${absent_before[@]}"; do [ ! -e "$d" ] || { echo "$d appeared"; return 1; }; done
 }
 check "Notepad++, SumatraPDF and VLC left the real AppData alone" untouched
+
+# finds_documents <sandbox>: where SHGetKnownFolderPath puts Documents, which
+# the probe may use, and Downloads, which it may not.
+finds_documents() {
+    local out
+    out=$("$zigsaw" run --sandbox=$1 $HOSTPROBE </dev/null 2>&1) || { echo "$out"; return 1; }
+    grep -qF "folder Documents = $(data $HOSTPROBE)\\home\\Documents (write ok)" <<<"$out" || { grep 'folder Documents' <<<"$out"; return 1; }
+    grep -q '^folder Downloads = .* (missing)$' <<<"$out" || { grep 'folder Downloads' <<<"$out"; return 1; }
+}
+row "A desktop program finds Documents in its home, as yours, and writes it; not Downloads" ok ok ok finds_documents
+# linked <id> <folder...>: the folders are links in the app's home.
+linked() {
+    local id=$1 f
+    shift
+    for f in "$@"; do [ -L "$(data "$id")\\home\\$f" ] || { echo "no $f in $id's home"; return 1; }; done
+}
+documents_apps_linked() {
+    local id
+    for id in $SEVENZIP $NPP $SUMATRA; do linked $id Desktop Documents Downloads || return 1; done
+}
+check "7-Zip, Notepad++ and SumatraPDF have Desktop, Documents and Downloads in their homes" documents_apps_linked
+check "VLC has Desktop, Downloads, Music, Pictures and Videos" linked $VLC Desktop Downloads Music Pictures Videos
 
 shim_dir=$(dirname "$zigsaw")
 # gui_installed <id> <export> <shortcut> <extension...>

@@ -2,6 +2,7 @@
   "id": "test.hostprobe",
   "version": "1",
   "command": "hostprobe.exe",
+  "permissions": { "filesystem": ["documents"] },
   "modules": [
     {
       "name": "probe",

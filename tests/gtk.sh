@@ -50,6 +50,10 @@ export ZIGSAW_SHORTCUTS_DIR="$links"
 # File associations go under this key of HKCU rather than Software\Classes.
 classes="Software\\ZigsawTest\\gtk-$$"
 export ZIGSAW_CLASSES_KEY="$classes"
+# The user's folders the apps may use, such as Documents, are these, not
+# yours, which low and AppContainer runs would label and grant.
+for f in Desktop Documents Downloads Pictures; do mkdir -p "$work\\folders\\$f"; done
+export ZIGSAW_USER_FOLDERS="$work\\folders"
 
 failures=0
 check() {

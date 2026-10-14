@@ -3,7 +3,7 @@
   "version": "0.14.2",
   "command": "bin/rnote.exe",
   "path": ["bin"],
-  "permissions": { "filesystem": ["cwd"] },
+  "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads", "pictures"] },
   "exports": {
     "rnote": { "command": "bin/rnote.exe" },
     "rnote-cli": { "command": "bin/rnote-cli.exe" }

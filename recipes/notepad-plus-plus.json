@@ -2,7 +2,7 @@
   "id": "org.notepad_plus_plus.NotepadPlusPlus",
   "version": "8.9.8.1",
   "command": "notepad++.exe",
-  "permissions": { "filesystem": ["cwd"] },
+  "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "exports": {
     "notepad++": { "command": "notepad++.exe" }
   },

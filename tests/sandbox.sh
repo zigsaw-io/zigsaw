@@ -147,6 +147,81 @@ check "--file needs a file that exists" sh -c "\"\$0\" run --file='$work\\docs\\
 check "  and not a directory" sh -c "\"\$0\" run --file='$work\\docs' $BB true 2>&1 | grep -q 'is a directory; --filesystem='" "$zigsaw"
 check "override doesn't take --file" sh -c "\"\$0\" override --file=x $BB 2>&1 | grep -q \"can't be saved as an override\"" "$zigsaw"
 
+# --- The user's folders (--filesystem=documents) -------------------------------
+#
+# Fake folders: ZIGSAW_USER_FOLDERS has zigsaw take <dir>\Documents and so on
+# for the user's. A third app declares documents, and a permission of a later
+# zigsaw's.
+
+FOLD=test.sandbox.folders
+sed -e "s/\"net.frippery.busybox\"/\"$FOLD\"/" \
+    -e 's/"command": "busybox.exe",/&\n  "permissions": { "filesystem": ["documents", "xdg-later"] },/' \
+    "$root/recipes/busybox.json" >"$work\\folders.json"
+"$zigsaw" build "$work\\folders.json" >/dev/null 2>&1 || { echo "building the folders app failed"; exit 1; }
+folders="$work\\folders"
+mkdir -p "$folders\\Documents" "$folders\\Downloads" "$folders\\Music"
+echo mine >"$folders\\Documents\\mine.txt"
+# Windows' own Documents holds hidden links that deny listing, as "My Music".
+powershell -NoProfile -Command "New-Item -ItemType Junction -Path '$folders\\Documents\\My Music' -Target '$folders\\Music' | Out-Null; icacls '$folders\\Documents\\My Music' /deny 'Everyone:(RD)' | Out-Null"
+export ZIGSAW_USER_FOLDERS="$folders"
+home="$ZIGSAW_HOME\\data\\$FOLD\\home"
+# Git Bash takes a junction for a symbolic link.
+is_junction() { [ -L "$1" ]; }
+folder_files_kept() { [ -f "$folders\\Documents\\mine.txt" ] && [ -f "$folders\\Music\\song.txt" ]; }
+echo song >"$folders\\Music\\song.txt"
+warns_unknown() { "$zigsaw" run $FOLD true 2>&1 </dev/null | grep -q 'xdg-later.*doesn.t know'; }
+link_gone() { [ ! -e "$home\\Documents" ] && ! is_junction "$home\\Documents" && folder_files_kept; }
+override_nofilesystem() {
+    "$zigsaw" override --nofilesystem=documents $FOLD >/dev/null 2>&1 &&
+        z run $FOLD sh -c '[ ! -e "$USERPROFILE/Documents" ]' &&
+        z run --filesystem=documents:ro $FOLD sh -c '[ -f "$USERPROFILE/Documents/mine.txt" ]' &&
+        "$zigsaw" override --reset $FOLD >/dev/null 2>&1
+}
+keeps_own_documents() {
+    z run --nofilesystem=documents $FOLD true && mkdir "$home\\Documents" && echo own >"$home\\Documents\\own.txt" || return 1
+    "$zigsaw" run $FOLD true 2>&1 </dev/null | grep -q 'kept .*own files' &&
+        [ -f "$home\\Documents\\own.txt" ] && ! is_junction "$home\\Documents" && [ ! -e "$folders\\Documents\\own.txt" ]
+}
+reads_unlabelled() { z run --sandbox=low --filesystem=downloads:ro $FOLD ls "$folders\\Downloads" && no_label "$folders\\Downloads"; }
+ephemeral_keeps_folder() { z run --ephemeral $FOLD sh -c 'grep -q mine "$USERPROFILE/Documents/mine.txt"' && folder_files_kept; }
+
+check "soft: an app's declared folder is linked into its home" z run $FOLD sh -c 'grep -q mine "$USERPROFILE/Documents/mine.txt"'
+check "  as a junction" is_junction "$home\\Documents"
+check "  a permission this zigsaw doesn't know is left out, with a warning" warns_unknown
+check "  and no other folder" z run $FOLD sh -c '[ ! -e "$USERPROFILE/Downloads" ]'
+check "--filesystem=downloads adds one" z run --filesystem=downloads $FOLD sh -c '[ -d "$USERPROFILE/Downloads" ]'
+check "--nofilesystem=documents takes the app's away" z run --nofilesystem=documents $FOLD sh -c '[ ! -e "$USERPROFILE/Documents" ]'
+check "  and its link, not what it pointed to" link_gone
+check "override --nofilesystem too, until the command line grants it again" override_nofilesystem
+check "a home Documents with the app's own files is kept" keeps_own_documents
+is_junction "$home\\Documents" || rm -rf "$home\\Documents"
+check "low: writes the folder through the link" z run --sandbox=low $FOLD sh -c 'echo x > "$USERPROFILE/Documents/low.txt"'
+check "  which is labelled low" low_label "$folders\\Documents"
+check "  and recorded for rm" granted $FOLD "low $folders\\Documents"
+check "  a link in it labelled, not what that points to" no_label "$folders\\Music"
+check "low: a read-only folder can't be written" fails z run --sandbox=low --filesystem=downloads:ro $FOLD sh -c 'echo x > "$USERPROFILE/Downloads/ro.txt"'
+check "  but is read, and isn't labelled" reads_unlabelled
+check "appcontainer: reads and writes the folder through the link" z run --sandbox=appcontainer $FOLD sh -c 'grep -q mine "$USERPROFILE/Documents/mine.txt" && echo x > "$USERPROFILE/Documents/ac.txt"'
+check "  granted to the app's capability" has_ace "$folders\\Documents" 'S-1-15-3-1024-'
+check "appcontainer: a folder it may not use stays out" fails z run --sandbox=appcontainer $FOLD ls "$folders\\Downloads"
+check "--ephemeral: linked too, and its data deleted without what the link pointed to" ephemeral_keeps_folder
+rm_delete_data_keeps_folder() {
+    "$zigsaw" rm --delete-data $FOLD >/dev/null 2>&1 </dev/null || return 1
+    [ ! -e "$ZIGSAW_HOME\\data\\$FOLD" ] && folder_files_kept &&
+        [ -f "$folders\\Documents\\low.txt" ] && [ -f "$folders\\Documents\\ac.txt" ]
+}
+check "rm --delete-data leaves the folder's files" rm_delete_data_keeps_folder
+check "  and takes back its label and grant" sh -c "! icacls '$folders\\Documents' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
+prune_data_keeps_folder() {
+    "$zigsaw" build "$work\\folders.json" >/dev/null 2>&1 &&
+        z run $FOLD true 2>/dev/null && is_junction "$home\\Documents" &&
+        "$zigsaw" rm $FOLD >/dev/null 2>&1 </dev/null &&
+        "$zigsaw" prune --data >/dev/null 2>&1 </dev/null || return 1
+    [ ! -e "$ZIGSAW_HOME\\data\\$FOLD" ] && folder_files_kept
+}
+check "prune --data of a removed app's data leaves the folder's files" prune_data_keeps_folder
+unset ZIGSAW_USER_FOLDERS
+
 # --- Labels two apps share, labels zigsaw didn't make, and rm ---------------------
 
 check "a second app's low run writes the same path" writes $OTHER low "$work\\rw\\g" --filesystem="$work\\rw"

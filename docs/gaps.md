@@ -13,7 +13,9 @@
   sandbox.
 - Under `--sandbox=appcontainer`, access granted to a host path lasts until
   the app is removed, even after the permission or override that granted it
-  is gone, and so does a low integrity label under `--sandbox=low`.
+  is gone (`--nofilesystem` included), and so does a low integrity label
+  under `--sandbox=low`. For one of the user's folders, the link in the
+  app's home goes with the permission; the grant stays.
 - `--sandbox=low` labels only paths whose permissions you may change, which
   you may for what you own. Labelling needs the right to change a path's
   owner, which a second drive whose root gives users only Modify (a fresh
@@ -40,11 +42,26 @@
   with a copy of the app installed the usual way and left behind by
   `zigsaw rm`. At low integrity and in an AppContainer such writes fail, and
   apps such as 7-Zip carry on without saving their settings.
-- Desktop, Documents, Downloads and Pictures are folders in the app's
-  redirected profile, which don't exist: apps' file dialogs don't show
-  yours, only the drives, and an app that asks for Documents to save in
-  gets an error or nothing. `AppData\LocalLow` and the profile folder are
-  your real ones, in every sandbox.
+- An app sees only the user's folders its permissions name (Desktop,
+  Documents, Downloads, Music, Pictures, Videos), linked into its profile;
+  others don't exist there, and an app that asks for one to save in gets
+  an error or nothing. `AppData\LocalLow` and the profile folder are your
+  real ones, in every sandbox. Saved Games, Contacts, Favorites, Links and
+  Searches, and the Public folders, can't be granted by name.
+- A folder is granted whole: there's no `documents/Notes` for one folder in
+  it. Under `--sandbox=low` a writable folder is labelled low integrity
+  until `zigsaw rm`, so any low-integrity program can write in all of your
+  Documents meanwhile. The first low or AppContainer run with a folder
+  changes the ACL of every file in it, which takes a while for a big one.
+- A folder whose location Windows keeps as a path with a variable other
+  than `USERPROFILE` in it, which a run's environment doesn't have, isn't
+  linked: the app looks for it at that path, unexpanded, and zigsaw says so.
+  Folders under `%USERPROFILE%` and at absolute paths (OneDrive's) work.
+  Junctions only point to local drives: a folder on a network share isn't
+  linked either.
+- An app whose image names a folder in its permissions needs zigsaw 0.18.0
+  or later; 0.17.0 refuses the image. Later names are left out of a run, with
+  a warning.
 - In an AppContainer, 7-Zip's file manager opens an archive given with
   `--file` at its root view instead: it goes through the archive's path from
   the drive root, whose folders the container can't read.

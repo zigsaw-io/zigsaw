@@ -598,6 +598,52 @@ pub extern "advapi32" fn RegDeleteKeyW(key: HKEY, sub_key: LPCWSTR) callconv(.wi
 pub extern "advapi32" fn RegDeleteValueW(key: HKEY, name: ?LPCWSTR) callconv(.winapi) LSTATUS;
 
 // ---------------------------------------------------------------------------
+// Directory junctions: the user's folders in an app's home (folders.zig)
+
+pub const INVALID_FILE_ATTRIBUTES: DWORD = 0xFFFFFFFF;
+pub const FILE_ATTRIBUTE_DIRECTORY: DWORD = 0x10;
+pub const FILE_ATTRIBUTE_REPARSE_POINT: DWORD = 0x400;
+pub const ERROR_PATH_NOT_FOUND: DWORD = 3;
+pub const FILE_READ_ATTRIBUTES: DWORD = 0x80;
+pub const FILE_SHARE_WRITE: DWORD = 0x2;
+pub const FILE_SHARE_DELETE: DWORD = 0x4;
+pub const FILE_FLAG_BACKUP_SEMANTICS: DWORD = 0x02000000;
+/// Opens a link itself rather than what it points to.
+pub const FILE_FLAG_OPEN_REPARSE_POINT: DWORD = 0x00200000;
+pub const FSCTL_SET_REPARSE_POINT: DWORD = 0x000900A4;
+pub const FSCTL_GET_REPARSE_POINT: DWORD = 0x000900A8;
+/// A directory junction's reparse tag.
+pub const IO_REPARSE_TAG_MOUNT_POINT: DWORD = 0xA0000003;
+pub const MAXIMUM_REPARSE_DATA_BUFFER_SIZE = 16 * 1024;
+
+/// REPARSE_DATA_BUFFER's header and its MountPointReparseBuffer, which the
+/// path buffer follows: the substitute name (`\??\C:\...`) and the print
+/// name, each NUL-terminated, at the offsets given in bytes.
+pub const MOUNT_POINT_REPARSE_HEADER = extern struct {
+    ReparseTag: DWORD,
+    /// The bytes after `Reserved`.
+    ReparseDataLength: u16,
+    Reserved: u16 = 0,
+    SubstituteNameOffset: u16,
+    SubstituteNameLength: u16,
+    PrintNameOffset: u16,
+    PrintNameLength: u16,
+};
+
+pub extern "kernel32" fn GetFileAttributesW(name: LPCWSTR) callconv(.winapi) DWORD;
+pub extern "kernel32" fn CreateDirectoryW(name: LPCWSTR, security: ?*anyopaque) callconv(.winapi) BOOL;
+pub extern "kernel32" fn DeviceIoControl(
+    device: HANDLE,
+    code: DWORD,
+    in: ?*const anyopaque,
+    in_size: DWORD,
+    out: ?*anyopaque,
+    out_size: DWORD,
+    returned: ?*DWORD,
+    overlapped: ?*anyopaque,
+) callconv(.winapi) BOOL;
+
+// ---------------------------------------------------------------------------
 // Helpers
 
 /// Converts a WTF-8 string (what Zig uses for Windows paths) to a

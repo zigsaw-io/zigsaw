@@ -3,7 +3,7 @@
   "version": "3.0.24",
   "command": "vlc.exe",
   "args": ["--no-qt-privacy-ask", "--no-qt-updates-notif"],
-  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "permissions": { "network": true, "filesystem": ["cwd", "desktop", "downloads", "music", "pictures", "videos"] },
   "exports": {
     "vlc": { "command": "vlc.exe", "args": ["--no-qt-privacy-ask", "--no-qt-updates-notif"] }
   },

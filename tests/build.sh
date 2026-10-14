@@ -26,6 +26,9 @@ ZIGSAW_HOME=$(cygpath -w "$(mktemp -d)")
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
 bin="$ZIGSAW_HOME\\bin"
+# Apps that may use the user's folders, as 7-Zip's Documents, find none here,
+# rather than yours.
+export ZIGSAW_USER_FOLDERS="$work\\no-folders"
 # tests/imports.zig: whether the loader binds every import of a program.
 (cd "$root" && zig build imports) || { echo "building the import checker failed"; exit 1; }
 imports="$root\\zig-out\\test\\zigsaw-imports.exe"

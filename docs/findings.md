@@ -310,6 +310,48 @@ VLC 3.0.24, from upstream's archives
 - Both upstream archives that publish hashes (Notepad++, VLC) had the hashes
   pinned. The four images are the same from three stores.
 
+## The user's folders
+
+Iteration 18, 2026-10-14, Windows 11 26300. Before giving an app the
+user's Documents and the like as a directory junction in its home, the
+probes checked that nothing zigsaw does to a data directory reaches
+through one into the folder, and that the sandboxes treat a path through a
+junction as the folder's own:
+
+| Probe | Result |
+|---|---|
+| Zig 0.16's `Io.Dir.deleteTree` on a tree with a junction in it | removes the junction; the folder's files stay |
+| Zig 0.16's `Dir.walk` | reports the junction as a `sym_link`, and doesn't go into it |
+| Git Bash's `rm -rf` | removes the junction only |
+| A low integrity label on the data directory, and an AppContainer grant of it (`SetNamedSecurityInfoW`, inherited) | change the junction's own ACL, not the folder's |
+| Labelling, and granting, a folder with a junction in it that denies Everyone listing, as Windows' `Documents\My Music` | works; the junction's target is left alone; `zigsaw rm` puts both back |
+| A low-integrity process through the junction | reads; writes only once the folder is labelled |
+| An AppContainer process through the junction | neither reads nor writes until the folder is granted to its capability; then both |
+| `SHGetKnownFolderPath` for Documents, with `home\Documents` a junction | `home\Documents`, writable, in all three sandboxes |
+
+- `User Shell Folders` on this machine names all six folders as
+  `%USERPROFILE%\<name>` (`Personal` for Documents, `My Video` for Videos,
+  Downloads by its GUID), which is why a run's `USERPROFILE` moves them.
+- Creating a junction needs no privilege, unlike a symbolic link, which
+  needs Developer Mode or an administrator.
+- So zigsaw's own deletes (`zigsaw rm --delete-data`, `prune --data`,
+  `--ephemeral`) were safe as they were; `tests/sandbox.sh` now checks that
+  they leave a folder's files.
+
+In Notepad++'s Open dialog, with fake folders standing in for the user's:
+
+- Typing `shell:Personal` goes to **Documents**, which the dialog names
+  and shows as the known folder, with the fake folder's file in it, under
+  `soft`, `low` and `appcontainer` alike.
+- **Quick access**: the dialog's navigation pane had Home, Gallery,
+  OneDrive and the drives, but none of the user's folders pinned. Its pins
+  are kept in `%APPDATA%\Microsoft\Windows\Recent\AutomaticDestinations`,
+  in the app's profile in a run, and the dialog only makes its file there,
+  with the default pins, if the folder exists. Explorer would make the
+  folder in a real profile; nothing does in an app's. Once zigsaw made it,
+  the dialog pinned Downloads and Documents (the folders the app has), in
+  all three sandboxes. Desktop isn't among the pane's default pins.
+
 ## Other findings
 
 - **Fixed: `soft` runs could modify installed apps.** Python wrote a file into

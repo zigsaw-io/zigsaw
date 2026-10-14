@@ -2,7 +2,7 @@
   "id": "org.sumatrapdfreader.SumatraPDF",
   "version": "3.6.1",
   "command": "SumatraPDF-3.6.1-64.exe",
-  "permissions": { "filesystem": ["cwd"] },
+  "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "exports": {
     "sumatrapdf": { "command": "SumatraPDF-3.6.1-64.exe" }
   },

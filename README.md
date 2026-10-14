@@ -54,7 +54,7 @@ zigsaw for you alone, in Windows PowerShell 5.1 or later:
 With parameters (`-Version`, `-Dir`, `-NoPath`, `-Uninstall`):
 
 ```powershell
-& ([scriptblock]::Create((irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1))) -Version 0.17.0
+& ([scriptblock]::Create((irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1))) -Version 0.18.0
 ```
 
 `-Uninstall` removes zigsaw and its PATH entry once no app is installed
@@ -300,7 +300,8 @@ to finish.
 |---|---|
 | `--command=<name>` | Run one of the app's exported commands, or another executable or batch file from the app's PATH (its aliases included) or System32 (e.g. `--command=cmd`), or one of yours by its absolute path |
 | `--sandbox=soft\|low\|appcontainer` | `soft` (default) shapes the environment only; `low` also keeps the app from writing anywhere but its data directory and the paths granted; `appcontainer` enforces all permissions |
-| `--filesystem=<cwd\|path>[:ro]` | Grant access to a host location |
+| `--filesystem=<location>[:ro]` | Grant access to a host location: `cwd`, an absolute path, or one of [your folders](#your-folders) (`desktop`, `documents`, `downloads`, `music`, `pictures`, `videos`); for a location the app has a permission for already, this one replaces it (`documents:ro`) |
+| `--nofilesystem=<location>` | Take away access that the app's permissions or its overrides give to a location |
 | `--file=<path>` | Have the app open a file of yours: grants it that file, to read and write, and adds the file's path to the app's arguments (see [below](#opening-a-file)) |
 | `--share=network` / `--unshare=network` | Override the app's network permission |
 | `--env=NAME=VALUE` | Set an environment variable |
@@ -332,6 +333,53 @@ zigsaw run --sandbox=low --file=D:\docs\todo.txt org.gnome.TextEditor
 
 Files opened from Explorer come this way (see
 [File associations](#file-associations)).
+
+### Your folders
+
+A run's profile is the app's own, in its data directory, so an app sees
+none of your Desktop, Documents, Downloads, Music, Pictures or Videos
+folders, unless its permissions name them, as Flatpak's `xdg-documents`
+does:
+
+```json
+"permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] }
+```
+
+```powershell
+zigsaw run --filesystem=pictures:ro org.notepad_plus_plus.NotepadPlusPlus
+zigsaw override --nofilesystem=documents org.gnome.TextEditor
+```
+
+- Each folder the app may use is a link (a directory junction) in its
+  home, `home\Documents` and so on, to yours: where the app, and any
+  program that asks Windows for the folder, looks for it. So it's in the
+  app's file dialogs, by its name, and pinned in their Quick access, which
+  the dialogs keep in the app's profile. A folder it may not use isn't
+  there at all, and its link goes when the permission does.
+- Under `soft` that's all. Under `low`, a folder the app may write is
+  labelled low integrity, and under `appcontainer` it's granted, as any
+  host path would be ([how it works](#how-it-works)): for everything in
+  it, until `zigsaw rm`, and the first time takes a while for a big folder.
+  A low label lets every low-integrity program write there, not only the
+  app; if you'd rather not, give the app the folder `:ro`, or take it away
+  with `--nofilesystem`.
+- Folders that Windows keeps elsewhere, such as Documents in OneDrive, are
+  linked to where they are. A folder you don't have, and one the app's
+  data directory is in, are left out.
+- A folder the app made itself in its home before it had the permission,
+  with files in it, stays: zigsaw never deletes app data, and says so
+  instead of linking.
+- Deleting the app's data (`zigsaw rm --delete-data`, `prune --data`,
+  `--ephemeral`) removes the links, never what's in your folders.
+- `ZIGSAW_USER_FOLDERS=<dir>` makes `<dir>\Documents` and so on stand in for
+  yours: the tests use it, so that no run labels or grants your folders.
+
+The GUI apps zigsaw publishes declare the folders they open files from:
+7-Zip, Notepad++, SumatraPDF, Text Editor and Rnote your Desktop, Documents
+and Downloads (Rnote Pictures too, for exports), and VLC your Desktop,
+Downloads, Music, Pictures and Videos. Images that use folder names need
+zigsaw 0.18.0 or later; and a permission this zigsaw doesn't know, from a
+later one, is left out of a run with a warning, rather than refused.
 
 ### Batch files
 
@@ -397,7 +445,7 @@ folders from it, so those programs keep their settings there too:
 | What a program asks Windows for | In a zigsaw run |
 |---|---|
 | Roaming and Local AppData, the temporary directory | the app's data directory, in every sandbox (in an AppContainer, Local AppData is the container's own folder in it) |
-| Desktop, Documents, Downloads, Pictures | in the app's data directory too, where they don't exist: file dialogs lose them, and show the drives |
+| Desktop, Documents, Downloads, Music, Pictures, Videos | in the app's data directory too: links to yours for the folders its permissions name ([your folders](#your-folders)); the others don't exist there, and file dialogs leave them out |
 | `AppData\LocalLow`, the profile folder itself, ProgramData | the real ones; at low integrity only LocalLow can be written, and in an AppContainer none |
 | `HKEY_CURRENT_USER` | the real registry: writable under `soft`; at low integrity only `Software\AppDataLow`; in an AppContainer nothing |
 
@@ -484,12 +532,17 @@ including runs through its commands on PATH. It takes the same options as
 zigsaw override --sandbox=appcontainer com.github.BurntSushi.ripgrep   # rg is always sandboxed
 zigsaw override --sandbox=low org.nodejs.node                          # node writes only its data and cwd
 zigsaw override --filesystem=D:\src org.nodejs.node                    # node can use D:\src
+zigsaw override --filesystem=documents:ro org.videolan.VLC             # VLC reads your Documents
+zigsaw override --nofilesystem=downloads org.videolan.VLC              # but not your Downloads
 zigsaw override --show org.nodejs.node                                 # what's saved
 zigsaw override --reset org.nodejs.node                                # remove them all
 ```
 
-New options are added to the ones already saved; a filesystem path or
-variable given again replaces its earlier setting. Options given to `run`
+New options are added to the ones already saved; a filesystem location or
+variable given again replaces its earlier setting, and `--filesystem` and
+`--nofilesystem` for the same location replace each other. A location's
+setting also replaces the app's own permission for it: `documents:ro` makes
+an app that may write your Documents read it only. Options given to `run`
 still win for that run. Overrides are kept when an app is updated, rebuilt or
 removed, and `zigsaw rm --delete-data` deletes them with the app's data.
 `zigsaw list` shows them.
@@ -1479,7 +1532,11 @@ or an entry for the app's capability, on that file alone.
 
 **Runs** get an environment built from scratch: `PATH` is the app's
 directories, then its runtimes', then System32. `USERPROFILE`, `APPDATA`,
-`LOCALAPPDATA` and `TEMP` point into `data\<id>\home`. The working directory
+`LOCALAPPDATA` and `TEMP` point into `data\<id>\home`, and the user's folders
+the app may use are directory junctions there, to the real ones. Windows
+follows a junction as a path, and grants or denies access by what it
+points to; deleting a tree or changing its ACL (inheritance) stops at the
+junction. The working directory
 is that home folder unless the app has the `cwd` filesystem permission. A job
 object ends the whole process tree when the run ends. Deployed files deny
 writes and deletes to the user, so no run, and nothing else running as you,
@@ -1494,7 +1551,8 @@ started detached.
 **`--sandbox=low`** runs the app at low integrity, with a copy of your token
 that Windows lets any program make of its own. The app can then write only
 where the integrity label is low: zigsaw labels its data directory, and the
-host paths it may write (`cwd` and `--filesystem` paths without `:ro`). It
+host paths it may write (`cwd`, your folders and `--filesystem` paths without
+`:ro`). It
 can still read whatever you can, and use the network. Every tool the matrix
 runs works this way, including git, npm and zig builds.
 
@@ -1540,7 +1598,7 @@ it runs on allows, and prints it.
 ```bash
 zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash, network)
-bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes; --file
+bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes; --file; your folders (fake ones)
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, reproducibility

@@ -31,6 +31,9 @@ unset ZIGSAW_REGISTRY_USERNAME ZIGSAW_REGISTRY_PASSWORD # Pulls must work anonym
 root=$(cygpath -w "$(cd "$(dirname "$0")/.." && pwd)")
 zigsaw=${1:-$root/zig-out/bin/zigsaw.exe}
 work=$(cygpath -w "$(mktemp -d)")
+# Apps that may use the user's folders, such as Documents, find none here,
+# rather than yours.
+export ZIGSAW_USER_FOLDERS="$work\\no-folders"
 logs=${LOG_DIR:-$work\\logs}
 mkdir -p "$logs"
 pull_store="$work\\pulled"

@@ -19,26 +19,38 @@ pub const Settings = struct {
     sandbox: ?Sandbox = null,
     network: ?bool = null,
     ephemeral: ?bool = null,
-    /// Filesystem permissions granted on top of the app's own.
+    /// Filesystem permissions granted on top of the app's own, or instead of
+    /// one of them for the same location (`documents:ro` for `documents`).
     filesystem: []const []const u8 = &.{},
+    /// Locations whose filesystem permission the layers below give, and
+    /// this one takes away, like Flatpak's --nofilesystem.
+    nofilesystem: []const []const u8 = &.{},
     /// "NAME=VALUE" environment variables, set over the app's own.
     env: []const []const u8 = &.{},
 
     pub fn isEmpty(s: Settings) bool {
         return s.sandbox == null and s.network == null and s.ephemeral == null and
-            s.filesystem.len == 0 and s.env.len == 0;
+            s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.env.len == 0;
     }
 
     /// `upper` over `lower`. For the lists, an entry of `upper` replaces
-    /// `lower`'s for the same path or variable name.
+    /// `lower`'s for the same location or variable name; what `upper`
+    /// grants or takes away for a location is what holds for it.
     pub fn merge(arena: Allocator, lower: Settings, upper: Settings) !Settings {
         return .{
             .sandbox = upper.sandbox orelse lower.sandbox,
             .network = upper.network orelse lower.network,
             .ephemeral = upper.ephemeral orelse lower.ephemeral,
-            .filesystem = try mergeList(arena, lower.filesystem, upper.filesystem, grantPath),
+            .filesystem = try mergeList(arena, try without(arena, lower.filesystem, upper.nofilesystem), upper.filesystem, grantPath),
+            .nofilesystem = try mergeList(arena, try without(arena, lower.nofilesystem, upper.filesystem), upper.nofilesystem, grantPath),
             .env = try mergeList(arena, lower.env, upper.env, envName),
         };
+    }
+
+    /// The filesystem permissions a run gets: the app's own under these
+    /// settings.
+    pub fn filesystemFor(s: Settings, arena: Allocator, app_permissions: []const []const u8) ![]const []const u8 {
+        return (try merge(arena, .{ .filesystem = app_permissions }, s)).filesystem;
     }
 
     /// As the command-line options that set them.
@@ -58,6 +70,10 @@ pub const Settings = struct {
         }
         for (s.filesystem) |f| {
             try w.print("{s}--filesystem={s}", .{ sep, f });
+            sep = " ";
+        }
+        for (s.nofilesystem) |f| {
+            try w.print("{s}--nofilesystem={s}", .{ sep, f });
             sep = " ";
         }
         for (s.env) |e| {
@@ -80,6 +96,20 @@ fn mergeList(arena: Allocator, lower: []const []const u8, upper: []const []const
             } else i += 1;
         }
         try out.append(arena, u);
+    }
+    return out.items;
+}
+
+/// The filesystem permissions of `list` whose location none of `locations`
+/// names.
+fn without(arena: Allocator, list: []const []const u8, locations: []const []const u8) ![]const []const u8 {
+    if (locations.len == 0) return list;
+    var out: std.ArrayList([]const u8) = .empty;
+    for (list) |spec| {
+        const named = for (locations) |l| {
+            if (std.os.windows.eqlIgnoreCaseWtf8(grantPath(spec), grantPath(l))) break true;
+        } else false;
+        if (!named) try out.append(arena, spec);
     }
     return out.items;
 }
@@ -155,6 +185,34 @@ test "Settings.merge: upper wins, lists replace by path or name" {
 
     try std.testing.expect((Settings{}).isEmpty());
     try std.testing.expectEqualDeep(saved, try Settings.merge(arena, .{}, saved));
+}
+
+test "Settings.merge: --nofilesystem takes away what the layers below grant, until a layer above grants it again" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const app: []const []const u8 = &.{ "cwd", "documents", "downloads:ro" };
+
+    // An override takes documents away, and makes downloads writable.
+    const saved: Settings = .{ .filesystem = &.{"downloads"}, .nofilesystem = &.{"Documents"} };
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "cwd", "downloads" }), try saved.filesystemFor(arena, app));
+
+    // The command line gives documents back, read-only, and takes cwd away.
+    const command_line: Settings = .{ .filesystem = &.{"documents:ro"}, .nofilesystem = &.{"cwd"} };
+    const s = try Settings.merge(arena, saved, command_line);
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "downloads", "documents:ro" }), s.filesystem);
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{"cwd"}), s.nofilesystem);
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "downloads", "documents:ro" }), try s.filesystemFor(arena, app));
+
+    // A layer's own grant downgrades the app's for the same location.
+    const ro: Settings = .{ .filesystem = &.{"documents:ro"} };
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "cwd", "downloads:ro", "documents:ro" }), try ro.filesystemFor(arena, app));
+
+    var buf: [256]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    try s.format(&w);
+    try std.testing.expectEqualStrings("--filesystem=downloads --filesystem=documents:ro --nofilesystem=cwd", w.buffered());
+    try std.testing.expect(!(Settings{ .nofilesystem = &.{"cwd"} }).isEmpty());
 }
 
 test "Settings round-trips through JSON" {

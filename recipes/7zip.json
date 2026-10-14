@@ -2,7 +2,7 @@
   "id": "org.7_zip.7zip",
   "version": "26.04",
   "command": "7z.exe",
-  "permissions": { "filesystem": ["cwd"] },
+  "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "exports": {
     "7z": { "command": "7z.exe" },
     "7zfm": { "command": "7zFM.exe" },

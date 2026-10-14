@@ -64,8 +64,9 @@ pub const Manifest = struct {
 pub const Permissions = struct {
     /// Outbound network access.
     network: bool = false,
-    /// Host locations the app may use: "cwd" or an absolute path, either
-    /// optionally suffixed with ":ro". Anything not listed is off limits.
+    /// Host locations the app may use: "cwd", one of the user's folders
+    /// ("documents"; see `UserFolder`) or an absolute path, each optionally
+    /// suffixed with ":ro". Anything not listed is off limits.
     filesystem: []const []const u8 = &.{},
 };
 
@@ -398,8 +399,10 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
         return fail("{s}: command \"{s}\" must be a relative path inside the app, or start with a runtime's ${{alias}}\\", .{ what, c.command });
     for (c.path) |p| if (!isValidPathEntry(p, aliases))
         return fail("{s}: path entry \"{s}\" must be a relative path inside the app, or start with ${{app}}, ${{data}}, ${{cache}} or a runtime's ${{alias}}", .{ what, p });
+    // A name this zigsaw doesn't know passes: a later zigsaw's permission,
+    // which a run leaves out.
     for (c.permissions.filesystem) |spec| if (parseFsGrant(spec) == null)
-        return fail("{s}: filesystem permission \"{s}\" must be \"cwd\" or an absolute path, optionally with \":ro\"", .{ what, spec });
+        return fail("{s}: filesystem permission \"{s}\" must be \"cwd\", one of the user's folders ({s}) or an absolute path, optionally with \":ro\"", .{ what, spec, UserFolder.list });
     var it = c.exports.map.iterator();
     while (it.next()) |e| {
         if (!isValidExportName(e.key_ptr.*))
@@ -563,14 +566,46 @@ pub fn isSafeRelPath(p: []const u8) bool {
     return true;
 }
 
-pub const FsGrant = struct {
-    /// Null means the working directory zigsaw was started from.
-    path: ?[]const u8,
-    read_only: bool,
+/// The user's own folders, which an app may be granted by name, like
+/// Flatpak's xdg-documents (folders.zig).
+pub const UserFolder = enum {
+    desktop,
+    documents,
+    downloads,
+    music,
+    pictures,
+    videos,
+
+    /// For messages.
+    pub const list = "desktop, documents, downloads, music, pictures, videos";
+
+    pub fn parse(name: []const u8) ?UserFolder {
+        inline for (@typeInfo(UserFolder).@"enum".fields) |f| {
+            if (std.ascii.eqlIgnoreCase(name, f.name)) return @enumFromInt(f.value);
+        }
+        return null;
+    }
 };
 
-/// Parses a filesystem permission: "cwd" or an absolute path, optionally
-/// followed by ":ro" or ":rw".
+pub const FsGrant = struct {
+    where: Where,
+    read_only: bool,
+
+    pub const Where = union(enum) {
+        /// The working directory zigsaw was started from.
+        cwd,
+        /// An absolute path.
+        path: []const u8,
+        folder: UserFolder,
+        /// A name this zigsaw doesn't know, such as a folder that a later
+        /// zigsaw added: an image may ask for it, and a run leaves it out.
+        unknown: []const u8,
+    };
+};
+
+/// Parses a filesystem permission: "cwd", one of the user's folders or an
+/// absolute path, optionally followed by ":ro" or ":rw". Any other lowercase
+/// name is `.unknown`.
 pub fn parseFsGrant(spec: []const u8) ?FsGrant {
     var s = spec;
     var read_only = false;
@@ -580,9 +615,26 @@ pub fn parseFsGrant(spec: []const u8) ?FsGrant {
     } else if (std.mem.endsWith(u8, s, ":rw")) {
         s = s[0 .. s.len - 3];
     }
-    if (std.mem.eql(u8, s, "cwd")) return .{ .path = null, .read_only = read_only };
-    if (std.fs.path.isAbsoluteWindows(s) and s.len > 2) return .{ .path = s, .read_only = read_only };
-    return null;
+    const where: FsGrant.Where = if (std.mem.eql(u8, s, "cwd"))
+        .cwd
+    else if (UserFolder.parse(s)) |f|
+        .{ .folder = f }
+    else if (std.fs.path.isAbsoluteWindows(s) and s.len > 2)
+        .{ .path = s }
+    else if (isPermissionName(s))
+        .{ .unknown = s }
+    else
+        return null;
+    return .{ .where = where, .read_only = read_only };
+}
+
+/// A lowercase name, such as "xdg-config", optionally followed by a
+/// subpath: "documents/notes". What a later zigsaw might add.
+fn isPermissionName(s: []const u8) bool {
+    const name_end = std.mem.indexOfScalar(u8, s, '/') orelse s.len;
+    if (name_end == 0 or !std.ascii.isLower(s[0])) return false;
+    for (s[0..name_end]) |c| if (!std.ascii.isLower(c) and !std.ascii.isDigit(c) and c != '-') return false;
+    return std.mem.indexOfAny(u8, s, "\\:") == null;
 }
 
 test isValidId {
@@ -783,12 +835,22 @@ test "runtimes' aliases" {
 }
 
 test parseFsGrant {
-    try std.testing.expectEqual(@as(?[]const u8, null), parseFsGrant("cwd").?.path);
+    try std.testing.expectEqual(.cwd, parseFsGrant("cwd").?.where);
     try std.testing.expect(parseFsGrant("cwd:ro").?.read_only);
-    try std.testing.expectEqualStrings("D:\\src", parseFsGrant("D:\\src:ro").?.path.?);
+    try std.testing.expectEqualStrings("D:\\src", parseFsGrant("D:\\src:ro").?.where.path);
     try std.testing.expect(!parseFsGrant("D:\\src").?.read_only);
     try std.testing.expect(parseFsGrant("relative\\dir") == null);
-    try std.testing.expect(parseFsGrant("home") == null);
+
+    try std.testing.expectEqual(FsGrant.Where{ .folder = .documents }, parseFsGrant("documents").?.where);
+    const pictures = parseFsGrant("Pictures:ro").?;
+    try std.testing.expectEqual(FsGrant.Where{ .folder = .pictures }, pictures.where);
+    try std.testing.expect(pictures.read_only);
+
+    // A later zigsaw's names pass, as unknown.
+    for ([_][]const u8{ "home", "xdg-config", "documents/notes:ro", "host-os" }) |name|
+        try std.testing.expect(parseFsGrant(name).?.where == .unknown);
+    for ([_][]const u8{ "", "Home", "relative\\dir", "dir/a\\b", "1st", "-x", "a b", ":ro", "C:" }) |bad|
+        try std.testing.expect(parseFsGrant(bad) == null);
 }
 
 test sourcesTag {

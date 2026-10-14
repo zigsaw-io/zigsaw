@@ -70,7 +70,10 @@ const usage =
     \\                                  the app from writing anywhere but its data directory
     \\                                  and the paths granted; appcontainer enforces all of
     \\                                  the app's permissions
-    \\  --filesystem=<cwd|path>[:ro]    grant access to a host location
+    \\  --filesystem=<location>[:ro]    grant access to a host location: cwd, an absolute path,
+    \\                                  or one of your folders: desktop, documents, downloads,
+    \\                                  music, pictures, videos
+    \\  --nofilesystem=<location>       take away access the app or an override grants
     \\  --share=network                 allow network access
     \\  --unshare=network               deny network access
     \\  --env=NAME=VALUE                set an environment variable
@@ -259,6 +262,7 @@ const Option = struct {
 const SettingsParser = struct {
     settings: override.Settings = .{},
     filesystem: std.ArrayList([]const u8) = .empty,
+    nofilesystem: std.ArrayList([]const u8) = .empty,
     env: std.ArrayList([]const u8) = .empty,
 
     const flags = [_][]const u8{"ephemeral"};
@@ -275,10 +279,17 @@ const SettingsParser = struct {
         if (std.mem.eql(u8, name, "sandbox")) {
             p.settings.sandbox = std.meta.stringToEnum(override.Sandbox, value) orelse
                 return fail("--sandbox must be soft, low or appcontainer", .{});
-        } else if (std.mem.eql(u8, name, "filesystem")) {
-            if (oci.parseFsGrant(value) == null)
-                return fail("--filesystem must be cwd or an absolute path, optionally with :ro; got \"{s}\"", .{value});
-            try p.filesystem.append(arena, value);
+        } else if (std.mem.eql(u8, name, "filesystem") or std.mem.eql(u8, name, "nofilesystem")) {
+            const g = oci.parseFsGrant(value);
+            if (g == null or g.?.where == .unknown)
+                return fail("--{s} must be cwd, one of your folders ({s}) or an absolute path; got \"{s}\"", .{ name, oci.UserFolder.list, value });
+            if (std.mem.eql(u8, name, "filesystem")) {
+                try p.filesystem.append(arena, value);
+            } else {
+                if (std.mem.endsWith(u8, value, ":ro") or std.mem.endsWith(u8, value, ":rw"))
+                    return fail("--nofilesystem takes away all access to a location; it takes no :ro or :rw", .{});
+                try p.nofilesystem.append(arena, value);
+            }
         } else if (std.mem.eql(u8, name, "share") or std.mem.eql(u8, name, "unshare")) {
             if (!std.mem.eql(u8, value, "network")) return fail("--{s} only supports network", .{name});
             p.settings.network = std.mem.eql(u8, name, "share");
@@ -292,6 +303,7 @@ const SettingsParser = struct {
     fn finish(p: *const SettingsParser) override.Settings {
         var s = p.settings;
         s.filesystem = p.filesystem.items;
+        s.nofilesystem = p.nofilesystem.items;
         s.env = p.env.items;
         return s;
     }
@@ -508,6 +520,7 @@ test {
     _ = @import("drive.zig");
     _ = @import("environment.zig");
     _ = @import("exports.zig");
+    _ = @import("folders.zig");
     _ = @import("msvc.zig");
     _ = @import("oci.zig");
     _ = @import("override.zig");

@@ -15,10 +15,10 @@ again by the new zigsaw (zigsaw repair).
 
 With parameters:
 
-    & ([scriptblock]::Create((irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1))) -Version 0.17.0
+    & ([scriptblock]::Create((irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1))) -Version 0.18.0
 
 .PARAMETER Version
-The release to install, such as 0.17.0. The latest by default. Also
+The release to install, such as 0.18.0. The latest by default. Also
 $env:ZIGSAW_VERSION.
 
 .PARAMETER Dir

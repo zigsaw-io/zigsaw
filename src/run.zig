@@ -7,6 +7,8 @@
 //!   APPDATA, LOCALAPPDATA, TEMP) point into the app's data directory;
 //! - the data directory as its working directory, unless the app has the
 //!   "cwd" filesystem permission;
+//! - the user's folders it may use, such as Documents, linked into that
+//!   profile (see folders.zig);
 //! - a job object, so the whole process tree ends when the run ends.
 //!
 //! The `appcontainer` sandbox additionally runs the app under its AppContainer
@@ -28,6 +30,7 @@ const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const environment = @import("environment.zig");
 const exports = @import("exports.zig");
+const folders = @import("folders.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
 const fail = Context.fail;
@@ -64,14 +67,20 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const settings = try override.Settings.merge(arena, saved, opts.settings);
     const sandbox = settings.sandbox orelse .soft;
     const network = settings.network orelse cfg.permissions.network;
-    var grants: std.ArrayList(oci.FsGrant) = .empty;
-    for ([_][]const []const u8{ cfg.permissions.filesystem, settings.filesystem }) |specs| {
-        for (specs) |spec| try grants.append(arena, oci.parseFsGrant(spec) orelse
-            return fail("invalid filesystem permission \"{s}\"", .{spec}));
-    }
+    var grants: std.ArrayList(HostGrant) = .empty;
+    var folder_grants: std.ArrayList(folders.Grant) = .empty;
     var cwd_granted = false;
-    for (grants.items) |g| {
-        if (g.path == null) cwd_granted = true;
+    for (try settings.filesystemFor(arena, cfg.permissions.filesystem)) |spec| {
+        const g = oci.parseFsGrant(spec) orelse return fail("invalid filesystem permission \"{s}\"", .{spec});
+        switch (g.where) {
+            .cwd => {
+                cwd_granted = true;
+                try grants.append(arena, .{ .path = null, .read_only = g.read_only });
+            },
+            .path => |p| try grants.append(arena, .{ .path = p, .read_only = g.read_only }),
+            .folder => |f| try folder_grants.append(arena, .{ .folder = f, .read_only = g.read_only }),
+            .unknown => note("warning: {s} asks for the filesystem permission \"{s}\", which this zigsaw doesn't know, and leaves out; a newer zigsaw may", .{ cfg.id, spec }),
+        }
     }
     const host_cwd = try std.process.currentPathAlloc(io, arena);
     const files = try openedFiles(io, arena, host_cwd, opts.files);
@@ -84,7 +93,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     store_lock.release(io);
     const data_dir = if (run_dir) |d| d.path else try ctx.store.path(arena, &.{ "data", cfg.id });
     const profile: environment.Profile = try .init(arena, data_dir);
-    for ([_][]const u8{ profile.roaming, profile.temp }) |dir| try Io.Dir.cwd().createDirPath(io, dir);
+    // Where file dialogs keep Quick access: only if it exists do they make
+    // it, with the user's folders pinned (docs/findings.md).
+    const quick_access = try std.fs.path.join(arena, &.{ profile.roaming, "Microsoft", "Windows", "Recent", "AutomaticDestinations" });
+    for ([_][]const u8{ quick_access, profile.temp }) |dir| try Io.Dir.cwd().createDirPath(io, dir);
 
     const cwd = if (cwd_granted) host_cwd else profile.home;
 
@@ -125,6 +137,9 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .vars = app_env.items,
         .extra = settings.env,
     });
+    // The user's folders, where the app's environment says it looks for them.
+    for (try folders.apply(ctx, data_dir, env.items, folder_grants.items)) |f|
+        try grants.append(arena, .{ .path = f.path, .read_only = f.read_only });
 
     if (ctx.verbose) {
         note("app      {s} {s} ({s})", .{ cfg.id, cfg.version, image.ref.manifest });
@@ -180,6 +195,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     if (run_dir == null and exports.hasCommandDirs(cfg)) exports.syncAfterRun(ctx, cfg.id);
     return code;
 }
+
+/// A host path the run may use, which the enforcing sandboxes grant: null
+/// for the working directory zigsaw was started from.
+const HostGrant = struct { path: ?[]const u8, read_only: bool };
 
 /// The absolute paths of the files `--file` names, which may be relative to
 /// the directory zigsaw was started from; the app's own working directory
@@ -280,7 +299,7 @@ const AppContainerSetup = struct {
     /// The run's LOCALAPPDATA, in its data directory.
     local_app_data: []const u8,
     host_cwd: []const u8,
-    grants: []const oci.FsGrant,
+    grants: []const HostGrant,
     network: bool,
 };
 
@@ -342,7 +361,7 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
 const LowSetup = struct {
     data_dir: []const u8,
     host_cwd: []const u8,
-    grants: []const oci.FsGrant,
+    grants: []const HostGrant,
     network: bool,
 };
 
