@@ -108,7 +108,9 @@ row() {
 
 # Fixtures: a note, a one-page PDF, an archive of the note, and two clips of
 # silence (8 kHz, 8-bit, mono), one long enough to still play when its
-# window is looked at.
+# window is looked at: VLC names a clip in its title while it plays it,
+# which is within a second or two of starting, but now and then 30 s later
+# (docs/findings.md).
 printf 'a note for zigsaw\r\n' >"$docs\\zigsaw-note.txt"
 cat >"$docs\\zigsaw-doc.pdf" <<'EOF'
 %PDF-1.4
@@ -131,7 +133,7 @@ wav() {
     } >"$2"
 }
 le32() { printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $(($1 & 255)) $(($1 >> 8 & 255)) $(($1 >> 16 & 255)) $(($1 >> 24 & 255)))"; }
-wav 10 "$docs\\zigsaw-tone.wav"
+wav 60 "$docs\\zigsaw-tone.wav"
 wav 1 "$work\\zigsaw-short.wav"
 (cd "$docs" && "$zigsaw" run $SEVENZIP a -bd zigsaw-archive.7z zigsaw-note.txt >/dev/null 2>&1)
 
@@ -148,20 +150,26 @@ cd "$work" || exit 1
 
 data() { echo "$ZIGSAW_HOME\\data\\$1"; }
 # opens <id> <export> <file> <title> <settings file name> <sandbox>: the app
-# opens the file, the title names it, it closes when asked, and its settings
-# are then in its data directory.
+# opens the file, the title names it within $window_wait seconds (15 unless
+# set), it closes when asked, and its settings are then in its data
+# directory.
 opens() {
-    local id=$1 cmd=$2 file=$3 title=$4 settings=$5 sandbox=$6
+    local id=$1 cmd=$2 file=$3 title=$4 settings=$5 sandbox=$6 limit=${window_wait:-15}
     [ -z "$settings" ] || find "$(cygpath -u "$(data "$id")")" -name "$settings" -delete 2>/dev/null
+    local start=$SECONDS
     "$zigsaw" run --sandbox=$sandbox --command=$cmd --file="$file" $id >"$work\\run.log" 2>&1 &
-    local runner=$! status
-    "$winwait" "$title" 15 --close
+    local runner=$! status i
+    "$winwait" "$title" $limit --close
     status=$?
-    sleep 1
+    # zigsaw ends once the app's processes have (it gives them up to 5 s).
+    for i in $(seq 50); do
+        kill -0 $runner 2>/dev/null || break
+        sleep 0.2
+    done
     if kill -0 $runner 2>/dev/null; then
         kill $runner
         wait $runner
-        echo "no window named $title closed (winwait $status); $(tail -1 "$work\\run.log")"
+        echo "no window named $title closed (winwait $status after $((SECONDS - start)) s); $(tail -1 "$work\\run.log")"
         return 1
     fi
     wait $runner || { echo "zigsaw run failed: $(tail -1 "$work\\run.log")"; return 1; }
@@ -174,24 +182,28 @@ opens() {
 # through the archive's path from the drive root, whose folders it can't read.
 row "7-Zip's file manager opens an archive given with --file" ok gap ok \
     opens $SEVENZIP 7zfm "$docs\\zigsaw-archive.7z" 'zigsaw-archive.7z' ''
-# 7-Zip keeps its settings in HKCU\Software\7-Zip. zigsaw doesn't isolate the
-# registry; low integrity and an AppContainer keep it from writing there.
-leaves_registry() {
+# 7-Zip keeps its settings in HKCU\Software\7-Zip, which its recipe declares:
+# zigsaw keeps the key with its data, and puts it in HKCU only while it runs,
+# labelled or granted so that it saves there in every sandbox. Its file
+# manager saves its window's position when it closes.
+keeps_settings() {
     $had_7zip_key && { echo "HKCU\\Software\\7-Zip existed before"; return 1; }
-    reg delete 'HKCU\Software\7-Zip' /f >/dev/null 2>&1
-    opens $SEVENZIP 7zfm "$docs\\zigsaw-archive.7z" 'class:7-Zip::FM' '' "$1" >/dev/null 2>&1
-    ! reg query 'HKCU\Software\7-Zip' >/dev/null 2>&1 || { echo "it wrote HKCU\\Software\\7-Zip"; return 1; }
+    rm -f "$(data $SEVENZIP)\\registry\\user.dat"*
+    opens $SEVENZIP 7zfm "$docs\\zigsaw-archive.7z" 'class:7-Zip::FM' '' "$1" || return 1
+    ! reg query 'HKCU\Software\7-Zip' >/dev/null 2>&1 || { echo "HKCU\\Software\\7-Zip is still there"; return 1; }
+    "$zigsaw" run --sandbox=$1 --command=reg $SEVENZIP query 'HKCU\Software\7-Zip\FM' /v Position >/dev/null 2>&1 ||
+        { echo "its next run doesn't find the position it saved"; return 1; }
 }
 if $had_7zip_key; then
-    echo "skip  7-Zip leaves the real registry alone: HKCU\\Software\\7-Zip was there before"
+    echo "skip  7-Zip keeps its settings with its data: HKCU\\Software\\7-Zip was there before"
 else
-    row "7-Zip leaves the real registry alone" gap ok ok leaves_registry
+    row "7-Zip keeps its settings with its data, and in HKCU only while it runs" ok ok ok keeps_settings
 fi
 row "Notepad++ opens a file given with --file, and keeps its settings in its data directory" ok ok ok \
     opens $NPP notepad++ "$docs\\zigsaw-note.txt" 'zigsaw-note.txt - Notepad++' config.xml
 row "SumatraPDF opens a PDF given with --file, and keeps its settings in its data directory" ok ok ok \
     opens $SUMATRA sumatrapdf "$docs\\zigsaw-doc.pdf" 'zigsaw-doc.pdf - SumatraPDF' SumatraPDF-settings.txt
-row "VLC plays a clip given with --file, and keeps its settings in its data directory" ok ok ok \
+window_wait=60 row "VLC plays a clip given with --file, and keeps its settings in its data directory" ok ok ok \
     opens $VLC vlc "$docs\\zigsaw-tone.wav" 'zigsaw-tone.wav - VLC media player' vlc-qt-interface.ini
 decodes() {
     rm -f "$work\\decoded.raw"

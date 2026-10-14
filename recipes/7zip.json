@@ -1,6 +1,10 @@
 {
   "id": "org.7_zip.7zip",
   "version": "26.04",
+  "name": "7-Zip",
+  "summary": "A file archiver with a high compression ratio",
+  "homepage": "https://7-zip.org/",
+  "license": "LGPL-2.1-or-later AND BSD-3-Clause AND LicenseRef-unRAR",
   "command": "7z.exe",
   "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "exports": {
@@ -18,6 +22,7 @@
     ".gz": { "command": "7zfm", "description": "Gzip archive" },
     ".xz": { "command": "7zfm", "description": "XZ archive" }
   },
+  "registry": ["Software\\7-Zip"],
   "sdk": {
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },

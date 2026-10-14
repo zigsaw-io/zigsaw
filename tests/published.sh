@@ -13,6 +13,7 @@
 #   then be up to date.
 # - The programs of an image built with Rust must have all their imports
 #   bound (tests/imports.zig).
+# - The registry's catalog must list the apps published at these versions.
 # CI runs this on a fresh Windows runner (.github/workflows/reproduce.yml), so
 # it also shows that the recipes build the same images on another machine.
 #
@@ -107,6 +108,7 @@ host_built() {
 }
 
 ids=()
+published_versions=()
 skipped=0
 for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); do
     case " ${SKIP_RECIPES:-} " in
@@ -141,6 +143,7 @@ for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); 
     fi
     pulled=$((pulled + 1))
     pass "$id $version: pulls anonymously by app id"
+    published_versions+=("$id $version")
 
     published=$(ref_digest "$pull_store" "$id")
     if host_built "$build_store" "$built"; then
@@ -189,6 +192,21 @@ done
 if [ $pulled -gt 0 ]; then
     redirected() { cat "$(cygpath -u "$logs")"/*.pull.log | grep -q 'redirected to .*, without the registry token'; }
     check "blob downloads were redirected to another host, without the token" redirected
+fi
+
+# The registry's catalog (scripts/publish.sh pushes it) lists the apps
+# published at these versions, as `zigsaw search` shows it.
+if [ ${#published_versions[@]} -gt 0 ]; then
+    in_catalog() {
+        local out entry missing=()
+        out=$(zp search 2>&1) || { grep -v '^\s*$' <<<"$out" | tail -1; return 1; }
+        for entry in "${published_versions[@]}"; do
+            awk -v id="${entry% *}" -v v="${entry#* }" '$1 == id && $2 == v { found = 1 } END { exit !found }' <<<"$out" ||
+                missing+=("$entry")
+        done
+        [ ${#missing[@]} -eq 0 ] || { echo "it doesn't list ${missing[*]}"; return 1; }
+    }
+    check "the registry's catalog lists the apps published at these versions" in_catalog
 fi
 
 # Installed apps are protected against deletion, so remove them through zigsaw.

@@ -1,6 +1,10 @@
 {
   "id": "org.notepad_plus_plus.NotepadPlusPlus",
   "version": "8.9.8.1",
+  "name": "Notepad++",
+  "summary": "A source code editor and Notepad replacement",
+  "homepage": "https://notepad-plus-plus.org/",
+  "license": "GPL-3.0-or-later",
   "command": "notepad++.exe",
   "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "exports": {

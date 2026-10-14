@@ -53,7 +53,8 @@ fn updateApp(ctx: *Context, ref: Store.Ref) !void {
             note("{s} {s}: pinned to {s}", .{ ref.id, ref.version, source });
             return;
         }
-        break :newer try remote.fetch(ctx, source, .{ .unless = ref.manifest });
+        const installed = try ctx.store.readImage(ctx.arena, ref.id, ref.manifest);
+        break :newer try remote.fetch(ctx, source, .{ .unless = ref.manifest, .installed = installed.config.permissions });
     };
 
     const image = newer orelse {

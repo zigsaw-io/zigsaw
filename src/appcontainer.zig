@@ -52,6 +52,12 @@ pub fn deleteProfile(arena: Allocator, id: []const u8) !void {
     if (hr < 0) return fail("deleting AppContainer profile for {s}: HRESULT 0x{x}", .{ id, @as(u32, @bitCast(hr)) });
 }
 
+/// The app's capability (see `Profile.capability`), whether or not its
+/// profile exists. Left to be freed at process exit.
+pub fn appCapability(arena: Allocator, id: []const u8) !win32.PSID {
+    return capabilitySid(arena, try profileName(arena, id));
+}
+
 fn profileName(arena: Allocator, id: []const u8) ![]u8 {
     return std.fmt.allocPrint(arena, "zigsaw.{s}", .{id});
 }

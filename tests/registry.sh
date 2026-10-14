@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end checks for `zigsaw push` and `zigsaw pull` against a real
 # registry: apps round-trip between two stores through it, byte for byte,
-# and builds take sources that are gone from their URLs from next to images.
+# builds take sources that are gone from their URLs from next to images, and
+# `search` and `info` find apps through the registry's catalog.
 #
 #   tests/registry.sh [registry-host] [path\to\zigsaw.exe]
 #
@@ -148,6 +149,63 @@ other_app_image() {
 check "pull by app id refuses an image of another app" other_app_image
 check "push by app id refuses another app's image" sh -c "ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_a' \"\$0\" push net.frippery.busybox org.example.other:2 2>&1 | grep -q 'is the image of org.example.other'" "$zigsaw"
 
+# The catalog: push --catalog lists apps as the registry has them at their
+# latest tag, and search and info read it. A second app has a name, a summary
+# and a kind of file of its own.
+CAT=test.registry.catalog
+sed -e "s/\"net.frippery.busybox\"/\"$CAT\"/" \
+    -e 's|"command": "busybox.exe",|&\n  "name": "Catalog Shell",\n  "summary": "A shell for the catalog checks",\n  "license": "GPL-2.0-only",\n  "homepage": "https://example.com/catalog",\n  "permissions": { "filesystem": ["documents"] },\n  "associations": { ".zct": { "command": "busybox", "description": "Zigsaw catalog test" } },|' \
+    "$root/recipes/busybox.json" >"$work\\catalog-app.json"
+za build "$work\\catalog-app.json" >/dev/null 2>&1 || echo "building $CAT failed"
+sza push $CAT >/dev/null 2>&1 && sza push $CAT $CAT:latest >/dev/null 2>&1
+catalog_pushed() { sza push --catalog net.frippery.busybox $CAT 2>&1 | grep -q 'pushed the catalog of 2 app(s)'; }
+search_all() {
+    local out
+    out=$(szb search) && grep -q '^net.frippery.busybox .*commands: busybox' <<<"$out" &&
+        grep -q "^$CAT .*Catalog Shell: A shell for the catalog checks" <<<"$out"
+}
+search_words() {
+    local out
+    out=$(szb search catalog SHELL) && grep -q "^$CAT " <<<"$out" && ! grep -q '^net.frippery' <<<"$out"
+}
+search_kind() { szb search .zct | grep -q "^$CAT "; }
+no_match() { ! szb search no-such-app-anywhere >/dev/null 2>&1; }
+info_catalog_app() {
+    local out
+    out=$(szb info $CAT) && grep -q 'Catalog Shell' <<<"$out" && grep -q 'permits *your Documents' <<<"$out" &&
+        grep -q 'license *GPL-2.0-only' <<<"$out" && grep -q 'opens *.zct' <<<"$out" && grep -q 'installed *no' <<<"$out"
+}
+info_any_image() { szb info "$repo/busybox:FRP-6075-g169694ebd" | grep -q '^net.frippery.busybox FRP-6075-g169694ebd'; }
+unknown_app() { ! sza push --catalog net.frippery.busybox org.example.none >/dev/null 2>&1; }
+told_first() {
+    local out told installed
+    out=$(szb pull $CAT 2>&1) || return 1
+    told=$(grep -n 'permits  your Documents' <<<"$out" | cut -d: -f1)
+    installed=$(grep -n '^installed' <<<"$out" | cut -d: -f1)
+    [ -n "$told" ] && [ -n "$installed" ] && [ "$told" -lt "$installed" ] && ! grep -q '^  permits' <<<"$(sed -n "$installed,\$p" <<<"$out")"
+}
+# The copy kept in the cache, when the registry can't be reached: the same
+# catalog, as another registry's.
+offline() {
+    local cache="$store_b\\cache\\catalog" name="${repo//[^A-Za-z0-9.-]/_}_catalog_latest"
+    local other="localhost:5999/${repo#*/}"
+    local other_name="${other//[^A-Za-z0-9.-]/_}_catalog_latest" out
+    cp "$cache\\$name.json" "$cache\\$other_name.json" && cp "$cache\\$name.digest" "$cache\\$other_name.digest" || return 1
+    out=$(ZIGSAW_REGISTRY="$other" ZIGSAW_HOME="$store_b" "$zigsaw" search catalog 2>&1) &&
+        grep -q "using the catalog of $other fetched on" <<<"$out" && grep -q "^$CAT " <<<"$out"
+}
+check "push --catalog lists apps as the registry has them" catalog_pushed
+check "search lists them all, by name and summary, or commands" search_all
+check "search finds what has every word, ignoring case" search_words
+check "search finds the kinds of file an app opens" search_kind
+check "search fails when nothing matches" no_match
+check "info shows an app's name, licence, permissions and kinds of file" info_catalog_app
+check "info shows any image, in the catalog or not" info_any_image
+check "push --catalog refuses an app the registry doesn't have" unknown_app
+check "pull tells what the app may reach before downloading it" told_first
+check "search uses the catalog kept from earlier when the registry can't be reached" offline
+check "an app can't have the id catalog" sh -c "sed 's/\"net.frippery.busybox\"/\"catalog\"/' '$root/recipes/busybox.json' > '$work\\catalog-id.json' && ! ZIGSAW_HOME='$store_a' \"\$0\" build '$work\\catalog-id.json' >/dev/null 2>&1" "$zigsaw"
+
 # Sources next to images: push --sources keeps the files an app was built
 # from in its image's repository, and a build whose pinned source can't be
 # had from its URL takes it from there, by its sha256. Each build below is in
@@ -288,7 +346,7 @@ fi
 # Installed apps are protected against deletion, so remove them through
 # zigsaw, and the images builds use with prune --downloads.
 for store in "$work\a" "$work\b" "$work\c" "$work\d" "$work\plain" "$work\fresh1" "$work\fresh2" "$work\fresh-none" "$work\fresh-vendor"; do
-    for id in net.frippery.busybox org.nodejs.node io.prettier.prettier test.registry.vendored; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
+    for id in net.frippery.busybox org.nodejs.node io.prettier.prettier test.registry.vendored test.registry.catalog; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
     ZIGSAW_HOME="$store" "$zigsaw" prune --downloads >/dev/null 2>&1
 done
 rm -rf "$work"

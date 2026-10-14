@@ -1,6 +1,10 @@
 {
   "id": "org.sqlite.sqlite3",
   "version": "3.53.4",
+  "name": "SQLite",
+  "summary": "The SQLite database's command-line shell",
+  "homepage": "https://sqlite.org/",
+  "license": "blessing",
   "command": "bin/sqlite3.exe",
   "permissions": { "filesystem": ["cwd"] },
   "sdk": {

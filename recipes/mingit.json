@@ -1,6 +1,10 @@
 {
   "id": "org.git_scm.MinGit",
   "version": "2.56.0.windows.1",
+  "name": "Git (MinGit)",
+  "summary": "Git for Windows' minimal distribution, for tools and scripts that run git",
+  "homepage": "https://gitforwindows.org/",
+  "license": "GPL-2.0-only",
   "command": "cmd/git.exe",
   "path": ["cmd"],
   "env": { "GIT_DISCOVERY_ACROSS_FILESYSTEM": "1" },

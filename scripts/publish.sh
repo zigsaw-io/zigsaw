@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds recipes and publishes them as images, each tagged with its app's
 # version and "latest", to the default registry (ghcr.io/zigsaw-io) or the
-# one in ZIGSAW_REGISTRY.
+# one in ZIGSAW_REGISTRY; then the registry's catalog of the apps, which
+# `zigsaw search` reads.
 #
 #   scripts/publish.sh [recipe.json...]     (default: those in published-recipes.txt)
 #
@@ -47,6 +48,15 @@ for recipe in "$@"; do
     published+=("$id $version $digest")
 done
 
+# The catalog `zigsaw search` reads lists every app published-recipes.txt
+# names, as the registry has it now: those published before this run too.
+catalog_ids=()
+for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); do
+    catalog_ids+=("$(grep -o '"id": *"[^"]*"' "$root/recipes/$name" | head -1 | cut -d'"' -f4)")
+done
+echo "== catalog"
+"$zigsaw" push --catalog "${catalog_ids[@]}"
+
 if $own_store; then
     # Installed apps are protected against deletion, so remove them through zigsaw.
     for line in "${published[@]}"; do "$zigsaw" rm --delete-data "${line%% *}" >/dev/null 2>&1 || true; done
@@ -64,7 +74,7 @@ done
 case $registry in
 ghcr.io/*)
     echo
-    echo "New packages on ghcr.io are private. Make each one public under"
+    echo "New packages on ghcr.io are private, the catalog's too (\"catalog\"). Make each one public under"
     echo "https://github.com/orgs/${registry#ghcr.io/}/packages -> the package -> Package settings."
     ;;
 esac

@@ -1,6 +1,10 @@
 {
   "id": "org.gnome.TextEditor",
   "version": "51.0",
+  "name": "GNOME Text Editor",
+  "summary": "A simple text editor that remembers your open documents",
+  "homepage": "https://apps.gnome.org/TextEditor/",
+  "license": "GPL-3.0-or-later",
   "command": "bin/gnome-text-editor.exe",
   "path": ["bin"],
   "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },

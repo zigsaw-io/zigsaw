@@ -1,0 +1,13 @@
+{
+  "id": "test.regprobe",
+  "version": "1",
+  "command": "regprobe.exe",
+  "modules": [
+    {
+      "name": "probe",
+      "sources": [
+        { "path": "../../zig-out/test/zigsaw-regprobe.exe", "dest": "regprobe.exe" }
+      ]
+    }
+  ]
+}

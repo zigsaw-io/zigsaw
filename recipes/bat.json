@@ -1,6 +1,10 @@
 {
   "id": "com.github.sharkdp.bat",
   "version": "0.26.1",
+  "name": "bat",
+  "summary": "A cat clone with syntax highlighting and Git integration",
+  "homepage": "https://github.com/sharkdp/bat",
+  "license": "MIT OR Apache-2.0",
   "command": "bat.exe",
   "permissions": { "filesystem": ["cwd:ro"] },
   "sdk": {

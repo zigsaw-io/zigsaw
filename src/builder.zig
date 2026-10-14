@@ -194,6 +194,10 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
     var annotations: std.json.ArrayHashMap([]const u8) = .{};
     try annotations.map.put(arena, "org.opencontainers.image.title", r.id);
     try annotations.map.put(arena, "org.opencontainers.image.version", r.version);
+    // The standard ones registries show, as ghcr.io does on a package's page.
+    if (r.summary) |s| try annotations.map.put(arena, "org.opencontainers.image.description", s);
+    if (r.license) |l| try annotations.map.put(arena, "org.opencontainers.image.licenses", l);
+    if (r.homepage) |h| try annotations.map.put(arena, "org.opencontainers.image.url", h);
     const manifest: oci.Manifest = .{
         .config = config_desc,
         .layers = layers.items,

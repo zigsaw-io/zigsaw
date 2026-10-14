@@ -222,6 +222,93 @@ prune_data_keeps_folder() {
 check "prune --data of a removed app's data leaves the folder's files" prune_data_keeps_folder
 unset ZIGSAW_USER_FOLDERS
 
+# --- Registry keys an app keeps (its config's "registry") --------------------------
+#
+# A fourth app keeps a test key, and a fifth the same one. Their runs set and
+# read values with System32's reg.exe (--command=reg).
+
+REG=test.sandbox.registry
+REG2=test.sandbox.registry2
+key="Software\\ZigsawTest\\sandbox-$$"
+record="HKCU\\Software\\zigsaw\\keys\\Software/ZigsawTest/sandbox-$$"
+for app in $REG $REG2; do
+    sed -e "s/\"net.frippery.busybox\"/\"$app\"/" \
+        -e "s/\"command\": \"busybox.exe\",/&\n  \"registry\": [\"Software\\\\\\\\ZigsawTest\\\\\\\\sandbox-$$\"],/" \
+        "$root/recipes/busybox.json" >"$work\\$app.json"
+    "$zigsaw" build "$work\\$app.json" >/dev/null 2>&1 || { echo "building $app failed"; exit 1; }
+done
+# sets <sandbox> <name> [run options...]: a run sets a value in the key.
+sets() {
+    local sb=$1 name=$2
+    shift 2
+    z run --sandbox="$sb" "$@" --command=reg $REG add "HKCU\\$key" /v "$name" /d "$sb" /f
+}
+# has <sandbox> <name> [run options...]: a run finds the value.
+has() {
+    local sb=$1 name=$2
+    shift 2
+    z run --sandbox="$sb" "$@" --command=reg $REG query "HKCU\\$key" /v "$name"
+}
+not_in_hkcu() { ! reg query "HKCU\\$key" >/dev/null 2>&1 && ! reg query "$record" >/dev/null 2>&1; }
+in_order() {
+    sets soft a && has low a && sets low b && has appcontainer b && sets appcontainer c && has soft c
+}
+ephemeral_starts_empty() { fails has soft a --ephemeral && sets soft e --ephemeral && fails has soft e && has soft a; }
+moved_aside() {
+    reg add "HKCU\\$key" /v native /d 1 /f >/dev/null || return 1
+    fails has soft native && has soft a || { reg delete "HKCU\\$key" /f >/dev/null 2>&1; return 1; }
+    reg query "HKCU\\$key" /v native >/dev/null && ! reg query "HKCU\\$key" /v a >/dev/null 2>&1
+    local status=$?
+    reg delete "HKCU\\$key" /f >/dev/null 2>&1
+    return $status
+}
+# Runs `sleep` in the app in the background, and waits until its run has put
+# the key in HKCU; its PID in $runner.
+start_sleeping() {
+    "$zigsaw" run "$1" sleep 60 </dev/null >/dev/null 2>&1 &
+    runner=$!
+    local i
+    for i in $(seq 50); do reg query "$record" >/dev/null 2>&1 && return 0; sleep 0.2; done
+    return 1
+}
+killed_run() {
+    start_sleeping $REG || return 1
+    # Set as the app would, while its run goes on.
+    reg add "HKCU\\$key" /v killed /d 1 /f >/dev/null
+    kill -9 $runner
+    wait $runner 2>/dev/null
+    reg query "$record" >/dev/null 2>&1 || { echo "the record went with the run"; return 1; }
+    has soft killed && not_in_hkcu
+}
+other_app_waits() {
+    start_sleeping $REG || return 1
+    local out
+    out=$(z run --command=reg $REG2 query "HKCU\\$key" 2>&1)
+    local status=$?
+    kill -9 $runner
+    wait $runner 2>/dev/null
+    [ $status -ne 0 ] && grep -q "which a run of $REG is using" <<<"$out" || { echo "$out"; return 1; }
+    # Its next run settles what the killed one left, into $REG's data.
+    z run --command=reg $REG2 query "HKCU\\$key" >/dev/null 2>&1 && not_in_hkcu && has soft killed
+}
+rm_settles() {
+    start_sleeping $REG || return 1
+    kill -9 $runner
+    wait $runner 2>/dev/null
+    "$zigsaw" rm --delete-data $REG >/dev/null 2>&1 </dev/null && not_in_hkcu && [ ! -e "$ZIGSAW_HOME\\data\\$REG" ] && [ ! -e "$ZIGSAW_HOME\\data\\$REG.hkcu.lock" ]
+}
+
+check "registry: a value one run sets is there in the next, in each sandbox" in_order
+check "  in a hive in the app's data" test -f "$ZIGSAW_HOME\\data\\$REG\\registry\\user.dat"
+check "  and HKCU has neither the key nor zigsaw's record of it between runs" not_in_hkcu
+check "--ephemeral: starts without the app's keys, and leaves them as they were" ephemeral_starts_empty
+check "a key of the same name that was there is moved aside for the run, and back after" moved_aside
+check "a run that didn't end leaves the key in HKCU, and the next one settles it" killed_run
+check "another app keeping the same key can't run while that app's run uses it" other_app_waits
+check "rm --delete-data settles what a run left, and leaves nothing in HKCU" rm_settles
+"$zigsaw" rm --delete-data $REG2 >/dev/null 2>&1 </dev/null
+reg delete "HKCU\\$key" /f >/dev/null 2>&1
+
 # --- Labels two apps share, labels zigsaw didn't make, and rm ---------------------
 
 check "a second app's low run writes the same path" writes $OTHER low "$work\\rw\\g" --filesystem="$work\\rw"

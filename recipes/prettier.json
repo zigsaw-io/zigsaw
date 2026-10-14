@@ -1,6 +1,10 @@
 {
   "id": "io.prettier.prettier",
   "version": "3.9.9",
+  "name": "Prettier",
+  "summary": "An opinionated code formatter for JavaScript, TypeScript, CSS, HTML, Markdown and more",
+  "homepage": "https://prettier.io/",
+  "license": "MIT",
   "command": "${node}\\node.exe",
   "args": ["${app}\\bin\\prettier.cjs"],
   "permissions": { "filesystem": ["cwd"] },

@@ -31,6 +31,10 @@ on Windows 11 Home 10.0.26300 with Defender real-time protection on.
   directory in all three sandboxes, since Windows derives AppData from
   `USERPROFILE`; the registry, `LocalLow` and the user's Documents and the
   like don't follow (see [below](#prebuilt-gui-apps)).
+- **The registry (iteration 19)**: a key in HKCU labelled low, or granted
+  to an app's capability, is one the app can write at low integrity and in
+  an AppContainer, so zigsaw keeps an app's keys with its data and puts them
+  there for its runs (see [below](#the-registry)).
 
 ### Matrix
 
@@ -286,7 +290,7 @@ VLC 3.0.24, from upstream's archives
 
 | App | soft | appcontainer | low | Its settings |
 |---|---|---|---|---|
-| 7-Zip's file manager | ok | opens its root view instead (known gap) | ok | `HKCU\Software\7-Zip`: the real registry under soft; not saved otherwise |
+| 7-Zip's file manager | ok | opens its root view instead (known gap) | ok | `HKCU\Software\7-Zip`: the real registry under soft; not saved otherwise. Since iteration 19, kept with its data, and saved in all three sandboxes ([the registry](#the-registry)) |
 | Notepad++ | ok | ok | ok | data, `AppData\Roaming\Notepad++` |
 | SumatraPDF | ok | ok | ok | data, `AppData\Local\SumatraPDF` (in an AppContainer, the container's folder) |
 | VLC | ok | ok | ok | data, `AppData\Roaming\vlc` |
@@ -352,7 +356,61 @@ In Notepad++'s Open dialog, with fake folders standing in for the user's:
   the dialog pinned Downloads and Documents (the folders the app has), in
   all three sandboxes. Desktop isn't among the pane's default pins.
 
+## The registry
+
+Iteration 19, 2026-10-15, Windows 11 26300. Before keeping an app's keys in
+`HKEY_CURRENT_USER` with its data, [`tests/regprobe.zig`](../tests/regprobe.zig)
+(`zig build regprobe`; [`tests/regprobe/app.json`](../tests/regprobe/app.json)
+makes an app of it) checked what that takes, without administrator rights.
+
+At medium integrity, as zigsaw:
+
+| Probe | Result |
+|---|---|
+| `RegLoadAppKey` on a file in a directory of the user's | loads it, creating `user.dat`, `.LOG1` and `.LOG2`; privately, only through the key it returns |
+| The same file loaded again while it's loaded | the same hive: what one handle wrote, the other sees |
+| `RegCopyTree` from an HKCU key into the hive | `ERROR_ACCESS_DENIED`, even for values alone |
+| `RegCopyTree` from the hive into HKCU | works |
+| Copying value by value (`RegEnumValue`, `RegSetValueEx`, subkeys through their handles), both ways | keeps every type (SZ, EXPAND_SZ, MULTI_SZ, DWORD, QWORD, BINARY), the default value and the subkeys; 2,000 values in 109 ms |
+| `RegRenameKey` in HKCU | works |
+
+In the sandboxes, a key in HKCU that zigsaw prepared, and one it didn't:
+
+| The app, in its run | soft | low, key labelled low (inheritable) | appcontainer, key granted to the app's capability (inheritable) |
+|---|---|---|---|
+| reads, sets and deletes values | ok | ok | ok |
+| makes a subkey (`RegCreateKeyEx` from HKCU with the whole path) | ok | ok | ok |
+| makes two missing levels at once that way | ok | ok | `ERROR_ACCESS_DENIED` |
+| makes two missing levels at once from a handle to the key | ok | ok | ok |
+| writes a sibling key zigsaw didn't prepare | ok | denied | denied |
+| reads a key zigsaw didn't prepare | ok | ok | denied |
+
+- So zigsaw copies an app's keys value by value, and a run labels or grants
+  them: in every sandbox the app can write them.
+- **7-Zip 26.04's file manager**, with `HKCU\Software\7-Zip` prepared, saved
+  the same settings on close in all three sandboxes: `FM` with its window's
+  position, panels, list mode and folder history, and `FM\Columns`. It makes
+  its keys one level at a time, so an AppContainer's limit doesn't reach it.
+
 ## Other findings
+
+- **v0.18.0's programs are built for the CPU of GitHub's runner.**
+  `build.zig` set only the target's OS, so Zig compiled for the CPU of the
+  machine that built them: the released `zigsaw.exe` has 18,697 AVX2
+  instructions, the SHA extensions' (`sha256rnds2`) and BMI2's. A build of
+  the tag here is deterministic, but differs (2,354,688 bytes released,
+  2,263,552 here), and no CPU model Zig names (`znver2`-`4`,
+  `skylake_avx512`, `icelake_server`, `sapphirerapids`, `x86_64_v3`) gives
+  the release's bytes: the runner's CPU, in a virtual machine, has some
+  features hidden. On a CPU without the SHA extensions, such as Intel's 6th
+  to 10th generation Core, it would stop at its first hash. From 0.19.0,
+  `build.zig` targets the x86-64 baseline: pulling zig takes about 3% longer
+  than with a build for this machine's CPU (32.4 and 33.5 s against 31.2 and
+  32.9 s).
+- **VLC sometimes starts playing 30 s late.** In one run of
+  `tests/guiapps.sh`, VLC's window was up at once, but named the clip only
+  30.7 s later, when it started playing it; the next 13 runs by hand and 5
+  suite runs took 0.7-1.2 s. Not found why. The suite waits for it.
 
 - **Fixed: `soft` runs could modify installed apps.** Python wrote a file into
   its shared app folder, so the files no longer matched the image digest.

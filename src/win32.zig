@@ -596,6 +596,13 @@ pub extern "advapi32" fn RegQueryInfoKeyW(key: HKEY, class: ?[*]u16, class_len: 
 pub extern "advapi32" fn RegDeleteTreeW(key: HKEY, sub_key: ?LPCWSTR) callconv(.winapi) LSTATUS;
 pub extern "advapi32" fn RegDeleteKeyW(key: HKEY, sub_key: LPCWSTR) callconv(.winapi) LSTATUS;
 pub extern "advapi32" fn RegDeleteValueW(key: HKEY, name: ?LPCWSTR) callconv(.winapi) LSTATUS;
+pub extern "advapi32" fn RegEnumValueW(key: HKEY, index: DWORD, name: [*]u16, name_len: *DWORD, reserved: ?*DWORD, type: ?*DWORD, data: ?[*]u8, data_len: ?*DWORD) callconv(.winapi) LSTATUS;
+/// Loads a hive file, creating it if there is none, privately: only through
+/// the key returned. It's unloaded when the last handle to it closes.
+pub extern "advapi32" fn RegLoadAppKeyW(file: LPCWSTR, result: *HKEY, access: DWORD, options: DWORD, reserved: DWORD) callconv(.winapi) LSTATUS;
+pub const KEY_ALL_ACCESS: DWORD = 0xF003F;
+/// For GetNamedSecurityInfoW and the like: "CURRENT_USER\\Software\\...".
+pub const SE_REGISTRY_KEY: c_int = 4;
 
 // ---------------------------------------------------------------------------
 // Directory junctions: the user's folders in an app's home (folders.zig)

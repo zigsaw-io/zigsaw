@@ -1,6 +1,10 @@
 {
   "id": "com.github.facebook.zstd",
   "version": "1.5.7",
+  "name": "Zstandard",
+  "summary": "Fast lossless compression: the zstd command-line tool",
+  "homepage": "https://facebook.github.io/zstd/",
+  "license": "BSD-3-Clause OR GPL-2.0-only",
   "command": "bin/zstd.exe",
   "permissions": { "filesystem": ["cwd"] },
   "exports": {

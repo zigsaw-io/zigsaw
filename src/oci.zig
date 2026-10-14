@@ -265,6 +265,15 @@ pub const Build = struct {
 pub const AppConfig = struct {
     id: []const u8,
     version: []const u8,
+    /// What people call the app ("VLC media player"), for `search` and
+    /// `info`. Absent unless its recipe gives one, as are the three below.
+    name: ?[]const u8 = null,
+    /// What the app is, in a line.
+    summary: ?[]const u8 = null,
+    /// Where to read about it: an https URL.
+    homepage: ?[]const u8 = null,
+    /// Its licence, as an SPDX expression ("GPL-2.0-or-later").
+    license: ?[]const u8 = null,
     /// Executable to run: relative to the app root, or in a runtime.
     command: []const u8,
     /// Arguments placed before the caller's. They may use placeholders.
@@ -290,6 +299,11 @@ pub const AppConfig = struct {
     /// The kinds of file the app opens, by extension (".rnote"). Absent
     /// unless there are some.
     associations: ?std.json.ArrayHashMap(Association) = null,
+    /// Keys in HKEY_CURRENT_USER where the app keeps its settings, such as
+    /// "Software\\7-Zip". zigsaw keeps them with the app's data, and puts
+    /// them in the registry for its runs (see hkcu.zig). Absent unless there
+    /// are some.
+    registry: ?[]const []const u8 = null,
     /// The images the app runs with, by alias, in the order of their layers.
     runtimes: std.json.ArrayHashMap(Runtime) = .{},
     /// Null in images made before iteration 4.
@@ -393,8 +407,19 @@ pub fn validateConfig(what: []const u8, c: AppConfig) error{Failed}!void {
 pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []const u8) error{Failed}!void {
     if (!isValidId(c.id))
         return fail("{s}: id \"{s}\" must be 1-57 characters of letters, digits, '.', '-', '_'", .{ what, c.id });
+    // The registry's catalog of apps is <registry>/catalog (see catalog.zig).
+    if (std.ascii.eqlIgnoreCase(c.id, "catalog"))
+        return fail("{s}: the id \"catalog\" is the name of a registry's catalog of apps", .{what});
     if (c.version.len == 0)
         return fail("{s}: version must not be empty", .{what});
+    if (c.name) |n| if (!isOneLine(n, 64))
+        return fail("{s}: name must be 1-64 bytes on one line", .{what});
+    if (c.summary) |s| if (!isOneLine(s, 160))
+        return fail("{s}: summary must be 1-160 bytes on one line", .{what});
+    if (c.homepage) |h| if (!isValidHomepage(h))
+        return fail("{s}: homepage \"{s}\" must be an https:// URL of up to 256 bytes, without spaces", .{ what, h });
+    if (c.license) |l| if (!isValidLicense(l))
+        return fail("{s}: license \"{s}\" must be an SPDX expression, such as \"GPL-2.0-or-later\" or \"MIT OR Apache-2.0\"", .{ what, l });
     if (!isValidCommand(c.command, aliases))
         return fail("{s}: command \"{s}\" must be a relative path inside the app, or start with a runtime's ${{alias}}\\", .{ what, c.command });
     for (c.path) |p| if (!isValidPathEntry(p, aliases))
@@ -443,6 +468,138 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
                 return fail("{s}: association \"{s}\" description must be 1-256 bytes on one line", .{ what, ext });
         }
     }
+    if (c.registry) |keys| for (keys, 0..) |key, i| {
+        if (!isValidRegistryKey(key))
+            return fail("{s}: registry key \"{s}\" must be a key of the app's own in HKEY_CURRENT_USER\\Software, such as \"Software\\\\7-Zip\": no other root, not Software itself, nor Classes, Microsoft, Policies, Wow6432Node, AppDataLow or zigsaw in it", .{ what, key });
+        for (keys[0..i]) |earlier| if (registryKeyWithin(earlier, key) or registryKeyWithin(key, earlier))
+            return fail("{s}: registry keys \"{s}\" and \"{s}\" overlap", .{ what, earlier, key });
+    };
+}
+
+/// 1 to `max` bytes, without control characters.
+fn isOneLine(s: []const u8, max: usize) bool {
+    if (s.len == 0 or s.len > max) return false;
+    for (s) |ch| if (ch < 0x20 or ch == 0x7f) return false;
+    return true;
+}
+
+fn isValidHomepage(url: []const u8) bool {
+    if (!std.mem.startsWith(u8, url, "https://") or url.len <= "https://".len or url.len > 256) return false;
+    for (url) |ch| if (ch <= 0x20 or ch == 0x7f) return false;
+    return true;
+}
+
+/// SPDX license expressions: identifiers ("LicenseRef-..." included), "WITH",
+/// "AND", "OR" and parentheses.
+fn isValidLicense(l: []const u8) bool {
+    if (l.len == 0 or l.len > 128) return false;
+    for (l) |ch| switch (ch) {
+        'a'...'z', 'A'...'Z', '0'...'9', '.', '-', '+', ' ', '(', ')', ':' => {},
+        else => return false,
+    };
+    return true;
+}
+
+/// What `p` lets an app reach, in words, for `pull`, `update` and `info`:
+/// "the network; the directory you run it from; your Documents and
+/// Downloads; C:\data (read-only)".
+pub fn describePermissions(arena: std.mem.Allocator, p: Permissions) ![]const u8 {
+    var parts: std.ArrayList([]const u8) = .empty;
+    if (p.network) try parts.append(arena, "the network");
+    var folders: [2]std.ArrayList([]const u8) = .{ .empty, .empty };
+    for (p.filesystem) |spec| {
+        const g = parseFsGrant(spec) orelse continue;
+        const access = if (g.read_only) " (read-only)" else "";
+        switch (g.where) {
+            .cwd => try parts.append(arena, try std.fmt.allocPrint(arena, "the directory you run it from{s}", .{access})),
+            .path => |path| try parts.append(arena, try std.fmt.allocPrint(arena, "{s}{s}", .{ path, access })),
+            .folder => |f| {
+                const name = try arena.dupe(u8, @tagName(f));
+                name[0] = std.ascii.toUpper(name[0]);
+                try folders[@intFromBool(g.read_only)].append(arena, name);
+            },
+            .unknown => |name| try parts.append(arena, try std.fmt.allocPrint(arena, "\"{s}\", which this zigsaw doesn't know", .{name})),
+        }
+    }
+    for (folders, [_][]const u8{ "", " (read-only)" }) |list, access| if (list.items.len > 0)
+        try parts.append(arena, try std.fmt.allocPrint(arena, "your {s}{s}", .{ try joinAnd(arena, list.items), access }));
+    if (parts.items.len == 0) return "nothing outside its own files";
+    return std.mem.join(arena, "; ", parts.items);
+}
+
+/// The keys an app keeps (see `AppConfig.registry`) in full, for messages:
+/// "HKCU\Software\7-Zip".
+pub fn describeRegistry(arena: std.mem.Allocator, keys: []const []const u8) ![]const u8 {
+    const full = try arena.alloc([]const u8, keys.len);
+    for (full, keys) |*f, k| f.* = try std.fmt.allocPrint(arena, "HKCU\\{s}", .{k});
+    return joinAnd(arena, full);
+}
+
+/// "a", "a and b", "a, b and c".
+pub fn joinAnd(arena: std.mem.Allocator, items: []const []const u8) ![]const u8 {
+    if (items.len <= 1) return if (items.len == 1) items[0] else "";
+    return std.fmt.allocPrint(arena, "{s} and {s}", .{ try std.mem.join(arena, ", ", items[0 .. items.len - 1]), items[items.len - 1] });
+}
+
+test describePermissions {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try std.testing.expectEqualStrings("nothing outside its own files", try describePermissions(arena, .{}));
+    try std.testing.expectEqualStrings(
+        "the network; the directory you run it from; C:\\data (read-only); \"xdg-later\", which this zigsaw doesn't know; your Desktop, Downloads and Videos; your Music (read-only)",
+        try describePermissions(arena, .{ .network = true, .filesystem = &.{ "cwd", "desktop", "C:\\data:ro", "downloads:rw", "music:ro", "videos", "xdg-later" } }),
+    );
+}
+
+test "app metadata" {
+    try std.testing.expect(isValidLicense("MIT OR Apache-2.0"));
+    try std.testing.expect(isValidLicense("LGPL-2.1-or-later AND (BSD-3-Clause OR LicenseRef-unRAR)"));
+    try std.testing.expect(!isValidLicense("MIT; rm -rf"));
+    try std.testing.expect(isValidHomepage("https://www.videolan.org/vlc/"));
+    try std.testing.expect(!isValidHomepage("http://example.com"));
+    try std.testing.expect(!isValidHomepage("https://a b"));
+    try std.testing.expect(isOneLine("VLC media player", 64));
+    try std.testing.expect(!isOneLine("two\nlines", 64));
+}
+
+/// A key the app keeps (see `AppConfig.registry`): a path relative to
+/// HKEY_CURRENT_USER, below Software and its own there. Not the keys Windows
+/// and zigsaw keep for everyone (Classes, Microsoft...), which a run moving
+/// aside would break. Parts are plain names, without '/', which zigsaw's own
+/// record of a key uses instead of '\'.
+pub fn isValidRegistryKey(key: []const u8) bool {
+    if (key.len == 0 or key.len > 255) return false;
+    var parts = std.mem.splitScalar(u8, key, '\\');
+    var count: usize = 0;
+    while (parts.next()) |part| : (count += 1) {
+        if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
+        for (part) |ch| if (ch < 0x20 or ch == 0x7f or ch == '/') return false;
+        if (count == 0 and !std.ascii.eqlIgnoreCase(part, "Software")) return false;
+        if (count == 1) for ([_][]const u8{ "Classes", "Microsoft", "Policies", "Wow6432Node", "AppDataLow", "zigsaw" }) |shared|
+            if (std.ascii.eqlIgnoreCase(part, shared)) return false;
+    }
+    return count >= 2;
+}
+
+/// Whether registry key `inner` is `outer` or below it.
+fn registryKeyWithin(outer: []const u8, inner: []const u8) bool {
+    if (inner.len < outer.len or !std.ascii.eqlIgnoreCase(inner[0..outer.len], outer)) return false;
+    return inner.len == outer.len or inner[outer.len] == '\\';
+}
+
+test isValidRegistryKey {
+    for ([_][]const u8{ "Software\\7-Zip", "software\\VideoLAN\\VLC", "Software\\Some App\\Settings" }) |k|
+        try std.testing.expect(isValidRegistryKey(k));
+    for ([_][]const u8{
+        "",                     "Software",               "Software\\",         "\\Software\\x",
+        "SOFTWARE\\Classes",    "Software\\Microsoft\\x", "Software\\zigsaw",   "Software\\AppDataLow\\x",
+        "Software\\Policies",   "Software\\Wow6432Node",  "System\\x",          "Software\\a\\\\b",
+        "Software\\..\\x",      "Software\\a/b",          "Software\\a\x01",    "HKCU\\Software\\x",
+    }) |k| try std.testing.expect(!isValidRegistryKey(k));
+    try std.testing.expect(registryKeyWithin("Software\\A", "software\\a\\B"));
+    try std.testing.expect(registryKeyWithin("Software\\A", "Software\\A"));
+    try std.testing.expect(!registryKeyWithin("Software\\A", "Software\\AB"));
 }
 
 /// Extensions name registry keys, and end the name of the app's own

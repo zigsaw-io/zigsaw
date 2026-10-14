@@ -30,6 +30,7 @@ const exports = @import("exports.zig");
 const oci = @import("oci.zig");
 const shortcuts = @import("shortcuts.zig");
 const win32 = @import("win32.zig");
+const Key = @import("regkey.zig").Key;
 const fail = Context.fail;
 const note = Context.note;
 
@@ -309,104 +310,6 @@ fn containsIgnoreCase(list: []const []const u8, name: []const u8) bool {
     for (list) |n| if (std.ascii.eqlIgnoreCase(n, name)) return true;
     return false;
 }
-
-/// An open registry key.
-const Key = struct {
-    handle: win32.HKEY,
-
-    /// Opens `parent`'s key `sub`, making it and the keys on the way if
-    /// they aren't there.
-    fn create(arena: Allocator, parent: win32.HKEY, sub: []const u8) !Key {
-        var handle: win32.HKEY = undefined;
-        try check("creating", sub, win32.RegCreateKeyExW(parent, try win32.wide(arena, sub), 0, null, 0, win32.KEY_READ | win32.KEY_WRITE, null, &handle, null));
-        return .{ .handle = handle };
-    }
-
-    /// Null if there's no such key.
-    fn open(arena: Allocator, parent: win32.HKEY, sub: []const u8, access: win32.DWORD) !?Key {
-        var handle: win32.HKEY = undefined;
-        const status = win32.RegOpenKeyExW(parent, try win32.wide(arena, sub), 0, access, &handle);
-        if (status == win32.ERROR_FILE_NOT_FOUND) return null;
-        try check("opening", sub, status);
-        return .{ .handle = handle };
-    }
-
-    fn close(k: Key) void {
-        _ = win32.RegCloseKey(k.handle);
-    }
-
-    /// Sets a string value; a null `name` is the key's default value.
-    fn setString(k: Key, arena: Allocator, name: ?[]const u8, value: []const u8) !void {
-        const value_w = try win32.wide(arena, value);
-        const name_w: ?win32.LPCWSTR = if (name) |n| try win32.wide(arena, n) else null;
-        const bytes: []const u8 = std.mem.sliceAsBytes(value_w[0 .. value_w.len + 1]);
-        try check("setting", name orelse "(default)", win32.RegSetValueExW(k.handle, name_w, 0, win32.REG_SZ, bytes.ptr, @intCast(bytes.len)));
-    }
-
-    /// A string value, or null if the key has no such value, or one of
-    /// another type.
-    fn getString(k: Key, arena: Allocator, name: []const u8) !?[]const u8 {
-        const name_w = try win32.wide(arena, name);
-        var size: win32.DWORD = 0;
-        var kind: win32.DWORD = 0;
-        var status = win32.RegQueryValueExW(k.handle, name_w, null, &kind, null, &size);
-        if (status == win32.ERROR_FILE_NOT_FOUND) return null;
-        try check("reading", name, status);
-        if (kind != win32.REG_SZ) return null;
-        const buf = try arena.alignedAlloc(u8, .of(u16), size + 2);
-        status = win32.RegQueryValueExW(k.handle, name_w, null, null, buf.ptr, &size);
-        try check("reading", name, status);
-        const units: []const u16 = @alignCast(std.mem.bytesAsSlice(u16, buf[0 .. size - size % 2]));
-        return try std.unicode.wtf16LeToWtf8Alloc(arena, std.mem.sliceTo(units, 0));
-    }
-
-    fn deleteValue(k: Key, arena: Allocator, name: []const u8) !void {
-        const status = win32.RegDeleteValueW(k.handle, try win32.wide(arena, name));
-        if (status != win32.ERROR_FILE_NOT_FOUND) try check("deleting", name, status);
-    }
-
-    /// The names of the key's own keys.
-    fn subKeys(k: Key, arena: Allocator) ![]const []const u8 {
-        var out: std.ArrayList([]const u8) = .empty;
-        var index: win32.DWORD = 0;
-        while (true) : (index += 1) {
-            // Key names are at most 255 characters.
-            var buf: [256]u16 = undefined;
-            var len: win32.DWORD = buf.len;
-            const status = win32.RegEnumKeyExW(k.handle, index, &buf, &len, null, null, null, null);
-            if (status == win32.ERROR_NO_MORE_ITEMS) break;
-            try check("listing", "keys", status);
-            try out.append(arena, try std.unicode.wtf16LeToWtf8Alloc(arena, buf[0..len]));
-        }
-        return out.items;
-    }
-
-    /// Whether the key has no keys and no values, its default included.
-    fn isEmpty(k: Key) !bool {
-        var keys: win32.DWORD = 0;
-        var values: win32.DWORD = 0;
-        try check("reading", "a key", win32.RegQueryInfoKeyW(k.handle, null, null, null, &keys, null, null, &values, null, null, null, null));
-        return keys == 0 and values == 0;
-    }
-
-    /// Deletes the key `sub` and all below it, if it's there.
-    fn deleteTree(k: Key, arena: Allocator, sub: []const u8) !void {
-        const status = win32.RegDeleteTreeW(k.handle, try win32.wide(arena, sub));
-        if (status == win32.ERROR_FILE_NOT_FOUND) return;
-        try check("deleting", sub, status);
-    }
-
-    /// Deletes the key `sub`, which has no keys of its own.
-    fn deleteKey(k: Key, arena: Allocator, sub: []const u8) !void {
-        const status = win32.RegDeleteKeyW(k.handle, try win32.wide(arena, sub));
-        if (status != win32.ERROR_FILE_NOT_FOUND) try check("deleting", sub, status);
-    }
-
-    fn check(doing: []const u8, what: []const u8, status: win32.LSTATUS) !void {
-        if (status == win32.ERROR_SUCCESS) return;
-        return fail("registering file types: {s} {s} failed: error {d} ({s})", .{ doing, what, status, win32.errorName(status) });
-    }
-};
 
 test "registry keys: strings round-trip, an emptied extension goes" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);

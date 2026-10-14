@@ -7,6 +7,7 @@
 //! the default registry: `org.nodejs.node` is ghcr.io/zigsaw-io/org.nodejs.node.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Registry = @import("Registry.zig");
 const Store = @import("Store.zig");
@@ -61,6 +62,9 @@ pub const FetchOptions = struct {
     /// The manifest digest already installed: if the image still has it,
     /// `fetch` returns null without downloading any blob.
     unless: ?[]const u8 = null,
+    /// What the installed version may reach, for `update`: then only a
+    /// change to that is told.
+    installed: ?oci.Permissions = null,
 };
 
 /// Downloads an image into the store, ready to install. `zigsaw pull` is this
@@ -90,6 +94,9 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
     try oci.validateLayers(target.text, manifest, config);
     if (target.app_id) |id| if (!std.ascii.eqlIgnoreCase(id, config.id))
         return fail("{f} holds {s}, not {s}", .{ ref, config.id, id });
+    // What it is and may reach, before any layer is downloaded, so that
+    // nobody installs an app without seeing it.
+    try describe(ctx, config, opts.installed);
 
     for (manifest.layers) |desc| try downloadBlob(ctx, &registry, desc);
     const manifest_desc = try ctx.store.putBlob(arena, fetched.bytes, oci.media_type.manifest);
@@ -98,7 +105,55 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
         .manifest = manifest,
         .config = config,
         .source = target.text,
+        .described = true,
     };
+}
+
+/// An image's manifest and config, as a registry has them.
+pub const Info = struct {
+    target: Target,
+    manifest_digest: []const u8,
+    manifest: oci.Manifest,
+    config: oci.AppConfig,
+};
+
+/// Reads an image's manifest and config from its registry, without its
+/// layers: what `info` shows and the catalog lists. The config stays in the
+/// store as a blob.
+pub fn fetchInfo(ctx: *Context, image_text: []const u8) !Info {
+    const arena = ctx.arena;
+    const target = try resolve(ctx, image_text);
+    var registry: Registry = undefined;
+    try registry.init(ctx, target.ref, "pull");
+    defer registry.deinit();
+    const fetched = try registry.fetchManifest();
+    if (target.ref.digest) |want| if (!std.mem.eql(u8, want, fetched.digest))
+        return fail("{f} returned a manifest with digest {s}", .{ target.ref, fetched.digest });
+    const manifest = try parseManifest(arena, target.ref, fetched.bytes);
+    if (!oci.isConfigType(manifest.config.mediaType))
+        return fail("{f} is not a zigsaw app (its config type is {s}; it may be a container image)", .{ target.ref, manifest.config.mediaType });
+    try downloadBlob(ctx, &registry, manifest.config);
+    const config = try oci.parseConfig(arena, target.text, manifest.config.mediaType, try ctx.store.readBlob(arena, manifest.config.digest));
+    try oci.validateLayers(target.text, manifest, config);
+    if (target.app_id) |id| if (!std.ascii.eqlIgnoreCase(id, config.id))
+        return fail("{f} holds {s}, not {s}", .{ target.ref, config.id, id });
+    return .{ .target = target, .manifest_digest = fetched.digest, .manifest = manifest, .config = config };
+}
+
+/// Tells what an app about to be installed is, and what it may reach; for an
+/// update, only whether what it may reach changed.
+fn describe(ctx: *Context, cfg: oci.AppConfig, installed: ?oci.Permissions) !void {
+    const arena = ctx.arena;
+    const permits = try oci.describePermissions(arena, cfg.permissions);
+    if (installed) |before| {
+        const was = try oci.describePermissions(arena, before);
+        if (!std.mem.eql(u8, permits, was)) note("{s} {s} now permits {s}; it permitted {s}", .{ cfg.id, cfg.version, permits, was });
+        return;
+    }
+    if (cfg.name) |name| note("{s} {s}: {s}", .{ cfg.id, cfg.version, name }) else note("{s} {s}", .{ cfg.id, cfg.version });
+    if (cfg.summary) |s| note("  {s}", .{s});
+    note("  permits  {s}", .{permits});
+    if (cfg.registry) |keys| note("  keeps    {s} with its data", .{try oci.describeRegistry(arena, keys)});
 }
 
 /// Downloads a blob into the store, unless it's there already.
@@ -201,7 +256,7 @@ fn pushSources(ctx: *Context, registry: *Registry, installed: Store.Ref) !void {
 
 /// Uploads a blob unless the repository has it, or mounts it from
 /// `mount_from` if the registry can.
-fn uploadIfMissing(ctx: *Context, registry: *Registry, desc: oci.Descriptor, path: []const u8, mount_from: ?[]const u8) !void {
+pub fn uploadIfMissing(ctx: *Context, registry: *Registry, desc: oci.Descriptor, path: []const u8, mount_from: ?[]const u8) !void {
     if (try registry.hasBlob(desc.digest)) return;
     const start = ctx.now();
     switch (try registry.startUpload(desc.digest, mount_from)) {
@@ -286,7 +341,7 @@ test expandShort {
 
 /// Parses a fetched manifest, and checks it is a single image rather than an
 /// index. Whether it's a zigsaw app is up to its config.
-fn parseManifest(arena: std.mem.Allocator, ref: Registry.Reference, bytes: []const u8) !oci.Manifest {
+pub fn parseManifest(arena: std.mem.Allocator, ref: Registry.Reference, bytes: []const u8) !oci.Manifest {
     const Probe = struct { mediaType: ?[]const u8 = null, manifests: ?[]const std.json.Value = null };
     const probe = std.json.parseFromSliceLeaky(Probe, arena, bytes, .{ .ignore_unknown_fields = true }) catch
         return fail("{f} returned a manifest that isn't JSON", .{ref});

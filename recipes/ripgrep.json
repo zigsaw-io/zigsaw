@@ -1,6 +1,10 @@
 {
   "id": "com.github.BurntSushi.ripgrep",
   "version": "15.2.0",
+  "name": "ripgrep",
+  "summary": "Searches files for a regular expression, recursively and fast, respecting .gitignore",
+  "homepage": "https://github.com/BurntSushi/ripgrep",
+  "license": "Unlicense OR MIT",
   "command": "rg.exe",
   "permissions": { "filesystem": ["cwd:ro"] },
   "sdk": {

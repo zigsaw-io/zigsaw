@@ -31,6 +31,7 @@ const Store = @import("Store.zig");
 const environment = @import("environment.zig");
 const exports = @import("exports.zig");
 const folders = @import("folders.zig");
+const hkcu = @import("hkcu.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
 const fail = Context.fail;
@@ -179,6 +180,16 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             .network = network,
         }),
     }
+
+    // The keys the app keeps in HKCU, there for the run (see hkcu.zig), and
+    // taken back before an --ephemeral run's data directory goes.
+    const keys = try hkcu.enter(ctx, cfg.id, cfg.registry, data_dir, switch (sandbox) {
+        .soft => .none,
+        .low => .low,
+        .appcontainer => .{ .capability = try appcontainer.appCapability(arena, cfg.id) },
+    }, run_dir == null);
+    defer if (keys) |k| hkcu.leave(ctx, k);
+    if (ctx.verbose) if (cfg.registry) |r| note("registry {s} (kept in {s}\\registry)", .{ try std.mem.join(arena, ", ", r), data_dir });
 
     const code = try process.spawn(arena, .{
         .exe = exe,

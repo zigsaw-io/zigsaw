@@ -1,6 +1,10 @@
 {
   "id": "org.videolan.VLC",
   "version": "3.0.24",
+  "name": "VLC media player",
+  "summary": "Plays most multimedia files, DVDs, audio CDs and streams",
+  "homepage": "https://www.videolan.org/vlc/",
+  "license": "GPL-2.0-or-later",
   "command": "vlc.exe",
   "args": ["--no-qt-privacy-ask", "--no-qt-updates-notif"],
   "permissions": { "network": true, "filesystem": ["cwd", "desktop", "downloads", "music", "pictures", "videos"] },

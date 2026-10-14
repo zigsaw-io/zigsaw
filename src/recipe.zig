@@ -109,6 +109,12 @@ pub const Vendor = struct {
 pub const Recipe = struct {
     id: []const u8,
     version: []const u8,
+    /// The app's name, a line about it, its homepage and licence (see
+    /// oci.AppConfig).
+    name: ?[]const u8 = null,
+    summary: ?[]const u8 = null,
+    homepage: ?[]const u8 = null,
+    license: ?[]const u8 = null,
     command: []const u8,
     args: []const []const u8 = &.{},
     path: []const []const u8 = &.{"."},
@@ -123,6 +129,8 @@ pub const Recipe = struct {
     shortcuts: ?std.json.ArrayHashMap(oci.Shortcut) = null,
     /// The kinds of file the app opens, by extension (see oci.AppConfig).
     associations: ?std.json.ArrayHashMap(oci.Association) = null,
+    /// Keys in HKEY_CURRENT_USER kept with the app's data (see oci.AppConfig).
+    registry: ?[]const []const u8 = null,
     /// Images the build uses, by alias: references pinned with "@sha256:...".
     sdk: std.json.ArrayHashMap([]const u8) = .{},
     /// Images the app runs with, by alias, pinned the same way. Their
@@ -153,6 +161,10 @@ pub const Recipe = struct {
         return .{
             .id = r.id,
             .version = r.version,
+            .name = r.name,
+            .summary = r.summary,
+            .homepage = r.homepage,
+            .license = r.license,
             .command = r.command,
             .args = r.args,
             .path = r.path,
@@ -162,6 +174,7 @@ pub const Recipe = struct {
             .aliases = r.aliases,
             .shortcuts = r.shortcuts,
             .associations = r.associations,
+            .registry = r.registry,
             .runtimes = runtimes,
             .build = build,
         };

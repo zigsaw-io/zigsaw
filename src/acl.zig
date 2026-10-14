@@ -233,6 +233,46 @@ pub fn letChildrenQueryUs(arena: Allocator) !void {
     if (rc != 0) return fail("changing zigsaw's own integrity label: error {d}", .{rc});
 }
 
+// ---------------------------------------------------------------------------
+// Registry keys
+//
+// For the keys an app keeps (hkcu.zig), which are only in HKEY_CURRENT_USER
+// while it runs: zigsaw deletes them afterwards, so nothing is undone here.
+
+/// Labels HKCU\<sub> low integrity, and through inheritance the keys in it,
+/// so that low-integrity processes can write there and make keys.
+pub fn labelKeyLow(arena: Allocator, sub: []const u8) !void {
+    const low = try lowIntegritySid(arena);
+    const size = @sizeOf(win32.ACL) + @sizeOf(win32.ACCESS_ALLOWED_ACE) + win32.GetLengthSid(low);
+    const buf = try arena.alignedAlloc(u8, .of(u64), size);
+    const sacl: *win32.ACL = @ptrCast(buf.ptr);
+    if (win32.InitializeAcl(sacl, @intCast(size), win32.ACL_REVISION) == 0) return win32.lastErrorFail("InitializeAcl");
+    if (win32.AddMandatoryAce(sacl, win32.ACL_REVISION, win32.CONTAINER_INHERIT_ACE, win32.SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, low) == 0)
+        return win32.lastErrorFail("AddMandatoryAce");
+    const name = try keyObjectName(arena, sub);
+    const rc = win32.SetNamedSecurityInfoW(try win32.wide(arena, name), win32.SE_REGISTRY_KEY, win32.LABEL_SECURITY_INFORMATION, null, null, null, sacl);
+    if (rc != 0) return labelFail("changing", name, rc);
+}
+
+/// Grants `sid` full access to HKCU\<sub> and, through inheritance, the keys
+/// in it, unless an ACE grants it already.
+pub fn grantKey(arena: Allocator, sub: []const u8, sid: win32.PSID) !void {
+    var dacl = try Dacl.readObject(arena, try keyObjectName(arena, sub), win32.SE_REGISTRY_KEY);
+    defer dacl.deinit();
+    if (dacl.find(win32.ACCESS_ALLOWED_ACE_TYPE, sid, win32.KEY_ALL_ACCESS, .any) != null) return;
+    var entries = [1]win32.EXPLICIT_ACCESS_W{.{
+        .grfAccessPermissions = win32.KEY_ALL_ACCESS,
+        .grfAccessMode = win32.GRANT_ACCESS,
+        .grfInheritance = win32.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        .Trustee = .{ .ptstrName = sid },
+    }};
+    try dacl.addEntries(&entries);
+}
+
+fn keyObjectName(arena: Allocator, sub: []const u8) ![]u8 {
+    return std.fmt.allocPrint(arena, "CURRENT_USER\\{s}", .{sub});
+}
+
 fn lowIntegritySid(arena: Allocator) !win32.PSID {
     var sid: ?win32.PSID = null;
     if (win32.ConvertStringSidToSidW(try win32.wide(arena, win32.low_integrity_sid), &sid) == 0)
@@ -242,17 +282,24 @@ fn lowIntegritySid(arena: Allocator) !win32.PSID {
 
 // ---------------------------------------------------------------------------
 
-/// The DACL of a file or directory, as returned by GetNamedSecurityInfoW.
+/// The DACL of a file or directory, or a registry key, as returned by
+/// GetNamedSecurityInfoW.
 const Dacl = struct {
     path: []const u8,
     path_w: [:0]const u16,
+    object_type: c_int,
     security_descriptor: ?*anyopaque,
     acl: ?*win32.ACL,
 
     fn read(arena: Allocator, path: []const u8) !Dacl {
-        var d: Dacl = .{ .path = path, .path_w = try win32.wide(arena, path), .security_descriptor = null, .acl = null };
-        const rc = win32.GetNamedSecurityInfoW(d.path_w, win32.SE_FILE_OBJECT, win32.DACL_SECURITY_INFORMATION, null, null, &d.acl, null, &d.security_descriptor);
-        if (rc != 0) return aclFail("reading", path, rc);
+        return readObject(arena, path, win32.SE_FILE_OBJECT);
+    }
+
+    /// `name` as GetNamedSecurityInfoW takes it for an `object_type`.
+    fn readObject(arena: Allocator, name: []const u8, object_type: c_int) !Dacl {
+        var d: Dacl = .{ .path = name, .path_w = try win32.wide(arena, name), .object_type = object_type, .security_descriptor = null, .acl = null };
+        const rc = win32.GetNamedSecurityInfoW(d.path_w, object_type, win32.DACL_SECURITY_INFORMATION, null, null, &d.acl, null, &d.security_descriptor);
+        if (rc != 0) return aclFail("reading", name, rc);
         return d;
     }
 
@@ -270,7 +317,7 @@ const Dacl = struct {
     }
 
     fn write(d: *const Dacl, acl: ?*win32.ACL) !void {
-        const rc = win32.SetNamedSecurityInfoW(d.path_w, win32.SE_FILE_OBJECT, win32.DACL_SECURITY_INFORMATION, null, null, acl, null);
+        const rc = win32.SetNamedSecurityInfoW(d.path_w, d.object_type, win32.DACL_SECURITY_INFORMATION, null, null, acl, null);
         if (rc != 0) return aclFail("updating", d.path, rc);
     }
 

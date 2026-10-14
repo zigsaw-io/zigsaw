@@ -1,6 +1,10 @@
 {
   "id": "dev.zotregistry.zot",
   "version": "2.1.21",
+  "name": "zot",
+  "summary": "An OCI image registry, its minimal build",
+  "homepage": "https://zotregistry.dev/",
+  "license": "Apache-2.0",
   "command": "zot.exe",
   "permissions": { "network": true, "filesystem": ["cwd"] },
   "sdk": {

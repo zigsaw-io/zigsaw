@@ -37,11 +37,30 @@
   do.
 - Installing an app with many files is limited by Defender scanning each new
   file: about 16 s for zig's 19.5k files, 3 s for Node.
-- The registry isn't isolated. Under `soft`, an app that keeps its settings
-  in `HKEY_CURRENT_USER`, as 7-Zip does, writes the real registry, shared
-  with a copy of the app installed the usual way and left behind by
-  `zigsaw rm`. At low integrity and in an AppContainer such writes fail, and
-  apps such as 7-Zip carry on without saving their settings.
+- The registry is kept apart only for the keys an app's image declares
+  (`registry`, as 7-Zip's does). Under `soft`, an app that writes other keys
+  in `HKEY_CURRENT_USER` writes the real registry, and leaves them behind
+  after `zigsaw rm`; at low integrity and in an AppContainer such writes
+  fail, and apps carry on without them. No override or run option adds a
+  key to an app's.
+- The keys an app keeps are in the real HKCU while it runs. A copy of the app
+  installed the usual way, running at the same time, sees the zigsaw app's
+  settings instead of its own (which are aside), and what it saves meanwhile
+  goes to the zigsaw app's. Two apps that keep the same key, or two stores'
+  copies of one, can't run at the same time.
+- In an AppContainer, an app that makes two missing levels of keys at once in
+  one of its keys, with a path from `HKEY_CURRENT_USER`, is refused (from a
+  handle to its key, it works): only the key itself is granted.
+- zigsaw 0.18.0 ignores the keys an image declares: it runs the republished
+  7-Zip as before, with its settings in the real registry under `soft`.
+- `zigsaw search` reads the default registry's catalog only; there are no
+  other "remotes". The catalog lists the apps `scripts/publish.sh` publishes,
+  as they were when it was made: an app pushed later without
+  `push --catalog` isn't in it, or is at its older version. It has no icons
+  or screenshots, and runtimes and SDKs published before iteration 19 have no
+  name or summary in it yet, only their commands.
+- `pull` and `update` tell what an app may reach, and don't ask whether to
+  go on.
 - An app sees only the user's folders its permissions name (Desktop,
   Documents, Downloads, Music, Pictures, Videos), linked into its profile;
   others don't exist there, and an app that asks for one to save in gets
@@ -67,6 +86,9 @@
   the drive root, whose folders the container can't read.
 - At low integrity and in an AppContainer, an app can't add buttons or a
   progress bar to its taskbar button (Explorer refuses it), as VLC tries to.
+- Now and then, VLC starts playing a file about 30 s after its window comes
+  up, rather than at once. Seen twice in a day, on its first runs in a while;
+  not found why.
 - zigsaw's releases aren't signed. `install.ps1` checks the zip against the
   release's `SHA256SUMS`, which comes from the same release; anyone can
   check the programs against a build of the tag (see

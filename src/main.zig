@@ -5,8 +5,11 @@ const Store = @import("Store.zig");
 const acl = @import("acl.zig");
 const appcontainer = @import("appcontainer.zig");
 const builder = @import("builder.zig");
+const catalog = @import("catalog.zig");
 const credentials = @import("credentials.zig");
 const exports = @import("exports.zig");
+const hkcu = @import("hkcu.zig");
+const info = @import("info.zig");
 const install = @import("install.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
@@ -28,10 +31,14 @@ const usage =
     \\  build [--rebuild] [--keep-build-dir] <recipe.json>
     \\                                  build an app from a recipe, install it and its commands;
     \\                                  --rebuild builds even if an earlier build had the same inputs
+    \\  search [<words>...]             find apps in the default registry's catalog
+    \\  info <image>                    show what an app in a registry is, needs and may reach
     \\  pull <image>                    install an app and its commands from a registry
     \\  push [--sources] <app-id> [<image>]
     \\                                  publish an installed app to a registry; --sources also
     \\                                  keeps the files it was built from next to it
+    \\  push --catalog <app-id>...      make the default registry's catalog list these apps,
+    \\                                  as it has them
     \\  login [--username=<user>] [--password-stdin] <registry>
     \\                                  check and save a login for a registry
     \\  logout <registry>               delete a registry's saved login
@@ -163,17 +170,37 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     }
     if (std.mem.eql(u8, command, "push")) {
         var opts: remote.PushOptions = .{};
+        var make_catalog = false;
         var names: std.ArrayList([]const u8) = .empty;
         for (rest) |arg| {
             if (isFlag(arg, "sources")) {
                 opts.sources = true;
+            } else if (isFlag(arg, "catalog")) {
+                make_catalog = true;
             } else if (!std.mem.startsWith(u8, arg, "-")) {
                 try names.append(ctx.arena, arg);
             } else return usageError();
         }
+        if (make_catalog) {
+            if (opts.sources or names.items.len == 0) return usageError();
+            _ = try ctx.store.lock(ctx.arena, .shared);
+            try catalog.push(ctx, names.items);
+            return 0;
+        }
         if (names.items.len != 1 and names.items.len != 2) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
         try remote.push(ctx, names.items[0], if (names.items.len == 2) names.items[1] else null, opts);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "search")) {
+        for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        return catalog.search(ctx, @ptrCast(rest));
+    }
+    if (std.mem.eql(u8, command, "info")) {
+        if (rest.len != 1 or std.mem.startsWith(u8, rest[0], "-")) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try info.info(ctx, rest[0]);
         return 0;
     }
     if (std.mem.eql(u8, command, "run")) return runtime.run(ctx, try parseRunOptions(ctx, rest));
@@ -224,6 +251,9 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     if (std.mem.eql(u8, command, "repair")) {
         if (rest.len != 0) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
+        // What runs that didn't end left in HKCU first, as repair runs after
+        // installing a zigsaw, maybe over one that was killed.
+        try hkcu.settleLeftovers(ctx, null);
         return exports.repair(ctx);
     }
     return usageError();
@@ -435,6 +465,7 @@ fn list(ctx: *Context) !void {
         for (try shortcuts.names(ctx, ref.id)) |name| try w.print("  (shortcut \"{s}\")", .{name});
         const opens = try associations.names(ctx, ref.id);
         if (opens.len > 0) try w.print("  (opens {s})", .{try std.mem.join(arena, ", ", opens)});
+        if (image.config.registry) |keys| for (keys) |k| try w.print("  (keeps HKCU\\{s})", .{k});
         const saved = try override.load(ctx.store, arena, ref.id);
         if (!saved.isEmpty()) try w.print("  (override {f})", .{saved});
         try w.writeByte('\n');
@@ -493,6 +524,9 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
         try store.deleteGrants(arena, id);
     }
     try appcontainer.deleteProfile(arena, id);
+    // The keys the app keeps, if a run that didn't end left them in HKCU:
+    // back into its data, before that goes too.
+    try hkcu.settleLeftovers(ctx, id);
 
     try store.deleteRef(arena, id);
     {
@@ -515,12 +549,14 @@ test {
     _ = @import("aliases.zig");
     _ = @import("associations.zig");
     _ = @import("builder.zig");
+    _ = @import("catalog.zig");
     _ = @import("credentials.zig");
     _ = @import("deps.zig");
     _ = @import("drive.zig");
     _ = @import("environment.zig");
     _ = @import("exports.zig");
     _ = @import("folders.zig");
+    _ = @import("hkcu.zig");
     _ = @import("msvc.zig");
     _ = @import("oci.zig");
     _ = @import("override.zig");
@@ -528,6 +564,7 @@ test {
     _ = @import("process.zig");
     _ = @import("prune.zig");
     _ = @import("recipe.zig");
+    _ = @import("regkey.zig");
     _ = @import("Registry.zig");
     _ = @import("remote.zig");
     _ = @import("layer.zig");
@@ -537,4 +574,10 @@ test {
     _ = @import("Store.zig");
     _ = @import("Tree.zig");
     _ = @import("zipfile.zig");
+}
+
+test "zigsaw is built for the x86-64 baseline, not for the CPU that builds it" {
+    // build.zig's default target: a release then runs on any x86-64 CPU, and
+    // builds the same on any machine.
+    try std.testing.expectEqualStrings("x86_64", @import("builtin").cpu.model.name);
 }

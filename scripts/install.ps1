@@ -15,10 +15,10 @@ again by the new zigsaw (zigsaw repair).
 
 With parameters:
 
-    & ([scriptblock]::Create((irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1))) -Version 0.18.0
+    & ([scriptblock]::Create((irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1))) -Version 0.19.0
 
 .PARAMETER Version
-The release to install, such as 0.18.0. The latest by default. Also
+The release to install, such as 0.19.0. The latest by default. Also
 $env:ZIGSAW_VERSION.
 
 .PARAMETER Dir
@@ -118,7 +118,8 @@ param(
         }
         Remove-Leftovers
         if (-not $NoPath -and (Set-UserPath $false)) { Write-Host "Removed $Dir from your PATH." }
-        Write-Host "zigsaw is removed from $Dir. Its store, with downloads and apps' data, is the folder above it; delete that too if you don't want them."
+        $store = if ($env:ZIGSAW_HOME) { $env:ZIGSAW_HOME } else { Join-Path $env:LOCALAPPDATA 'zigsaw' }
+        Write-Host "zigsaw is removed from $Dir. Its store, with downloads and apps' data, is $store; delete that too if you don't want them."
         return
     }
 

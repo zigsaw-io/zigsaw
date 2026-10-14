@@ -1,6 +1,10 @@
 {
   "id": "com.github.flxzt.rnote",
   "version": "0.14.2",
+  "name": "Rnote",
+  "summary": "Sketch and take handwritten notes",
+  "homepage": "https://rnote.flxzt.net/",
+  "license": "GPL-3.0-or-later",
   "command": "bin/rnote.exe",
   "path": ["bin"],
   "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads", "pictures"] },

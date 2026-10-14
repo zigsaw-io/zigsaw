@@ -1,6 +1,10 @@
 {
   "id": "com.github.junegunn.fzf",
   "version": "0.74.4",
+  "name": "fzf",
+  "summary": "A command-line fuzzy finder",
+  "homepage": "https://github.com/junegunn/fzf",
+  "license": "MIT",
   "command": "fzf.exe",
   "permissions": { "filesystem": ["cwd:ro"] },
   "sdk": {

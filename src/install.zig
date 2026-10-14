@@ -14,6 +14,9 @@ pub const Image = struct {
     config: oci.AppConfig,
     /// Where the image came from: a recipe path or a registry reference.
     source: []const u8,
+    /// Whether what the app may reach was told already, as `remote.fetch`
+    /// does before downloading the layers.
+    described: bool = false,
 };
 
 /// Deploys the image's layers, points the app's ref at it, and syncs its
@@ -48,10 +51,10 @@ pub fn install(ctx: *Context, image: Image) !void {
         });
     }
     // What the app may reach, so nobody installs an app without seeing it.
-    var permissions: std.ArrayList([]const u8) = .empty;
-    if (cfg.permissions.network) try permissions.append(arena, "network");
-    for (cfg.permissions.filesystem) |f| try permissions.append(arena, try std.fmt.allocPrint(arena, "filesystem {s}", .{f}));
-    note("  permits  {s}", .{if (permissions.items.len == 0) "nothing outside its own files" else try std.mem.join(arena, ", ", permissions.items)});
+    if (!image.described) {
+        note("  permits  {s}", .{try oci.describePermissions(arena, cfg.permissions)});
+        if (cfg.registry) |keys| note("  keeps    {s} with its data", .{try oci.describeRegistry(arena, keys)});
+    }
     const saved = try override.load(ctx.store, arena, cfg.id);
     if (!saved.isEmpty()) note("  override {f}", .{saved});
     try exports.sync(ctx, image.manifest, cfg);

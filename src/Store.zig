@@ -139,17 +139,17 @@ pub const Lock = struct {
     }
 };
 
-const Wait = enum { wait, no_wait };
+pub const Wait = enum { wait, no_wait };
 
 /// Opens (creating if needed) and locks the lock file at `p`. With `.no_wait`,
 /// fails with `error.WouldBlock` if another process holds a conflicting lock.
-fn openLock(io: Io, p: []const u8, mode: Io.File.Lock, wait: Wait) !Lock {
+pub fn openLock(io: Io, p: []const u8, mode: Io.File.Lock, wait: Wait) !Lock {
     const file = try Io.Dir.cwd().createFile(io, p, .{ .truncate = false, .lock = mode, .lock_nonblocking = wait == .no_wait });
     return .{ .file = file };
 }
 
 /// Locks `p` without waiting; null if another process holds a conflicting lock.
-fn tryLock(io: Io, p: []const u8, mode: Io.File.Lock) !?Lock {
+pub fn tryLock(io: Io, p: []const u8, mode: Io.File.Lock) !?Lock {
     return openLock(io, p, mode, .no_wait) catch |err| switch (err) {
         error.WouldBlock => null,
         else => |e| e,

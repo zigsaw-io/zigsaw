@@ -1,8 +1,13 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    // For the x86-64 baseline, not for the CPU that builds: a build for the
+    // builder's CPU differs from machine to machine, and uses instructions
+    // other CPUs lack (v0.18.0, built on GitHub's runner, has AVX2 and SHA
+    // instructions). Pulling zig takes about 3% longer than with a build for
+    // this machine's CPU.
     const target = b.standardTargetOptions(.{
-        .default_target = .{ .os_tag = .windows },
+        .default_target = .{ .cpu_arch = .x86_64, .os_tag = .windows },
     });
     const chosen = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size (default: ReleaseSafe for zigsaw.exe, Debug otherwise)");
     const optimize = chosen orelse .Debug;
@@ -97,6 +102,23 @@ pub fn build(b: *std.Build) void {
     const hostprobe = b.addExecutable(.{ .name = "zigsaw-hostprobe", .root_module = hostprobe_mod });
     const hostprobe_step = b.step("hostprobe", "Build the known-folder and registry probe");
     hostprobe_step.dependOn(&b.addInstallArtifact(hostprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
+    // What keeping an app's registry settings with its data needs: an app
+    // hive, and keys that low-integrity and AppContainer runs may write
+    // (docs/findings.md). Also installed under zig-out\test.
+    const regprobe_mod = b.createModule(.{
+        .root_source_file = b.path("tests/regprobe.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    regprobe_mod.addImport("win32", b.createModule(.{
+        .root_source_file = b.path("src/win32.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    const regprobe = b.addExecutable(.{ .name = "zigsaw-regprobe", .root_module = regprobe_mod });
+    const regprobe_step = b.step("regprobe", "Build the registry probe");
+    regprobe_step.dependOn(&b.addInstallArtifact(regprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
     // Waits for a window by its title, and closes it; see tests/guiapps.sh.
     // Also installed under zig-out\test.

@@ -1,6 +1,10 @@
 {
   "id": "org.sumatrapdfreader.SumatraPDF",
   "version": "3.6.1",
+  "name": "SumatraPDF",
+  "summary": "A reader for PDF, EPUB, MOBI, XPS, DjVu, CHM and comic books",
+  "homepage": "https://www.sumatrapdfreader.org/",
+  "license": "GPL-3.0-only",
   "command": "SumatraPDF-3.6.1-64.exe",
   "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "exports": {
