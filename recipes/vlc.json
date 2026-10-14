@@ -1,0 +1,31 @@
+{
+  "id": "org.videolan.VLC",
+  "version": "3.0.24",
+  "command": "vlc.exe",
+  "args": ["--no-qt-privacy-ask", "--no-qt-updates-notif"],
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "exports": {
+    "vlc": { "command": "vlc.exe", "args": ["--no-qt-privacy-ask", "--no-qt-updates-notif"] }
+  },
+  "shortcuts": {
+    "VLC media player": { "command": "vlc", "description": "Play video and audio" }
+  },
+  "associations": {
+    ".mp4": { "command": "vlc", "description": "MP4 video" },
+    ".mkv": { "command": "vlc", "description": "Matroska video" },
+    ".mp3": { "command": "vlc", "description": "MP3 audio" }
+  },
+  "cleanup": ["/msi", "/axvlc.dll", "/vlc-cache-gen.exe"],
+  "modules": [
+    {
+      "name": "vlc",
+      "sources": [
+        {
+          "url": "https://get.videolan.org/vlc/3.0.24/win64/vlc-3.0.24-win64.zip",
+          "sha256": "fcf30850371ad10c9373cc4f0f4501e7dee49e3e9ae9f20c72fb2661a1ca6323",
+          "strip": 1
+        }
+      ]
+    }
+  ]
+}

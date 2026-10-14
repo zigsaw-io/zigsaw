@@ -71,8 +71,17 @@ smoke_args() {
     org.nodejs.node) printf '%s\n' '-e 0' ;;
     org.python.python) printf '%s\n' '-c pass' ;;
     org.ziglang.zig | org.golang.go) printf '%s\n' version ;;
+    org.7_zip.7zip) printf '%s\n' i ;;
+    org.videolan.VLC) printf '%s\n' '-I dummy vlc://quit' ;;
     *) printf '%s\n' --version ;;
     esac
+}
+# GUI apps with no option that exits: they must still be running after ten
+# seconds, when the run is stopped.
+stays_up_ids=" org.notepad_plus_plus.NotepadPlusPlus org.sumatrapdfreader.SumatraPDF "
+stays_up() {
+    ZIGSAW_HOME="$pull_store" timeout 10 "$zigsaw" run "$1" >/dev/null 2>&1
+    [ $? -eq 124 ]
 }
 ref_digest() { grep -o 'sha256:[0-9a-f]*' "$1\\refs\\$2.json"; }
 # all_bound <store> <manifest digest>: tests/imports.zig on the executables
@@ -153,8 +162,12 @@ for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); 
         fail "$id $version: has the digest of a fresh build" "${details[@]}"
     fi
 
-    # shellcheck disable=SC2046 # The arguments are meant to split.
-    check "$id: runs" zp run "$id" $(smoke_args "$id")
+    if [[ $stays_up_ids == *" $id "* ]]; then
+        check "$id: runs, and is still running after ten seconds" stays_up "$id"
+    else
+        # shellcheck disable=SC2046 # The arguments are meant to split.
+        check "$id: runs" zp run "$id" $(smoke_args "$id")
+    fi
     # What Rust's toolchain links, GNU ld, must leave no import unbound
     # (docs/iteration-12.md).
     if grep -q '"org\.rust-lang\.rust[:@]' "$recipe"; then

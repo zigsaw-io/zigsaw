@@ -1,0 +1,27 @@
+{
+  "id": "org.sumatrapdfreader.SumatraPDF",
+  "version": "3.6.1",
+  "command": "SumatraPDF-3.6.1-64.exe",
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "sumatrapdf": { "command": "SumatraPDF-3.6.1-64.exe" }
+  },
+  "shortcuts": {
+    "SumatraPDF": { "command": "sumatrapdf", "description": "Read PDF, EPUB and other documents" }
+  },
+  "associations": {
+    ".pdf": { "command": "sumatrapdf", "description": "PDF document" },
+    ".epub": { "command": "sumatrapdf", "description": "EPUB book" }
+  },
+  "modules": [
+    {
+      "name": "sumatrapdf",
+      "sources": [
+        {
+          "url": "https://www.sumatrapdfreader.org/dl/rel/3.6.1/SumatraPDF-3.6.1-64.zip",
+          "sha256": "98b33a518d42986856d225064b0cd2d3643ecf78cbf84ab873d26cc51877a544"
+        }
+      ]
+    }
+  ]
+}

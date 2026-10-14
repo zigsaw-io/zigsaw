@@ -11,3 +11,7 @@ src/testdata/** binary
 
 # Batch files need CRLF line endings: cmd.exe misreads labels without them.
 tests/batch/*.cmd text eol=crlf
+tests/install/*.cmd text eol=crlf
+
+# Hashed for releases (SHA256SUMS), so the same bytes on every checkout.
+*.ps1 text eol=lf

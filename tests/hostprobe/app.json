@@ -1,0 +1,13 @@
+{
+  "id": "test.hostprobe",
+  "version": "1",
+  "command": "hostprobe.exe",
+  "modules": [
+    {
+      "name": "probe",
+      "sources": [
+        { "path": "../../zig-out/test/zigsaw-hostprobe.exe", "dest": "hostprobe.exe" }
+      ]
+    }
+  ]
+}

@@ -27,6 +27,10 @@ on Windows 11 Home 10.0.26300 with Defender real-time protection on.
 - **The `low` sandbox (iteration 9)** works for every tool the matrix runs,
   and keeps them from writing outside their data directory and the paths
   they may write (see [below](#the-low-sandbox)). It confines nothing else.
+- **Prebuilt GUI apps (iteration 17)** keep their settings in their data
+  directory in all three sandboxes, since Windows derives AppData from
+  `USERPROFILE`; the registry, `LocalLow` and the user's Documents and the
+  like don't follow (see [below](#prebuilt-gui-apps)).
 
 ### Matrix
 
@@ -222,6 +226,89 @@ granted. Every check's low result is as intended, 0 mismatches:
   zig's first low run took 9 s, with its cache.
 - **Windows Server 2025 isn't known.** CI runs the matrix there, as an
   administrator; it wasn't seen from here.
+
+## Prebuilt GUI apps
+
+Iteration 17, 2026-10-14, Windows 11 26300. The tools above are
+command-line programs that read their folders from environment variables,
+and the GUI apps of iterations 10 to 16 were built here against GTK, with
+GLib's folders set by variables too. Most Windows programs are published
+built, and ask Windows instead.
+
+### Where Windows sends a program
+
+[`tests/hostprobe.zig`](../tests/hostprobe.zig) (`zig build hostprobe`) asks
+what a desktop program asks, run as an app
+([`tests/hostprobe/app.json`](../tests/hostprobe/app.json)): the paths
+`SHGetKnownFolderPath` gives, whether a file can be made there, and what the
+registry allows. "data" is the app's data directory, `home` the profile
+zigsaw makes in it:
+
+| | soft | low | appcontainer |
+|---|---|---|---|
+| RoamingAppData | data `home\AppData\Roaming` | the same | the same |
+| LocalAppData | data `home\AppData\Local` | the same | the container's folder in data (`...\Packages\zigsaw.<id>\AC`) |
+| LocalAppDataLow | real, writable | real, writable | the container's folder in data |
+| Documents, Downloads | data `home\Documents`..., missing | the same | the same |
+| Profile | real, writable | real, read-only | real, unreadable |
+| ProgramData | real, writable | real, read-only | real, unreadable |
+| `GetTempPath2` | data, as TEMP | the same | the container's Temp in data |
+| `GetUserProfileDirectory` | real | real | real |
+| write `HKCU\Software` | ok (the real registry) | denied | denied |
+| write `HKCU\Software\AppDataLow` | ok | ok | denied |
+| read `HKLM` | ok | ok | ok |
+| create the file dialog (COM) | ok | ok | ok |
+| open the clipboard, without a window | ok | ok | denied |
+
+- **AppData follows `USERPROFILE`.** Windows keeps the user's folders as
+  `%USERPROFILE%\AppData\Roaming` and so on, and expands that with the
+  program's own environment, so the redirect zigsaw sets for programs that
+  read variables steers those that ask Windows as well.
+- **What doesn't follow it**: LocalLow, which Windows derives from the
+  profile it knows from the token; the profile folder itself; ProgramData;
+  and the registry. Under `soft` a program can write all of them; at low
+  integrity only LocalLow and `HKCU\Software\AppDataLow`; in an AppContainer
+  none of them.
+- **Desktop, Documents, Downloads and Pictures** follow it too, into a home
+  that doesn't have them. In a file dialog they're gone: Notepad++'s Open
+  dialog showed This PC and the drives only.
+- Runs' environment has no `ProgramData`, `ProgramFiles`, `PUBLIC` or
+  `COMPUTERNAME`. None of the four apps below missed them, so they stay out
+  (builds share the environment, and CMake, for one, searches
+  `ProgramFiles`).
+
+### Four apps
+
+7-Zip 26.04 (its file manager), Notepad++ 8.9.8.1, SumatraPDF 3.6.1 and
+VLC 3.0.24, from upstream's archives
+([`tests/guiapps.sh`](../tests/guiapps.sh)). Each opened a file given with
+`--file`, named it in its title, and was closed as its close button would:
+
+| App | soft | appcontainer | low | Its settings |
+|---|---|---|---|---|
+| 7-Zip's file manager | ok | opens its root view instead (known gap) | ok | `HKCU\Software\7-Zip`: the real registry under soft; not saved otherwise |
+| Notepad++ | ok | ok | ok | data, `AppData\Roaming\Notepad++` |
+| SumatraPDF | ok | ok | ok | data, `AppData\Local\SumatraPDF` (in an AppContainer, the container's folder) |
+| VLC | ok | ok | ok | data, `AppData\Roaming\vlc` |
+| VLC decoding a clip without a window | ok | ok | ok | |
+
+- **No app needed a change to zigsaw.** Their recipes leave out what makes
+  them write next to their executable (Notepad++'s portable marker,
+  `doLocalConf.xml`): SumatraPDF falls back to AppData by itself when it
+  can't write there.
+- **7-Zip's file manager in an AppContainer** starts, and shows its root
+  instead of the archive: it goes through the path from the drive root, and
+  the container can't read the folders above what it's granted, the
+  restriction that keeps Node's realpath from working there.
+- **VLC** asks about privacy on its first start, in a dialog that keeps its
+  window from closing, and checks for updates when it has no settings yet,
+  which held up its closing by more than ten seconds once. Its recipe passes
+  `--no-qt-privacy-ask --no-qt-updates-notif`.
+- **The taskbar**: at low integrity and in an AppContainer, VLC's calls to
+  add buttons to its taskbar button fail with `E_ACCESSDENIED`, as Explorer
+  runs at medium integrity.
+- Both upstream archives that publish hashes (Notepad++, VLC) had the hashes
+  pinned. The four images are the same from three stores.
 
 ## Other findings
 

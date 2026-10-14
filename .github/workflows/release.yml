@@ -1,0 +1,60 @@
+# Publishes a release of zigsaw when a tag v<version> is pushed, the version
+# being build.zig.zon's: the unit tests, then scripts/package.sh's files,
+# checked by tests/install.sh, as the release's assets (the zip,
+# install.ps1, SHA256SUMS), with notes listing the programs' hashes. The
+# programs are built without debug information, so a build of the tag
+# anywhere, with the same Zig, has those hashes. Images are still published
+# by hand (scripts/publish.sh).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+
+      - name: The tag is build.zig.zon's version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^ *\.version = "\(.*\)",$/\1/p' build.zig.zon)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::The tag is $GITHUB_REF_NAME, but build.zig.zon's version is $version"
+              exit 1
+          fi
+
+      - name: Unit tests
+        run: zig build test --summary all
+
+      - name: Package
+        shell: bash
+        run: bash scripts/package.sh
+
+      - name: tests/install.sh, on the package
+        shell: bash
+        env:
+          PACKAGE_DIR: zig-out\release
+        run: bash tests/install.sh
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd zig-out/release
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "zigsaw ${GITHUB_REF_NAME#v}" --notes-file notes.md \
+              zigsaw-x86_64-windows.zip install.ps1 SHA256SUMS

@@ -1,0 +1,43 @@
+{
+  "id": "org.7_zip.7zip",
+  "version": "26.04",
+  "command": "7z.exe",
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "7z": { "command": "7z.exe" },
+    "7zfm": { "command": "7zFM.exe" },
+    "7zg": { "command": "7zG.exe" }
+  },
+  "shortcuts": {
+    "7-Zip File Manager": { "command": "7zfm", "description": "Browse, pack and unpack archives" }
+  },
+  "associations": {
+    ".7z": { "command": "7zfm", "description": "7-Zip archive" },
+    ".zip": { "command": "7zfm", "description": "Zip archive" },
+    ".tar": { "command": "7zfm", "description": "Tar archive" },
+    ".gz": { "command": "7zfm", "description": "Gzip archive" },
+    ".xz": { "command": "7zfm", "description": "XZ archive" }
+  },
+  "sdk": {
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "cleanup": ["/Uninstall.exe", "/7-zip.dll", "/7-zip32.dll"],
+  "modules": [
+    {
+      "name": "7zip",
+      "sources": [
+        {
+          "url": "https://github.com/ip7z/7zip/releases/download/26.04/7zr.exe",
+          "sha256": "256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282"
+        },
+        {
+          "url": "https://github.com/ip7z/7zip/releases/download/26.04/7z2604-x64.exe",
+          "sha256": "d54bf805f9f3704d1e8db2fa3498ae7ef2df0312b40b558e7c71c734430a665d"
+        }
+      ],
+      "build": [
+        "./7zr.exe x -y -bd -o\"$PREFIX\" 7z2604-x64.exe"
+      ]
+    }
+  ]
+}

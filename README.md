@@ -8,28 +8,66 @@ own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
 ## Quick start
 
-Requires Zig 0.16.
+In PowerShell, as yourself (no administrator):
+
+```powershell
+irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1 | iex
+zigsaw pull org.nodejs.node
+node -e "console.log(process.version)"
+```
+
+The first line installs zigsaw in `%LOCALAPPDATA%\zigsaw\bin` and adds that
+directory to your PATH (see [Installing zigsaw](#installing-zigsaw)).
+`pull org.nodejs.node` installs the published image of Node (see
+[Published apps](#published-apps)), and its commands, here `node`, `npm` and
+`npx`, in that same directory, so they run through zigsaw by name.
+`zigsaw build recipes\node.json` builds the same image, with the same
+digest, from its recipe.
+
+PATH is searched in order, so if another copy of a command comes earlier (say
+an installed Node), that one wins. `where node` shows which is found first.
+
+To build zigsaw yourself instead, with Zig 0.16:
 
 ```powershell
 zig build                # ReleaseSafe by default; -Doptimize=Debug for a quicker compile
 .\zig-out\bin\zigsaw.exe pull org.nodejs.node
-.\zig-out\bin\zigsaw.exe run org.nodejs.node -e "console.log(process.version)"
 ```
 
-`pull org.nodejs.node` installs the published image of Node (see
-[Published apps](#published-apps)). `zigsaw build recipes\node.json` builds
-the same image, with the same digest, from its recipe.
+## Installing zigsaw
 
-Installing an app also puts its commands (here `node`, `npm` and `npx`) in
-`%LOCALAPPDATA%\zigsaw\bin`. Add that directory to your PATH, and they run
-through zigsaw by name:
+[`scripts/install.ps1`](scripts/install.ps1), which every
+[release](https://github.com/zigsaw-io/zigsaw/releases) carries, installs
+zigsaw for you alone, in Windows PowerShell 5.1 or later:
+
+- It downloads the release's `zigsaw-x86_64-windows.zip` and checks it
+  against the release's `SHA256SUMS` before changing anything.
+- It puts `zigsaw.exe` and its two shim programs in `%LOCALAPPDATA%\zigsaw\bin`,
+  where zigsaw puts installed apps' commands too, and adds that directory to
+  your PATH, keeping the rest of PATH as it was stored (variables such as
+  `%USERPROFILE%` in it stay variables).
+- Run it again to upgrade. A zigsaw that's running, because an app it
+  started still runs, is moved aside, and the next install deletes it. Then
+  `zigsaw repair` writes the installed apps' commands, shortcuts and file
+  associations again, as copies of the new shims.
+
+With parameters (`-Version`, `-Dir`, `-NoPath`, `-Uninstall`):
 
 ```powershell
-[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ";$env:LOCALAPPDATA\zigsaw\bin", 'User')
+& ([scriptblock]::Create((irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1))) -Version 0.17.0
 ```
 
-PATH is searched in order, so if another copy of a command comes earlier (say
-an installed Node), that one wins. `where node` shows which is found first.
+`-Uninstall` removes zigsaw and its PATH entry once no app is installed
+(`zigsaw rm` undoes what zigsaw changed for each app, which deleting its
+files wouldn't). The rest of `%LOCALAPPDATA%\zigsaw`, downloads and apps'
+data, stays until you delete it.
+
+Releases are published by the [Release workflow](.github/workflows/release.yml)
+when a `v<version>` tag is pushed. Their programs are built with
+`zig build -Dstrip`, which leaves out the debug information that would name
+the directory they were built in, so a build of the same tag with Zig 0.16.0
+gives the same bytes anywhere; the release notes list their SHA-256.
+[`scripts/package.sh`](scripts/package.sh) makes the release's files.
 
 ## Commands
 
@@ -50,6 +88,9 @@ zigsaw update [<app-id>...]            rebuild or re-pull apps from where they c
 zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
 zigsaw prune [--dry-run] [--downloads] [--data]
                                        delete what no installed app needs
+zigsaw repair                          write every app's commands, shortcuts and file
+                                       associations again, as after installing a new zigsaw
+zigsaw version                         print zigsaw's version
 ```
 
 ## Published apps
@@ -83,6 +124,10 @@ with `zigsaw pull <id>`:
 | GTK, with libadwaita, libsoup, librsvg and enchant (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo`, `gio`, `pango-view`, `pango-list` |
 | GNOME Text Editor (built from source, on GTK) | `org.gnome.TextEditor` | 51.0 | `gnome-text-editor` |
 | Rnote (built from source, on GTK) | `com.github.flxzt.rnote` | 0.14.2 | `rnote`, `rnote-cli` |
+| 7-Zip | `org.7_zip.7zip` | 26.04 | `7z`, `7zfm`, `7zg` |
+| Notepad++ | `org.notepad_plus_plus.NotepadPlusPlus` | 8.9.8.1 | `notepad++` |
+| SumatraPDF | `org.sumatrapdfreader.SumatraPDF` | 3.6.1 | `sumatrapdf` |
+| VLC media player | `org.videolan.VLC` | 3.0.24 | `vlc` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -102,6 +147,10 @@ and Rnote are translated. GTK's demos, Text Editor and Rnote are GUI apps:
 they open no console, and get [Start menu shortcuts](#start-menu-shortcuts)
 with their icons. Explorer offers Rnote for `.rnote` and `.xopp` files and
 Text Editor for `.txt`, `.md` and `.log` ([file associations](#file-associations)).
+7-Zip, Notepad++, SumatraPDF and VLC are the programs their projects
+publish, packaged from upstream's archives, with shortcuts and the kinds of
+file they open ([prebuilt GUI apps](#prebuilt-gui-apps)). 7-Zip's image is
+made from its installer, which its standalone `7zr.exe` unpacks.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -128,7 +177,9 @@ suites (see [Testing](#testing)) on that runner too.
 - An image built with a [host toolchain](#msvc) isn't compared, since it
   isn't expected to match. (None of the published ones is.)
 
-The workflow only checks; publishing stays manual.
+The workflow only checks. Images are published by hand
+([`scripts/publish.sh`](scripts/publish.sh)); zigsaw's own releases by the
+Release workflow (see [Installing zigsaw](#installing-zigsaw)).
 
 ## Sharing apps through registries
 
@@ -336,6 +387,31 @@ and the app write there, and if the app fails, shows it in a message box
 with the exit code. With a pipe or file for stderr, as in Git Bash or with
 `2>log.txt`, the output goes there instead.
 
+### Prebuilt GUI apps
+
+Most Windows programs are published built, and ask Windows where to keep
+their settings rather than reading `APPDATA`. A run points `USERPROFILE`
+into the app's data directory, and Windows derives most of the user's
+folders from it, so those programs keep their settings there too:
+
+| What a program asks Windows for | In a zigsaw run |
+|---|---|
+| Roaming and Local AppData, the temporary directory | the app's data directory, in every sandbox (in an AppContainer, Local AppData is the container's own folder in it) |
+| Desktop, Documents, Downloads, Pictures | in the app's data directory too, where they don't exist: file dialogs lose them, and show the drives |
+| `AppData\LocalLow`, the profile folder itself, ProgramData | the real ones; at low integrity only LocalLow can be written, and in an AppContainer none |
+| `HKEY_CURRENT_USER` | the real registry: writable under `soft`; at low integrity only `Software\AppDataLow`; in an AppContainer nothing |
+
+[docs/findings.md](docs/findings.md#prebuilt-gui-apps) has the probe that
+asked, and what 7-Zip, Notepad++, SumatraPDF and VLC do in each sandbox:
+Notepad++, SumatraPDF and VLC keep everything in their data directories;
+7-Zip's file manager keeps its settings in the registry, which under `soft`
+is the real one.
+
+Recipes for such programs leave out what makes them write next to their
+executable, which zigsaw installs read-only (Notepad++'s `doLocalConf.xml`),
+and their updaters: zigsaw updates them. VLC's turns off its first-run
+privacy question and its update check with arguments.
+
 ### Start menu shortcuts
 
 A recipe can declare shortcuts to its exports, as Flatpak apps export
@@ -454,7 +530,10 @@ is a single `file`, or an archive (`zip`, `tar`, `tar.gz`/`tgz` or `tar.xz`)
 extracted into `dest` with optional `strip`. The type is inferred from the
 file name, or given as `type` for a URL that doesn't end in one. A link in a
 tar to a file in the same archive becomes a copy of that file; a link to a
-directory, or out of the archive, fails the build.
+directory, or out of the archive, fails the build. Other archives, such as
+`.7z` files and installers, come in as files, and a build command unpacks
+them, with 7-Zip's image in the recipe's `sdk`
+(`"sevenzip": "org.7_zip.7zip@sha256:..."`, then `7z x -o"$PREFIX" file.7z`).
 `cleanup` leaves files out of the app: `"/include"` is a path from
 the top, and `"*.pdb"` a file name pattern that matches anywhere. Building the
 same recipe always produces the same image digest.
@@ -1466,6 +1545,8 @@ bash tests/shims.sh     # command shims end to end, also for commands installed 
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, reproducibility
 bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor and Rnote, their file associations, and opening a file with --file; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
+bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
+bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update, mounts, logins and sources next to images, through local registries (see its header)
@@ -1494,149 +1575,3 @@ ZOT_HOME=path/to/a/store/with/zot bash tests/zot.sh bash tests/registry.sh
 The [Reproduce workflow](.github/workflows/reproduce.yml) runs all of them on
 a fresh runner, after `published.sh`, with its build store as
 `SEED_DOWNLOADS`, and as the matrix's store.
-
-## Known gaps
-
-- A command an app's run installs that names the app's files by their
-  absolute path, as pip's launchers name their `python.exe`, stops working
-  when an update deploys the app elsewhere. npm's and cargo's don't.
-- A batch file that turns on delayed expansion itself
-  (`setlocal EnableDelayedExpansion`) expands `!var!` in its own arguments.
-- Node's image sets `NODE_OPTIONS=--preserve-symlinks
-  --preserve-symlinks-main`, so that Node works under AppContainer. A
-  package linked in with a symlink (`npm link`, workspaces, pnpm) then finds
-  its dependencies from where the link is, not where the package is, in every
-  sandbox.
-- Under `--sandbox=appcontainer`, access granted to a host path lasts until
-  the app is removed, even after the permission or override that granted it
-  is gone, and so does a low integrity label under `--sandbox=low`.
-- `--sandbox=low` labels only paths whose permissions you may change, which
-  you may for what you own. Labelling needs the right to change a path's
-  owner, which a second drive whose root gives users only Modify (a fresh
-  `D:`) withholds; zigsaw then grants it to you for the change, and puts the
-  permissions back as they were. A writable grant of a path you neither own
-  nor may change the permissions of fails.
-- `--sandbox=low` confines writing only: the app can read whatever you can,
-  and use the network whatever its permissions say. At low integrity,
-  writing to the registry fails outside `HKCU\Software\AppDataLow`, and the
-  few directories Windows labels low itself, such as `AppData\LocalLow`, can
-  be written.
-- A host path an earlier zigsaw granted an app's AppContainer, to the
-  container's own SID, keeps other apps' low runs out until that app runs
-  under `--sandbox=appcontainer` again, or is removed; that app's own low
-  runs clear it too. In the store, runs clear such grants from what they
-  use.
-- Apps that locate folders with `SHGetKnownFolderPath` instead of environment
-  variables would bypass the data-directory redirect. None of the tested tools
-  do.
-- Installing an app with many files is limited by Defender scanning each new
-  file: about 16 s for zig's 19.5k files, 3 s for Node.
-- The registry isn't isolated.
-- zigsaw keeps its own registry logins; it doesn't read Docker's
-  `config.json` or credential helpers.
-- Multi-platform image indexes aren't supported.
-- Runtimes can't have runtimes of their own (SDKs and image sources can).
-- Under `--sandbox=appcontainer`, BusyBox's sh doesn't wait for the last
-  command of `sh -c`, which then ends with the run, having printed nothing,
-  and the run's exit code is 0: in an AppContainer, sh doesn't see its
-  parent, zigsaw, and takes itself for an orphan. A command after it
-  (`sh -c "cc x.c; true"`) avoids that. Low-integrity runs had the same
-  problem until zigsaw let them read its process.
-- An app's alias shims are by app, not by version: an update while the app
-  runs switches its later alias calls to the new version's tools. A Meson
-  build directory set up with the GTK SDK's `meson` names the SDK's
-  deployment, so after an update it needs `meson setup --wipe`.
-- `$(pkg-config ...)` in a shell splits the paths it prints at spaces: a
-  store whose path has a space (a user name with one) breaks
-  `cc ... $(pkg-config --libs gtk4)`.
-- Pushing mounts a runtime's layer only from the runtime's repository in the
-  default layout, and an app's blobs only from where it was pulled. A blob
-  the registry holds elsewhere is uploaded again.
-- Each blob goes up in one request, so an upload that breaks off starts
-  again from the beginning, and registries that limit a request's size can't
-  take big layers.
-- A layer's compressed bytes, and so every image's digest, are what the
-  deflate of the Zig that zigsaw is built with makes. A Zig whose deflate
-  changed would make other digests from the same files; CI pins Zig 0.16.0.
-- Build steps are kept off the network by convention (proxy variables), not
-  enforced: a tool that ignores them can still download.
-- Builds need `B:` free, and run one at a time.
-- Builds with MSVC depend on the machine's Visual Studio, so they don't
-  reproduce elsewhere, and CI doesn't check them. Only x64 MSVC builds are
-  set up.
-- Vendor steps run their commands with network access and nothing more
-  confining than a build's sandbox; only what they leave in their directory
-  is pinned.
-- Rust builds need zig in their SDK, for an assembler and C. Only the
-  `x86_64-pc-windows-gnu` target is set up. Crates' C code is compiled with
-  fixed flags rather than the profile's, against zig's UCRT headers but
-  linked with Rust's `msvcrt.dll` libraries; C code that needs what only UCRT
-  has would fail to link.
-- Rust builds need the store's path to be shorter than about 100
-  characters: rustc starts its linker from the Rust image's deployment, and
-  can't start a program whose path is longer than Windows' 260 characters.
-  The default store, `%LOCALAPPDATA%\zigsaw`, is well within that.
-- cgo works only in builds that list zig in their SDK. `go build` run as
-  Go's app has no C compiler: Go's image doesn't have zig as a runtime, as
-  GTK's SDK has. Until zig's `cc -###` succeeds, recipes that use
-  cgo have to leave out Go's build ID (`-ldflags=-buildid=`), and their
-  executables are stripped.
-- CMake run as an app has no compiler either, for the same reason; it's
-  for builds, and for `cmake -E` and scripts. When a command it runs can't
-  be started while other commands are running, Ninja 1.13.2 stops with
-  `ninja: fatal: ReadFile: The handle is invalid.` (once, it crashed with
-  `0xC0000409`) instead of reporting the command.
-- Executables built with zig's `LDFLAGS` or `CGO_LDFLAGS` have no debug
-  information, as a PDB would differ from build to build.
-- A Go vendor step downloads every module its `go.mod` names, whatever the
-  build uses: zot's takes 14 minutes and 5 GB of temporary space, for the
-  68 MB it keeps.
-- zig's `rc` alias runs `zig rc` as it is, which includes Visual Studio's
-  headers when the machine has Visual Studio, and zig's MinGW headers
-  otherwise. A resource script that includes a header only one of them has
-  builds on some machines and not others. GTK's recipe passes
-  `/:auto-includes gnu`; zig's image doesn't, yet.
-- DLLs that zig links without any `dllexport` export the C runtime's
-  `atexit`, `_CRT_INIT` and `__mingw_module_is_dll` too, unless the link
-  includes an object that excludes them, as GTK's SDK recipe does.
-- A GUI app whose executable is built as a console program, as
-  libadwaita's demo is upstream, gets a console shim, and a console window
-  from the Start menu; its recipe has to build it as a GUI program
-  (libadwaita's sets Meson's `win_subsystem`).
-- A shortcut or a kind of file shows the icon of an `.ico`, or of an
-  executable that has one: a recipe whose app has only an SVG has to make
-  the `.ico`, as GTK's and Text Editor's do with the SDK's `rsvg-convert`.
-- zigsaw sets no AppUserModelID. An app started from its shortcut counts
-  as started from it; whether pinning its window to the taskbar then pins
-  the shortcut, and not the app's executable in the store, hasn't been
-  checked: it takes pinning one by hand.
-- zigsaw offers an app for a kind of file, and can't make it the default:
-  Windows keeps that choice to the user. Only extensions are registered:
-  no MIME types, no URL schemes, no "New" menu entries, and no command
-  other than opening.
-- `--file` gives an app the file and nothing next to it. An app that
-  writes a backup or a temporary file beside the document, or reads files
-  the document names, needs `--filesystem` for the directory, or a
-  fallback of its own. Like other grants it lasts until `zigsaw rm`: under
-  `--sandbox=low`, a file opened once stays writable to every
-  low-integrity process until then.
-- Selecting several files in Explorer and opening them starts the app once
-  for each. Text Editor and Rnote hand a file to the instance that's
-  running already.
-- GTK built with MSVC ([`recipes/gtk4-msvc.json`](recipes/gtk4-msvc.json))
-  is an experiment: no translations, SVG loader, HTTP, spell checking or
-  apps, and it isn't published or checked in CI.
-- Text Editor has no help pages (no yelp on Windows). Its spell checking
-  has the languages Windows has, through WinSpell, and English (US) from
-  hunspell; other hunspell dictionaries aren't in the runtime.
-- GTK's SDK's `windres` takes what Rust's crates and libtool pass (`-i`,
-  `-o`, `-I`, `-D`, `--target`, COFF output); GNU windres's other options,
-  such as `--preprocessor-arg` or `.res` output, reach zig's `rc`, which
-  refuses them. Meson uses `rc`, as the SDK's `RC` says.
-- Under `--sandbox=appcontainer`, DirectWrite can't open fonts installed
-  for the user only, rather than for the machine; GTK warns, and draws
-  with the others.
-- Pango doesn't fall back to another font for scripts its font lacks:
-  Devanagari in Segoe UI shows as boxes, where Windows would use Nirmala UI.
-
-[docs/iteration-11.md](docs/iteration-11.md) lists what hasn't been tested yet.

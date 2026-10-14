@@ -2,7 +2,8 @@
 # End-to-end checks for building apps: runtimes, which an app runs with and
 # whose layers travel in its image, and build commands, which build an app
 # from source with SDK images (zig, busybox, CMake, Meson, Rust, and Go with and
-# without C), tools' caches and aliases, and vendor steps.
+# without C), tools' caches and aliases, and vendor steps; 7-Zip unpacks a
+# source zigsaw doesn't.
 #
 #   tests/build.sh [path\to\zigsaw.exe]
 #
@@ -629,6 +630,19 @@ fi
 check "sqlite.json builds SQLite and zlib from source" z build "$root\\recipes\\sqlite.json"
 check "sqlite3 runs, with zlib" sh -c "[ \"\$(\"\$0\" run org.sqlite.sqlite3 :memory: 'select sqlite_version(), length(sqlar_uncompress(sqlar_compress(zeroblob(1000)), 1000))' | tr -d '\r')\" = '3.53.4|1000' ]" "$zigsaw"
 
+# --- 7-Zip, for sources zigsaw doesn't unpack -----------------------------------------
+
+check "7zip.json makes 7-Zip's image from its installer, which its 7zr unpacks" z build "$root\\recipes\\7zip.json"
+# A .7z, made with 7-Zip's image, is the source of a recipe that has 7-Zip
+# in its sdk to unpack it, as recipes can for installers and .7z downloads.
+SEVENZIP=test.build.sevenzip
+mkdir -p "$work\\7z\\in" && printf '@echo hello from a .7z\r\n' >"$work\\7z\\in\\hello.cmd"
+(cd "$work\\7z\\in" && z run org.7_zip.7zip a -bd hello.7z hello.cmd >/dev/null 2>&1) && mv "$work\\7z\\in\\hello.7z" "$work\\7z\\"
+sed -e "s/@SEVENZIP@/$(manifest_of org.7_zip.7zip)/" -e "s/@BUSYBOX@/$bb_digest/" \
+    "$root\\tests\\build\\sevenzip\\hello.json.in" >"$work\\7z\\hello.json"
+check "a recipe with 7-Zip in its sdk unpacks a .7z source" z build "$work\\7z\\hello.json"
+check "what it unpacked runs" sh -c "[ \"\$(\"\$0\" run $SEVENZIP | tr -d '\r')\" = 'hello from a .7z' ]" "$zigsaw"
+
 # --- Rust from source ---------------------------------------------------------------
 
 check "rust.json builds the Rust SDK image" z build "$root\\recipes\\rust.json"
@@ -734,7 +748,7 @@ check "built again, it's the same image" cgo_again
 # protected deployments.
 for id in $APP $SDK $RT test.image.built $AAPP $ASDK $TOOL test.alias.built test.alias.files io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP com.mesonbuild.meson $MESONAPP org.sqlite.sqlite3 \
     test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
-    test.build.vendored org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO; do z rm --delete-data $id >/dev/null 2>&1; done
+    test.build.vendored org.7_zip.7zip $SEVENZIP org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO; do z rm --delete-data $id >/dev/null 2>&1; done
 z prune --downloads --data >/dev/null 2>&1
 check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
 rm -rf "$ZIGSAW_HOME" "$work"

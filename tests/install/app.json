@@ -1,0 +1,16 @@
+{
+  "id": "test.install.wait",
+  "version": "1",
+  "command": "wait.cmd",
+  "exports": {
+    "install-wait": { "command": "wait.cmd" }
+  },
+  "modules": [
+    {
+      "name": "scripts",
+      "sources": [
+        { "path": "wait.cmd" }
+      ]
+    }
+  ]
+}

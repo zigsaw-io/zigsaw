@@ -17,6 +17,7 @@ const shortcuts = @import("shortcuts.zig");
 const associations = @import("associations.zig");
 const update = @import("update.zig");
 const win32 = @import("win32.zig");
+const options = @import("options");
 const fail = Context.fail;
 const note = Context.note;
 
@@ -45,6 +46,9 @@ const usage =
     \\                                  delete what no installed app needs; also cached
     \\                                  downloads and tool caches, and the data of
     \\                                  uninstalled apps
+    \\  repair                          write every app's commands, shortcuts and file
+    \\                                  associations again, as after installing a new zigsaw
+    \\  version                         print zigsaw's version
     \\
     \\An image is <registry>/<repository>[:tag][@digest], e.g. ghcr.io/owner/node:24.21.0,
     \\or <app-id>[:tag][@digest] for the app's image in the default registry, e.g.
@@ -108,6 +112,13 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     const rest = args[1..];
     if (std.mem.eql(u8, command, "help") or isFlag(command, "help")) {
         Context.printStderr("{s}", .{usage});
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "version") or isFlag(command, "version")) {
+        var buf: [64]u8 = undefined;
+        var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+        try stdout.interface.print("zigsaw {s}\n", .{options.version});
+        try stdout.interface.flush();
         return 0;
     }
     // Logins don't touch the store.
@@ -206,6 +217,11 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         _ = try ctx.store.lock(ctx.arena, .exclusive);
         try prune.prune(ctx, opts);
         return 0;
+    }
+    if (std.mem.eql(u8, command, "repair")) {
+        if (rest.len != 0) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        return exports.repair(ctx);
     }
     return usageError();
 }

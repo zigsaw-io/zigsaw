@@ -1,0 +1,16 @@
+{
+  "id": "test.build.sevenzip",
+  "version": "1",
+  "command": "hello.cmd",
+  "sdk": {
+    "sevenzip": "org.7_zip.7zip@@SEVENZIP@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "modules": [
+    {
+      "name": "hello",
+      "sources": [{ "path": "hello.7z" }],
+      "build": ["7z x -y -bd -o\"$PREFIX\" hello.7z"]
+    }
+  ]
+}

@@ -91,6 +91,12 @@ jobs:
         shell: bash
         run: bash tests/ctrlc.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/ctrlc.txt"
 
+      # What the Release workflow publishes, and installing it.
+      - name: tests/install.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/install.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/install.txt"
+
       # zot is the app recipes/zot.json builds, which published.sh built in
       # the build store; tests/zot.sh runs it with zigsaw.
       - name: tests/registry.sh, against two local zot registries

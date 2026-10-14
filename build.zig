@@ -10,7 +10,10 @@ pub fn build(b: *std.Build) void {
     // zigsaw compresses, hashes and unpacks layers of hundreds of MB, which
     // takes about 8 times as long in Debug: 74 s instead of 9 s to compress
     // zig's layer.
-    const exe_mod = zigsawModule(b, target, chosen orelse .ReleaseSafe);
+    // Debug information names the directory zigsaw was built in, so releases
+    // leave it out: zigsaw.exe then builds the same anywhere.
+    const strip = b.option(bool, "strip", "Omit debug information from zigsaw.exe, as releases do");
+    const exe_mod = zigsawModule(b, target, chosen orelse .ReleaseSafe, strip);
 
     const exe = b.addExecutable(.{
         .name = "zigsaw",
@@ -78,6 +81,33 @@ pub fn build(b: *std.Build) void {
     const acprobe_step = b.step("acprobe", "Build the AppContainer probe used by tests/matrix.sh");
     acprobe_step.dependOn(&b.addInstallArtifact(acprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // Asks Windows where the user's folders are and what the registry allows,
+    // as desktop programs do; see docs/findings.md. Also installed under
+    // zig-out\test.
+    const hostprobe_mod = b.createModule(.{
+        .root_source_file = b.path("tests/hostprobe.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    hostprobe_mod.addImport("win32", b.createModule(.{
+        .root_source_file = b.path("src/win32.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    const hostprobe = b.addExecutable(.{ .name = "zigsaw-hostprobe", .root_module = hostprobe_mod });
+    const hostprobe_step = b.step("hostprobe", "Build the known-folder and registry probe");
+    hostprobe_step.dependOn(&b.addInstallArtifact(hostprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
+    // Waits for a window by its title, and closes it; see tests/guiapps.sh.
+    // Also installed under zig-out\test.
+    const winwait = b.addExecutable(.{ .name = "zigsaw-winwait", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/winwait.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const winwait_step = b.step("winwait", "Build the window waiter used by tests/guiapps.sh");
+    winwait_step.dependOn(&b.addInstallArtifact(winwait, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     // A GUI program that records how it was started and exits with the code
     // it's given, for the GUI shim; see tests/shims.sh. Also installed under
     // zig-out\test.
@@ -102,7 +132,7 @@ pub fn build(b: *std.Build) void {
     imports_step.dependOn(&b.addInstallArtifact(imports, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize) })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize, null) })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shimModule(b, target, optimize, true) })).step);
 }
 
@@ -119,12 +149,17 @@ fn shimModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
     return mod;
 }
 
-fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, strip: ?bool) *std.Build.Module {
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = strip,
     });
+    // What `zigsaw version` prints: the package's version.
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", @import("build.zig.zon").version);
+    mod.addOptions("options", options);
     // AppContainer profiles live in userenv; ACL editing lives in advapi32.
     mod.linkSystemLibrary("userenv", .{});
     mod.linkSystemLibrary("advapi32", .{});

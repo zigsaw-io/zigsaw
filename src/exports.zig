@@ -59,13 +59,39 @@ pub fn list(ctx: *Context) ![]Shim {
 /// with its layers deployed (see `syncLocked`), and then its Start menu
 /// shortcuts, which run them, and its file associations.
 pub fn sync(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig) !void {
+    return syncAs(ctx, manifest, config, .install);
+}
+
+fn syncAs(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, when: When) !void {
     const lock = try ctx.store.lockShims(ctx.arena);
     defer lock.release(ctx.io);
-    try syncLocked(ctx, manifest, config, .install);
+    try syncLocked(ctx, manifest, config, when);
     const data_dir = try ctx.store.path(ctx.arena, &.{ "data", config.id });
     const placeholders = try deployedPlaceholders(ctx, manifest, config, data_dir);
     try shortcuts.sync(ctx, config, placeholders);
     try associations.sync(ctx, config, placeholders);
+}
+
+/// `zigsaw repair`: writes every installed app's shims, shortcuts and file
+/// associations again, as installing it would. They are copies of this
+/// zigsaw's shims and name its path, so a new zigsaw, or one that moved,
+/// takes them over this way. An app that fails, as one whose shim is running
+/// does, doesn't stop the others. Returns the exit code.
+pub fn repair(ctx: *Context) !u32 {
+    const arena = ctx.arena;
+    const refs = try ctx.store.listRefs(arena);
+    var failed: usize = 0;
+    for (refs) |ref| {
+        const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
+        syncAs(ctx, image.manifest, image.config, .repair) catch |err| switch (err) {
+            error.Failed => failed += 1, // Already reported.
+            else => |e| return e,
+        };
+    }
+    if (refs.len == 0) note("no apps are installed", .{});
+    if (failed == 0) return 0;
+    note("{d} app(s) couldn't be repaired; close them and run `zigsaw repair` again", .{failed});
+    return 1;
 }
 
 /// After a run of the app, gives the commands it installed shims, and
@@ -90,7 +116,7 @@ pub fn syncAfterRun(ctx: *Context, id: []const u8) void {
     ctx.timed(start, "sync commands", .{});
 }
 
-const When = enum { install, run };
+const When = enum { install, run, repair };
 
 /// Makes the store's shims match what the app provides: its exports, and
 /// the commands in its command directories, which exports win over. Creates
@@ -119,7 +145,7 @@ fn syncLocked(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, when
         if (owner) |o| if (!std.mem.eql(u8, o.sidecar.app, config.id)) {
             switch (when) {
                 .install => note("warning: not exporting {s}: {s} already provides it", .{ name, o.sidecar.app }),
-                .run => if (ctx.verbose) note("not adding {s}: {s} already provides it", .{ name, o.sidecar.app }),
+                .run, .repair => if (ctx.verbose) note("not adding {s}: {s} already provides it", .{ name, o.sidecar.app }),
             }
             continue;
         };
@@ -135,7 +161,7 @@ fn syncLocked(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, when
         const shim_exe = shim_exes.getPtr(kind);
         if (shim_exe.* == null) shim_exe.* = try shimExe(ctx, zigsaw, kind);
         writeShim(ctx, name, shim_exe.*.?, sidecar) catch |err| switch (when) {
-            .install => return fail("writing the shim for {s} in {s} (is it running?): {t}", .{ name, try binDir(ctx), err }),
+            .install, .repair => return fail("writing the shim for {s} in {s} (is it running?): {t}", .{ name, try binDir(ctx), err }),
             .run => {
                 note("warning: couldn't add {s} to {s}: {t}", .{ name, try binDir(ctx), err });
                 continue;
@@ -149,7 +175,7 @@ fn syncLocked(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, when
         if (!std.mem.eql(u8, shim.sidecar.app, config.id)) continue;
         if (containsIgnoreCase(exported.items, shim.name) or containsIgnoreCase(from_runs.items, shim.name)) continue;
         removeShim(ctx, shim.name) catch |err| switch (when) {
-            .install => return fail("removing the shim for {s} from {s} (is it running?): {t}", .{ shim.name, try binDir(ctx), err }),
+            .install, .repair => return fail("removing the shim for {s} from {s} (is it running?): {t}", .{ shim.name, try binDir(ctx), err }),
             .run => {
                 note("warning: couldn't remove {s} from {s}: {t}", .{ shim.name, try binDir(ctx), err });
                 continue;
@@ -171,6 +197,10 @@ fn syncLocked(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, when
                 pathHint(ctx, bin);
             }
             if (removed.items.len > 0) note("removed {s} from {s} (gone from {s})", .{ try std.mem.join(arena, ", ", removed.items), bin, config.id });
+        },
+        .repair => {
+            const names = try std.mem.concat(arena, []const u8, &.{ exported.items, from_runs.items });
+            note("repaired {s}: {s}", .{ config.id, if (names.len == 0) "no commands" else try std.mem.join(arena, ", ", names) });
         },
     }
 }
