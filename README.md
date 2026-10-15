@@ -71,8 +71,11 @@ the directory they were built in, for the x86-64 baseline, whatever CPU
 builds them (`build.zig`'s default target), so a build of the same tag with
 Zig 0.16.0 gives the same bytes anywhere, and runs on any x64 CPU; the
 release notes list their SHA-256. (0.18.0's were built for the CPU of
-GitHub's runner, and need AVX2, BMI2 and the SHA instructions.)
-[`scripts/package.sh`](scripts/package.sh) makes the release's files.
+GitHub's runner, and need AVX2, BMI2 and the SHA instructions.) A build
+of 0.19.0, 0.20.0 and 0.21.0 here gave their releases' bytes. From 0.22.0
+the programs carry version information, which Explorer's Properties show,
+and an application manifest ([`src/windows/`](src/windows/)); they aren't
+signed. [`scripts/package.sh`](scripts/package.sh) makes the release's files.
 
 ## Commands
 

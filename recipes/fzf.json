@@ -8,7 +8,7 @@
   "command": "fzf.exe",
   "permissions": { "filesystem": ["cwd:ro"] },
   "sdk": {
-    "go": "org.golang.go:1.27.1@sha256:426de395c658dc3dd5c1459edb4016d9d98a5752923bac56f9220473458fd8bf",
+    "go": "org.golang.go:1.27.1@sha256:f8192fc2cb2be9c04e1ee833a8d135bd292c122f9fb9907dbc8d7d62a134cb8c",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [

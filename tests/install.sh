@@ -88,6 +88,16 @@ installs() {
     [ "$("$bin\\zigsaw.exe" version | tr -d '\r')" = "zigsaw $(sed -n 's/^ *\.version = "\(.*\)",$/\1/p' "$root\\build.zig.zon")" ]
 }
 check "it installs zigsaw and its shims, with build.zig.zon's version" installs
+version_info() {
+    local version f info
+    version=$("$bin\\zigsaw.exe" version | tr -d '\r' | cut -d' ' -f2)
+    for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe; do
+        info=$(powershell -NoProfile -Command "\$v = (Get-Item -LiteralPath '$bin\\$f').VersionInfo; \$v.ProductVersion + '|' + \$v.OriginalFilename" | tr -d '\r')
+        [ "$info" = "$version|$f" ] || { echo "$f: $info"; return 1; }
+        grep -a -q 'level="asInvoker"' "$bin\\$f" || { echo "$f has no manifest"; return 1; }
+    done
+}
+check "each program's version information has zigsaw's version, and its manifest runs it as the user" version_info
 check "the installed zigsaw.exe is the packaged one, without debug information" sh -c "! grep -a -q 'zigsaw\.pdb' '$bin\\zigsaw.exe'"
 check "the app's shim names the installed zigsaw now (zigsaw repair)" grep -qF "zigsaw = $bin\\zigsaw.exe" "$bin\\install-wait.shim"
 check "its command runs through it" "$bin\\install-wait.exe" 1

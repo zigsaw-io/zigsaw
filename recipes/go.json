@@ -1,6 +1,10 @@
 {
   "id": "org.golang.go",
   "version": "1.27.1",
+  "name": "Go",
+  "summary": "The Go programming language: its compiler, tools and standard library",
+  "homepage": "https://go.dev/",
+  "license": "BSD-3-Clause",
   "command": "bin/go.exe",
   "path": ["bin", "${data}\\go\\bin"],
   "env": {

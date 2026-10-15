@@ -108,6 +108,7 @@ host_built() {
 }
 
 ids=()
+declare -A names # by id: the recipe's name, if it gives one
 published_versions=()
 skipped=0
 for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); do
@@ -121,6 +122,7 @@ for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); 
     recipe="$root\\recipes\\$name"
     id=$(grep -o '"id": *"[^"]*"' "$recipe" | cut -d'"' -f4)
     ids+=("$id")
+    names[$id]=$(grep -o '^  "name": *"[^"]*"' "$recipe" | cut -d'"' -f4)
     if ! zb build "$recipe" >"$logs\\$id.build.log" 2>&1; then
         fail "$id: builds" "$(last_line "$logs\\$id.build.log")"
         continue
@@ -207,6 +209,20 @@ if [ ${#published_versions[@]} -gt 0 ]; then
         [ ${#missing[@]} -eq 0 ] || { echo "it doesn't list ${missing[*]}"; return 1; }
     }
     check "the registry's catalog lists the apps published at these versions" in_catalog
+    # A catalog pushed before an app was republished with a name lists it by
+    # its commands.
+    named() {
+        local out entry id unnamed=()
+        out=$(zp search 2>&1) || return 1
+        for entry in "${published_versions[@]}"; do
+            id=${entry% *}
+            [ -n "${names[$id]}" ] || continue
+            awk -v id="$id" -v name="${names[$id]}: " '$1 == id && index($0, name) { found = 1 } END { exit !found }' <<<"$out" ||
+                unnamed+=("$id")
+        done
+        [ ${#unnamed[@]} -eq 0 ] || { echo "it doesn't name ${unnamed[*]}"; return 1; }
+    }
+    check "the catalog describes each app by its recipe's name" named
 fi
 
 # Installed apps are protected against deletion, so remove them through zigsaw.

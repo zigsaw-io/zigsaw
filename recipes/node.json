@@ -1,6 +1,10 @@
 {
   "id": "org.nodejs.node",
   "version": "24.21.0",
+  "name": "Node.js",
+  "summary": "The JavaScript runtime, with npm",
+  "homepage": "https://nodejs.org/",
+  "license": "MIT",
   "command": "node.exe",
   "path": [".", "${data}\\npm"],
   "env": {

@@ -159,7 +159,8 @@ opens() {
     local start=$SECONDS
     "$zigsaw" run --sandbox=$sandbox --command=$cmd --file="$file" $id >"$work\\run.log" 2>&1 &
     local runner=$! status i
-    "$winwait" "$title" $limit --close
+    # Only windows of that run count (its Windows pid; $! is Git Bash's).
+    "$winwait" "$(cat /proc/$runner/winpid)" "$title" $limit --close
     status=$?
     # zigsaw ends once the app's processes have (it gives them up to 5 s).
     for i in $(seq 50); do

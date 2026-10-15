@@ -73,11 +73,25 @@ fn describeBuild(arena: std.mem.Allocator, b: oci.Build) ![]const u8 {
     var parts: std.ArrayList([]const u8) = .empty;
     var sdks: std.ArrayList([]const u8) = .empty;
     for (b.sdk.map.keys()) |alias| try sdks.append(arena, alias);
+    // Not "from its sources": the config doesn't say whether anything was
+    // compiled, and a recipe may only unpack upstream's own build.
+    const downloads = try std.fmt.allocPrint(arena, "from {d} pinned download{s}", .{ b.sources.len, if (b.sources.len == 1) "" else "s" });
     try parts.append(arena, if (sdks.items.len > 0)
-        try std.fmt.allocPrint(arena, "with {s}", .{try oci.joinAnd(arena, sdks.items)})
+        try std.fmt.allocPrint(arena, "{s}, with {s}", .{ downloads, try oci.joinAnd(arena, sdks.items) })
     else
-        "from its sources, without an SDK");
+        try std.fmt.allocPrint(arena, "{s}, without an SDK", .{downloads}));
     if (b.network) try parts.append(arena, "a step used the network, so it may not rebuild the same");
     if (b.host.map.count() > 0) try parts.append(arena, try std.fmt.allocPrint(arena, "with the build machine's {s}, so it won't rebuild the same elsewhere", .{try std.mem.join(arena, ", ", b.host.map.keys())}));
     return std.mem.join(arena, "; ", parts.items);
+}
+
+test describeBuild {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try std.testing.expectEqualStrings("from 1 pinned download, without an SDK", try describeBuild(arena, .{ .sources = &.{"a"} }));
+    var with: oci.Build = .{ .sources = &.{ "a", "b" }, .network = true };
+    try with.sdk.map.put(arena, "zig", "sha256:z");
+    try with.sdk.map.put(arena, "busybox", "sha256:b");
+    try std.testing.expectEqualStrings("from 2 pinned downloads, with zig and busybox; a step used the network, so it may not rebuild the same", try describeBuild(arena, with));
 }

@@ -8,7 +8,7 @@
   "command": "${node}\\node.exe",
   "args": ["${app}\\bin\\prettier.cjs"],
   "permissions": { "filesystem": ["cwd"] },
-  "runtimes": { "node": "org.nodejs.node:24.21.0@sha256:1094b9dbcaf59d6055c74d83fde1bc132b561e49a768a756d2d7180074903c02" },
+  "runtimes": { "node": "org.nodejs.node:24.21.0@sha256:0a7a2c31adcd9e24d4452b508ca70eab760753d0f332174a100faf9f78d20157" },
   "exports": {
     "prettier": { "command": "${node}\\node.exe", "args": ["${app}\\bin\\prettier.cjs"] }
   },

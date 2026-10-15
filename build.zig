@@ -24,6 +24,7 @@ pub fn build(b: *std.Build) void {
         .name = "zigsaw",
         .root_module = exe_mod,
     });
+    addWindowsResources(b, exe, "zigsaw");
     b.installArtifact(exe);
 
     // Copied to <store>\bin\<name>.exe for every exported command, so it is
@@ -35,6 +36,7 @@ pub fn build(b: *std.Build) void {
             .root_module = shimModule(b, target, .ReleaseSmall, gui),
         });
         if (gui) shim.subsystem = .windows;
+        addWindowsResources(b, shim, if (gui) "zigsaw GUI command shim" else "zigsaw command shim");
         b.installArtifact(shim);
     }
 
@@ -156,6 +158,26 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize, null) })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shimModule(b, target, optimize, true) })).step);
+}
+
+/// Version information, which Explorer shows in the file's properties, and an
+/// application manifest (src/windows/): programs without either look more
+/// like malware to antivirus heuristics (docs/findings.md). Task Manager
+/// names a process by its description, so it's short.
+fn addWindowsResources(b: *std.Build, exe: *std.Build.Step.Compile, description: []const u8) void {
+    const version = std.SemanticVersion.parse(@import("build.zig.zon").version) catch @panic("build.zig.zon's version isn't x.y.z");
+    exe.root_module.addWin32ResourceFile(.{
+        .file = b.path("src/windows/zigsaw.rc"),
+        .flags = &.{
+            "/:auto-includes", // no headers: see zigsaw.rc
+            "none",
+            b.fmt("/dZIGSAW_VERSION=\"{d}.{d}.{d}\"", .{ version.major, version.minor, version.patch }),
+            b.fmt("/dZIGSAW_VERSION_NUMBERS={d},{d},{d},0", .{ version.major, version.minor, version.patch }),
+            b.fmt("/dZIGSAW_DESCRIPTION=\"{s}\"", .{description}),
+            b.fmt("/dZIGSAW_FILE_NAME=\"{s}.exe\"", .{exe.name}),
+        },
+    });
+    exe.win32_manifest = b.path("src/windows/zigsaw.manifest");
 }
 
 fn shimModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, gui: bool) *std.Build.Module {

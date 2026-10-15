@@ -550,6 +550,30 @@ Files lists folders with Win32, but makes each drive's entry from a
   including the .NET builds; what set it off isn't known. Restoring the file from quarantine
   allowed it again.
 
+  Looked into in iteration 22. The flagged build was a development one, with
+  debug information (`b9b5923c…`, 2.7 MB), not a release: the programs of
+  every release from 0.18.0 to 0.21.0 scan clean (`MpCmdRun -Scan -ScanType
+  3 -File <exe> -DisableRemediation`, which works without admin rights), and
+  0.19.0's release was never flagged. Defender flagged the running process
+  first (`DidThreatExecute`), and then identical copies as they were opened,
+  so it judged what the program did and then spread that verdict to its
+  bytes. Restoring the file had also set `Bearfoos.A!ml` to "allow" on this
+  machine (`Get-MpPreference`, `ThreatIDDefaultAction_Ids`), so a local
+  scan can no longer say whether any build would be flagged: it reports
+  clean for that detection whatever the file. Undoing that needs admin
+  rights.
+
+  zigsaw's programs had neither version information nor an application
+  manifest, which machine-learning detectors weigh against unknown,
+  unsigned programs. From 0.22.0 they have both (`src/windows/`): the
+  version, the author and the licence, as Explorer's Properties show them,
+  and a manifest that runs them as the user who starts them. Task Manager
+  names a process by its description, so the descriptions are short:
+  "zigsaw", "zigsaw command shim". The programs stay the same bytes from any
+  checkout. Whether this keeps Defender quiet can't be shown from here.
+  Reporting the false positive to Microsoft, with the flagged file, is a
+  form only its author can send.
+
 - **v0.18.0's programs are built for the CPU of GitHub's runner.**
   `build.zig` set only the target's OS, so Zig compiled for the CPU of the
   machine that built them: the released `zigsaw.exe` has 18,697 AVX2

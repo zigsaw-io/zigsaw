@@ -57,8 +57,11 @@
   other "remotes". The catalog lists the apps `scripts/publish.sh` publishes,
   as they were when it was made: an app pushed later without
   `push --catalog` isn't in it, or is at its older version. It has no icons
-  or screenshots, and runtimes and SDKs published before iteration 19 have no
-  name or summary in it yet, only their commands.
+  or screenshots. Ten runtimes and SDKs have no name or summary in it yet,
+  only their commands: busybox, zig, Rust, CMake, Meson, Perl, cargo-c,
+  gettext and GTK's SDK and runtime. Naming any of them changes its digest,
+  and the GTK SDK pins them all, so they get one at their next version
+  (Node and Go got theirs in iteration 22).
 - `pull` and `update` tell what an app may reach, and don't ask whether to
   go on.
 - An app sees only the user's folders its permissions name (Desktop,
@@ -180,10 +183,12 @@
 - Files' vendor step keeps 3.3 GB of NuGet packages, for x64 alone, among
   them the Windows App SDK's AI and ML packages, which its project excludes
   from the build but NuGet still downloads.
-- zigsaw 0.19.0 can be quarantined by Microsoft Defender as
+- Microsoft Defender quarantined a development build of zigsaw 0.19.0 as
   `Trojan:Win32/Bearfoos.A!ml`, which ends a build or run in progress
-  ([findings](findings.md#other-findings)). It hasn't been reported to
-  Microsoft.
+  ([findings](findings.md#other-findings)). The released programs scan
+  clean, and from 0.22.0 they carry version information and a manifest, but
+  Defender's machine learning may still flag an unsigned build by what it
+  does; zigsaw's programs aren't signed.
 - A Go vendor step downloads every module its `go.mod` names, whatever the
   build uses: zot's takes 14 minutes and 5 GB of temporary space, for the
   68 MB it keeps.

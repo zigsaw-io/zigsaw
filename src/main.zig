@@ -557,6 +557,7 @@ test {
     _ = @import("exports.zig");
     _ = @import("folders.zig");
     _ = @import("hkcu.zig");
+    _ = @import("info.zig");
     _ = @import("msvc.zig");
     _ = @import("oci.zig");
     _ = @import("override.zig");
