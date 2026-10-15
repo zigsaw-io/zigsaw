@@ -1,0 +1,18 @@
+// vim:ft=javascript
+// zigsaw's test extension: what php-ext's config.w32 stand-ins handle.
+
+ARG_ENABLE("zprobe", "zigsaw's test extension", "no");
+ARG_WITH("zprobe-greeting", "the greeting zprobe_greeting() returns", "hello from config.w32");
+
+if (PHP_ZPROBE != "no") {
+	EXTENSION("zprobe", "zprobe.c", null, "/DZEND_ENABLE_STATIC_TSRMLS_CACHE=1");
+	ADD_SOURCES(configure_module_dirname + "/src", "greet.c", "zprobe");
+	ADD_FLAG("CFLAGS_ZPROBE", "/I " + configure_module_dirname + "/src /wd4996");
+	AC_DEFINE("ZPROBE_GREETING", PHP_ZPROBE_GREETING, "What zprobe_greeting() says");
+	if (CHECK_LIB("version.lib", "zprobe")) {
+		AC_DEFINE("HAVE_ZPROBE_VERSION_LIB", 1);
+	}
+	if (CHECK_LIB("no_such_library_zigsaw.lib", "zprobe")) {
+		ERROR("found a library that doesn't exist");
+	}
+}

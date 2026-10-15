@@ -1,0 +1,20 @@
+{
+  "id": "test.php.consumer",
+  "version": "1",
+  "command": "${php}\\php.exe",
+  "args": ["${app}\\check.php"],
+  "runtimes": {
+    "php": "net.php.php@@PHP@",
+    "apcu": "net.php.php.APCu@@APCU@",
+    "xdebug": "net.php.php.Xdebug@@XDEBUG@"
+  },
+  "env": { "PHP_INI_SCAN_DIR": "${apcu}\\conf.d;${xdebug}\\conf.d;${app}\\conf.d" },
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "exports": {},
+  "modules": [
+    {
+      "name": "check",
+      "sources": [{ "path": "check.php" }, { "path": "app.ini", "dest": "conf.d/app.ini" }]
+    }
+  ]
+}

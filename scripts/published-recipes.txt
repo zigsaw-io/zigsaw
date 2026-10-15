@@ -28,3 +28,7 @@ rnote.json
 notepad-plus-plus.json
 sumatrapdf.json
 vlc.json
+php-sdk.json
+php.json
+php-apcu.json
+php-xdebug.json

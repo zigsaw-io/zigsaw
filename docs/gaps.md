@@ -239,3 +239,23 @@
   with the others.
 - Pango doesn't fall back to another font for scripts its font lacks:
   Devanagari in Segoe UI shows as boxes, where Windows would use Nirmala UI.
+- PHP needs Microsoft's Visual C++ Redistributable installed, which takes
+  an administrator: its images don't carry it, as its licence doesn't let
+  it be published.
+- Xdebug's step debugger can't connect to an IDE from an app running under
+  `--sandbox=appcontainer`: an AppContainer can't reach `127.0.0.1` without
+  a loopback exemption (`CheckNetIsolation`), which takes an administrator.
+  It does under `soft` and `low`.
+- An extension's image loads only in apps that list it as a runtime and
+  name its `conf.d` in `PHP_INI_SCAN_DIR`: installing it doesn't make the
+  `php` command load it.
+- `php-ext` builds extensions that need only PHP and Windows' own
+  libraries: those PHP's build links some extensions with (zlib, OpenSSL,
+  libxml2, ICU...) aren't in the devel pack, so `CHECK_LIB` doesn't find
+  them. It hasn't been tried with C++ extensions, nor with thread-safe PHP,
+  which isn't packaged. A `config.w32` that calls a configure function its
+  stand-ins don't have fails, naming it.
+- MinGW's headers define POSIX names that MSVC's don't, and an extension
+  that tests for one takes another branch than in MSVC builds of it.
+  `zig-php.h` removes those found so far (`P_tmpdir`, `PATH_MAX`,
+  `NAME_MAX`).

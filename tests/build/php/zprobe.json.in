@@ -1,0 +1,20 @@
+{
+  "id": "test.build.phpext",
+  "version": "1",
+  "command": "about.bat",
+  "env": { "PHP_EXT_ZPROBE": "${app}" },
+  "exports": {},
+  "sdk": { "phpsdk": "net.php.php.Sdk@@PHPSDK@" },
+  "modules": [
+    {
+      "name": "zprobe",
+      "sources": [
+        { "path": "zprobe/config.w32", "dest": "config.w32" },
+        { "path": "zprobe/zprobe.c", "dest": "zprobe.c" },
+        { "path": "zprobe/src/greet.c", "dest": "src/greet.c" },
+        { "path": "zprobe/src/greet.h", "dest": "src/greet.h" }
+      ],
+      "build": ["php-ext build"]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "id": "net.php.php.APCu",
+  "version": "5.1.28",
+  "name": "APCu for PHP 8.5",
+  "summary": "APCu, an in-memory key-value cache for PHP, as an extension built with zig; apps list it as a runtime next to PHP's",
+  "homepage": "https://pecl.php.net/package/APCu",
+  "license": "PHP-3.01",
+  "command": "about.bat",
+  "env": { "PHP_EXT_APCU": "${app}" },
+  "exports": {},
+  "sdk": { "phpsdk": "net.php.php.Sdk:8.5.11@sha256:29cab2e00b29b3765c0e2be99db3eabd6b015b0c6e0be796d421dc0ad6a5348f" },
+  "modules": [
+    {
+      "name": "apcu",
+      "sources": [
+        {
+          "url": "https://pecl.php.net/get/apcu-5.1.28.tgz",
+          "sha256": "ca9c1820810a168786f8048a4c3f8c9e3fd941407ad1553259fb2e30b5f057bf",
+          "strip": 1
+        }
+      ],
+      "build": ["php-ext build"]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "id": "net.php.php",
+  "version": "8.5.11",
+  "name": "PHP",
+  "summary": "PHP 8.5 (NTS, x64), the scripting language, as php.net builds it for Windows; needs the Visual C++ Redistributable",
+  "homepage": "https://www.php.net/",
+  "license": "PHP-3.01",
+  "command": "php.exe",
+  "env": { "PHPRC": "${app}" },
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "exports": {
+    "php": { "command": "php.exe" },
+    "php-cgi": { "command": "php-cgi.exe" },
+    "phpdbg": { "command": "phpdbg.exe" }
+  },
+  "cleanup": ["/dev", "/php8embed.lib"],
+  "modules": [
+    {
+      "name": "php",
+      "sources": [{ "image": "net.php.php.Sdk:8.5.11@sha256:29cab2e00b29b3765c0e2be99db3eabd6b015b0c6e0be796d421dc0ad6a5348f" }]
+    }
+  ]
+}

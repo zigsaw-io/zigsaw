@@ -1,0 +1,13 @@
+{
+  "id": "test.build.php",
+  "version": "1",
+  "command": "${php}\\php.exe",
+  "args": ["${app}\\test.php"],
+  "runtimes": {
+    "php": "net.php.php@@PHP@",
+    "zprobe": "test.build.phpext@@PHPEXT@"
+  },
+  "env": { "PHP_INI_SCAN_DIR": "${zprobe}\\conf.d" },
+  "exports": {},
+  "modules": [{ "name": "test", "sources": [{ "path": "test.php" }] }]
+}

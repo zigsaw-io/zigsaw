@@ -822,13 +822,55 @@ check "its form and its window come up, under soft, low and appcontainer" deskto
 desktop_again() { [ "$(rebuilt_manifest "$work\\dotnetdesktop\\desktop.json")" = "$desktop_digest" ]; }
 check "built again, it's the same image" desktop_again
 
+# --- PHP extensions with zig ------------------------------------------------------
+
+# PHP's official Windows build, which MSVC builds, in an SDK image with its
+# headers and php-ext, which runs an extension's config.w32 under Node and
+# builds it with zig; the runtime is the SDK image's files without those.
+# The test extension's image is a runtime of an app, next to PHP's, which
+# loads it through the .ini in the extension's image (tests/php.sh has
+# APCu's and Xdebug's test suites).
+check "php-sdk.json builds PHP's SDK image" z build "$root\\recipes\\php-sdk.json"
+check "php.json builds PHP's runtime image from it" z build "$root\\recipes\\php.json"
+PHPEXT=test.build.phpext PHPAPP=test.build.php
+mkdir -p "$work\\php" && cp -r "$(cygpath -u "$root")"/tests/build/php/{zprobe,test.php} "$(cygpath -u "$work")/php/" &&
+    sed -e "s/@PHPSDK@/$(manifest_of net.php.php.Sdk)/" "$root\\tests\\build\\php\\zprobe.json.in" >"$work\\php\\zprobe.json"
+check "a PHP extension builds with the SDK image's php-ext, from its config.w32" z build "$work\\php\\zprobe.json"
+phpext_digest=$(manifest_of $PHPEXT)
+sed -e "s/@PHP@/$(manifest_of net.php.php)/" -e "s/@PHPEXT@/$phpext_digest/" "$root\\tests\\build\\php\\app.json.in" >"$work\\php\\app.json"
+check "an app with PHP's runtime and the extension's image as runtimes builds" z build "$work\\php\\app.json"
+# test.php prints a line per check; the last one is a fatal error, which
+# Zend's bailout unwinds through the extension's zend_try.
+mkdir -p "$work\\phpcwd"
+php_ext_runs() {
+    local sb out
+    for sb in soft low appcontainer; do
+        out=$(cd "$work\\phpcwd" && z run --sandbox=$sb $PHPAPP 2>&1 | tr -d '\r')
+        ! grep -q '^FAIL' <<<"$out" && [ "$(grep -c '^ok ' <<<"$out")" -eq 26 ] && grep -q '^shutdown ok$' <<<"$out" ||
+            { echo "$sb: $(grep -E '^FAIL|rror' <<<"$out" | head -2 | tr '\n' ' ')"; return 1; }
+    done
+}
+check "PHP loads it, and its 26 checks pass, under soft, low and appcontainer" php_ext_runs
+phpext_again() { [ "$(rebuilt_manifest "$work\\php\\zprobe.json")" = "$phpext_digest" ]; }
+check "built again, the extension's image is the same" phpext_again
+# Without a recipe: the SDK's php-ext in the extension's directory, and PHP's
+# runtime loading the DLL from there.
+mkdir -p "$work\\phpdir" && cp -r "$(cygpath -u "$root")"/tests/build/php/zprobe/. "$(cygpath -u "$work")/phpdir/"
+php_ext_no_recipe() {
+    local out
+    out=$(cd "$work\\phpdir" && z run --command=php-ext net.php.php.Sdk build 2>&1) || { echo "$out" | tail -2; return 1; }
+    out=$(cd "$work\\phpdir" && z run net.php.php -d "extension=$work\\phpdir\\php_zprobe.dll" -r 'echo zprobe_config(), "\n";' 2>&1 | tr -d '\r')
+    [ "$out" = "hello from config.w32, version info: yes" ] || { echo "got: $out"; return 1; }
+}
+check "php-ext builds it in its directory without a recipe, and PHP's runtime loads it" php_ext_no_recipe
+
 # Removing the apps also deletes their AppContainer profiles. The images
 # builds use stay until prune --downloads, and only zigsaw can delete their
 # protected deployments.
 for id in $APP $SDK $RT test.image.built $AAPP $ASDK $TOOL test.alias.built test.alias.files io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP com.mesonbuild.meson $MESONAPP org.sqlite.sqlite3 \
     test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
     test.build.vendored org.7_zip.7zip $SEVENZIP org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO \
-    com.microsoft.dotnet.Sdk com.microsoft.dotnet $DOTNETAPP $DESKTOP; do z rm --delete-data $id >/dev/null 2>&1; done
+    com.microsoft.dotnet.Sdk com.microsoft.dotnet $DOTNETAPP $DESKTOP net.php.php.Sdk net.php.php $PHPEXT $PHPAPP; do z rm --delete-data $id >/dev/null 2>&1; done
 z prune --downloads --data >/dev/null 2>&1
 check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
 rm -rf "$ZIGSAW_HOME" "$work"

@@ -1,0 +1,71 @@
+{
+  "id": "net.php.php.Sdk",
+  "version": "8.5.11",
+  "name": "PHP SDK",
+  "summary": "PHP 8.5 with its headers, and php-ext to build extensions with zig; needs the Visual C++ Redistributable, as PHP's own build does",
+  "homepage": "https://www.php.net/",
+  "license": "PHP-3.01",
+  "command": "php.exe",
+  "env": { "PHPRC": "${app}" },
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "runtimes": {
+    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d",
+    "node": "org.nodejs.node:24.21.0@sha256:0a7a2c31adcd9e24d4452b508ca70eab760753d0f332174a100faf9f78d20157"
+  },
+  "aliases": {
+    "php-ext": { "command": "php.exe", "args": ["${app}\\dev\\zigsaw\\php-ext.php"] }
+  },
+  "exports": {
+    "php-ext": { "command": "php.exe", "args": ["${app}\\dev\\zigsaw\\php-ext.php"] }
+  },
+  "cleanup": [
+    "/dev/php8.lib",
+    "/dev/phpize.bat",
+    "/dev/script/config.phpize.js",
+    "/dev/script/config.w32.phpize.in",
+    "/dev/script/configure.tail",
+    "/dev/script/confutils.js",
+    "/dev/script/Makefile.phpize",
+    "/dev/script/phpize.js",
+    "/dev/build/default.manifest",
+    "/dev/build/template.rc"
+  ],
+  "modules": [
+    {
+      "name": "php",
+      "sources": [
+        {
+          "url": "https://downloads.php.net/~windows/releases/archives/php-8.5.11-nts-Win32-vs17-x64.zip",
+          "sha256": "0ea96e0d2b9b737a6036f05cf4e95c49313faa6d0f27bd97edb2742503f0c043"
+        },
+        {
+          "url": "https://curl.se/ca/cacert-2026-09-25.pem",
+          "sha256": "a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505",
+          "dest": "extras/ssl/cacert.pem"
+        }
+      ]
+    },
+    {
+      "name": "devel",
+      "sources": [
+        {
+          "url": "https://downloads.php.net/~windows/releases/archives/php-devel-pack-8.5.11-nts-Win32-vs17-x64.zip",
+          "sha256": "d85e734238d45d02ddc35b5bca4ab47ad12e005fad970c792c520683ae3b0f33",
+          "dest": "dev",
+          "strip": 1
+        }
+      ]
+    },
+    {
+      "name": "zigsaw",
+      "sources": [
+        { "path": "php-sdk/php.ini", "dest": "php.ini" },
+        { "path": "php-sdk/zig-php.h", "dest": "dev/zigsaw/zig-php.h" },
+        { "path": "php-sdk/zig-php.c", "dest": "dev/zigsaw/zig-php.c" },
+        { "path": "php-sdk/php-ext.php", "dest": "dev/zigsaw/php-ext.php" },
+        { "path": "php-sdk/config-w32.js", "dest": "dev/zigsaw/config-w32.js" }
+      ]
+    }
+  ]
+}

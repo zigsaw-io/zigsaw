@@ -539,6 +539,79 @@ Files lists folders with Win32, but makes each drive's entry from a
   runtime image; the self-contained Debug builds of the probes took 1.0-1.4
   s. Not looked into.
 
+## PHP extensions without MSVC
+
+Iteration 23, 2026-10-16, Windows 11 26300, with php.net's PHP 8.5.11 x64
+builds (NTS and TS, "vs17": MSVC 14.44) and their devel packs, zig 0.16.0
+(clang 21.1), Visual Studio 18 Insiders (MSVC 14.44 and 14.51 side by side)
+and MSYS2's GCC 16.1 with binutils 2.46. The question was whether an
+extension for PHP's official Windows build can be built without MSVC.
+
+**With zig, yes**, with what [the recipes guide](recipes.md#php) lists:
+`-fms-extensions`, a header included first, one object, `-Wno-date-time`.
+Each was found by a build failing, or by a test, as follows:
+
+| Without | What happens |
+|---|---|
+| `-fms-extensions` | `zend_atomic.h` calls `_InterlockedExchange8`, undeclared; and `__declspec(thread)` (`TSRM_TLS`, thread-safe builds) isn't thread-local |
+| `_PID_T_` | `php.h`'s `typedef int pid_t` clashes with MinGW's 64-bit one |
+| `ZEND_FASTCALL` as `__vectorcall` | 340 of `php8.dll`'s exports are `__vectorcall` (`_emalloc@@8`); the link fails on all of them |
+| no `HAVE_BUILTIN_CONSTANT_P` | the link fails on `_emalloc_40@@0`: the size-class allocators exist only where PHP was built with `__builtin_constant_p` |
+| `_TIMEZONE_DEFINED` | `struct timezone` is defined twice (PHP's `win32/time.h`, MinGW's `time.h`); Xdebug doesn't compile |
+| `zig-php.c` | Xdebug's link fails on `zend_string_equal_val@@16`, which MSVC builds inline |
+| no `P_tmpdir` | Xdebug's default output directory is `\`, the current drive's root, not `C:\Windows\Temp` as in its MSVC build: 52 of its tests fail when run from `C:` (a user may write to `D:\`'s root here, so they passed there) |
+
+**Compared with MSVC 14.44**, building the same sources with the same flags
+as PHP's configure:
+
+| | zig | MSVC 14.44 |
+|---|---|---|
+| A test extension: classes and custom objects, callbacks, exceptions, streams, ini, `phpinfo()`, a fatal error unwinding through its `zend_try`; NTS and TS | all 24 checks pass | the same |
+| Sizes and offsets of 123 structs and fields (`zval`, `zend_class_entry`, executor globals, `php_stream`...) | | the same, but `long double`: 16 bytes, MSVC's 8, which only `zend_max_align_t` uses, to size a buffer the caller allocates |
+| APCu 5.1.28's tests | 56 pass | the same |
+| Xdebug 3.5.3's tests, with its own runner | 745 pass, 148 skipped | the same |
+| The extension's imports | UCRT (`api-ms-win-crt-*`), as `php8.dll`'s | UCRT and `VCRUNTIME140.dll` |
+
+Xdebug's `remote_log-win` test passes only when
+`C:\Windows\Temp\remote-log-win.txt` isn't there yet: it deletes its log
+while Xdebug has it open, so the file stays, and the next run finds it.
+
+**PHP checks the linker.** It refuses an extension whose PE header says a
+newer linker than its own: "Can't load module ... as it's linked with 14.51,
+but the core is linked with 14.44". MSVC builds of extensions need the
+Visual Studio PHP was built with, or an older one; Visual Studio 18's
+default toolset makes extensions PHP 8.5 refuses. lld writes 14.0, which
+passes.
+
+**GCC and GNU ld don't fit.** GCC has no `__vectorcall`; for PHP's
+`ZEND_FASTCALL` functions on x64 it's the plain Microsoft ABI with another
+name, so an import library mapping each name to `name@@bytes` links. Two more
+MSVC intrinsics need stand-ins (`__assume`, the 8-bit `_Interlocked*`). GNU
+ld writes linker version 2.46, which PHP refuses, and has no option to
+change it; with the two bytes patched to 14.0 the test extension passes.
+But GCC takes `__declspec(thread)` for an attribute it doesn't know, with a
+warning, so a thread-safe extension's `TSRMLS_CACHE` would be one variable
+for all threads.
+
+**Running PHP.** php.net's build reads the `php.ini` that `PHPRC` names,
+which PHP's documentation puts before those that keys under
+`HKLM\SOFTWARE\PHP` name, its own directory's and Windows' directory's (the
+keys weren't tried: writing them takes an administrator). Its default
+`extension_dir` is `C:\php\ext`. `${VAR}` in a
+`php.ini` value, quoted or not, is the environment variable, and
+`PHP_INI_SCAN_DIR` takes several directories, separated by `;`. HTTPS through
+streams checks with Windows' certificate stores; curl's OpenSSL has no
+certificates unless told (`curl.cainfo`), or per request
+(`CURLSSLOPT_NATIVE_CA`). PHP runs under the three sandboxes, finding the
+Visual C++ runtime in System32, and loads extensions from other images'
+directories. Xdebug's step debugger reaches a client on `127.0.0.1` under
+`soft` and `low`, not in an AppContainer.
+
+`run-tests.php` reads `TEST_PHP_ARGS` as options of its own as well as
+passing them on, so an extension given in both loads twice ("Module is
+already loaded"); and for a test path that doesn't exist it runs nothing,
+and passes.
+
 ## Other findings
 
 - **Microsoft Defender quarantines zigsaw 0.19.0.** During a build of

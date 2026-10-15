@@ -1038,6 +1038,173 @@ network, the working directory and the user's six folders. It runs in the
 storage APIs refuse a program without a package, and Files shows no drives
 ([findings](findings.md#files)).
 
+## PHP
+
+PHP's images are made from php.net's own Windows build of PHP 8.5 (NTS,
+x64), which MSVC builds, and extensions for it are built from source with
+zig's clang, which that PHP loads as it loads MSVC's builds:
+
+- **[`net.php.php.Sdk`](recipes/php-sdk.json)** is PHP's zip with its devel
+  pack in `dev` (the headers, the import libraries of `php8.dll` and of the
+  extensions that are DLLs, `run-tests.php`), and `php-ext`, which builds an
+  extension from its sources. Its runtimes are zig, BusyBox and Node, which
+  builds that use it get too. It exports `php-ext`.
+- **[`net.php.php`](recipes/php.json)** is the runtime: the SDK image's files
+  without `dev` ([image source](#images-as-sources)). As an app it exports
+  `php`, `php-cgi` and `phpdbg`, with the network and the working directory.
+- **[`net.php.php.APCu`](recipes/php-apcu.json)** (APCu 5.1.28) and
+  **[`net.php.php.Xdebug`](recipes/php-xdebug.json)** (Xdebug 3.5.3) are
+  extensions, each an image of its own that apps list as a runtime next to
+  PHP's ([below](#apps-with-extensions)).
+
+PHP needs Microsoft's Visual C++ Redistributable (x64), as php.net's zip
+does: its DLLs import `vcruntime140.dll`, and ICU's and intl's
+`msvcp140.dll` and `vcruntime140_1.dll`, which runs find in System32, where
+the Redistributable puts them. The images don't carry them: the
+Redistributable's licence lets you install it, not publish it. Without it,
+PHP doesn't start.
+
+The images set `PHPRC` to their own directory, so PHP reads their
+`php.ini` and no other (not a `php.ini` in Windows' directory, nor one
+`HKLM\SOFTWARE\PHP` names). It is PHP's built-in defaults, as in Docker's
+PHP images, plus where the extensions are (`extension_dir="${PHPRC}\ext"`,
+in PHP's own syntax for a variable) and which are on: curl, fileinfo, gd,
+intl, mbstring, openssl, pdo_sqlite, sqlite3, sodium and zip. OPcache is
+built in. PHP's `php.ini-development` and `php.ini-production` are next to
+it. HTTPS through streams (`file_get_contents("https://...")`,
+`stream_socket_client`) checks with Windows' certificate stores; curl's
+OpenSSL has no certificates of its own, nor a setting for Windows' stores
+other than one per request (`CURLSSLOPT_NATIVE_CA`), so `curl.cainfo` names
+Mozilla's, as curl's project publishes them (`extras\ssl\cacert.pem`,
+pinned like any download).
+
+### Extensions
+
+`php-ext build`, in an extension's directory, does what phpize, configure
+and nmake do with MSVC:
+
+```
+php-ext build [--enable-foo[=...]|--with-foo[=...]|--disable-foo|--without-foo]... [--out DIR] [-j N]
+```
+
+- **Node runs the extension's `config.w32`**
+  ([`config-w32.js`](recipes/php-sdk/config-w32.js)), with stand-ins for
+  the functions PHP's configure gives it (`ARG_ENABLE`, `ARG_WITH`,
+  `EXTENSION`, `ZEND_EXTENSION`, `ADD_SOURCES`, `ADD_FLAG`, `AC_DEFINE`,
+  `CHECK_LIB`, `CHECK_HEADER_ADD_INCLUDE`, `ADD_EXTENSION_DEP`...), which
+  record what to build rather than write a Makefile. The options are
+  configure's; without any, the first option `config.w32` declares is on.
+  MSVC's flags become zig's where they mean the same (`/D`, `/I`, `/U`,
+  `/FI`); the others (warnings, optimization) are left out, with a note. A
+  function it doesn't know fails the build, naming it.
+- **zig's `cc` compiles the sources**, in parallel, with
+  [`zig-php.h`](recipes/php-sdk/zig-php.h) included first (below), and
+  links them with `php8.lib`, the libraries PHP's own build links every
+  extension with, and those `config.w32` asks for. `AC_DEFINE`s go into a
+  `main\config.pickle.h` of the build's own, as phpize writes them into the
+  devel pack's.
+- **It writes** `php_<ext>.dll`, `conf.d\<ext>.ini` and `about.bat` into
+  `--out`: `$PREFIX` in a build, the extension's directory otherwise. The
+  `.ini` loads the DLL from `${PHP_EXT_<EXT>}`, a variable the extension's
+  image sets to its own directory, and `about.bat`, the image's command,
+  says what it is.
+- `CHECK_LIB` finds Windows' own libraries, those zig has import libraries
+  for. The libraries PHP's build links some extensions with (zlib, OpenSSL,
+  libxml2...) aren't in the devel pack, so extensions that need them can't
+  be built yet.
+
+An extension's image ([`recipes/php-xdebug.json`](recipes/php-xdebug.json)):
+
+```json
+"command": "about.bat",
+"env": { "PHP_EXT_XDEBUG": "${app}" },
+"exports": {},
+"sdk": { "phpsdk": "net.php.php.Sdk:8.5.11@sha256:..." },
+"modules": [
+  {
+    "name": "xdebug",
+    "sources": [{ "url": "https://pecl.php.net/get/xdebug-3.5.3.tgz", "sha256": "...", "strip": 1 }],
+    "build": ["php-ext build"]
+  }
+]
+```
+
+It's built for the SDK's PHP: another PHP 8.5 loads it, as their extension
+API is the same; another minor version refuses it, with PHP's own message.
+
+`php-ext test` runs an extension's tests in the SDK's PHP, with
+`run-tests.php` or the extension's own (`--runner`, as Xdebug has one); it
+passes the DLL in `TEST_PHP_ARGS` too, for tests that start PHP themselves,
+and runs the tests that fail again one at a time, since tests with sockets
+fail when many run at once:
+
+```
+php-ext test tests --ext php_apcu.dll
+php-ext test --runner run-xdebug-tests.php tests --ext php_xdebug.dll
+```
+
+Without a recipe, `php-ext build` in an extension's directory makes the
+DLL there, and `php -d extension=C:\path\to\php_foo.dll` loads it.
+
+### Apps with extensions
+
+An app lists the extensions it needs as runtimes, and their `conf.d` in
+`PHP_INI_SCAN_DIR` (`;` between directories), as
+[`tests/php/consumer.json.in`](tests/php/consumer.json.in) does; its own
+`conf.d` last, for its settings:
+
+```json
+"command": "${php}\\php.exe",
+"args": ["${app}\\check.php"],
+"runtimes": {
+  "php": "net.php.php:8.5.11@sha256:...",
+  "apcu": "net.php.php.APCu:5.1.28@sha256:...",
+  "xdebug": "net.php.php.Xdebug:3.5.3@sha256:..."
+},
+"env": { "PHP_INI_SCAN_DIR": "${apcu}\\conf.d;${xdebug}\\conf.d;${app}\\conf.d" },
+"exports": {}
+```
+
+They're variables, so the PHP processes the app starts load the same
+extensions. Both extensions work under the three sandboxes. Xdebug's step
+debugger connects to an IDE under `soft` and `low`; in an AppContainer it
+can't reach `127.0.0.1` ([known gaps](gaps.md)).
+
+### What zig needs to build for MSVC's PHP
+
+PHP's headers expect the compiler that built `php8.dll`, or GCC and clang
+building PHP itself. [`zig-php.h`](recipes/php-sdk/zig-php.h) and
+[`zig-php.c`](recipes/php-sdk/zig-php.c) bridge the two:
+
+- `php8.dll`'s `ZEND_FASTCALL` functions, and the handlers it calls
+  (`PHP_FUNCTION`), are `__vectorcall`, as MSVC builds them, which also
+  names them (`_emalloc@@8`). The headers pick it only for `_MSC_VER`;
+  `zig-php.h` picks it for clang.
+- With `__builtin_constant_p`, which MSVC hasn't, `emalloc` of a constant
+  size calls an allocator for that size (`_emalloc_40`), which `php8.dll`
+  doesn't have; `zig-php.h` turns that off.
+- `zend_string.h` declares `zend_string_equal_val` as one of `php8.dll`'s
+  functions for GCC and clang, which have it in assembly; MSVC builds inline
+  it. `zig-php.c` gives each extension the pointer its calls go through.
+- PHP's Windows headers define what MSVC hasn't and MinGW has: `pid_t` (an
+  `int`; MinGW's is 64-bit), `struct timezone`, `gettimeofday`,
+  `S_IRUSR`... `zig-php.h` leaves MinGW's out.
+- MinGW defines POSIX names MSVC doesn't, and code that tests for them
+  takes another branch: Xdebug's default output directory is `P_tmpdir`
+  when there's one, MinGW's `"\\"`, the root of the current drive.
+  `zig-php.h` removes `P_tmpdir`, `PATH_MAX` and `NAME_MAX`. Others may
+  remain.
+- `-fms-extensions` gives clang MSVC's intrinsics, which `zend_atomic.h`
+  uses (`_InterlockedExchange8`), and makes `__declspec(thread)` thread-local
+  storage, which thread-safe builds need (`TSRM_TLS`).
+- PHP refuses an extension linked by a newer linker than its own
+  ("linked with 14.51, but the core is linked with 14.44"), which rules out
+  a newer Visual Studio as much as GNU ld (version 2.x); lld writes 14.0.
+
+The sizes and offsets of PHP's structs, as zig and MSVC 14.44 lay them out,
+are the same, except `long double` (16 bytes and 8), which PHP's API doesn't
+pass. Thread-safe PHP isn't packaged.
+
 ## MSVC
 
 Projects that need Microsoft's compiler can use the Visual Studio installed
