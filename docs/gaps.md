@@ -149,6 +149,23 @@
   `0xC0000409`) instead of reporting the command.
 - Executables built with zig's `LDFLAGS` or `CGO_LDFLAGS` have no debug
   information, as a PDB would differ from build to build.
+- .NET's images can't be published: Microsoft's licence for its Windows
+  binaries doesn't allow it. Each machine builds the SDK and the runtime
+  from Microsoft's download, in that order, before an app that names them
+  (`recipes/no-publish/`); they're in no registry to pull from, and neither
+  is an app built with them, such as Pinta.
+- .NET builds can't use NativeAOT, which links with Visual Studio's linker
+  and C runtime libraries. Only .NET 10 is set up; a project for an older
+  .NET is rebuilt for it, which takes a `TargetFramework` its project lets
+  the environment set, or a change to the project.
+- The .NET runtime is one image with all three shared frameworks: a console
+  app's runs have WPF's and ASP.NET Core's files on disk too (200 MB in all).
+- In an AppContainer, `dotnet --info` and `dotnet workload list` stop at the
+  workloads, with an exception: they ask Visual Studio's installer for its
+  workloads, which the container can't reach. Building and running work.
+- Pinta has no WebP: GTK's runtime has no WebP loader for GdkPixbuf, which
+  Pinta's own Windows build brings. Its own strings follow Windows' display
+  language only: `LANGUAGE` changes GTK's and libadwaita's, not Pinta's.
 - A Go vendor step downloads every module its `go.mod` names, whatever the
   build uses: zot's takes 14 minutes and 5 GB of temporary space, for the
   68 MB it keeps.

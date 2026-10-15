@@ -1,0 +1,22 @@
+{
+  "id": "test.build.dotnet",
+  "version": "1",
+  "command": "hello.exe",
+  "runtimes": { "dotnet": "com.microsoft.dotnet@@DOTNET@" },
+  "sdk": {
+    "dotnetsdk": "com.microsoft.dotnet.Sdk@@DOTNETSDK@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "modules": [
+    {
+      "name": "hello",
+      "sources": [{ "path": "hello.csproj" }, { "path": "Program.cs" }],
+      "vendor": {
+        "commands": ["dotnet restore --packages vendor"],
+        "dir": "vendor",
+        "sha256": "5f8fe2a471b0a15988ad7e61fc3911d47812958181728a9e8618f3bda6f4ae26"
+      },
+      "build": ["dotnet publish -c Release --packages vendor --source \"$PWD/vendor\" -o \"$PREFIX\""]
+    }
+  ]
+}

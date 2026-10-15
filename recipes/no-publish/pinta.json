@@ -1,0 +1,60 @@
+{
+  "id": "com.github.PintaProject.Pinta",
+  "version": "3.1.2",
+  "name": "Pinta",
+  "summary": "Edit images and paint digitally",
+  "homepage": "https://www.pinta-project.com/",
+  "license": "MIT",
+  "command": "bin/Pinta.exe",
+  "path": ["bin"],
+  "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads", "pictures"] },
+  "exports": {
+    "pinta": { "command": "bin/Pinta.exe" }
+  },
+  "shortcuts": {
+    "Pinta": { "command": "pinta", "description": "Edit images and paint digitally" }
+  },
+  "associations": {
+    ".ora": { "command": "pinta", "description": "OpenRaster image" },
+    ".png": { "command": "pinta", "description": "PNG image" },
+    ".jpg": { "command": "pinta", "description": "JPEG image" },
+    ".jpeg": { "command": "pinta", "description": "JPEG image" },
+    ".bmp": { "command": "pinta", "description": "Bitmap image" },
+    ".tif": { "command": "pinta", "description": "TIFF image" },
+    ".tiff": { "command": "pinta", "description": "TIFF image" }
+  },
+  "runtimes": {
+    "dotnet": "com.microsoft.dotnet:10.0.13@sha256:02a480d6f4386234410f88a2942d5264b4ffd355faed02003fc0431b3ce69b64",
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:28c0ec8ecbe3b4c90b5dcb655d7cd73847669107934666722404b087494731fb"
+  },
+  "sdk": {
+    "dotnetsdk": "com.microsoft.dotnet.Sdk:10.0.402@sha256:af8d05f19b602a7c8784524b6c0108231932cec7123d5a7ba7dc1d08ae32a2e2",
+    "gettext": "org.gnu.gettext:1.0@sha256:f3f85ba59c5cb8607358ae8c04ae78979772ce6e6df87080b0e77cd998387e8e",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "cleanup": ["*.pdb"],
+  "modules": [
+    {
+      "name": "pinta",
+      "sources": [
+        {
+          "url": "https://github.com/PintaProject/Pinta/releases/download/3.1.2/pinta-3.1.2.tar.gz",
+          "sha256": "27f55a026b51f6f18197e6bcfdd7c79544e41529d166daf6c93a1117e9ed45f0",
+          "strip": 1
+        }
+      ],
+      "env": { "TargetFramework": "net10.0" },
+      "vendor": {
+        "commands": ["dotnet restore Pinta/Pinta.csproj --packages vendor"],
+        "dir": "vendor",
+        "sha256": "e93c0bd7adac517e6415fb92c1ba0891cd47de11309006eee8b78010c5046a28"
+      },
+      "build": [
+        "sed -i '/installer\\/windows\\/bundle_gtk.targets/d' Pinta/Pinta.csproj",
+        "! grep -q bundle_gtk Pinta/Pinta.csproj",
+        "dotnet publish Pinta/Pinta.csproj -c Release -p:BuildTranslations=true --packages vendor --source \"$PWD/vendor\" -o \"$PREFIX/bin\"",
+        "mkdir -p \"$PREFIX/share\" && mv \"$PREFIX/bin/icons\" \"$PREFIX/bin/locale\" \"$PREFIX/share/\""
+      ]
+    }
+  ]
+}

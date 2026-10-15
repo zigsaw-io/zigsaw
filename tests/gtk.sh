@@ -13,8 +13,10 @@
 # document with its command-line program and starts up in each sandbox.
 # The apps' shortcuts have icons made from their SVGs; Text Editor and Rnote
 # are registered for their kinds of file (in a scratch registry key) and open
-# one given with --file in each sandbox. GTK built with MSVC
-# (recipes/gtk4-msvc.json) runs its demos, if the store has it.
+# one given with --file in each sandbox. Pinta (recipes/no-publish/pinta.json),
+# a C# app, runs on the runtime and .NET's, and opens an image given with
+# --file in each sandbox. GTK built with MSVC (recipes/gtk4-msvc.json) runs
+# its demos, if the store has it.
 #
 # Not in CI: the SDK takes a quarter of an hour to build, and the runner has
 # no GPU for the OpenGL check.
@@ -26,7 +28,8 @@
 # BUILD_HOME as tests/published.sh leaves it), and says so and stops if
 # neither has them. It installs its app there, and removes it afterwards;
 # it builds Text Editor there too unless the store has it (a few minutes),
-# and then removes it. The apps open windows on the desktop for a moment.
+# and then removes it, as it does Rnote, Pinta and .NET's images. The apps
+# open windows on the desktop for a moment.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -385,7 +388,47 @@ cp "$work\\notes.rnote" "$docs\\notes.rnote"
 check "it opens a document it's given with --file" stays_up 20 --command=rnote --file="$docs\\notes.rnote" $RNOTE
 check "with --sandbox=low" stays_up 20 --sandbox=low --command=rnote --file="$docs\\notes.rnote" $RNOTE
 check "with --sandbox=appcontainer" stays_up 20 --sandbox=appcontainer --command=rnote --file="$docs\\notes.rnote" $RNOTE
-check "the documents' directory was granted to neither app" sh -c "! icacls '$docs' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
+
+# Pinta (recipes/no-publish/pinta.json), a C# app, on the runtime and .NET's,
+# built with .NET's SDK image. Microsoft's licence doesn't let the .NET images
+# be published, so they're built here from Microsoft's download unless the
+# store has them (300 MB, about a minute), and Pinta too (about a minute).
+PINTA=com.github.PintaProject.Pinta
+installed_dotnet=false installed_pinta=false
+[ -f "$ZIGSAW_HOME\\refs\\com.microsoft.dotnet.Sdk.json" ] || installed_dotnet=true
+[ -f "$ZIGSAW_HOME\\refs\\$PINTA.json" ] || installed_pinta=true
+for r in dotnet-sdk dotnet pinta; do
+    z build "$root\\recipes\\no-publish\\$r.json" >"$work\\$r.log" 2>&1 || echo "building $r.json failed: $(tail -1 "$work\\$r.log")"
+done
+pinta_dir="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $PINTA | cut -d: -f2)" | tail -1 | cut -d: -f2)"
+check "Pinta 3.1.2 is installed" sh -c "timeout 60 \"\$0\" run $PINTA --version | tr -d '\r' | grep -qx '3\\.1\\.2'" "$zigsaw"
+check "it gets the windowless shim and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\pinta.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\Pinta.lnk'"
+# Its icon is in its executable, the apphost the .NET SDK makes for it, which
+# takes the project's icon.
+exe_icons() {
+    powershell -NoProfile -Command "Add-Type -Namespace Z -Name I -MemberDefinition '[DllImport(\"shell32.dll\", CharSet = CharSet.Unicode)] public static extern uint ExtractIconEx(string f, int i, IntPtr[] l, IntPtr[] s, uint n);'; [Z.I]::ExtractIconEx('$1', -1, \$null, \$null, 0)" | tr -d '\r'
+}
+pinta_icon() {
+    local ico
+    ico=$(lnk_icon "$links\\Pinta.lnk")
+    [ "$ico" = "$pinta_dir\\bin\\Pinta.exe,0" ] || { echo "Pinta: $ico"; return 1; }
+    [ "$(exe_icons "$pinta_dir\\bin\\Pinta.exe")" -ge 1 ] || { echo "no icon in Pinta.exe"; return 1; }
+}
+check "its shortcut shows the icon in its executable" pinta_icon
+# Pinta looks for its icons and translations in the share directory next to
+# its bin, as its own Windows build lays them out.
+check "it has its icons and translations in share" test -f "$pinta_dir\\share\\locale\\de\\LC_MESSAGES\\pinta.mo" -a -f "$pinta_dir\\share\\icons\\hicolor\\scalable\\actions\\tool-paintbrush-symbolic.svg"
+check "Pinta runs" stays_up 15 $PINTA
+check "with --sandbox=low" stays_up 15 --sandbox=low $PINTA
+check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $PINTA
+pinta_opens() { for ext in .ora .png .jpg .jpeg .bmp .tif .tiff; do opens_with $PINTA pinta $ext Pinta.exe || return 1; done; }
+check "it's registered to open .ora, .png, .jpg, .jpeg, .bmp, .tif and .tiff files" pinta_opens
+# A 4x4 PNG.
+printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR42mM4EaABRwzEcQASUhQB/GAXigAAAABJRU5ErkJggg==' | base64 -d >"$docs\\picture.png"
+check "it opens an image it's given with --file" stays_up 20 --command=pinta --file="$docs\\picture.png" $PINTA
+check "with --sandbox=low" stays_up 20 --sandbox=low --command=pinta --file="$docs\\picture.png" $PINTA
+check "with --sandbox=appcontainer" stays_up 20 --sandbox=appcontainer --command=pinta --file="$docs\\picture.png" $PINTA
+check "the documents' directory was granted to none of the apps" sh -c "! icacls '$docs' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
 # GTK built with the machine's MSVC (recipes/gtk4-msvc.json), if the store
 # has it: it isn't published, and needs Visual Studio to build.
@@ -412,6 +455,8 @@ cd "$root" || exit 1
 reg delete "HKCU\\$classes" /f >/dev/null 2>&1
 reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1
 rm -rf "$docs"
+$installed_pinta && z rm --delete-data $PINTA >/dev/null 2>&1
+$installed_dotnet && { z rm --delete-data com.microsoft.dotnet >/dev/null 2>&1; z rm --delete-data com.microsoft.dotnet.Sdk >/dev/null 2>&1; }
 $installed_rnote && z rm --delete-data $RNOTE >/dev/null 2>&1
 $installed_editor && z rm --delete-data $EDITOR >/dev/null 2>&1
 z rm --delete-data $APP >/dev/null 2>&1

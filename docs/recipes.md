@@ -834,6 +834,144 @@ looking for an object file that `-###` never makes, so Go hashes the error
 instead, which names a temporary file and the store. Without a build ID, the
 executable is the same from any store.
 
+## .NET
+
+Microsoft's .NET binaries for Windows come under the .NET Library License,
+which lets anyone use them to build and test programs, and ship them inside
+the programs they build, but not publish them for others to copy. So
+.NET's recipes are in [`recipes/no-publish/`](recipes/no-publish/), where
+recipes go that must never be pushed to a registry
+([`scripts/publish.sh`](scripts/publish.sh) refuses them). Each machine
+builds their images from Microsoft's own download, the SDK first, then the
+runtime, then apps; a recipe that names them finds them in the store, as no
+registry has them:
+
+```powershell
+zigsaw build recipes\no-publish\dotnet-sdk.json   # 300 MB from Microsoft; about a minute
+zigsaw build recipes\no-publish\dotnet.json       # from the SDK image's files; seconds
+zigsaw build recipes\no-publish\pinta.json        # an app on it
+```
+
+- **[`com.microsoft.dotnet.Sdk`](recipes/no-publish/dotnet-sdk.json)** is
+  the .NET SDK 10.0.402's zip: the `dotnet` command, the C#, F# and Visual
+  Basic compilers, MSBuild, NuGet, the reference packs, and the runtime. It
+  exports `dotnet` and `dnx`.
+- **[`com.microsoft.dotnet`](recipes/no-publish/dotnet.json)** is the
+  runtime 10.0.13: the SDK image's files ([image source](#images-as-sources))
+  without the SDK's own, its packs and templates, so `dotnet.exe`, its host,
+  and the three shared frameworks, .NET's, ASP.NET Core's and Windows
+  Desktop's (WPF and Windows Forms). Apps list it in their `runtimes`. Its
+  layer is 86 MB, for 200 MB of files.
+
+The SDK image's variables keep it to itself:
+
+```json
+"DOTNET_ROOT": "${app}",
+"DOTNET_CLI_HOME": "${data}\\dotnet",
+"ProgramFiles(x86)": "${app}",
+"DOTNET_GENERATE_ASPNET_CERTIFICATE": "false",
+"DOTNET_ADD_GLOBAL_TOOLS_TO_PATH": "false",
+"DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+"DOTNET_NOLOGO": "1",
+"DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE": "1",
+"DOTNET_SKIP_WORKLOAD_INTEGRITY_CHECK": "true",
+"MSBUILDDISABLENODEREUSE": "1",
+"UseSharedCompilation": "false"
+```
+
+- `DOTNET_CLI_HOME`: the `dotnet` command's files and NuGet's packages are
+  in the data directory (in builds, `B:\data\dotnet`, fresh for each).
+  Without it, both find your profile with `SHGetKnownFolderPath`, which a
+  run's `USERPROFILE` doesn't move: the command would write into your real
+  `.dotnet`, and NuGet keep its packages in your real `.nuget`.
+- `ProgramFiles(x86)`: NuGet reads its machine-wide settings from under the
+  directory this variable names, and fails without it; zigsaw's runs don't
+  pass the machine's. The image's own directory has no settings there, so
+  NuGet never reads the machine's (to which Visual Studio can add an offline
+  package source), and builds use the same package sources everywhere.
+- `DOTNET_GENERATE_ASPNET_CERTIFICATE` and `DOTNET_ADD_GLOBAL_TOOLS_TO_PATH`:
+  otherwise the command's first run would add a developer certificate to
+  your certificate store, and its tools' directory to your PATH, in the
+  registry.
+- `DOTNET_SKIP_WORKLOAD_INTEGRITY_CHECK`: the first run's check of
+  workloads, which can't be installed into an image, would otherwise report
+  an issue at the start of every build.
+- `MSBUILDDISABLENODEREUSE` and `UseSharedCompilation`: MSBuild's worker
+  processes and the C# compiler's server end with the build, rather than
+  waiting to serve the next one, which may be another app's run, in another
+  sandbox.
+- `DOTNET_ROOT`: programs that the SDK starts, or that you run with
+  `--command`, find .NET in the image rather than one installed on the
+  machine.
+
+Run as an app, the SDK builds the project in the working directory
+(`dotnet build`, `dotnet run`), and what `dotnet tool install -g` installs
+is a [command on PATH](#commands-installed-while-an-app-runs).
+
+### Apps on .NET
+
+An app built with the SDK runs on the runtime: its `.exe` is the apphost the
+SDK makes, which finds .NET where `DOTNET_ROOT` says, and the runtime's
+variables set it to the runtime's directory. A .NET module vendors its
+NuGet packages, then builds offline from them, as
+[`tests/build/dotnet`](tests/build/dotnet) does:
+
+```json
+"runtimes": { "dotnet": "com.microsoft.dotnet:10.0.13@sha256:..." },
+"sdk": {
+  "dotnetsdk": "com.microsoft.dotnet.Sdk:10.0.402@sha256:...",
+  "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
+},
+"modules": [
+  {
+    "name": "hello",
+    "sources": [{ "path": "hello.csproj" }, { "path": "Program.cs" }],
+    "vendor": { "commands": ["dotnet restore --packages vendor"], "dir": "vendor", "sha256": "..." },
+    "build": ["dotnet publish -c Release --packages vendor --source \"$PWD/vendor\" -o \"$PREFIX\""]
+  }
+]
+```
+
+- `dotnet restore --packages vendor` downloads the packages the project
+  needs into `vendor`, in NuGet's own layout, which is also a package
+  source: the build restores from it, without the network, and finds them
+  in place. A package's version on nuget.org never changes, and NuGet takes
+  the lowest version a reference allows, so the step makes the same files
+  each time.
+- Packs that `dotnet publish` would download, for a self-contained,
+  ReadyToRun or trimmed app, come through the vendor step too. A
+  framework-dependent app, as above, needs none: the SDK has the reference
+  packs and the Windows apphost.
+- Builds reproduce without further settings: the compiler is deterministic
+  in SDK projects, and the paths it writes into DLLs and PDBs are on `B:`.
+- MSBuild reads variables as properties, so the module's `env` sets them:
+  `"TargetFramework": "net10.0"` rebuilds a project for an older .NET for
+  this one, if the project lets the environment set it, as Pinta's does.
+- NativeAOT isn't available: it links with Visual Studio's linker and C
+  runtime libraries.
+
+### Pinta
+
+[Pinta](recipes/no-publish/pinta.json) 3.1.2 is an image editor written in
+C#, with GTK 4 and libadwaita through GirCore's bindings. It runs on two
+runtimes, .NET's and [GTK's](#gtk): GirCore loads GTK's DLLs by the names
+MSYS2 gives them (`libgtk-4-1.dll`, `libadwaita-1-0.dll`), which GTK's
+runtime has too, on PATH. It's built from its release tarball, for .NET 10:
+
+- Its project imports, on Windows, a file of its repository's that copies
+  GTK's DLLs from MSYS2 into its output, and that its tarball lacks; the
+  recipe leaves the import out.
+- Its translations are compiled with `msgfmt`, from
+  [gettext's image](recipes/gettext.json) in the SDK.
+- It looks for its icons and translations in `share`, next to the `bin` its
+  executable is in, as its own Windows build lays them out; the recipe moves
+  them there.
+
+Explorer offers it for `.ora`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif` and
+`.tiff` files. It speaks Windows' display language (.NET's
+`CurrentUICulture`), which it also passes on to GTK and libadwaita; a
+`LANGUAGE` given with `--env` changes only theirs.
+
 ## MSVC
 
 Projects that need Microsoft's compiler can use the Visual Studio installed

@@ -6,6 +6,9 @@
 #
 #   scripts/publish.sh [recipe.json...]     (default: those in published-recipes.txt)
 #
+# It refuses recipes in recipes/no-publish/, whose images mustn't be
+# published.
+#
 # Needs Git Bash, a built zigsaw (zig build), and credentials for the
 # registry: a login saved with `zigsaw login ghcr.io`, or
 # ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD. For ghcr.io, that's a
@@ -25,16 +28,27 @@ root=$(cygpath -w "$(cd "$(dirname "$0")/.." && pwd)")
 zigsaw=${ZIGSAW:-$root/zig-out/bin/zigsaw.exe}
 registry=${ZIGSAW_REGISTRY:-ghcr.io/zigsaw-io}
 
+if [ $# -eq 0 ]; then
+    for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); do set -- "$@" "$root/recipes/$name"; done
+fi
+# Recipes in recipes/no-publish/ make images whose licences don't allow
+# publishing them (Microsoft's .NET binaries, for one). Any of them, named or
+# listed, stops this before anything is published.
+for recipe in "$@"; do
+    case /${recipe//\\//} in
+    */no-publish/*)
+        echo "error: $recipe is in recipes/no-publish/: its image mustn't be published" >&2
+        exit 1
+        ;;
+    esac
+done
+
 own_store=false
 if [ -z "${ZIGSAW_HOME:-}" ]; then
     ZIGSAW_HOME=$(cygpath -w "$(mktemp -d)")
     own_store=true
 fi
 export ZIGSAW_HOME
-
-if [ $# -eq 0 ]; then
-    for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); do set -- "$@" "$root/recipes/$name"; done
-fi
 
 published=()
 for recipe in "$@"; do

@@ -1,0 +1,17 @@
+{
+  "id": "test.build.dotnetdesktop",
+  "version": "1",
+  "command": "desktop.exe",
+  "runtimes": { "dotnet": "com.microsoft.dotnet@@DOTNET@" },
+  "sdk": {
+    "dotnetsdk": "com.microsoft.dotnet.Sdk@@DOTNETSDK@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "modules": [
+    {
+      "name": "desktop",
+      "sources": [{ "path": "desktop.csproj" }, { "path": "Program.cs" }],
+      "build": ["dotnet publish -c Release -o \"$PREFIX\""]
+    }
+  ]
+}

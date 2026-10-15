@@ -137,7 +137,9 @@ from when it is.
 
 The recipes in [recipes/](recipes/) are published as images in
 `ghcr.io/zigsaw-io`, tagged with their version and `latest`, and listed in
-its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`:
+its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
+(those in `recipes/no-publish/` aren't: see
+[Apps you build yourself](#apps-you-build-yourself)):
 
 | App | Id | Version | Commands |
 |---|---|---|---|
@@ -197,6 +199,32 @@ Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 
 [`scripts/publish.sh`](scripts/publish.sh) publishes the recipes listed in
 [`scripts/published-recipes.txt`](scripts/published-recipes.txt).
+
+### Apps you build yourself
+
+The recipes in [recipes/no-publish/](recipes/no-publish/) make images that
+mustn't be published, as the licences of what's in them don't allow it.
+`zigsaw pull` can't find them: each machine builds them, in this order.
+
+| App | Id | Version | Commands |
+|---|---|---|---|
+| .NET SDK | `com.microsoft.dotnet.Sdk` | 10.0.402 | `dotnet`, `dnx` |
+| .NET runtime, with ASP.NET Core and Windows Desktop (from its SDK) | `com.microsoft.dotnet` | 10.0.13 | |
+| Pinta (built from source, on GTK and .NET) | `com.github.PintaProject.Pinta` | 3.1.2 | `pinta` |
+
+```powershell
+zigsaw build recipes\no-publish\dotnet-sdk.json   # 300 MB from Microsoft
+zigsaw build recipes\no-publish\dotnet.json
+zigsaw build recipes\no-publish\pinta.json
+```
+
+Microsoft's licence for its .NET binaries on Windows lets anyone use them
+to build and test programs, and ship them in their own, but not publish
+them for others to copy ([.NET](docs/recipes.md#net)). Pinta, an image
+editor written in C#, runs on GTK's runtime and .NET's: its build pulls
+GTK's runtime and gettext's image from the registry, and finds .NET's in the
+store. Explorer offers it for images (`.ora`, `.png`, `.jpg`, `.bmp`,
+`.tif`).
 
 ### Reproducibility
 
@@ -751,8 +779,8 @@ bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash,
 bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes; --file; your folders (fake ones); registry keys kept with an app
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
-bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, reproducibility
-bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor and Rnote, their file associations, and opening a file with --file; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
+bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), reproducibility
+bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole

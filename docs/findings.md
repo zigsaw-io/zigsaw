@@ -392,6 +392,66 @@ In the sandboxes, a key in HKCU that zigsaw prepared, and one it didn't:
   position, panels, list mode and folder history, and `FM\Columns`. It makes
   its keys one level at a time, so an AppContainer's limit doesn't reach it.
 
+## .NET
+
+Iteration 20, 2026-10-15, Windows 11 26300, with the .NET SDK 10.0.402 from
+Microsoft's zip, which also has the runtime 10.0.13. This machine has .NET
+SDK 10.0.303 installed too, in `C:\Program Files\dotnet`, and long paths
+turned on (`LongPathsEnabled=1`).
+
+**Licence.** Microsoft's .NET binaries for Windows come under the
+[.NET Library License](https://github.com/dotnet/core/blob/main/license-information.md)
+(`LICENSE.txt` in the zip), not MIT as on Linux and macOS. It allows using
+any number of copies to build and test programs, and shipping its files
+inside programs you develop, under conditions; but not to "publish the
+software for others to copy". An image of the SDK or the runtime on a
+registry would be that, so their recipes are in `recipes/no-publish/`, and
+each machine builds them from Microsoft's download.
+
+The SDK image's variables, each tried without:
+
+| Without | What happens |
+|---|---|
+| `ProgramFiles(x86)` (zigsaw's runs don't pass it) | every NuGet command fails: `Value cannot be null. (Parameter 'path1')`. NuGet on .NET takes the machine-wide settings' directory from the variable `PROGRAMFILES(X86)`, or `PROGRAMFILES` |
+| `DOTNET_CLI_HOME` | the CLI writes its first-use sentinel to the real `C:\Users\<you>\.dotnet` (at low integrity, refused, and the CLI stops with `UnauthorizedAccessException`), and NuGet's packages would go to the real `.nuget\packages`: both find the profile with `SHGetKnownFolderPath`, which the run's `USERPROFILE` doesn't move |
+| `DOTNET_ROOT` | a program the SDK built, run with `--command`, ran on the machine's .NET (`C:\Program Files\dotnet\shared\Microsoft.NETCore.App\10.0.11`) |
+| `DOTNET_SKIP_WORKLOAD_INTEGRITY_CHECK` | each first run in a fresh profile, so every build, prints "An issue was encountered verifying workloads" |
+
+`DOTNET_GENERATE_ASPNET_CERTIFICATE=false` and
+`DOTNET_ADD_GLOBAL_TOOLS_TO_PATH=false` weren't tried without, as that would
+change this machine (a certificate in the user's store, an entry in the
+user's PATH, which this machine's own .NET first runs left three times). With
+all of them, after runs under soft, low and appcontainer: the real profile's
+`.dotnet` unchanged, no `.nuget`, the user's PATH and certificate store
+unchanged.
+
+| Check | soft | low | appcontainer |
+|---|---|---|---|
+| `dotnet new console`, `build`, `run` in a granted working directory | ok | ok | ok |
+| the built program, with `--command` | ok | ok | ok |
+| `dotnet --info` | ok | ok | stops at the workloads: Visual Studio's setup COM server (`{177F0C4A-...}`) refuses the container |
+| a console program with a NuGet package, on the runtime image | ok | ok | ok |
+| a Windows Forms form and a WPF window, on the runtime image | ok | ok | ok |
+
+- **Builds reproduce.** The SDK, the runtime, the two programs and Pinta
+  made the same images in two stores, the NuGet packages vendored afresh in
+  each, PDBs included: the compiler is deterministic, and its paths are on
+  `B:`. The apphost the SDK writes resources into (Pinta's icon) is the same
+  too.
+- **Long paths.** The SDK's deepest file is 145 characters into it, so 252
+  in the default store of a user named `Test`. A store whose own path is 102
+  characters long worked throughout (deploying, building, running, `dotnet
+  user-jwts`), but with long paths turned on; with them off, not tried.
+- **Pinta 3.1.2** looks for its icons and translations in `..\share` from
+  its executable, unless it finds `Pinta.sln` two levels up (a development
+  build), as its Windows build lays it out; with them next to the executable
+  its own icons were all missing. Its release tarball lacks the Windows
+  installer's files, among them `bundle_gtk.targets`, which its project
+  imports on Windows, to copy GTK's DLLs from MSYS2. It saves an image given
+  with `--file` in place in every sandbox. NuGet's audit warns that its
+  Tmds.DBus 0.22.0 has a known vulnerability (GHSA-xrw6-gwf8-vvr9), in a
+  D-Bus library Windows has no session bus for.
+
 ## Other findings
 
 - **v0.18.0's programs are built for the CPU of GitHub's runner.**

@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # End-to-end checks for building apps: runtimes, which an app runs with and
 # whose layers travel in its image, and build commands, which build an app
-# from source with SDK images (zig, busybox, CMake, Meson, Rust, and Go with and
-# without C), tools' caches and aliases, and vendor steps; 7-Zip unpacks a
-# source zigsaw doesn't.
+# from source with SDK images (zig, busybox, CMake, Meson, Rust, Go with and
+# without C, and .NET), tools' caches and aliases, and vendor steps; 7-Zip
+# unpacks a source zigsaw doesn't.
 #
 #   tests/build.sh [path\to\zigsaw.exe]
 #
 # Needs Git Bash and network access (busybox, Node, Prettier, zig, CMake,
-# zlib, SQLite, Rust and Go downloads, and crates from crates.io). Always uses
-# temporary stores, since it removes apps, and deletes them afterwards. To
-# skip downloading what a store already has (zig's is 97 MB, Rust's 150 MB),
+# zlib, SQLite, Rust, Go and .NET downloads, crates from crates.io and a
+# package from nuget.org). Always uses temporary stores, since it removes
+# apps, and deletes them afterwards. To skip downloading what a store already
+# has (zig's is 97 MB, Rust's 150 MB, .NET's SDK 300 MB),
 # set SEED_DOWNLOADS to its cache\downloads directory; its files are linked,
 # or copied, into the temporary stores.
 #
@@ -746,12 +747,88 @@ check "it runs, calling its C, which calls Windows" cgo_runs
 cgo_again() { [ "$(rebuilt_manifest "$work\\cgo\\hello.json")" = "$cgo_app_digest" ]; }
 check "built again, it's the same image" cgo_again
 
+# --- .NET from source ---------------------------------------------------------------
+
+# Microsoft's licence for its Windows binaries doesn't let them be published,
+# so .NET's recipes are in recipes/no-publish: the images are built here from
+# Microsoft's download, and the runtime from the SDK image's own files.
+check "dotnet-sdk.json builds the .NET SDK image" z build "$root\\recipes\\no-publish\\dotnet-sdk.json"
+check "dotnet.json builds the .NET runtime image from it" z build "$root\\recipes\\no-publish\\dotnet.json"
+dotnet_version=$(grep -o '"version": *"[^"]*"' "$root\\recipes\\no-publish\\dotnet.json" | cut -d'"' -f4)
+runtime_files() {
+    local d="$ZIGSAW_HOME\\deploy\\$(own_layer com.microsoft.dotnet)"
+    for f in dotnet.exe shared/Microsoft.NETCore.App/$dotnet_version shared/Microsoft.AspNetCore.App shared/Microsoft.WindowsDesktop.App; do
+        [ -e "$d\\$f" ] || { echo "no $f"; return 1; }
+    done
+    for f in sdk packs templates; do [ ! -e "$d\\$f" ] || { echo "has $f"; return 1; }; done
+}
+check "the runtime has dotnet.exe and the three shared frameworks, not the SDK's tools and packs" runtime_files
+# The SDK's image keeps the CLI's and NuGet's files in its data directory: on
+# .NET, NuGet finds the profile with SHGetKnownFolderPath, which a run's
+# USERPROFILE doesn't move, unless DOTNET_CLI_HOME says where it is.
+mkdir -p "$work\\dotnettiny"
+sdk_builds_cwd() {
+    local out
+    out=$(cd "$work\\dotnettiny" && z run com.microsoft.dotnet.Sdk new console -n tiny -o . 2>&1 &&
+        z run com.microsoft.dotnet.Sdk run 2>&1) || { echo "$out" | tail -3; return 1; }
+    grep -q '^Hello, World!' <<<"$out" || { echo "$out" | tail -3; return 1; }
+}
+check "the SDK run as an app makes, builds and runs a project in the working directory" sdk_builds_cwd
+nuget_in_data() {
+    z run com.microsoft.dotnet.Sdk nuget locals global-packages --list | tr -d '\r' |
+        grep -qF "global-packages: $ZIGSAW_HOME\\data\\com.microsoft.dotnet.Sdk\\dotnet\\.nuget\\packages"
+}
+check "NuGet keeps its packages in the SDK's data directory" nuget_in_data
+# A program built with the SDK image, its NuGet package from nuget.org through
+# a vendor step, that runs on the runtime image: its apphost finds .NET through
+# the DOTNET_ROOT the runtime's variables set, not a .NET installed on the
+# machine.
+DOTNETAPP=test.build.dotnet
+mkdir -p "$work\\dotnet" && cp "$(cygpath -u "$root")"/tests/build/dotnet/{hello.csproj,Program.cs} "$(cygpath -u "$work")/dotnet/" &&
+    sed -e "s/@DOTNETSDK@/$(manifest_of com.microsoft.dotnet.Sdk)/" -e "s/@DOTNET@/$(manifest_of com.microsoft.dotnet)/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\dotnet\\hello.json.in" >"$work\\dotnet\\hello.json"
+check "a .NET program builds with the SDK image, its NuGet package vendored" z build "$work\\dotnet\\hello.json"
+dotnet_app_digest=$(manifest_of $DOTNETAPP)
+dotnet_runs() {
+    local sb out
+    for sb in soft low appcontainer; do
+        out=$(z run --sandbox=$sb $DOTNETAPP zigsaw | tr -d '\r')
+        [ "$out" = "hello, zigsaw, from .NET $dotnet_version
+Built with a vendored package
+runs on $ZIGSAW_HOME\\deploy\\$(own_layer com.microsoft.dotnet)\\shared\\Microsoft.NETCore.App\\$dotnet_version\\" ] ||
+            { echo "$sb, got: $out"; return 1; }
+    done
+}
+check "it runs on the runtime image, under soft, low and appcontainer" dotnet_runs
+dotnet_again() { [ "$(rebuilt_manifest "$work\\dotnet\\hello.json")" = "$dotnet_app_digest" ]; }
+check "built again, from the vendored packages in the cache, it's the same image" dotnet_again
+# Windows Forms and WPF, which the runtime's Windows Desktop framework has: a
+# form and a window that close themselves once they're up.
+DESKTOP=test.build.dotnetdesktop
+mkdir -p "$work\\dotnetdesktop" && cp "$(cygpath -u "$root")"/tests/build/dotnetdesktop/{desktop.csproj,Program.cs} "$(cygpath -u "$work")/dotnetdesktop/" &&
+    sed -e "s/@DOTNETSDK@/$(manifest_of com.microsoft.dotnet.Sdk)/" -e "s/@DOTNET@/$(manifest_of com.microsoft.dotnet)/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\dotnetdesktop\\desktop.json.in" >"$work\\dotnetdesktop\\desktop.json"
+check "a Windows Forms and WPF program builds" z build "$work\\dotnetdesktop\\desktop.json"
+desktop_digest=$(manifest_of $DESKTOP)
+desktop_runs() {
+    local sb out
+    for sb in soft low appcontainer; do
+        out=$(z run --sandbox=$sb $DESKTOP | tr -d '\r')
+        [ "$out" = "Windows Forms: a form came up
+WPF: a window came up and drew its content" ] || { echo "$sb, got: $out"; return 1; }
+    done
+}
+check "its form and its window come up, under soft, low and appcontainer" desktop_runs
+desktop_again() { [ "$(rebuilt_manifest "$work\\dotnetdesktop\\desktop.json")" = "$desktop_digest" ]; }
+check "built again, it's the same image" desktop_again
+
 # Removing the apps also deletes their AppContainer profiles. The images
 # builds use stay until prune --downloads, and only zigsaw can delete their
 # protected deployments.
 for id in $APP $SDK $RT test.image.built $AAPP $ASDK $TOOL test.alias.built test.alias.files io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP com.mesonbuild.meson $MESONAPP org.sqlite.sqlite3 \
     test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
-    test.build.vendored org.7_zip.7zip $SEVENZIP org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO; do z rm --delete-data $id >/dev/null 2>&1; done
+    test.build.vendored org.7_zip.7zip $SEVENZIP org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO \
+    com.microsoft.dotnet.Sdk com.microsoft.dotnet $DOTNETAPP $DESKTOP; do z rm --delete-data $id >/dev/null 2>&1; done
 z prune --downloads --data >/dev/null 2>&1
 check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
 rm -rf "$ZIGSAW_HOME" "$work"
