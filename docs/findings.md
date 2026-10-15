@@ -452,7 +452,103 @@ unchanged.
   Tmds.DBus 0.22.0 has a known vulnerability (GHSA-xrw6-gwf8-vvr9), in a
   D-Bus library Windows has no session bus for.
 
+## Files
+
+Iteration 21, 2026-10-15: Files 4.3 (`cbfb4ba5`), WinUI 3 with the Windows
+App SDK 2.5.1, built with the .NET SDK 10.0.402.
+
+**What Files' repository builds with.** Visual Studio's MSBuild, for the
+solution: besides the C# projects, it has three C++ ones on Visual Studio's
+v145 toolset, a launcher (with C++/WinRT and WIL from NuGet) used when Files
+replaces Explorer, and COM servers replacing Windows' open and save dialogs
+(ATL, which only Visual Studio has, and MIDL). Release builds use NativeAOT,
+and CI makes MSIX packages. `dotnet build` of `Files.App.csproj` alone needs
+none of that: the XAML compiler, the resource index and the compiled XAML
+all work with the SDK image, and the C++ projects aren't references of it.
+
+**Without a package.** A build of Files run as a plain program stopped at
+each of these in turn; the recipe's patch deals with each:
+
+| What failed | How it showed | What the patch does |
+|---|---|---|
+| The Windows App SDK's initialization of a packaged app | `REGDB_E_CLASSNOTREG` in a static constructor, at once | builds Files unpackaged (`WindowsPackageType=None`), with the SDK in its directory |
+| `Package.Current`, `ApplicationData.Current` (about 80 uses) | they throw in a program without a package | classes of the same names in Files' namespace |
+| A launch's arguments start with `Files.exe`'s own path | Files exits with 0 at once: it takes the path for a program to start | treats that as a launch from the command line, as `MainWindow` already did |
+| `FileSystemWatcher` on the Libraries folder | the splash screen forever; nothing in the log | no watcher when there's no Libraries folder, as in a zigsaw run's profile |
+| The UWP `ResourceLoader` in a XAML markup extension | the splash screen forever (`XamlParseException` in `MainPage`) | the Windows App SDK's `ResourceLoader` |
+| `dotnet publish` leaves out `Assets` | a crash 2 s in, `0xC000027B` (only Windows Error Reporting's `Report.wer` names the error, `0x80070003`) | the recipe copies `Assets` |
+
+Files starts its window with `_ = ActivateAsync()`, so an exception there
+goes nowhere: two of the hangs above were found in a dump, with
+`dotnet-dump` run with the SDK image's `dnx` (`dumpasync` for what's still
+awaited, `dumpheap -type Exception` and `pe` for the exceptions). In an
+AppContainer, `dotnet-stack` and `dotnet-dump collect` hang: the process's
+diagnostics pipe can't be reached. A dump written from outside with
+`MiniDumpWriteDump` (full memory) can be read by `dotnet-dump analyze`.
+
+**WinRT's storage refuses an app without a package that isn't at medium
+integrity.** `StorageFolder.GetFolderFromPathAsync`, from PowerShell started
+at low integrity by `zigsaw-acprobe --low`:
+
+| Path | medium | low | .NET's `Directory.EnumerateFileSystemEntries` at low |
+|---|---|---|---|
+| `C:\` | ok | `E_ACCESSDENIED` | ok |
+| `C:\Windows` | ok | `E_ACCESSDENIED` | ok |
+| the app's data directory (labelled low) | ok | `E_ACCESSDENIED` | ok |
+
+The error says the item "is not in a location that the application has
+access to (including application data folders, folders that are accessible
+via capabilities, and persisted items in the StorageApplicationPermissions
+lists)": the rules for a packaged app in a sandbox, with no package to grant
+anything. In an AppContainer it's the same; Files' first patch, which made
+its data folders `StorageFolder`s at startup, hung there.
+
+| Files | soft | low | appcontainer |
+|---|---|---|---|
+| starts | ok | ok | ok |
+| the drives | ok | none, and a "Welcome to Files!" dialog asking to grant a permission in Settings | the same |
+| a folder given on its command line (`C:\Windows`) | ok | ok | ok |
+| its data | `home\AppData\Local\Files Community` in its data directory | the same | the container's Local AppData (`...\Packages\zigsaw.<id>\AC`) |
+
+Files lists folders with Win32, but makes each drive's entry from a
+`StorageFolder`, and shows the dialog when the system drive is missing.
+
+- **The XAML compiler crashes on an implicit conversion to a WinRT class.**
+  An `implicit operator StorageFolder` on a class of Files' made it stop with
+  `WMC9999: Object reference not set to an instance of an object`, followed
+  by `WMC0001: Unknown type` for most of Files' XAML types.
+- **Two generators aren't deterministic.** Two builds' `Files.dll` and
+  `Files.App.Controls.dll` had the same types and methods, but CsWinRT's AOT
+  optimizer wrote its `WinRT.*GenericHelpers` types in a different order,
+  which ReadyToRun's code followed; `Files.App.Server.winmd`, written by
+  CsWinRT for an authored component, had a new module ID and timestamp each
+  time. The vendor step reproduced.
+- **MSBuild's environment properties lose to a project's.** `env` set
+  `RuntimeIdentifiers`, `SelfContained` and `PublishAot` in vain: Files'
+  projects and publish profiles set them.
+- **Files keeps running when its window closes** (`LeaveAppRunning`, on by
+  default), and hands a new launch to the parked instance, which it finds by
+  a semaphore named for its flavour, `Files-Dev-Instance`, in the session.
+  Its open tabs are saved in its settings as they load
+  (`ContinueLastSessionOnStartUp`, also on).
+- **Ending `zigsaw run` rather than the app leaves the app's keys in
+  HKCU,** as designed (the next run settles them): a test that killed
+  `zigsaw.exe` with `timeout` left `HKCU\Software\Files Community` there.
+  `tests/files.sh` ends Files instead.
+- Its window was up 1.8-2.0 s after `zigsaw run`, ReadyToRun and on .NET's
+  runtime image; the self-contained Debug builds of the probes took 1.0-1.4
+  s. Not looked into.
+
 ## Other findings
+
+- **Microsoft Defender quarantines zigsaw 0.19.0.** During a build of
+  Files, it reported `Trojan:Win32/Bearfoos.A!ml` for the running
+  `zigsaw.exe` (a copy in a scratch directory), ended it and quarantined the
+  file; five minutes later it quarantined two copies of the same build, the
+  one in `zig-out\bin` among them. `!ml` is its machine-learning detection,
+  not a signature. The same build had run on this machine all day,
+  including the .NET builds; what set it off isn't known. Restoring the file from quarantine
+  allowed it again.
 
 - **v0.18.0's programs are built for the CPU of GitHub's runner.**
   `build.zig` set only the target's OS, so Zig compiled for the CPU of the

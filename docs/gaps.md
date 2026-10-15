@@ -166,6 +166,24 @@
 - Pinta has no WebP: GTK's runtime has no WebP loader for GdkPixbuf, which
   Pinta's own Windows build brings. Its own strings follow Windows' display
   language only: `LANGUAGE` changes GTK's and libadwaita's, not Pinta's.
+- Files works in the `soft` sandbox only. At low integrity and in an
+  AppContainer, Windows' storage APIs refuse a program without a package:
+  Files starts and lists folders, but shows no drives, and a dialog asks for
+  a permission only a package can have.
+- Files runs without the package it's made for, so what its package gives
+  it isn't there: starting with Windows, the `files-dev:` protocol and its
+  `files-dev` alias (zigsaw's `files` command instead), the update task, and
+  its out-of-process server (unused as it stands). Its C++ parts aren't
+  built, as they need Visual Studio: the launcher that makes Files open
+  folders in Explorer's place, and its open and save dialogs. Changing its
+  language wasn't tried. It's the Dev flavour, without NativeAOT.
+- Files' vendor step keeps 3.3 GB of NuGet packages, for x64 alone, among
+  them the Windows App SDK's AI and ML packages, which its project excludes
+  from the build but NuGet still downloads.
+- zigsaw 0.19.0 can be quarantined by Microsoft Defender as
+  `Trojan:Win32/Bearfoos.A!ml`, which ends a build or run in progress
+  ([findings](findings.md#other-findings)). It hasn't been reported to
+  Microsoft.
 - A Go vendor step downloads every module its `go.mod` names, whatever the
   build uses: zot's takes 14 minutes and 5 GB of temporary space, for the
   68 MB it keeps.

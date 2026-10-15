@@ -850,6 +850,7 @@ registry has them:
 zigsaw build recipes\no-publish\dotnet-sdk.json   # 300 MB from Microsoft; about a minute
 zigsaw build recipes\no-publish\dotnet.json       # from the SDK image's files; seconds
 zigsaw build recipes\no-publish\pinta.json        # an app on it
+zigsaw build recipes\no-publish\files.json        # another; about ten minutes
 ```
 
 - **[`com.microsoft.dotnet.Sdk`](recipes/no-publish/dotnet-sdk.json)** is
@@ -944,9 +945,17 @@ NuGet packages, then builds offline from them, as
   packs and the Windows apphost.
 - Builds reproduce without further settings: the compiler is deterministic
   in SDK projects, and the paths it writes into DLLs and PDBs are on `B:`.
+  Two code generators that WinUI projects use aren't: CsWinRT's AOT
+  optimizer and its `.winmd` writer ([Files](#files) has what to do).
 - MSBuild reads variables as properties, so the module's `env` sets them:
   `"TargetFramework": "net10.0"` rebuilds a project for an older .NET for
-  this one, if the project lets the environment set it, as Pinta's does.
+  this one, if the project lets the environment set it, as Pinta's does. A
+  property the project or its publish profile sets itself wins over the
+  environment; such ones go on each command, as `-p:` options.
+- A project whose `nuget.config` maps packages to named sources
+  (`packageSourceMapping`) can't restore with `--source`, which replaces the
+  sources and so their names: the build writes a `nuget.config` whose one
+  source is `vendor`.
 - NativeAOT isn't available: it links with Visual Studio's linker and C
   runtime libraries.
 
@@ -971,6 +980,63 @@ Explorer offers it for `.ora`, `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tif` and
 `.tiff` files. It speaks Windows' display language (.NET's
 `CurrentUICulture`), which it also passes on to GTK and libadwaita; a
 `LANGUAGE` given with `--env` changes only theirs.
+
+### Files
+
+[Files](recipes/no-publish/files.json) 4.3 is a file manager written in C#
+with WinUI 3 and the Windows App SDK 2.5. Its project makes an MSIX package
+and nothing else: its code asks the package for its name, version and data
+folders (`Windows.ApplicationModel.Package`,
+`Windows.Storage.ApplicationData`), which fails in a program that isn't one.
+zigsaw doesn't install packages, so the recipe patches Files to run without
+one, and builds it from its release tarball:
+
+- [`files/unpackaged.patch`](recipes/no-publish/files/unpackaged.patch)
+  adds `Unpackaged.cs`, with classes named `Package`, `ApplicationData` and
+  `ApplicationLanguages` in Files' own namespace. C# finds those before the
+  ones of the same names that Files' `using` directives import, so most of
+  Files' code uses them unchanged. They read the name and version from the
+  `Package.appxmanifest` the build copies next to `Files.exe`, put the data
+  folders under `%LOCALAPPDATA%\Files Community\FilesDev`, keep the settings
+  in `HKCU\Software\Files Community\FilesDev\v1\LocalSettings`, beside the
+  keys Files keeps there already, and keep the language override there too.
+  The patch also builds Files unpackaged, with the Windows App SDK in its
+  own directory; takes Files' own path as the first argument of a launch
+  from the command line; loads strings with the Windows App SDK's resource
+  loader rather than the package's; and lets a profile have no Libraries
+  folder (a zigsaw run's has none).
+- [`files/name.patch`](recipes/no-publish/files/name.patch) names it
+  "Files - Zigsaw build". It's Files' Dev flavour, as its repository builds
+  it: no updater, no crash reports, and the features Files is still working
+  on, such as the shelf pane.
+- The build is `dotnet publish` of `Files.App.csproj` for x64, ReadyToRun,
+  framework-dependent (on .NET's runtime image), without NativeAOT, which
+  Files' release builds use and the SDK image can't link. Its
+  `Files.App.Server` project is built by an MSBuild task rather than as a
+  reference, so it's restored separately; it's an out-of-process server
+  Files activates through its package, and doesn't use as it stands.
+- `dotnet publish` leaves out most of `Assets`: in a package, Files' images
+  come from the package's layout. The recipe copies them in, except
+  `Libraries` (the build's own packages) and the other flavours' logos, as
+  upstream's release script deletes those.
+- Two generators made different files in each build: CsWinRT's AOT
+  optimizer, which writes its helper types in a different order each time,
+  and the `.winmd` of `Files.App.Server`, with a new module ID. The recipe
+  turns the optimizer off (`CsWinRTAotOptimizerEnabled=false`; for a JIT
+  app, CsWinRT makes those helpers at run time) and leaves the `.winmd` out
+  (Files reads it only to activate the server). The image is then the same
+  in two stores.
+
+The vendor step restores both projects for x64: 3.3 GB of packages (the
+Windows App SDK and its AI and ML parts, which Files excludes from its build
+but NuGet downloads anyway, Win2D, CsWinRT, Sentry), 4.5 minutes; the build
+takes 4. The image is 168 MB of files, 61 MB compressed.
+
+It declares `HKCU\Software\Files Community` as a key it keeps, and has the
+network, the working directory and the user's six folders. It runs in the
+`soft` sandbox only: at low integrity and in an AppContainer, Windows'
+storage APIs refuse a program without a package, and Files shows no drives
+([findings](findings.md#files)).
 
 ## MSVC
 

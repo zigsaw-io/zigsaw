@@ -1,0 +1,44 @@
+diff --git a/src/Files.App/Package.appxmanifest b/src/Files.App/Package.appxmanifest
+index 54653e46..b085b392 100644
+--- a/src/Files.App/Package.appxmanifest
++++ b/src/Files.App/Package.appxmanifest
+@@ -20,7 +20,7 @@
+         Version="4.3.0.0" />
+ 
+     <Properties>
+-        <DisplayName>Files - Dev</DisplayName>
++        <DisplayName>Files - Zigsaw build</DisplayName>
+         <PublisherDisplayName>Yair A</PublisherDisplayName>
+         <Logo>Assets\AppTiles\Dev\StoreLogo.png</Logo>
+         <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+@@ -95,7 +95,7 @@
+             desktop4:SupportsMultipleInstances="true">
+ 
+             <uap:VisualElements
+-                DisplayName="Files - Dev"
++                DisplayName="Files - Zigsaw build"
+                 Description="Organize your files and folders easily. Robust multitasking experiences, helpful tags, and deep integrations add to an intuitive design, made by the community."
+                 Square150x150Logo="Assets\AppTiles\Dev\Square150x150Logo.png"
+                 Square44x44Logo="Assets\AppTiles\Dev\Square44x44Logo.png"
+@@ -105,7 +105,7 @@
+                     Wide310x150Logo="Assets\AppTiles\Dev\Wide310x150Logo.png"
+                     Square71x71Logo="Assets\AppTiles\Dev\Small71x71Logo.png"
+                     Square310x310Logo="Assets\AppTiles\Dev\Large310x310Logo.png"
+-                    ShortName="Files - Dev">
++                    ShortName="Files - Zigsaw build">
+                     <uap:ShowNameOnTiles>
+                         <uap:ShowOn Tile="square150x150Logo" />
+                         <uap:ShowOn Tile="wide310x150Logo" />
+diff --git a/src/Files.App/Views/SplashScreenPage.xaml.cs b/src/Files.App/Views/SplashScreenPage.xaml.cs
+index e367220f..c952187e 100644
+--- a/src/Files.App/Views/SplashScreenPage.xaml.cs
++++ b/src/Files.App/Views/SplashScreenPage.xaml.cs
+@@ -14,7 +14,7 @@ namespace Files.App.Views
+ 		private string BranchLabel =>
+ 			AppLifecycleHelper.AppEnvironment switch
+ 			{
+-				AppEnvironment.Dev => "Dev",
++				AppEnvironment.Dev => "- Zigsaw build",
+ 				AppEnvironment.SideloadPreview or AppEnvironment.StorePreview => "Preview",
+ 				_ => string.Empty,
+ 			};

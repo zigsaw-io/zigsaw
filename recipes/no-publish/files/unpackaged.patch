@@ -1,0 +1,523 @@
+diff --git a/src/Files.App/Actions/FileSystem/CopyItemFromHomeAction.cs b/src/Files.App/Actions/FileSystem/CopyItemFromHomeAction.cs
+index 15477b11..ed1a0dd2 100644
+--- a/src/Files.App/Actions/FileSystem/CopyItemFromHomeAction.cs
++++ b/src/Files.App/Actions/FileSystem/CopyItemFromHomeAction.cs
+@@ -70,7 +70,7 @@ namespace Files.App.Actions
+ 						storageItem = standardItems.First();
+ 				}
+ 
+-				dataPackage.Properties.PackageFamilyName = Windows.ApplicationModel.Package.Current.Id.FamilyName;
++				dataPackage.Properties.PackageFamilyName = Package.Current.Id.FamilyName;
+ 				dataPackage.SetStorageItems(new[] { storageItem }, false);
+ 
+ 				Clipboard.SetContent(dataPackage);
+diff --git a/src/Files.App/Actions/Open/OpenLogFileLocationAction.cs b/src/Files.App/Actions/Open/OpenLogFileLocationAction.cs
+index 33690cea..1063948f 100644
+--- a/src/Files.App/Actions/Open/OpenLogFileLocationAction.cs
++++ b/src/Files.App/Actions/Open/OpenLogFileLocationAction.cs
+@@ -23,7 +23,7 @@ namespace Files.App.Actions
+ 
+ 		public async Task ExecuteAsync(object? parameter = null)
+ 		{
+-			await Launcher.LaunchFolderAsync(ApplicationData.Current.LocalFolder).AsTask();
++			await Launcher.LaunchFolderAsync(ApplicationData.Current.LocalFolder.StorageFolder).AsTask();
+ 		}
+ 	}
+ }
+diff --git a/src/Files.App/Actions/Sidebar/CopyItemFromSidebarAction.cs b/src/Files.App/Actions/Sidebar/CopyItemFromSidebarAction.cs
+index 512d363a..d4825a65 100644
+--- a/src/Files.App/Actions/Sidebar/CopyItemFromSidebarAction.cs
++++ b/src/Files.App/Actions/Sidebar/CopyItemFromSidebarAction.cs
+@@ -70,7 +70,7 @@ namespace Files.App.Actions
+ 						storageItem = standardItems.First();
+ 				}
+ 
+-				dataPackage.Properties.PackageFamilyName = Windows.ApplicationModel.Package.Current.Id.FamilyName;
++				dataPackage.Properties.PackageFamilyName = Package.Current.Id.FamilyName;
+ 				dataPackage.SetStorageItems(new[] { storageItem }, false);
+ 
+ 				Clipboard.SetContent(dataPackage);
+diff --git a/src/Files.App/Data/Items/WindowEx.cs b/src/Files.App/Data/Items/WindowEx.cs
+index a2ba5e8d..df3a53a5 100644
+--- a/src/Files.App/Data/Items/WindowEx.cs
++++ b/src/Files.App/Data/Items/WindowEx.cs
+@@ -216,9 +216,9 @@ namespace Files.App.Data.Items
+ 			}
+ 		}
+ 
+-		private IPropertySet GetDataStore(out bool oldDataExists, bool useNewStore = true)
++		private IDictionary<string, object> GetDataStore(out bool oldDataExists, bool useNewStore = true)
+ 		{
+-			IPropertySet values;
++			IDictionary<string, object> values;
+ 			oldDataExists = false;
+ 
+ 			if (_applicationDataContainer.Containers.TryGetValue("Files", out var dataContainer))
+diff --git a/src/Files.App/Files.App.csproj b/src/Files.App/Files.App.csproj
+index ffe246f1..15cabb0a 100644
+--- a/src/Files.App/Files.App.csproj
++++ b/src/Files.App/Files.App.csproj
+@@ -3,6 +3,8 @@
+ 
+     <PropertyGroup>
+         <EnableMsixTooling>true</EnableMsixTooling>
++        <WindowsPackageType>None</WindowsPackageType>
++        <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+         <PublishProfile>Properties\PublishProfiles\win-$(Platform).pubxml</PublishProfile>
+         <TargetFramework>$(WindowsTargetFramework)</TargetFramework>
+         <OutputType>WinExe</OutputType>
+@@ -74,6 +76,7 @@
+   
+     <ItemGroup>
+         <Manifest Include="app.manifest" />
++        <None Include="Package.appxmanifest" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+         <Content Update="Assets\Resources\**">
+             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+         </Content>
+diff --git a/src/Files.App/Helpers/ResourceHelpers.cs b/src/Files.App/Helpers/ResourceHelpers.cs
+index 545b5df0..a89ae05c 100644
+--- a/src/Files.App/Helpers/ResourceHelpers.cs
++++ b/src/Files.App/Helpers/ResourceHelpers.cs
+@@ -2,7 +2,7 @@
+ // Licensed under the MIT License.
+ 
+ using Microsoft.UI.Xaml.Markup;
+-using Windows.ApplicationModel.Resources;
++using Microsoft.Windows.ApplicationModel.Resources;
+ 
+ namespace Files.App.Helpers
+ {
+diff --git a/src/Files.App/Helpers/TransferHelpers.cs b/src/Files.App/Helpers/TransferHelpers.cs
+index 88b86137..ff078cee 100644
+--- a/src/Files.App/Helpers/TransferHelpers.cs
++++ b/src/Files.App/Helpers/TransferHelpers.cs
+@@ -56,7 +56,7 @@ namespace Files.App.Helpers
+ 				if (items.IsEmpty)
+ 					return;
+ 
+-				dataPackage.Properties.PackageFamilyName = Windows.ApplicationModel.Package.Current.Id.FamilyName;
++				dataPackage.Properties.PackageFamilyName = Package.Current.Id.FamilyName;
+ 				dataPackage.SetStorageItems(items, false);
+ 
+ 				Clipboard.SetContent(dataPackage);
+@@ -151,7 +151,7 @@ namespace Files.App.Helpers
+ 				if (items.IsEmpty)
+ 					return;
+ 
+-				dataPackage.Properties.PackageFamilyName = Windows.ApplicationModel.Package.Current.Id.FamilyName;
++				dataPackage.Properties.PackageFamilyName = Package.Current.Id.FamilyName;
+ 				dataPackage.SetStorageItems(items, false);
+ 
+ 				Clipboard.SetContent(dataPackage);
+diff --git a/src/Files.App/Program.cs b/src/Files.App/Program.cs
+index 60146937..39e7bb32 100644
+--- a/src/Files.App/Program.cs
++++ b/src/Files.App/Program.cs
+@@ -43,6 +43,8 @@ namespace Files.App
+ 
+ 		static Program()
+ 		{
++			ApplicationLanguages.RestoreOverride();
++
+ 			// Capture the source process's working directory before any potential
+ 			// activation redirect, so a receiving instance can resolve relative
+ 			// paths like "." against the terminal's CWD rather than its own. (#16982)
+@@ -92,7 +94,7 @@ namespace Files.App
+ 				try
+ 				{
+ 					return p.MainModule?.FileName
+-						.StartsWith(Windows.ApplicationModel.Package.Current.EffectivePath, StringComparison.OrdinalIgnoreCase) ?? false;
++						.StartsWith(Package.Current.EffectivePath, StringComparison.OrdinalIgnoreCase) ?? false;
+ 				}
+ 				catch
+ 				{
+@@ -274,7 +276,8 @@ namespace Files.App
+ 				launchArgs.Arguments is not null &&
+ 				CommandLineParser.SplitArguments(launchArgs.Arguments, true).FirstOrDefault() is string arg0 &&
+ 				(arg0.EndsWith($"files-dev.exe", StringComparison.OrdinalIgnoreCase) ||
+-				arg0.EndsWith($"files-dev", StringComparison.OrdinalIgnoreCase)) ? launchArgs.Arguments : null;
++				arg0.EndsWith($"files-dev", StringComparison.OrdinalIgnoreCase) ||
++				arg0.Equals(Path.Join(Package.Current.InstalledPath, "Files.exe"), StringComparison.OrdinalIgnoreCase)) ? launchArgs.Arguments : null;
+ 			var cmdProtocolArgs = activatedArgs.Data is IProtocolActivatedEventArgs protocolArgs &&
+ 				protocolArgs.Uri.Query.TrimStart('?').Split('=') is string[] parsedArgs &&
+ 				parsedArgs.Length == 2 && parsedArgs[0] == "cmd" ? Uri.UnescapeDataString(parsedArgs[1]) : null;
+diff --git a/src/Files.App/Unpackaged.cs b/src/Files.App/Unpackaged.cs
+new file mode 100644
+index 00000000..73beec2d
+--- /dev/null
++++ b/src/Files.App/Unpackaged.cs
+@@ -0,0 +1,302 @@
++// Copyright (c) Files Community
++// Licensed under the MIT License.
++
++// Files without package identity (zigsaw's patch). These types take the names
++// of the WinRT APIs that need identity, Windows.ApplicationModel.Package,
++// Windows.Storage.ApplicationData and Windows.Globalization.ApplicationLanguages,
++// so that code in Files.App.* binds to them instead: a namespace's own types
++// come before the ones its using directives import.
++
++using Microsoft.Win32;
++using System.Diagnostics.CodeAnalysis;
++using System.IO;
++using System.Xml.Linq;
++using Windows.ApplicationModel;
++using Windows.Foundation;
++using Windows.Storage;
++
++namespace Files.App
++{
++	/// <summary>
++	/// The app's identity, read from the Package.appxmanifest copied next to it.
++	/// </summary>
++	internal sealed class Package
++	{
++		public static Package Current { get; } = new();
++
++		public PackageId Id { get; }
++
++		public string DisplayName { get; }
++
++		public string InstalledPath { get; }
++
++		public string EffectivePath => InstalledPath;
++
++		public InstalledFolder InstalledLocation { get; }
++
++		/// <summary>
++		/// The languages the manifest lists as resources.
++		/// </summary>
++		public IReadOnlyList<string> Languages { get; }
++
++		private Package()
++		{
++			InstalledPath = Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory);
++			InstalledLocation = new(InstalledPath);
++
++			var manifest = XDocument.Load(Path.Combine(InstalledPath, "Package.appxmanifest"));
++			XNamespace ns = "http://schemas.microsoft.com/appx/manifest/foundation/windows10";
++			var root = manifest.Root!;
++			var identity = root.Element(ns + "Identity")!;
++			var name = (string)identity.Attribute("Name")!;
++			var version = Version.Parse((string)identity.Attribute("Version")!);
++
++			Id = new(name, $"{name}_unpackaged", new((ushort)version.Major, (ushort)version.Minor, (ushort)version.Build, (ushort)version.Revision));
++			DisplayName = (string?)root.Element(ns + "Properties")?.Element(ns + "DisplayName") ?? name;
++			Languages = root.Element(ns + "Resources")?.Elements(ns + "Resource")
++				.Select(r => (string?)r.Attribute("Language"))
++				.OfType<string>()
++				.ToList() ?? [];
++		}
++	}
++
++	internal sealed record PackageId(string Name, string FamilyName, PackageVersion Version);
++
++	internal sealed record InstalledFolder(string Path);
++
++	/// <summary>
++	/// The app's data: folders under %LOCALAPPDATA%\Files Community\{name},
++	/// and settings in the registry, beside the keys Files already keeps there.
++	/// </summary>
++	internal sealed class ApplicationData
++	{
++		public static ApplicationData Current { get; } = new();
++
++		private readonly string _root = Path.Combine(
++			Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
++			"Files Community",
++			Package.Current.Id.Name);
++
++		private readonly Dictionary<string, AppDataFolder> _folders = [];
++
++		public AppDataFolder LocalFolder => GetFolder("LocalState");
++
++		public AppDataFolder RoamingFolder => GetFolder("RoamingState");
++
++		public AppDataFolder TemporaryFolder => GetFolder("TempState");
++
++		public AppDataFolder LocalCacheFolder => GetFolder("LocalCache");
++
++		public ApplicationDataContainer LocalSettings { get; } =
++			new(@$"Software\Files Community\{Package.Current.Id.Name}\v1\LocalSettings");
++
++		private AppDataFolder GetFolder(string name)
++		{
++			lock (_folders)
++			{
++				if (!_folders.TryGetValue(name, out var folder))
++				{
++					folder = new(Directory.CreateDirectory(Path.Combine(_root, name)).FullName);
++					_folders[name] = folder;
++				}
++
++				return folder;
++			}
++		}
++	}
++
++	/// <summary>
++	/// One of the app's data folders. Most code wants only its path; the
++	/// StorageFolder for the rest is made when first needed, as WinRT's storage
++	/// APIs refuse paths to processes that run in an AppContainer without a
++	/// package.
++	/// </summary>
++	internal sealed class AppDataFolder(string path)
++	{
++		private StorageFolder? _storageFolder;
++
++		public string Path { get; } = path;
++
++		public StorageFolder StorageFolder
++			=> _storageFolder ??= StorageFolder.GetFolderFromPathAsync(Path).AsTask().GetAwaiter().GetResult();
++
++		public IAsyncOperation<IStorageItem> TryGetItemAsync(string name) => StorageFolder.TryGetItemAsync(name);
++
++		public IAsyncOperation<StorageFolder> CreateFolderAsync(string name, CreationCollisionOption options)
++			=> StorageFolder.CreateFolderAsync(name, options);
++
++		public IAsyncOperation<StorageFile> CreateFileAsync(string name, CreationCollisionOption options)
++			=> StorageFolder.CreateFileAsync(name, options);
++	}
++
++	/// <summary>
++	/// Settings in a registry key under HKEY_CURRENT_USER; containers are its subkeys.
++	/// </summary>
++	internal sealed class ApplicationDataContainer
++	{
++		private readonly string _key;
++
++		public ApplicationDataContainer(string key)
++		{
++			_key = key;
++			Values = new RegistryValues(key);
++		}
++
++		public IDictionary<string, object> Values { get; }
++
++		public IReadOnlyDictionary<string, ApplicationDataContainer> Containers
++		{
++			get
++			{
++				using var key = Registry.CurrentUser.OpenSubKey(_key);
++				return (key?.GetSubKeyNames() ?? []).ToDictionary(n => n, n => new ApplicationDataContainer(@$"{_key}\{n}"));
++			}
++		}
++
++		public ApplicationDataContainer CreateContainer(string name, ApplicationDataCreateDisposition disposition)
++		{
++			if (disposition is ApplicationDataCreateDisposition.Always)
++				Registry.CurrentUser.CreateSubKey(@$"{_key}\{name}").Dispose();
++
++			return new(@$"{_key}\{name}");
++		}
++
++		public void DeleteContainer(string name)
++			=> Registry.CurrentUser.DeleteSubKeyTree(@$"{_key}\{name}", false);
++	}
++
++	/// <summary>
++	/// A registry key's values as a dictionary, read and written on each access,
++	/// so that the app's processes see each other's changes, as with
++	/// ApplicationData's settings. Strings, ints and longs keep their registry
++	/// types; a bool is 1 byte of binary data, a double 8.
++	/// </summary>
++	internal sealed class RegistryValues(string key) : IDictionary<string, object>
++	{
++		public object this[string name]
++		{
++			get => TryGetValue(name, out var value) ? value : throw new KeyNotFoundException(name);
++			set
++			{
++				using var k = Registry.CurrentUser.CreateSubKey(key);
++				switch (value)
++				{
++					case string s: k.SetValue(name, s, RegistryValueKind.String); break;
++					case int i: k.SetValue(name, i, RegistryValueKind.DWord); break;
++					case long l: k.SetValue(name, l, RegistryValueKind.QWord); break;
++					case bool b: k.SetValue(name, new[] { (byte)(b ? 1 : 0) }, RegistryValueKind.Binary); break;
++					case double d: k.SetValue(name, BitConverter.GetBytes(d), RegistryValueKind.Binary); break;
++					default: throw new NotSupportedException($"Can't keep a {value?.GetType().Name ?? "null"} in the settings");
++				}
++			}
++		}
++
++		public bool TryGetValue(string name, [MaybeNullWhen(false)] out object value)
++		{
++			using var k = Registry.CurrentUser.OpenSubKey(key);
++			var raw = k?.GetValue(name);
++			if (raw is null)
++			{
++				value = null;
++				return false;
++			}
++
++			value = raw switch
++			{
++				byte[] { Length: 1 } b => b[0] != 0,
++				byte[] { Length: 8 } d => BitConverter.ToDouble(d),
++				_ => raw,
++			};
++			return true;
++		}
++
++		public bool ContainsKey(string name) => TryGetValue(name, out _);
++
++		public void Add(string name, object value)
++		{
++			if (ContainsKey(name))
++				throw new ArgumentException($"{name} is already set", nameof(name));
++
++			this[name] = value;
++		}
++
++		public bool Remove(string name)
++		{
++			using var k = Registry.CurrentUser.OpenSubKey(key, writable: true);
++			if (k?.GetValue(name) is null)
++				return false;
++
++			k.DeleteValue(name);
++			return true;
++		}
++
++		public ICollection<string> Keys
++		{
++			get
++			{
++				using var k = Registry.CurrentUser.OpenSubKey(key);
++				return k?.GetValueNames() ?? [];
++			}
++		}
++
++		public ICollection<object> Values => Keys.Select(n => this[n]).ToList();
++
++		public int Count => Keys.Count;
++
++		public bool IsReadOnly => false;
++
++		public void Clear()
++		{
++			foreach (var name in Keys)
++				Remove(name);
++		}
++
++		public void Add(KeyValuePair<string, object> item) => Add(item.Key, item.Value);
++
++		public bool Contains(KeyValuePair<string, object> item)
++			=> TryGetValue(item.Key, out var value) && Equals(value, item.Value);
++
++		public bool Remove(KeyValuePair<string, object> item) => Contains(item) && Remove(item.Key);
++
++		public void CopyTo(KeyValuePair<string, object>[] array, int arrayIndex)
++		{
++			foreach (var pair in this)
++				array[arrayIndex++] = pair;
++		}
++
++		public IEnumerator<KeyValuePair<string, object>> GetEnumerator()
++			=> Keys.Select(n => new KeyValuePair<string, object>(n, this[n])).ToList().GetEnumerator();
++
++		IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
++	}
++
++	/// <summary>
++	/// The app's languages: the manifest's, and an override that the Windows
++	/// App SDK applies to resources but doesn't keep, so the settings keep it.
++	/// </summary>
++	internal static class ApplicationLanguages
++	{
++		private const string OverrideKey = "PrimaryLanguageOverride";
++
++		public static IReadOnlyList<string> ManifestLanguages => Package.Current.Languages;
++
++		public static string PrimaryLanguageOverride
++		{
++			get => Microsoft.Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride;
++			set
++			{
++				ApplicationData.Current.LocalSettings.Values[OverrideKey] = value ?? string.Empty;
++				Microsoft.Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride = value ?? string.Empty;
++			}
++		}
++
++		/// <summary>
++		/// Applies the override kept by an earlier run; called before any resources are loaded.
++		/// </summary>
++		public static void RestoreOverride()
++		{
++			if (ApplicationData.Current.LocalSettings.Values.TryGetValue(OverrideKey, out var value) && value is string { Length: > 0 } code)
++				Microsoft.Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride = code;
++		}
++	}
++}
+diff --git a/src/Files.App/Utils/Cloud/Detector/GoogleDriveCloudDetector.cs b/src/Files.App/Utils/Cloud/Detector/GoogleDriveCloudDetector.cs
+index 2559ac76..bfe952da 100644
+--- a/src/Files.App/Utils/Cloud/Detector/GoogleDriveCloudDetector.cs
++++ b/src/Files.App/Utils/Cloud/Detector/GoogleDriveCloudDetector.cs
+@@ -33,11 +33,11 @@ namespace Files.App.Utils.Cloud
+ 			string appDataPath = UserDataPaths.GetDefault().LocalAppData;
+ 
+ 			await StorageFile.GetFileFromPathAsync(Path.Combine(appDataPath, @"Google\DriveFS\root_preference_sqlite.db")).AsTask()
+-				.AndThen(c => c.CopyAsync(ApplicationData.Current.TemporaryFolder, "google_drive.db", NameCollisionOption.ReplaceExisting).AsTask());
++				.AndThen(c => c.CopyAsync(ApplicationData.Current.TemporaryFolder.StorageFolder, "google_drive.db", NameCollisionOption.ReplaceExisting).AsTask());
+ 
+ 			// The wal file may not exist but that's ok
+ 			await FilesystemTasks.Wrap(() => StorageFile.GetFileFromPathAsync(Path.Combine(appDataPath, @"Google\DriveFS\root_preference_sqlite.db-wal")).AsTask()
+-				.AndThen(c => c.CopyAsync(ApplicationData.Current.TemporaryFolder, "google_drive.db-wal", NameCollisionOption.ReplaceExisting).AsTask()));
++				.AndThen(c => c.CopyAsync(ApplicationData.Current.TemporaryFolder.StorageFolder, "google_drive.db-wal", NameCollisionOption.ReplaceExisting).AsTask()));
+ 
+ 			var syncDbPath = Path.Combine(ApplicationData.Current.TemporaryFolder.Path, "google_drive.db");
+ 
+diff --git a/src/Files.App/Utils/Cloud/Detector/SynologyDriveCloudDetector.cs b/src/Files.App/Utils/Cloud/Detector/SynologyDriveCloudDetector.cs
+index 52965f99..68031d08 100644
+--- a/src/Files.App/Utils/Cloud/Detector/SynologyDriveCloudDetector.cs
++++ b/src/Files.App/Utils/Cloud/Detector/SynologyDriveCloudDetector.cs
+@@ -26,7 +26,7 @@ namespace Files.App.Utils.Cloud
+ 			string appDataPath = UserDataPaths.GetDefault().LocalAppData;
+ 
+ 			var configFile = await StorageFile.GetFileFromPathAsync(Path.Combine(appDataPath, @"SynologyDrive\data\db\sys.sqlite"));
+-			await configFile.CopyAsync(ApplicationData.Current.TemporaryFolder, "synology_drive.db", NameCollisionOption.ReplaceExisting);
++			await configFile.CopyAsync(ApplicationData.Current.TemporaryFolder.StorageFolder, "synology_drive.db", NameCollisionOption.ReplaceExisting);
+ 
+ 			var syncDbPath = Path.Combine(ApplicationData.Current.TemporaryFolder.Path, "synology_drive.db");
+ 
+diff --git a/src/Files.App/Utils/Library/LibraryManager.cs b/src/Files.App/Utils/Library/LibraryManager.cs
+index 236b2d6c..616cb59e 100644
+--- a/src/Files.App/Utils/Library/LibraryManager.cs
++++ b/src/Files.App/Utils/Library/LibraryManager.cs
+@@ -46,6 +46,10 @@ namespace Files.App.Utils.Library
+ 			if (librariesWatcher is not null)
+ 				return;
+ 
++			// A profile without a Libraries folder (an app's own, in a sandbox) has no libraries to watch
++			if (string.IsNullOrEmpty(ShellLibraryItem.LibrariesPath) || !Directory.Exists(ShellLibraryItem.LibrariesPath))
++				return;
++
+ 			librariesWatcher = new FileSystemWatcher
+ 			{
+ 				Path = ShellLibraryItem.LibrariesPath,
+diff --git a/src/Files.App/Utils/Storage/Helpers/StorageItemIconHelpers.cs b/src/Files.App/Utils/Storage/Helpers/StorageItemIconHelpers.cs
+index bc490024..3d3a3ec3 100644
+--- a/src/Files.App/Utils/Storage/Helpers/StorageItemIconHelpers.cs
++++ b/src/Files.App/Utils/Storage/Helpers/StorageItemIconHelpers.cs
+@@ -19,7 +19,7 @@ namespace Files.App.Utils.Storage
+ 		{
+ 			if (string.IsNullOrEmpty(fileExtension))
+ 			{
+-				StorageFolder localFolder = ApplicationData.Current.RoamingFolder;
++				StorageFolder localFolder = ApplicationData.Current.RoamingFolder.StorageFolder;
+ 				return await localFolder.GetThumbnailAsync(ThumbnailMode.ListView, requestedSize, ThumbnailOptions.UseCurrentScale);
+ 			}
+ 			else
+diff --git a/src/Files.App/ViewModels/Settings/AboutViewModel.cs b/src/Files.App/ViewModels/Settings/AboutViewModel.cs
+index 82151ab4..d4693598 100644
+--- a/src/Files.App/ViewModels/Settings/AboutViewModel.cs
++++ b/src/Files.App/ViewModels/Settings/AboutViewModel.cs
+@@ -97,7 +97,7 @@ namespace Files.App.ViewModels.Settings
+ 
+ 		private async Task<bool> OpenLogLocation()
+ 		{
+-			await Launcher.LaunchFolderAsync(ApplicationData.Current.LocalFolder).AsTask();
++			await Launcher.LaunchFolderAsync(ApplicationData.Current.LocalFolder.StorageFolder).AsTask();
+ 
+ 			// TODO: Move this to an application service
+ 			// Detect if Files is set as the default file manager

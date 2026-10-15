@@ -211,11 +211,13 @@ mustn't be published, as the licences of what's in them don't allow it.
 | .NET SDK | `com.microsoft.dotnet.Sdk` | 10.0.402 | `dotnet`, `dnx` |
 | .NET runtime, with ASP.NET Core and Windows Desktop (from its SDK) | `com.microsoft.dotnet` | 10.0.13 | |
 | Pinta (built from source, on GTK and .NET) | `com.github.PintaProject.Pinta` | 3.1.2 | `pinta` |
+| Files - Zigsaw build (built from source, on .NET) | `community.files.Files` | 4.3 | `files` |
 
 ```powershell
 zigsaw build recipes\no-publish\dotnet-sdk.json   # 300 MB from Microsoft
 zigsaw build recipes\no-publish\dotnet.json
 zigsaw build recipes\no-publish\pinta.json
+zigsaw build recipes\no-publish\files.json        # 3.3 GB of NuGet packages; about ten minutes
 ```
 
 Microsoft's licence for its .NET binaries on Windows lets anyone use them
@@ -225,6 +227,14 @@ editor written in C#, runs on GTK's runtime and .NET's: its build pulls
 GTK's runtime and gettext's image from the registry, and finds .NET's in the
 store. Explorer offers it for images (`.ora`, `.png`, `.jpg`, `.bmp`,
 `.tif`).
+
+[Files](https://files.community/), a file manager written in C# with
+WinUI 3, runs on .NET's runtime, patched to run without the MSIX package
+it's made for ([Files](docs/recipes.md#files)). Its window and Start menu
+shortcut say "Files - Zigsaw build", so as not to pass for the Files its
+project publishes. It works in the default `soft` sandbox only: at low
+integrity and in an AppContainer it starts, but shows no drives and asks
+for a permission it can't be given.
 
 ### Reproducibility
 
@@ -781,6 +791,7 @@ bash tests/shims.sh     # command shims end to end, also for commands installed 
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), reproducibility
 bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
+bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole

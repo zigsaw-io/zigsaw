@@ -1,0 +1,63 @@
+{
+  "id": "community.files.Files",
+  "version": "4.3",
+  "name": "Files - Zigsaw build",
+  "summary": "Browse and organize your files and folders",
+  "homepage": "https://files.community/",
+  "license": "MIT",
+  "command": "bin/Files.exe",
+  "path": ["bin"],
+  "permissions": {
+    "network": true,
+    "filesystem": ["cwd", "desktop", "documents", "downloads", "music", "pictures", "videos"]
+  },
+  "registry": ["Software\\Files Community"],
+  "exports": {
+    "files": { "command": "bin/Files.exe" }
+  },
+  "shortcuts": {
+    "Files - Zigsaw build": { "command": "files", "description": "Browse and organize your files and folders" }
+  },
+  "runtimes": {
+    "dotnet": "com.microsoft.dotnet:10.0.13@sha256:02a480d6f4386234410f88a2942d5264b4ffd355faed02003fc0431b3ce69b64"
+  },
+  "sdk": {
+    "dotnetsdk": "com.microsoft.dotnet.Sdk:10.0.402@sha256:af8d05f19b602a7c8784524b6c0108231932cec7123d5a7ba7dc1d08ae32a2e2",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "cleanup": ["*.pdb"],
+  "modules": [
+    {
+      "name": "files",
+      "sources": [
+        {
+          "url": "https://github.com/files-community/Files/archive/refs/tags/v4.3.tar.gz",
+          "sha256": "1c235ad8c2e6a5f056726c58e4cc7cde5a54339edb4cfd3531bd081cf4e2afda",
+          "strip": 1
+        },
+        { "path": "files/unpackaged.patch", "dest": "zigsaw/unpackaged.patch" },
+        { "path": "files/name.patch", "dest": "zigsaw/name.patch" }
+      ],
+      "vendor": {
+        "commands": [
+          "patch -p1 < zigsaw/unpackaged.patch",
+          "dotnet restore src/Files.App/Files.App.csproj --packages vendor -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifiers=win-x64 -p:PublishAot=false -p:SelfContained=false -p:PublishReadyToRun=true",
+          "dotnet restore src/Files.App.Server/Files.App.Server.csproj --packages vendor -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifiers=win-x64 -p:PublishAot=false -p:SelfContained=false -p:PublishReadyToRun=true"
+        ],
+        "dir": "vendor",
+        "sha256": "c594e0afb8b80e34ca59fc45246f3d71f6fbcdb31fbad576802db197f152717b"
+      },
+      "build": [
+        "patch -p1 < zigsaw/unpackaged.patch",
+        "patch -p1 < zigsaw/name.patch",
+        "printf '%s\\n' '<?xml version=\"1.0\" encoding=\"utf-8\"?>' '<configuration>' '  <packageSources>' '    <clear />' '    <add key=\"vendor\" value=\"vendor\" />' '  </packageSources>' '</configuration>' > nuget.config",
+        "dotnet restore src/Files.App.Server/Files.App.Server.csproj --packages vendor -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifiers=win-x64 -p:PublishAot=false -p:SelfContained=false -p:PublishReadyToRun=true",
+        "dotnet publish src/Files.App/Files.App.csproj --packages vendor -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifiers=win-x64 -p:PublishAot=false -p:SelfContained=false -p:PublishReadyToRun=true -p:AppxBundle=Never -p:GenerateAppxPackageOnBuild=false -p:CsWinRTAotOptimizerEnabled=false -o \"$PREFIX/bin\"",
+        "rm \"$PREFIX/bin/Files.App.Server.winmd\"",
+        "cp -r src/Files.App/Assets/. \"$PREFIX/bin/Assets/\"",
+        "rm -r \"$PREFIX/bin/Assets/Libraries\" \"$PREFIX/bin/Assets/AppTiles/Preview\" \"$PREFIX/bin/Assets/AppTiles/Release\"",
+        "test -f \"$PREFIX/bin/Assets/AppTiles/Dev/Logo.ico\""
+      ]
+    }
+  ]
+}
