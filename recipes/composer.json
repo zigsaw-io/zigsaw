@@ -1,0 +1,30 @@
+{
+  "id": "org.getcomposer.composer",
+  "version": "2.10.3",
+  "name": "Composer",
+  "summary": "Composer, the dependency manager for PHP, on PHP's runtime; as an SDK, it gives builds a composer command",
+  "homepage": "https://getcomposer.org/",
+  "license": "MIT",
+  "command": "${php}\\php.exe",
+  "args": ["${app}\\composer.phar"],
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "runtimes": { "php": "net.php.php:8.5.11@sha256:04d03b791cf0f75048aecc06560521266e756258a3720a5551a132fe8e56f7a4" },
+  "exports": {
+    "composer": { "command": "${php}\\php.exe", "args": ["${app}\\composer.phar"] }
+  },
+  "aliases": {
+    "composer": { "command": "${php}\\php.exe", "args": ["${app}\\composer.phar"] }
+  },
+  "modules": [
+    {
+      "name": "composer",
+      "sources": [
+        {
+          "url": "https://getcomposer.org/download/2.10.3/composer.phar",
+          "sha256": "7a2d379d5b8ffdaa028580ef26494c36d2feef4b178d3dd1473a4dbc5e17c8d6",
+          "dest": "composer.phar"
+        }
+      ]
+    }
+  ]
+}

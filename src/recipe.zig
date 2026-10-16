@@ -437,10 +437,11 @@ test "recipe checks" {
         ,
         \\{ "id": "x", "version": "1", "command": "a.exe", "host": ["msvc"], "modules": [{ "name": "m", "sources": [{ "path": "a.exe" }] }] }
         ,
-        // Aliases: plain names, for commands in the image itself.
+        // Aliases: plain names, for commands in the image itself or in one
+        // of its runtimes.
         \\{ "id": "x", "version": "1", "command": "a.exe", "aliases": { "a/b": { "command": "a.exe" } }, "modules": [{ "name": "m", "build": ["x"] }] }
         ,
-        \\{ "id": "x", "version": "1", "command": "a.exe", "aliases": { "ab": { "command": "${node}\\node.exe" } }, "runtimes": { "node": "n" }, "modules": [{ "name": "m", "build": ["x"] }] }
+        \\{ "id": "x", "version": "1", "command": "a.exe", "aliases": { "ab": { "command": "${go}\\go.exe" } }, "runtimes": { "node": "n" }, "modules": [{ "name": "m", "build": ["x"] }] }
         ,
         // Dropped arguments: only for aliases, one trimmed line each.
         \\{ "id": "x", "version": "1", "command": "a.exe", "exports": { "a": { "command": "a.exe", "drop": ["-x"] } }, "modules": [{ "name": "m", "build": ["x"] }] }

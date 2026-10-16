@@ -25,12 +25,14 @@ const win32 = @import("win32.zig");
 const fail = Context.fail;
 const note = Context.note;
 
-/// An image whose aliases apply, in its deployment `dir` (${app} in them).
-/// `id` names it in messages.
+/// An image whose aliases apply, in its deployment `dir` (${app} in them),
+/// with its own runtimes' deployments (${<alias>} in them). `id` names it in
+/// messages.
 pub const Provider = struct {
     id: []const u8,
     dir: []const u8,
     aliases: ?std.json.ArrayHashMap(oci.Export),
+    runtimes: []const oci.Placeholders.Dir = &.{},
 };
 
 pub const Resolved = struct {
@@ -50,7 +52,7 @@ pub fn resolve(ctx: *Context, providers: []const Provider, missing: Missing) ![]
     for (providers) |pr| if (pr.aliases) |a| for (a.map.keys(), a.map.values()) |name, e| {
         if (find(out.items, name) != null) continue;
         // Aliases can't name ${data} or ${cache} (see oci.validateAliases).
-        const p: oci.Placeholders = .{ .app = pr.dir, .data = "${data}" };
+        const p: oci.Placeholders = .{ .app = pr.dir, .data = "${data}", .runtimes = pr.runtimes };
         const exe = try p.commandPath(arena, e.command);
         if (!try Store.exists(ctx.io, exe)) switch (missing) {
             .fail => return fail("{s}'s alias {s} runs {s}, which isn't in it", .{ pr.id, name, e.command }),
@@ -225,6 +227,15 @@ test "resolve: the first provider wins a name, and ${app} is its directory" {
     try std.testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s} ar {s}\\lib", .{ zig, rt_dir }), resolved[1].alias.command_line);
     try std.testing.expectEqualStrings("--64", resolved[1].alias.drop[0]);
     try std.testing.expectEqualStrings("CC ar", try names(arena, resolved));
+
+    // An image's alias may run one of its runtimes' files: ${<alias>} is
+    // that runtime's directory, in the command and in arguments.
+    var uses: std.json.ArrayHashMap(oci.Export) = .{};
+    try uses.map.put(arena, "zc", .{ .command = "${z}\\zig.exe", .args = &.{ "cc", "${app}\\x.c", "${z}\\lib" } });
+    const user = [_]Provider{.{ .id = "user", .dir = app_dir, .aliases = uses, .runtimes = &.{.{ .alias = "z", .path = rt_dir }} }};
+    const zc = try resolve(&ctx, &user, .fail);
+    try std.testing.expectEqualStrings(zig, zc[0].alias.exe);
+    try std.testing.expectEqualStrings(try std.fmt.allocPrint(arena, "{s} cc {s}\\x.c {s}\\lib", .{ zig, app_dir, rt_dir }), zc[0].alias.command_line);
 }
 
 test "sync writes what changed and removes the rest" {

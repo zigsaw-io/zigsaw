@@ -1,0 +1,62 @@
+{
+  "id": "org.kanboard.Kanboard",
+  "version": "1.2.54",
+  "name": "Kanboard",
+  "summary": "Kanban project management, served by PHP's built-in web server and opened in your browser, with its database in the app's data",
+  "homepage": "https://kanboard.org/",
+  "license": "MIT",
+  "command": "${php}\\php.exe",
+  "args": ["${app}\\serve.php"],
+  "env": { "DATA_DIR": "${data}", "PLUGINS_DIR": "${data}\\plugins" },
+  "permissions": { "network": true },
+  "runtimes": { "php": "net.php.php:8.5.11@sha256:04d03b791cf0f75048aecc06560521266e756258a3720a5551a132fe8e56f7a4" },
+  "exports": {
+    "kanboard": { "command": "${php}\\php.exe", "args": ["${app}\\serve.php"] },
+    "kanboard-cli": { "command": "${php}\\php.exe", "args": ["${app}\\kanboard\\cli"] }
+  },
+  "shortcuts": {
+    "Kanboard": { "command": "kanboard", "description": "Serve Kanboard and open it in your browser", "icon": "kanboard\\favicon.ico" }
+  },
+  "sdk": {
+    "composer": "org.getcomposer.composer:2.10.3@sha256:5f65e42beb89159c6f30479417020780c5c27390be17988a63a30360e1ee4e90",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "kanboard",
+      "sources": [
+        {
+          "url": "https://github.com/kanboard/kanboard/archive/refs/tags/v1.2.54.tar.gz",
+          "sha256": "6548946b406bc8640dfe20a884dd9cdf708d8d6c25eeacdabd374a36d5e98237",
+          "strip": 1
+        },
+        {
+          "url": "https://raw.githubusercontent.com/kanboard/kanboard/9ce6a5edc5b646ef15780cb445bc6d2c39d9898f/composer.json",
+          "sha256": "48da225091408b7ccb372ff6699050af937784fca05a6d6015e659c329413295",
+          "dest": "composer.json"
+        },
+        {
+          "url": "https://raw.githubusercontent.com/kanboard/kanboard/9ce6a5edc5b646ef15780cb445bc6d2c39d9898f/composer.lock",
+          "sha256": "be22d1d4427e19cb6f907fd9a7d6e4d577a9cb1b98c04839656c15c0ab2384a4",
+          "dest": "composer.lock"
+        }
+      ],
+      "vendor": {
+        "commands": ["rm -rf vendor", "composer install --no-dev --no-scripts --no-interaction --no-ansi --prefer-dist"],
+        "dir": "vendor",
+        "sha256": "c88c6a0f697fcc0743d3e1ef5d74db8cfff89e5e6f00689b15f6ba352132e4d9"
+      },
+      "build": [
+        "mkdir -p \"$PREFIX/kanboard\"",
+        "cp -r app assets libs vendor cli index.php jsonrpc.php config.default.php favicon.ico robots.txt LICENSE ChangeLog \"$PREFIX/kanboard/\""
+      ]
+    },
+    {
+      "name": "zigsaw",
+      "sources": [
+        { "path": "kanboard/serve.php", "dest": "serve.php" },
+        { "path": "kanboard/router.php", "dest": "router.php" }
+      ]
+    }
+  ]
+}

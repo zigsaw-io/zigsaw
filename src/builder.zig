@@ -394,7 +394,7 @@ const BuildRoot = struct {
             const p = try t.placeholders(arena);
             if (p.cache != null and !containsIgnoreCase(caches.items, t.id)) try caches.append(arena, t.id);
             try path_dirs.appendSlice(arena, try environment.pathDirs(arena, p, t.path));
-            try providers.append(arena, .{ .id = t.id, .dir = t.dir, .aliases = t.aliases });
+            try providers.append(arena, .{ .id = t.id, .dir = t.dir, .aliases = t.aliases, .runtimes = t.runtimes });
         }
         // Of two tools with an alias of the same name, the first's wins, as
         // on PATH.

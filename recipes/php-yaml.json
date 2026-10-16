@@ -1,0 +1,47 @@
+{
+  "id": "net.php.php.Yaml",
+  "version": "2.3.0",
+  "name": "YAML for PHP 8.5",
+  "summary": "yaml, a YAML parser and emitter for PHP, as an extension built with zig, with libyaml built in; once installed, PHP loads it",
+  "homepage": "https://pecl.php.net/package/yaml",
+  "license": "MIT",
+  "command": "about.bat",
+  "env": { "PHP_EXT_YAML": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d" },
+  "extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17" },
+  "exports": {},
+  "sdk": {
+    "phpsdk": "net.php.php.Sdk:8.5.11@sha256:aaff294a00e7dbc0d70217fb7ad876b10d9133ce155581eacadab866e9e8595f",
+    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
+  },
+  "cleanup": ["/cmake", "/include", "/lib/libyaml.a", "/lib/libyaml_a.lib"],
+  "modules": [
+    {
+      "name": "libyaml",
+      "sources": [
+        {
+          "url": "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz",
+          "sha256": "fa240dbf262be053f3898006d502d514936c818e422afdcf33921c63bed9bf2e",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+        "cmake --build out",
+        "cmake --install out",
+        "cp \"$PREFIX/lib/libyaml.a\" \"$PREFIX/lib/libyaml_a.lib\"",
+        "cp License \"$PREFIX/LICENSE.libyaml\""
+      ]
+    },
+    {
+      "name": "yaml",
+      "sources": [
+        {
+          "url": "https://pecl.php.net/get/yaml-2.3.0.tgz",
+          "sha256": "bc8404807a3a4dc896b310af21a7f8063aa238424ff77f27eb6ffa88b5874b8a",
+          "strip": 1
+        }
+      ],
+      "build": ["php-ext build --with-yaml", "cp LICENSE \"$PREFIX/LICENSE\""]
+    }
+  ]
+}

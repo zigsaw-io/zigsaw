@@ -253,13 +253,35 @@
   needs), but nothing warns at install. Builds never get installed
   extensions. An extension's aliases aren't used, and extensions can't have
   runtimes of their own.
-- `php-ext` finds only the libraries PHP ships, as headers and import
-  libraries for its own DLLs: an extension that needs another (libzstd,
-  libyaml, libmemcached...) needs a recipe that builds it, which no image
-  does yet. The deps packages' static libraries (`*_a.lib`, MSVC's) aren't
-  in the SDK. It hasn't been tried with C++ extensions, nor with thread-safe
-  PHP, which isn't packaged. A `config.w32` that calls a configure function
-  its stand-ins don't have fails, naming it.
+- `php-ext` finds the libraries PHP ships, as headers and import libraries
+  for its own DLLs, and those a recipe built into the build's prefix
+  before it. Those have been static libraries, linked into the extension:
+  an extension that needs a DLL PHP doesn't ship would have to get it
+  loaded, and none has been tried. A library's file has to have the name
+  `config.w32` looks for, as yaml's needs `libyaml_a.lib`. The deps
+  packages' static libraries (`*_a.lib`, MSVC's) aren't in the SDK. It
+  hasn't been tried with C++ extensions, nor with thread-safe PHP, which
+  isn't packaged. A `config.w32` that calls a configure function its
+  stand-ins don't have fails, naming it.
+- At low integrity, PHP's `is_writable()` is false even for what the run
+  may write (its data, writable grants, `TEMP`): PHP leaves the integrity
+  label out of its access check ([findings](findings.md#phps-is_writable-at-low-integrity)).
+  PHP code that checks before it writes refuses: Kanboard doesn't start
+  under `--sandbox=low`. Under `--sandbox=appcontainer` it starts, but a
+  browser can't reach it, as an AppContainer can't be reached on
+  `127.0.0.1` without a loopback exemption. Kanboard works under `soft`.
+- Kanboard is served by PHP's built-in web server, which handles one
+  request at a time and is meant for development: fine for one person on
+  their own machine, not for a team. Its plugin installer is off, as
+  upstream's default; plugins go in `plugins` in its data by hand. Its
+  router keeps `app\`, `libs\`, `vendor\` and `cli` from the web; PHP's
+  server ignores Kanboard's `.htaccess` files.
+- Composer's image can't update itself (`self-update`): its `composer.phar`
+  is in the read-only image; a newer Composer is a newer image.
+  `composer diagnose` reports its keys for verifying updates missing.
+- zigsaw 0.24.0 and older refuse Composer's image, whose alias runs a file
+  of its PHP runtime, and so Kanboard's builds; running Kanboard needs only
+  PHP's runtime.
 - MinGW's headers define POSIX names that MSVC's don't, and an extension
   that tests for one takes another branch than in MSVC builds of it.
   `zig-php.h` removes those found so far (`P_tmpdir`, `PATH_MAX`,

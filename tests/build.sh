@@ -279,8 +279,9 @@ check "an extension with runtimes is refused" sh -c "\"\$0\" build '$work\\ext\\
 
 # A tool image with aliases, all BusyBox: greet echoes "tool:", ar echoes
 # (over BusyBox's own ar applet), fail exits 7, shout drops --quiet. An app
-# that has it as a runtime and an alias greet of its own, and runs BusyBox's
-# sh from the runtime. And an SDK that has the tool as its runtime.
+# that has it as a runtime and an alias greet of its own, another, rt, that
+# runs the runtime's busybox.exe, and runs BusyBox's sh from the runtime.
+# And an SDK that has the tool as its runtime, and an alias that runs it.
 TOOL=test.alias.tool
 AAPP=test.alias.app
 ASDK=test.alias.sdk
@@ -304,7 +305,7 @@ tool_recipe >"$work\\alias\\tool.json"
 check "a tool image with aliases builds" z build "$work\\alias\\tool.json"
 tool_digest=$(manifest_of $TOOL)
 alias_app_recipe() {
-    local aliases='"aliases": { "greet": { "command": "busybox.exe", "args": ["echo", "app:"] } },'
+    local aliases='"aliases": { "greet": { "command": "busybox.exe", "args": ["echo", "app:"] }, "rt": { "command": "${tool}/busybox.exe", "args": ["echo", "rt:", "${tool}"] } },'
     [ "${2:-}" = none ] && aliases=''
     cat <<EOF
 { "id": "$AAPP", "version": "1", "command": "\${tool}/busybox.exe", "args": ["sh"], "exports": {},
@@ -321,6 +322,7 @@ check "a runtime's alias runs, dropping what it drops" sh -c '[ "$("$0" run '$AA
 check "an alias wins over BusyBox's applet of the same name" sh -c '[ "$("$0" run '$AAPP' -c ar | tr -d "\r")" = "tool ar" ]' "$zigsaw"
 check "an alias's exit code comes through" sh -c '[ "$("$0" run '$AAPP' -c "fail; echo \$?" | tr -d "\r")" = 7 ]' "$zigsaw"
 check "--command finds an alias" sh -c '[ "$("$0" run --command=greet '$AAPP' there | tr -d "\r")" = "app: there" ]' "$zigsaw"
+check "the app's alias runs its runtime's file, \${tool} its directory" sh -c '[ "$("$0" run '$AAPP' -c "rt x" | tr -d "\r" | tr / \\\\)" = "rt: $1\\deploy\\$2 x" ]' "$zigsaw" "$ZIGSAW_HOME" "$(own_layer $TOOL)"
 check "the runtime's variables come with it" sh -c '[ "$("$0" run '$AAPP' -c "echo \$ALIAS_TOOL" | tr -d "\r" | tr / \\\\)" = "$1\\deploy\\$2" ]' "$zigsaw" "$ZIGSAW_HOME" "$(own_layer $TOOL)"
 records_aliases() { config_of $AAPP | tr -d ' \r\n' | grep -q '"runtimes":{"tool":{.*"aliases":{"greet":{"command":"busybox.exe","args":\["echo","tool:"\]}'; }
 check "the app's config records the runtime's aliases" records_aliases
@@ -328,9 +330,9 @@ unchanged_shims() {
     local dir="$ZIGSAW_HOME\\aliases\\$AAPP" before after
     before=$(cd "$dir" && ls -l --time-style=full-iso)
     z run $AAPP -c true && after=$(cd "$dir" && ls -l --time-style=full-iso)
-    [ "$before" = "$after" ] && [ "$(ls "$dir" | wc -l)" -eq 8 ] || { echo "$after"; return 1; }
+    [ "$before" = "$after" ] && [ "$(ls "$dir" | wc -l)" -eq 10 ] || { echo "$after"; return 1; }
 }
-check "a second run rewrites none of the 8 shim files (4 aliases)" unchanged_shims
+check "a second run rewrites none of the 10 shim files (5 aliases)" unchanged_shims
 check "aliases work under --sandbox=low, the last of sh -c's commands too" sh -c '[ "$("$0" run --sandbox=low '$AAPP' -c "greet x; shout --quiet y" | tr -d "\r" | tr "\n" " ")" = "app: x shout y " ]' "$zigsaw"
 # In an AppContainer, BusyBox's sh doesn't see zigsaw, takes itself for an
 # orphan, and doesn't wait for its last command (README's known gaps).
@@ -358,13 +360,14 @@ check "prune removes alias shims of apps that aren't installed" prune_aliases
 cat >"$work\\alias\\sdk.json" <<EOF
 { "id": "$ASDK", "version": "1", "command": "\${tool}/busybox.exe", "exports": {},
   "runtimes": { "tool": "$TOOL@$tool_digest" },
+  "aliases": { "hello": { "command": "\${tool}\\\\busybox.exe", "args": ["echo", "sdk hello"] } },
   "modules": [{ "name": "m", "sources": [{ "path": "y.h", "dest": "include/y.h" }] }] }
 EOF
 check "an SDK with the tool as its runtime builds" z build "$work\\alias\\sdk.json"
 asdk_digest=$(manifest_of $ASDK)
 with_sdk_recipe() {
     local extra=${1:-}
-    printf '{ "id": "test.alias.built", "version": "1", "command": "b.txt", "exports": {}, "sdk": { "s": "%s@%s"%s },\n  "modules": [{ "name": "m", "build": ["greet built > \\"$PREFIX/b.txt\\"", "echo \\"$ALIAS_TOOL\\" > \\"$PREFIX/t.txt\\"", "echo \\"$PATH\\" > \\"$PREFIX/p.txt\\""] }] }\n' \
+    printf '{ "id": "test.alias.built", "version": "1", "command": "b.txt", "exports": {}, "sdk": { "s": "%s@%s"%s },\n  "modules": [{ "name": "m", "build": ["greet built > \\"$PREFIX/b.txt\\"", "hello there > \\"$PREFIX/h.txt\\"", "echo \\"$ALIAS_TOOL\\" > \\"$PREFIX/t.txt\\"", "echo \\"$PATH\\" > \\"$PREFIX/p.txt\\""] }] }\n' \
         $ASDK "$asdk_digest" "$extra"
 }
 sdk_brings_tool() {
@@ -372,9 +375,10 @@ sdk_brings_tool() {
     z build "$work\\alias\\built.json" >/dev/null 2>&1 || { z build "$work\\alias\\built.json" 2>&1 | tail -1; return 1; }
     local dir="$ZIGSAW_HOME\\deploy\\$(own_layer test.alias.built)"
     [ "$(tr -d '\r' <"$dir\\b.txt")" = "tool: built" ] || { echo "b.txt: $(cat "$dir\\b.txt")"; return 1; }
+    [ "$(tr -d '\r' <"$dir\\h.txt")" = "sdk hello there" ] || { echo "h.txt: $(cat "$dir\\h.txt")"; return 1; }
     [ "$(tr -d '\r' <"$dir\\t.txt" | tr '/' '\\')" = "$ZIGSAW_HOME\\deploy\\$(own_layer $TOOL)" ] || { echo "t.txt: $(cat "$dir\\t.txt")"; return 1; }
 }
-check "a build with the SDK gets its runtime's aliases and variables" sdk_brings_tool
+check "a build with the SDK gets its runtime's aliases and variables, and its own alias that runs the runtime's file" sdk_brings_tool
 tool_once() {
     with_sdk_recipe ", \"t\": \"$TOOL@$tool_digest\"" >"$work\\alias\\both.json"
     z build "$work\\alias\\both.json" >/dev/null 2>&1 || { z build "$work\\alias\\both.json" 2>&1 | tail -1; return 1; }

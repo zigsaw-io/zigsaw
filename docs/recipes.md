@@ -324,7 +324,13 @@ PATH, so a Meson run finds the C compiler of a zig runtime. An alias runs
 its command with its arguments, then its caller's, in the caller's
 environment. `drop` leaves out the caller's arguments that equal one of its
 values: GNU `dlltool` passes its assembler `--64`, which zig's cc doesn't
-take. Arguments can't use `${data}` or `${cache}`. If two images alias the
+take. Arguments can't use `${data}` or `${cache}`. An image's alias may run
+a file of one of its own runtimes, as its command may: Composer's image,
+which has PHP as a runtime, aliases `composer` to
+`"${php}\\php.exe"` with `"${app}\\composer.phar"`, so a recipe with
+Composer as an SDK runs `composer install` (zigsaw 0.25.0 and later; 0.24
+refuses such an image). A runtime's aliases, which an app copies, run only
+the runtime's own files. If two images alias the
 same name, the one listed first in the recipe wins; in runs, the app's own,
 then its runtimes' in order. Aliases also win over BusyBox's applets of the
 same name, which its sh would otherwise run instead of anything on PATH
@@ -1108,8 +1114,14 @@ zig's clang, which that PHP loads as it loads MSVC's builds:
   [`net.php.php.Xdebug`](recipes/php-xdebug.json) (Xdebug 3.5.3, with
   compression), [`net.php.php.Igbinary`](recipes/php-igbinary.json)
   (igbinary 3.2.17RC1), [`net.php.php.Redis`](recipes/php-redis.json)
-  (PhpRedis 6.3.0, with igbinary's serializer) and
-  [`net.php.php.SSH2`](recipes/php-ssh2.json) (ssh2 1.5.0).
+  (PhpRedis 6.3.0, with igbinary's serializer),
+  [`net.php.php.SSH2`](recipes/php-ssh2.json) (ssh2 1.5.0),
+  [`net.php.php.Yaml`](recipes/php-yaml.json) (yaml 2.3.0, with libyaml
+  0.2.5) and [`net.php.php.Zstd`](recipes/php-zstd.json) (zstd 0.18.0, with
+  libzstd 1.5.7).
+- **[`org.getcomposer.composer`](recipes/composer.json)**, Composer on
+  PHP's runtime, and **[`org.kanboard.Kanboard`](recipes/kanboard.json)**, a
+  web app on it ([below](#composer-and-php-apps)).
 
 PHP needs Microsoft's Visual C++ Redistributable (x64), as php.net's zip
 does: its DLLs import `vcruntime140.dll`, and ICU's and intl's
@@ -1212,7 +1224,52 @@ byte for byte, as those in PHP's zip.)
   with, as PHP has the extension built in; the official build links its
   static library into the extension instead.
 - Libraries PHP doesn't ship aren't there: an extension's recipe builds
-  them, with zig.
+  them, with zig ([below](#libraries-php-doesnt-ship)).
+
+#### Libraries PHP doesn't ship
+
+An extension's recipe builds the library first, as a module of its own,
+into the build's prefix, and `php-ext` looks there before PHP's
+`dev\deps`, as php.net's builds find every library in `PHP_PHP_BUILD`:
+`$PREFIX\include` is on every compile's include path, and `CHECK_LIB` and
+`CHECK_HEADER_ADD_INCLUDE` search `$PREFIX\lib` and `$PREFIX\include`. The
+library is static, linked into the extension's DLL, and cleanup leaves its
+headers and static library out of the image; its licence stays
+([`recipes/php-yaml.json`](recipes/php-yaml.json)):
+
+```json
+"sdk": {
+  "phpsdk": "net.php.php.Sdk:8.5.11@sha256:...",
+  "cmake": "org.cmake.cmake:4.4.4@sha256:..."
+},
+"cleanup": ["/cmake", "/include", "/lib/libyaml.a", "/lib/libyaml_a.lib"],
+"modules": [
+  {
+    "name": "libyaml",
+    "sources": [{ "url": "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz", "sha256": "...", "strip": 1 }],
+    "build": [
+      "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5",
+      "cmake --build out",
+      "cmake --install out",
+      "cp \"$PREFIX/lib/libyaml.a\" \"$PREFIX/lib/libyaml_a.lib\"",
+      "cp License \"$PREFIX/LICENSE.libyaml\""
+    ]
+  },
+  {
+    "name": "yaml",
+    "sources": [{ "url": "https://pecl.php.net/get/yaml-2.3.0.tgz", "sha256": "...", "strip": 1 }],
+    "build": ["php-ext build --with-yaml", "cp LICENSE \"$PREFIX/LICENSE\""]
+  }
+]
+```
+
+A library's name is what `config.w32` looks for, as MSVC's builds name
+them: yaml's wants `libyaml_a.lib`, MSVC's name for a static library, to
+build against a static libyaml (`YAML_DECLARE_STATIC`), so its recipe
+copies zig's `libyaml.a` to that name. `CHECK_LIB` also takes zig's
+`lib<name>.a` for `<name>.lib`, which is how zstd's finds `libzstd.a`
+(`php --ri zstd` then says "Zstd library => external": not the copy it
+bundles). Both pass the same tests as php.net's own builds of them.
 
 Extensions that need another extension (`ADD_EXTENSION_DEP`, as redis with
 igbinary's serializer) find it by its `PHP_EXT_<EXT>` variable: a recipe
@@ -1271,6 +1328,63 @@ They're variables, so the PHP processes the app starts load the same
 extensions. The extensions work under the three sandboxes. Xdebug's step
 debugger connects to an IDE under `soft` and `low`; in an AppContainer it
 can't reach `127.0.0.1` ([known gaps](gaps.md)).
+
+### Composer and PHP apps
+
+[Composer](recipes/composer.json)'s image is `composer.phar` with PHP's
+runtime. As an app it exports `composer`, with the network and the working
+directory; its home and cache are in its data, as `APPDATA` and
+`LOCALAPPDATA` are. As an SDK it gives builds a `composer` alias, which runs
+the runtime's `php.exe` with the phar ([aliases](#building-from-source)), so
+a recipe installs an app's dependencies from its lock file in a
+[vendor step](#vendor-steps), pinned like a download
+([`recipes/kanboard.json`](recipes/kanboard.json)):
+
+```json
+"runtimes": { "php": "net.php.php:8.5.11@sha256:..." },
+"sdk": {
+  "composer": "org.getcomposer.composer:2.10.3@sha256:...",
+  "busybox": "net.frippery.busybox:...@sha256:..."
+},
+"modules": [
+  {
+    "name": "kanboard",
+    "sources": [
+      { "url": "https://github.com/kanboard/kanboard/archive/refs/tags/v1.2.54.tar.gz", "sha256": "...", "strip": 1 },
+      { "url": "https://raw.githubusercontent.com/kanboard/kanboard/<commit>/composer.json", "sha256": "...", "dest": "composer.json" },
+      { "url": "https://raw.githubusercontent.com/kanboard/kanboard/<commit>/composer.lock", "sha256": "...", "dest": "composer.lock" }
+    ],
+    "vendor": {
+      "commands": ["rm -rf vendor", "composer install --no-dev --no-scripts --no-interaction --no-ansi --prefer-dist"],
+      "dir": "vendor",
+      "sha256": "..."
+    },
+    "build": ["mkdir -p \"$PREFIX/kanboard\"", "cp -r app assets libs vendor cli index.php jsonrpc.php ... \"$PREFIX/kanboard/\""]
+  }
+]
+```
+
+Kanboard's release tarball leaves its `composer.json` and `composer.lock`
+out, so the recipe takes them from the tag's commit; it has the
+dependencies installed already, which the vendor step replaces with
+Composer's own install of the lock file (the same package files; see
+[findings](findings.md#composer-and-kanboard)). Two installs, one from
+Composer's cache, make the same files.
+
+Kanboard is a web app. Its `kanboard` command
+([`serve.php`](recipes/kanboard/serve.php)) runs PHP's built-in web server
+on `127.0.0.1:8471` (`--listen=<host>:<port>` for another), with a
+[router](recipes/kanboard/router.php) that refuses the directories
+Kanboard's `.htaccess` keeps from the web, and opens the page in the default
+browser (`--no-browser` doesn't): Explorer opens it, so the browser runs
+outside the app's sandbox, and doesn't end with the server. Its Start menu
+shortcut runs it, with a console window for the server's log; closing it
+stops the server. `DATA_DIR` is the app's data, where Kanboard keeps its
+SQLite database and files; `PLUGINS_DIR` is `plugins` in it. `kanboard-cli`
+is Kanboard's command line (`kanboard-cli db:version`). It works under
+`soft` only: at low integrity PHP's `is_writable()` says no to what the run
+may write, and Kanboard refuses its data directory; in an AppContainer the
+browser can't reach it ([known gaps](gaps.md)).
 
 ### What zig needs to build for MSVC's PHP
 

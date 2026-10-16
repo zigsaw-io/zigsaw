@@ -180,6 +180,10 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | igbinary for PHP 8.5 (built from source) | `net.php.php.Igbinary` | 3.2.17RC1 | |
 | PhpRedis for PHP 8.5 (built from source) | `net.php.php.Redis` | 6.3.0 | |
 | SSH2 for PHP 8.5 (built from source) | `net.php.php.SSH2` | 1.5.0 | |
+| YAML for PHP 8.5, with libyaml (built from source) | `net.php.php.Yaml` | 2.3.0 | |
+| Zstandard for PHP 8.5, with libzstd (built from source) | `net.php.php.Zstd` | 0.18.0 | |
+| Composer (on PHP) | `org.getcomposer.composer` | 2.10.3 | `composer` |
+| Kanboard (on PHP; dependencies installed by Composer) | `org.kanboard.Kanboard` | 1.2.54 | `kanboard`, `kanboard-cli` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -207,9 +211,15 @@ PHP is php.net's own Windows build, and needs Microsoft's Visual C++
 Redistributable installed, as that does. Its SDK's `php-ext` builds PHP
 extensions from source with zig, from their `config.w32`, against PHP and
 the libraries it ships (OpenSSL, libssh2, zlib...), as the extensions'
-images are. Installed, an extension joins every run of PHP, through PHP's
+images are; YAML's and Zstandard's recipes build their library first, with
+CMake and zig. Installed, an extension joins every run of PHP, through PHP's
 [extension point](docs/recipes.md#extension-points); `--noextension`
-leaves it out ([PHP](docs/recipes.md#php)).
+leaves it out ([PHP](docs/recipes.md#php)). Composer runs on PHP's runtime,
+and as an SDK gives builds a `composer` command: Kanboard's recipe installs
+its dependencies with it, from their lock file. Kanboard is a web app:
+`kanboard` serves it with PHP's built-in web server on `127.0.0.1:8471` and
+opens it in your browser (its Start menu shortcut does that too), with its
+database in the app's data.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -811,7 +821,7 @@ bash tests/build.sh     # building apps: runtimes, images as sources, build comm
 bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
-bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; five extensions built with php-ext join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger (needs PHP_HOME or BUILD_HOME; local only)
+bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing

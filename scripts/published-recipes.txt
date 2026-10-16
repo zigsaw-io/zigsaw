@@ -35,3 +35,7 @@ php-xdebug.json
 php-igbinary.json
 php-redis.json
 php-ssh2.json
+php-yaml.json
+php-zstd.json
+composer.json
+kanboard.json

@@ -663,6 +663,72 @@ was how extensions that need PHP's third-party libraries can build.
   Extension Build"), which PHP checks extensions against, and which PHP's
   extension point takes as its version.
 
+### With libraries PHP doesn't ship
+
+Iteration 25, 2026-10-16. The question was whether an extension's recipe
+can build the library it needs with zig, and get what php.net's own builds
+get.
+
+- **PhpRedis can't have zstd, lz4 or lzf on Windows**: its `config.w32`
+  has no option for them, only `config.m4`. So the proofs were PECL's yaml
+  2.3.0 (libyaml) and zstd 0.18.0 (libzstd, which it can also take from a
+  copy it bundles), which php.net builds for Windows too.
+- **libyaml 0.2.5's release tarball can't be built with CMake**: it has
+  the `CMakeLists.txt` but not the templates it reads
+  (`cmake/config.h.in`, `yamlConfig.cmake.in`). GitHub's archive of the tag
+  has them. CMake 4 also needs `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`, as the
+  project asks for 3.0.
+- **configure's `CHECK_LIB` returns where it found the library**, not
+  true: yaml's `config.w32` reads the name to know whether it's static
+  (`_a.lib`), and so whether to define `YAML_DECLARE_STATIC`.
+- **Built with zig and linked in statically, they pass what php.net's DLLs
+  pass**, the same tests, run the same way with the SDK's PHP:
+
+| | zig, with the recipe's library | php.net's build |
+|---|---|---|
+| yaml 2.3.0, its tests | 76 pass | the same |
+| zstd 0.18.0, its tests | 61 pass, 5 skipped | the same |
+
+### PHP's `is_writable()` at low integrity
+
+At low integrity, `is_writable()` and `is_writeable()` are false for every
+file and directory, even those the process can write: those labelled low,
+as zigsaw labels a run's data and writable grants, and its `TEMP`. Writing
+to them works. PHP's Windows access check (`tsrm_win32_access` in
+`TSRM/tsrm_win32.c`) asks `GetFileSecurityW` for the owner, group and DACL,
+but not the integrity label (`LABEL_SECURITY_INFORMATION`), and
+`AccessCheck`, given a security descriptor without one, takes the object as
+medium integrity, which a low-integrity token may not write to. Asking for
+the label too would fix it. Code that checks before writing refuses:
+Kanboard won't start ("The directory ... must be writeable by your web
+server user"), and checks its files and plugins directories the same way.
+Composer, which doesn't, installs at low.
+
+### Composer and Kanboard
+
+- **Kanboard's release tarball leaves out `composer.json` and
+  `composer.lock`** (`export-ignore`), and has the dependencies installed in
+  `vendor\` instead. The recipe takes the two files from the tag's commit,
+  and its vendor step installs from the lock file: 18 packages in 30 s, 16 s
+  from Composer's cache, the same files both ways, and the same again in a
+  store that had none of it.
+- **Composer's install is the same code as Kanboard's own `vendor\`**: every
+  file both have is the same, byte for byte, but Composer's own (`autoload.php`
+  and `composer\`: the class name it gives the autoloader, and the class map,
+  which lists Kanboard's tests, which upstream installed from its full tree).
+  It keeps 41 files upstream's leaves out: each package's `composer.json`,
+  `README.md` and `.gitignore`, and a few tests.
+- **PHP's built-in web server ignores `.htaccess` and `web.config`**, which
+  keep Kanboard's `app\` and `data\` from the web; its recipe adds a router
+  that refuses `app\`, `libs\`, `vendor\` and `cli`. Its data isn't under
+  the served directory.
+- **A browser started from a run would be in the run's job**, and end with
+  the server: Explorer, given the address, has the shell's own process open
+  it, outside the run.
+- **Composer finds what's on the run's PATH**: `diagnose` reports "7-Zip
+  present (7z)" in a store where 7-Zip's image is installed, through its
+  export.
+
 ## Other findings
 
 - **Microsoft Defender quarantines zigsaw 0.19.0.** During a build of

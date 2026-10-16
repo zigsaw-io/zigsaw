@@ -280,11 +280,13 @@ fn syncAliases(ctx: *Context, image: Store.Image) !?AppAliases {
 }
 
 /// The app first, then its runtimes in order: the first to have an alias
-/// of a name wins it.
+/// of a name wins it. The app's aliases may run its runtimes' files.
 fn aliasProviders(arena: Allocator, image: Store.Image) ![]const aliases.Provider {
     const cfg = image.config;
+    const runtimes = try arena.alloc(oci.Placeholders.Dir, image.runtime_dirs.len);
+    for (runtimes, cfg.runtimes.map.keys(), image.runtime_dirs) |*r, alias, dir| r.* = .{ .alias = alias, .path = dir };
     var out: std.ArrayList(aliases.Provider) = .empty;
-    try out.append(arena, .{ .id = cfg.id, .dir = image.deploy_dir, .aliases = cfg.aliases });
+    try out.append(arena, .{ .id = cfg.id, .dir = image.deploy_dir, .aliases = cfg.aliases, .runtimes = runtimes });
     for (cfg.runtimes.map.values(), image.runtime_dirs) |r, dir| try out.append(arena, .{ .id = r.id, .dir = dir, .aliases = r.aliases });
     return out.items;
 }
@@ -310,6 +312,13 @@ test aliasProviders {
         try std.testing.expectEqualStrings(id, got.id);
         try std.testing.expectEqualStrings(dir, got.dir);
     }
+    // The app's aliases may name its runtimes; theirs have only themselves.
+    try std.testing.expectEqual(2, p[0].runtimes.len);
+    try std.testing.expectEqualStrings("b", p[0].runtimes[0].alias);
+    try std.testing.expectEqualStrings("D:\\b", p[0].runtimes[0].path);
+    try std.testing.expectEqualStrings("a", p[0].runtimes[1].alias);
+    try std.testing.expectEqualStrings("D:\\a", p[0].runtimes[1].path);
+    try std.testing.expectEqual(0, p[1].runtimes.len);
 }
 
 // ---------------------------------------------------------------------------

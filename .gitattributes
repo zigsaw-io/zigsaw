@@ -16,5 +16,7 @@ tests/install/*.cmd text eol=crlf
 # Hashed for releases (SHA256SUMS), so the same bytes on every checkout.
 *.ps1 text eol=lf
 
-# Files PHP's SDK image carries, so it has the same digest on every checkout.
+# Files PHP's SDK image and Kanboard's carry, so they have the same digest on
+# every checkout.
 recipes/php-sdk/* text eol=lf
+recipes/kanboard/* text eol=lf

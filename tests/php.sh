@@ -2,14 +2,18 @@
 # PHP end to end: PHP's runtime image (recipes/php.json) runs PHP's official
 # Windows build with its php.ini and extensions under each sandbox. The
 # extension images (recipes/php-apcu.json, php-xdebug.json, php-igbinary.json,
-# php-redis.json, php-ssh2.json), which the SDK image's php-ext builds with
-# zig, join PHP's runs once installed, through PHP's extension point, under
-# each sandbox, and pass their own test suites: ssh2's and redis's against
-# servers of tests/php/servers, built with Go, as this machine has none. An
-# app that lists PHP, APCu and Xdebug as runtimes loads those through their
-# .ini files, the installed others too, and Xdebug's step debugger connects
-# to a DBGp client from it, except in an AppContainer, which can't reach
-# 127.0.0.1 (docs/gaps.md).
+# php-redis.json, php-ssh2.json, php-yaml.json, php-zstd.json), which the SDK
+# image's php-ext builds with zig, yaml's and zstd's with libraries their
+# recipes build first, join PHP's runs once installed, through PHP's
+# extension point, under each sandbox, and pass their own test suites:
+# ssh2's and redis's against servers of tests/php/servers, built with Go, as
+# this machine has none. An app that lists PHP, APCu and Xdebug as runtimes
+# loads those through their .ini files, the installed others too, and
+# Xdebug's step debugger connects to a DBGp client from it, except in an
+# AppContainer, which can't reach 127.0.0.1 (docs/gaps.md). Composer's image
+# (recipes/composer.json) installs a project offline; Kanboard
+# (recipes/kanboard.json), whose dependencies a build installed with it,
+# serves its pages and API with PHP's web server, under soft only.
 #
 # Not in CI: tests/build.sh's PHP section is, with a small test extension.
 #
@@ -58,8 +62,11 @@ recipe_sha256() { grep -o '"sha256": *"[0-9a-f]*"' "$root\\recipes\\$1" | head -
 
 PHP=net.php.php SDK=net.php.php.Sdk APCU=net.php.php.APCu XDEBUG=net.php.php.Xdebug CONSUMER=test.php.consumer
 IGBINARY=net.php.php.Igbinary REDIS=net.php.php.Redis SSH2=net.php.php.SSH2 SERVERS=test.php.servers
+YAML=net.php.php.Yaml ZSTD=net.php.php.Zstd COMPOSER=org.getcomposer.composer KANBOARD=org.kanboard.Kanboard
 installed=()
-for id in $SDK $PHP $APCU $XDEBUG $IGBINARY $REDIS $SSH2 $SERVERS; do [ -f "$ZIGSAW_HOME\\refs\\$id.json" ] || installed+=("$id"); done
+for id in $SDK $PHP $APCU $XDEBUG $IGBINARY $REDIS $SSH2 $YAML $ZSTD $SERVERS $COMPOSER $KANBOARD; do
+    [ -f "$ZIGSAW_HOME\\refs\\$id.json" ] || installed+=("$id")
+done
 
 check "php-sdk.json builds PHP's SDK image" z build "$root\\recipes\\php-sdk.json"
 check "php.json builds PHP's runtime image from it" z build "$root\\recipes\\php.json"
@@ -68,6 +75,10 @@ check "php-xdebug.json builds Xdebug with it, with compression (zlib from php8.d
 check "php-igbinary.json builds igbinary" z build "$root\\recipes\\php-igbinary.json"
 check "php-redis.json builds redis, with igbinary's image as an SDK" z build "$root\\recipes\\php-redis.json"
 check "php-ssh2.json builds ssh2 (libssh2 and OpenSSL, as PHP ships them)" z build "$root\\recipes\\php-ssh2.json"
+check "php-yaml.json builds libyaml with CMake, then yaml with it" z build "$root\\recipes\\php-yaml.json"
+check "php-zstd.json builds libzstd with CMake, then zstd with it" z build "$root\\recipes\\php-zstd.json"
+check "composer.json builds Composer's image, on PHP's runtime" z build "$root\\recipes\\composer.json"
+check "kanboard.json builds Kanboard, its dependencies installed by Composer's alias" z build "$root\\recipes\\kanboard.json"
 check "tests/php/servers builds the SSH and Redis servers with Go" z build "$root\\tests\\php\\servers\\servers.json"
 
 # --- the runtime ---------------------------------------------------------------
@@ -112,12 +123,23 @@ ext_files() {
     [ -f "$(deploy_of $IGBINARY)\\include\\ext\\igbinary\\src\\php7\\igbinary.h" ] || { echo "no igbinary.h"; return 1; }
 }
 check "each extension image has its DLL, its .ini, about.bat, its import library, and the headers it installs" ext_files
+# yaml's and zstd's have the licence of the library linked into their DLL,
+# and not its headers or static library.
+lib_ext_files() {
+    local id ext d
+    for id in $YAML:yaml $ZSTD:zstd; do
+        ext=${id#*:} d=$(deploy_of "${id%%:*}")
+        [ "$(ls "$d" | tr '\n' ' ')" = "LICENSE LICENSE.lib$ext about.bat conf.d lib php_$ext.dll " ] || { echo "${id%%:*} has $(ls "$d" | tr '\n' ' ')"; return 1; }
+        [ "$(ls "$d\\lib")" = "php_$ext.lib" ] || { echo "${id%%:*}'s lib has $(ls "$d\\lib" | tr '\n' ' ')"; return 1; }
+    done
+}
+check "yaml's and zstd's images have their library's licence, and not its headers or static library" lib_ext_files
 about() { z run $APCU | tr -d '\r' | grep -q '^This image is the PHP extension apcu, for PHP 8.5.11'; }
 check "an extension image run as an app says what it is" about
 
 # Installed, the extensions join PHP's runs, through the runtime's
 # extension point: redis after igbinary, which it needs and links with.
-EXTS='["apcu", "xdebug", "igbinary", "redis", "ssh2"]'
+EXTS='["apcu", "xdebug", "igbinary", "redis", "ssh2", "yaml", "zstd"]'
 loaded() {
     z run "$@" -r 'foreach ('"$EXTS"' as $e) echo extension_loaded($e) ? $e : "-", " "; echo implode(" ", array_map("basename", array_map("trim", explode(",", (string) php_ini_scanned_files())))), "\n";' 2>/dev/null | tr -d '\r'
 }
@@ -125,14 +147,14 @@ joins() {
     local sb out
     for sb in soft low appcontainer; do
         out=$(cd "$work\\cwd" && loaded --sandbox=$sb $PHP)
-        [ "$out" = "apcu xdebug igbinary redis ssh2 apcu.ini igbinary.ini redis.ini ssh2.ini xdebug.ini" ] || { echo "$sb, got: $out"; return 1; }
+        [ "$out" = "apcu xdebug igbinary redis ssh2 yaml zstd apcu.ini igbinary.ini redis.ini ssh2.ini xdebug.ini yaml.ini zstd.ini" ] || { echo "$sb, got: $out"; return 1; }
     done
 }
-check "installed, the five extensions join PHP's runs, redis after igbinary, under soft, low and appcontainer" joins
+check "installed, the seven extensions join PHP's runs, redis after igbinary, under soft, low and appcontainer" joins
 left_out() {
     local out
     out=$(cd "$work\\cwd" && loaded --noextension=$IGBINARY $PHP)
-    [ "$out" = "apcu xdebug - - ssh2 apcu.ini ssh2.ini xdebug.ini" ] || { echo "got: $out"; return 1; }
+    [ "$out" = "apcu xdebug - - ssh2 yaml zstd apcu.ini ssh2.ini xdebug.ini yaml.ini zstd.ini" ] || { echo "got: $out"; return 1; }
     (cd "$work\\cwd" && z run --noextension=$IGBINARY $PHP -r '' 2>&1) | grep -qF "$REDIS doesn't join this run: it needs $IGBINARY" || { echo "no note about redis"; return 1; }
 }
 check "--noextension leaves igbinary out, and redis, which needs it, with a note" left_out
@@ -142,6 +164,13 @@ uses_libs() {
     [ "$out" = "42 ssh2 xdebug" ] || { echo "got: $out"; return 1; }
 }
 check "redis serializes with igbinary's DLL" uses_libs
+built_in_libs() {
+    local out
+    out=$(cd "$work\\cwd" && z run $PHP -r 'echo yaml_parse(yaml_emit(["x" => [1, 2]]))["x"][1], " ", zstd_uncompress(zstd_compress(str_repeat("z", 1000))) === str_repeat("z", 1000) ? "zstd" : "-", "\n";' 2>&1 | tr -d '\r')
+    [ "$out" = "2 zstd" ] || { echo "got: $out"; return 1; }
+    (cd "$work\\cwd" && z run $PHP --ri zstd 2>&1) | tr -d '\r' | grep -qx 'Zstd library => external' || { echo "zstd's library isn't the one its recipe built"; return 1; }
+}
+check "yaml and zstd work with the libraries their recipes built (zstd's external, not its bundled copy)" built_in_libs
 
 # APCu's tests, from its release tarball, which its build left in the
 # store's downloads.
@@ -203,6 +232,19 @@ igbinary_suite() {
 }
 check "igbinary passes its test suite" igbinary_suite
 
+# yaml's and zstd's, from their PECL tarballs (their recipes' second source:
+# the first is their library's).
+pecl_sha256() { grep -A1 'pecl.php.net/get' "$root\\recipes\\$1" | grep -o '"sha256": *"[0-9a-f]*"' | cut -d'"' -f4; }
+lib_suite() {
+    local ext=$1 id=$2 out
+    mkdir -p "$work\\$ext"
+    tar -xzf "$(cygpath -u "$ZIGSAW_HOME\\cache\\downloads\\$(pecl_sha256 php-$ext.json)")" -C "$(cygpath -u "$work\\$ext")" --strip-components=1
+    out=$(cd "$work\\$ext" && z run --command=php-ext $SDK test tests --ext "$(deploy_of $id)\\php_$ext.dll" 2>&1 | tr -d '\r')
+    passed "$out"
+}
+check "yaml passes its test suite, as php.net's build of it does" lib_suite yaml $YAML
+check "zstd passes its test suite, as php.net's build of it does" lib_suite zstd $ZSTD
+
 # The SSH server takes a password, or the key ssh2's tests have, and runs
 # commands with BusyBox's sh; Redis is miniredis. Each says its port.
 "$zigsaw" run $SERVERS -ssh 127.0.0.1:0 -redis 127.0.0.1:0 -user zigsaw -pass secret \
@@ -248,7 +290,7 @@ consumer_runs() {
     local sb out
     for sb in soft low appcontainer; do
         out=$(cd "$work\\consumer" && z run --sandbox=$sb $CONSUMER | tr -d '\r')
-        [ "$out" = "ini apcu.ini xdebug.ini igbinary.ini redis.ini ssh2.ini app.ini
+        [ "$out" = "ini apcu.ini xdebug.ini igbinary.ini redis.ini ssh2.ini yaml.ini zstd.ini app.ini
 loaded apcu xdebug
 apcu works
 xdebug mode develop, debugger not connected" ] || { echo "$sb, got: $out"; return 1; }
@@ -277,6 +319,67 @@ debugs() {
 check "Xdebug's step debugger connects to a DBGp client under soft" debugs soft
 check "and under low" debugs low
 check "but not under appcontainer, which can't reach 127.0.0.1 (known gap)" debugs appcontainer
+
+# --- Composer and Kanboard ----------------------------------------------------
+
+# A project that requires a package from a path repository, without
+# Packagist: Composer installs it offline. Its script runs composer by name.
+composer_installs() {
+    local sb=$1 out
+    rm -rf "$work\\composer" && cp -r "$(cygpath -u "$root")/tests/php/composer" "$(cygpath -u "$work")/composer"
+    out=$(cd "$work\\composer" && z run --sandbox=$sb --ephemeral $COMPOSER install --no-interaction --no-ansi 2>&1 | tr -d '\r')
+    grep -q 'Installing zigsaw/hello (1.0.0)' <<<"$out" || { echo "$sb: $(tail -1 <<<"$out")"; return 1; }
+    out=$(cd "$work\\composer" && z run --sandbox=$sb --ephemeral $COMPOSER run-script which --no-ansi 2>&1 | tr -d '\r')
+    grep -q '^Composer version 2\.10\.3' <<<"$out" || { echo "$sb, its script: $(tail -1 <<<"$out")"; return 1; }
+    out=$(cd "$work\\composer" && z run --sandbox=$sb $PHP -r 'require "vendor/autoload.php"; echo Zigsaw\Hello\Hello::hi(), "\n";' 2>&1 | tr -d '\r')
+    [ "$out" = "hello from a package Composer installed" ] || { echo "$sb, PHP: $out"; return 1; }
+}
+check "Composer installs a project offline, and runs its script, under soft" composer_installs soft
+check "and under low" composer_installs low
+
+# Kanboard's web server, on a port of its own, without opening a browser.
+kanboard_port=$((9100 + RANDOM % 800))
+kanboard_start() {
+    "$zigsaw" run --sandbox=$1 --ephemeral $KANBOARD --no-browser --listen=127.0.0.1:$kanboard_port >"$work\\kanboard.out" 2>&1 &
+    kanboard=$!
+    for _ in $(seq 40); do grep -q 'Development Server' "$work\\kanboard.out" 2>/dev/null && break; sleep 0.25; done
+}
+kanboard_stop() { kill $kanboard 2>/dev/null; wait $kanboard 2>/dev/null; }
+kb() { curl -s -m 10 -c "$work\\jar" -b "$work\\jar" "$@"; }
+kanboard_serves() {
+    local url="http://127.0.0.1:$kanboard_port" csrf out p
+    csrf=$(kb "$url/?controller=AuthController&action=login" | sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' | head -1)
+    [ -n "$csrf" ] || { echo "no login form"; return 1; }
+    out=$(kb -o /dev/null -w '%{http_code} %{redirect_url}' --data-urlencode "csrf_token=$csrf" -d username=admin -d password=admin "$url/?controller=AuthController&action=check")
+    [ "$out" = "302 $url/?controller=DashboardController&action=show" ] || { echo "logging in: $out"; return 1; }
+    out=$(kb -u admin:admin -d '{"jsonrpc":"2.0","method":"createProject","id":1,"params":{"name":"zigsaw"}}' "$url/jsonrpc.php")
+    [ "$out" = '{"jsonrpc":"2.0","result":1,"id":1}' ] || { echo "createProject: $out"; return 1; }
+    kb -u admin:admin -d '{"jsonrpc":"2.0","method":"getAllProjects","id":2}' "$url/jsonrpc.php" | grep -q '"name":"zigsaw"' || { echo "no project"; return 1; }
+    for p in /app/common.php /vendor/autoload.php /libs/picodb/lib/PicoDb/Database.php /cli; do
+        out=$(kb -o /dev/null -w '%{http_code}' "$url$p")
+        [ "$out" = 403 ] || { echo "$p: $out"; return 1; }
+    done
+    [ "$(kb -o /dev/null -w '%{http_code}' "$url/assets/js/app.min.js")" = 200 ] || { echo "no app.min.js"; return 1; }
+}
+kanboard_start soft
+check "Kanboard logs in, creates a project through its API, and keeps its code from the web, under soft" kanboard_serves
+kanboard_stop
+kanboard_data() {
+    local out
+    out=$(z run --command=kanboard-cli $KANBOARD db:version 2>&1 | tr -d '\r')
+    grep -qE '^Current version: [0-9]+' <<<"$out" || { echo "kanboard-cli: $out"; return 1; }
+    [ -f "$ZIGSAW_HOME\\data\\$KANBOARD\\db.sqlite" ] || { echo "no db.sqlite in its data"; return 1; }
+}
+check "kanboard-cli makes its database in the app's data" kanboard_data
+# PHP's is_writable() is false at low integrity, even for what the run may
+# write: it leaves the integrity label out of its access check, and
+# Kanboard refuses to start (docs/gaps.md).
+kanboard_low() {
+    kb "http://127.0.0.1:$kanboard_port/" | grep -q 'must be writeable by your web server user'
+}
+kanboard_start low
+check "but under low it refuses its data directory, which PHP takes for read-only (known gap)" kanboard_low
+kanboard_stop
 
 z rm --delete-data $CONSUMER >/dev/null 2>&1
 for id in "${installed[@]}"; do z rm --delete-data "$id" >/dev/null 2>&1; done

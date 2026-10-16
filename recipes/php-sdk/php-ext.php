@@ -88,14 +88,17 @@ function build(string $dev, array $args): int
     file_put_contents("$tmp/main/config.pickle.h", $pickle);
 
     $flags = $config['flags'];
+    $prefix = (string) getenv('PREFIX');
     $base = array_merge(
         // Calling an undeclared function is a warning for MSVC (C4013), and
         // extensions do, as redis does PHP's usleep and gettimeofday.
         ['-O2', '-fms-extensions', '-Wno-date-time', '-Wno-error=implicit-function-declaration',
          '-include', "$dev/zigsaw/zig-php.h", "-I$tmp", '-I.'],
         array_map(fn($d) => "-I$dev/include$d", ['', '/main', '/Zend', '/TSRM', '/ext']),
-        // The headers of the libraries PHP's build links with, which its
-        // configure puts on every compile's include path too.
+        // The headers of libraries the recipe built first, in the build's
+        // prefix, then of those PHP's build links with, which its configure
+        // puts on every compile's include path too.
+        $prefix !== '' && is_dir("$prefix/include") ? ["-I$prefix/include"] : [],
         is_dir("$dev/deps/include") ? ["-I$dev/deps/include"] : [],
         ['-D_WINDOWS', '-DWINDOWS=1', '-DZEND_WIN32=1', '-DPHP_WIN32=1', '-DWIN32', '-D_MBCS', '-D_USE_MATH_DEFINES',
          '-DNDebug', '-DNDEBUG', '-DZEND_DEBUG=0'],
@@ -222,11 +225,13 @@ function linkFlags(string $flags): array
 }
 
 // A library config.w32 names: one of PHP's own (php_foo.lib, in the devel
-// pack), one PHP's build links with (in deps), a file in a directory
-// /libpath gave, or one of Windows'.
+// pack), one the recipe built (in the build's prefix), one PHP's build links
+// with (in deps), a file in a directory /libpath gave, or one of Windows'.
 function libArg(string $dev, string $lib): string
 {
-    foreach (["$dev/lib/$lib", "$dev/deps/lib/$lib"] as $f) if (is_file($f)) return $f;
+    $prefix = (string) getenv('PREFIX');
+    $dirs = array_merge(["$dev/lib"], $prefix !== '' ? ["$prefix/lib"] : [], ["$dev/deps/lib"]);
+    foreach ($dirs as $d) if (is_file("$d/$lib")) return "$d/$lib";
     return '-l' . preg_replace('/\.lib$/i', '', $lib);
 }
 

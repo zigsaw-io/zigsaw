@@ -64,6 +64,11 @@ function resolve(p) {
 // confutils.js calls this directory PHP_PHP_BUILD.
 const depsDir = path.join(devDir, "deps");
 
+// What a recipe's earlier modules installed into the build's prefix: the
+// libraries an extension needs that PHP doesn't ship, built first. They come
+// before PHP's, as php.net's own builds find everything in PHP_PHP_BUILD.
+const prefixDir = process.env.PREFIX && fs.existsSync(process.env.PREFIX) ? process.env.PREFIX : null;
+
 // Directories a pattern names: confutils globs the last part ("libxml2*").
 function globDirs(p) {
   p = resolve(p);
@@ -100,19 +105,20 @@ const host = {
   globDirs,
   depsDir: fs.existsSync(depsDir) ? depsDir : "no",
   // Include directories CHECK_HEADER_ADD_INCLUDE searches after its own:
-  // PHP's, then its libraries', then Windows'.
+  // PHP's, then the build's prefix, PHP's libraries', then Windows'.
   includeDirs: [
     path.join(devDir, "include"),
     path.join(devDir, "include", "main"),
     path.join(devDir, "include", "Zend"),
     path.join(devDir, "include", "TSRM"),
     path.join(devDir, "include", "ext"),
-    path.join(depsDir, "include"),
   ]
+    .concat(prefixDir ? [path.join(prefixDir, "include")] : [])
+    .concat([path.join(depsDir, "include")])
     .concat(peers.map((p) => path.join(p.dir, "include", "ext", p.name)))
     .concat((process.env.PHP_EXT_SYSTEM_INCLUDE || "").split(";").filter(Boolean)),
   // Library directories CHECK_LIB searches after its own.
-  libDirs: [path.join(depsDir, "lib")],
+  libDirs: (prefixDir ? [path.join(prefixDir, "lib")] : []).concat([path.join(depsDir, "lib")]),
   peers,
   // Windows' libraries that zig's MinGW import libraries cover, by name.
   systemLibs: new Set((process.env.PHP_EXT_SYSTEM_LIBS || "").split(";").filter(Boolean).map((s) => s.toLowerCase())),
@@ -243,7 +249,9 @@ function __dirs(list) {
 
 // As confutils': the given directories, the package's own under
 // PHP_PHP_BUILD (common_name, or the target), then the libraries' lib\;
-// in each, the file itself or under lib\, libs\ or Release\.
+// in each, the file itself or under lib\, libs\ or Release\. Returns where
+// it found the library, as confutils' does (yaml's config.w32 reads its
+// name), or false.
 function CHECK_LIB(libnames, target, path_to_check, common_name) {
   if (common_name == null && target != null) common_name = target;
   var paths = path_to_check ? String(path_to_check) : "";
@@ -258,23 +266,22 @@ function CHECK_LIB(libnames, target, path_to_check, common_name) {
     var php8 = __php8_libs[names[i].toLowerCase()];
     if (php8 && __builtin(php8)) {
       __host.note("Checking for library " + libnames + " ... php8.lib (PHP has " + php8.toLowerCase() + " built in)");
-      return true;
+      return "php8.lib";
     }
-    var found = __host.systemLibs.has(lib);
+    var found = __host.systemLibs.has(lib) ? names[i] : false;
     for (var j = 0; j < dirs.length && !found; j++) {
       var subs = ["", "/lib", "/libs", "/Release"];
       for (var k = 0; k < subs.length && !found; k++) {
         var d = dirs[j] + subs[k];
-        if (__host.isFile(d + "/" + names[i]) || __host.isFile(d + "/lib" + lib + ".a")) {
-          found = true;
-          ADD_FLAG("LDFLAGS" + T, "/libpath:" + d);
-        }
+        if (__host.isFile(d + "/" + names[i])) found = d + "\\" + names[i];
+        else if (__host.isFile(d + "/lib" + lib + ".a")) found = d + "\\lib" + lib + ".a";
+        if (found) ADD_FLAG("LDFLAGS" + T, "/libpath:" + d);
       }
     }
     if (found) {
       __host.note("Checking for library " + libnames + " ... " + names[i]);
       ADD_FLAG("LIBS" + T, names[i]);
-      return true;
+      return found;
     }
   }
   __host.note("Checking for library " + libnames + " ... <not found>");

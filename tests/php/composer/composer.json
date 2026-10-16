@@ -1,0 +1,12 @@
+{
+    "name": "zigsaw/composer-test",
+    "description": "tests/php.sh: a project Composer installs offline, from a path repository",
+    "type": "project",
+    "license": "BSD-3-Clause",
+    "repositories": [
+        { "packagist.org": false },
+        { "type": "path", "url": "hello", "options": { "symlink": false } }
+    ],
+    "require": { "zigsaw/hello": "*" },
+    "scripts": { "which": "composer --version" }
+}

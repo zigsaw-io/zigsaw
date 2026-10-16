@@ -475,7 +475,7 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
         if (e.value_ptr.drop != null)
             return fail("{s}: export {s} has \"drop\", which only aliases may have", .{ what, e.key_ptr.* });
     }
-    if (c.aliases) |a| try validateAliases(what, "", a);
+    if (c.aliases) |a| try validateAliases(what, "", a, aliases);
     if (c.shortcuts) |s| {
         const names = s.map.keys();
         for (names, s.map.values(), 0..) |name, shortcut, i| {
@@ -733,12 +733,18 @@ test isValidExtension {
 /// itself, whose runtimes they don't have. And an app's runs share one set of
 /// alias shims, ephemeral runs too, so they can't name a run's ${data} or
 /// ${cache}.
-fn validateAliases(what: []const u8, owner: []const u8, aliases: std.json.ArrayHashMap(Export)) error{Failed}!void {
+/// An image's aliases run a file in it, or in one of its own runtimes, which
+/// `runtimes` names: Composer's alias runs PHP's php.exe. A runtime's, which
+/// apps copy, have only the runtime itself, as runtimes have no runtimes.
+fn validateAliases(what: []const u8, owner: []const u8, aliases: std.json.ArrayHashMap(Export), runtimes: []const []const u8) error{Failed}!void {
     for (aliases.map.keys(), aliases.map.values()) |name, e| {
         if (!isValidExportName(name))
             return fail("{s}: {s}alias name \"{s}\" must be letters, digits, '.', '-', '_', '+' (and not zigsaw's own)", .{ what, owner, name });
-        if (!isValidCommand(e.command, &.{}))
-            return fail("{s}: {s}alias {s} command \"{s}\" must be a relative path inside the image", .{ what, owner, name, e.command });
+        if (!isValidCommand(e.command, runtimes)) {
+            if (runtimes.len == 0)
+                return fail("{s}: {s}alias {s} command \"{s}\" must be a relative path inside the image", .{ what, owner, name, e.command });
+            return fail("{s}: {s}alias {s} command \"{s}\" must be a relative path inside the image, or start with one of its runtimes' ${{alias}}\\", .{ what, owner, name, e.command });
+        }
         for (e.args) |arg| if (std.mem.indexOf(u8, arg, "${data}") != null or std.mem.indexOf(u8, arg, "${cache}") != null)
             return fail("{s}: {s}alias {s} argument \"{s}\" can't use ${{data}} or ${{cache}}", .{ what, owner, name, arg });
         // Shims keep them one per line, trimmed.
@@ -780,7 +786,7 @@ fn validateRuntimes(what: []const u8, runtimes: std.json.ArrayHashMap(Runtime)) 
             return fail("{s}: runtimes {s} and {s} are both {s}", .{ what, earlier_alias, alias, r.id });
         var owner_buf: [64]u8 = undefined;
         const owner = std.fmt.bufPrint(&owner_buf, "runtime {s}'s ", .{alias}) catch "a runtime's ";
-        if (r.aliases) |a| try validateAliases(what, owner, a);
+        if (r.aliases) |a| try validateAliases(what, owner, a, &.{});
         if (r.extensions) |e| try validateExtensionPoints(what, owner, e);
     }
 }
@@ -1096,6 +1102,26 @@ test "runtimes' aliases" {
     try a.map.put(arena, "zigsaw", .{ .command = "x.exe" });
     c.runtimes.map.getPtr("zig").?.aliases = a;
     try std.testing.expectError(error.Failed, validateConfig("test", c));
+}
+
+test "an image's aliases may run its runtimes' files" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const digest = "sha256:" ++ "a" ** 64;
+    var c: AppConfig = .{ .id = "x", .version = "1", .command = "x.exe" };
+    try c.runtimes.map.put(arena, "php", .{ .id = "net.php.php", .version = "1", .image = digest, .layer = digest });
+    var a: std.json.ArrayHashMap(Export) = .{};
+    try a.map.put(arena, "composer", .{ .command = "${php}\\php.exe", .args = &.{ "${app}\\composer.phar", "-d", "${php}\\x" } });
+    c.aliases = a;
+    try validateConfig("test", c);
+    // Not a runtime it doesn't have, nor outside the runtime.
+    for ([_][]const u8{ "${node}\\node.exe", "${php}\\..\\php.exe", "${php}" }) |command| {
+        var bad: std.json.ArrayHashMap(Export) = .{};
+        try bad.map.put(arena, "composer", .{ .command = command });
+        c.aliases = bad;
+        try std.testing.expectError(error.Failed, validateConfig("test", c));
+    }
 }
 
 test parseFsGrant {
