@@ -15,4 +15,17 @@ if (PHP_ZPROBE != "no") {
 	if (CHECK_LIB("no_such_library_zigsaw.lib", "zprobe")) {
 		ERROR("found a library that doesn't exist");
 	}
+	// Libraries PHP's build links with, as extensions of its own ask for
+	// them: zlib and libxml2, which PHP has built in, and OpenSSL.
+	ADD_SOURCES(configure_module_dirname + "/src", "libs.c", "zprobe");
+	if (!SETUP_ZLIB_LIB("zprobe") || !CHECK_HEADER_ADD_INCLUDE("zlib.h", "CFLAGS_ZPROBE")) {
+		ERROR("zlib not found");
+	}
+	if (!ADD_EXTENSION_DEP("zprobe", "libxml") || !CHECK_LIB("libxml2_a_dll.lib;libxml2_a.lib", "zprobe") ||
+		!CHECK_HEADER_ADD_INCLUDE("libxml/parser.h", "CFLAGS_ZPROBE", PHP_PHP_BUILD + "\\include\\libxml2")) {
+		ERROR("libxml2 not found");
+	}
+	if (SETUP_OPENSSL("zprobe", PHP_PHP_BUILD + "\\lib") < 2) {
+		ERROR("OpenSSL not found");
+	}
 }

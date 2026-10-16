@@ -346,8 +346,8 @@ fn toolVars(arena: Allocator, tools: []const Tool) !std.ArrayList(environment.Va
     var vars: std.ArrayList(environment.Var) = .empty;
     var i: usize = 0;
     while (i < tools.len) : (i += 1 + tools[i].brings) {
-        for (tools[i + 1 ..][0..tools[i].brings]) |rt| try environment.expand(arena, &vars, try rt.placeholders(arena), rt.env);
-        try environment.expand(arena, &vars, try tools[i].placeholders(arena), tools[i].env);
+        for (tools[i + 1 ..][0..tools[i].brings]) |rt| try environment.expand(arena, &vars, try rt.placeholders(arena), rt.env, &.{});
+        try environment.expand(arena, &vars, try tools[i].placeholders(arena), tools[i].env, &.{});
     }
     return vars;
 }
@@ -624,7 +624,7 @@ const BuildRoot = struct {
                 try environment.set(arena, &vars, name, "http://127.0.0.1:9");
             try environment.set(arena, &vars, "NO_PROXY", "");
         }
-        try environment.expand(arena, &vars, .{ .app = "", .data = "" }, m.env);
+        try environment.expand(arena, &vars, .{ .app = "", .data = "" }, m.env, &.{});
         const env = try environment.build(arena, ctx.env, .{
             .id = b.id,
             .profile = b.profile,

@@ -1,9 +1,12 @@
 # Checks that the published recipes build the same images on a fresh machine,
-# and runs the end-to-end suites there: the unit tests, then each recipe in
-# scripts/published-recipes.txt built and compared with the image published
-# for the recipe's version (tests/published.sh), then the suites in tests/,
-# which take what they'd download from that build's store. It only verifies;
-# scripts/publish.sh publishes.
+# and runs the end-to-end suites there, in two jobs that run side by side:
+# - published: each recipe in scripts/published-recipes.txt built and
+#   compared with the image published for the recipe's version
+#   (tests/published.sh), then the suites in tests/ that take what they'd
+#   download, and the apps they run, from that build's store;
+# - build: the unit tests, then tests/build.sh, which builds in stores of its
+#   own and downloads what it builds from.
+# It only verifies; scripts/publish.sh publishes.
 name: Reproduce
 
 on:
@@ -21,13 +24,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  reproduce:
+  published:
     runs-on: windows-2025
-    # The job took 31 minutes after iteration 8, zot's vendor step (561 Go
-    # modules) included, and 68 with GTK's images in iteration 10. GTK's
-    # images, the Perl, cargo-c and gettext images only they build with, and
-    # Rnote, which builds with them, are left out until they're stable
-    # locally (see SKIP_RECIPES).
+    # One job took 31 minutes after iteration 8, zot's vendor step (561 Go
+    # modules) included, 68 with GTK's images in iteration 10, and 55 after
+    # iteration 23 with build.sh in it; build.sh has had its own job since.
+    # GTK's images, the Perl, cargo-c and gettext images only they build
+    # with, and Rnote, which builds with them, are left out until they're
+    # stable locally (see SKIP_RECIPES).
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,9 +48,6 @@ jobs:
           t=$RUNNER_TEMP
           printf '%s\n' "TMP=$t" "TEMP=$t" "BUILD_HOME=$t\\store" "SEED_DOWNLOADS=$t\\store\\cache\\downloads" "LOG_DIR=$t\\logs" >>"$GITHUB_ENV"
 
-      - name: Unit tests
-        run: zig build test --summary all
-
       - name: Build zigsaw
         run: zig build
 
@@ -61,11 +62,6 @@ jobs:
           bash tests/published.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/published.txt"
 
       # The suites run whether or not the steps before them passed.
-      - name: tests/build.sh
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: bash tests/build.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/build.txt"
-
       - name: tests/store.sh
         if: ${{ !cancelled() }}
         shell: bash
@@ -119,6 +115,47 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: logs
+          name: logs-published
+          path: ${{ runner.temp }}\logs
+          if-no-files-found: ignore
+
+  build:
+    runs-on: windows-2025
+    # tests/build.sh took 19 minutes in iteration 23, with published.sh's
+    # downloads; here it downloads them itself (BusyBox's from the sources
+    # pushed next to its image, as frippery.org refuses runners).
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+
+      - name: Paths for the steps below
+        shell: bash
+        run: |
+          t=$RUNNER_TEMP
+          printf '%s\n' "TMP=$t" "TEMP=$t" "LOG_DIR=$t\\logs" >>"$GITHUB_ENV"
+
+      - name: Unit tests
+        run: zig build test --summary all
+
+      - name: Build zigsaw
+        run: zig build
+
+      - name: tests/build.sh
+        shell: bash
+        run: |
+          mkdir -p "$(cygpath -u "$LOG_DIR")"
+          bash tests/build.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/build.txt"
+
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: logs-build
           path: ${{ runner.temp }}\logs
           if-no-files-found: ignore

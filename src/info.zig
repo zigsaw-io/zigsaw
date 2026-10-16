@@ -46,6 +46,17 @@ pub fn info(ctx: *Context, image_text: []const u8) !void {
     var runtimes: std.ArrayList([]const u8) = .empty;
     for (cfg.runtimes.map.values()) |r| try runtimes.append(arena, try std.fmt.allocPrint(arena, "{s} {s}", .{ r.id, r.version }));
     try line(w, "runtimes", try std.mem.join(arena, ", ", runtimes.items));
+    if (cfg.extensions) |e| {
+        var pts: std.ArrayList([]const u8) = .empty;
+        for (e.map.keys(), e.map.values()) |name, p| try pts.append(arena, try std.fmt.allocPrint(arena, "{s} {s}", .{ name, p.version }));
+        try line(w, "points", try std.fmt.allocPrint(arena, "{s} (installed extensions of it join its runs)", .{try std.mem.join(arena, ", ", pts.items)}));
+    }
+    if (cfg.extends) |x| try line(w, "extends", try std.fmt.allocPrint(arena, "{s} {s}{s}{s}", .{
+        x.point,
+        x.version,
+        if (x.needs != null) ", after " else "",
+        if (x.needs) |n| try oci.joinAnd(arena, n) else "",
+    }));
     try line(w, "commands", try std.mem.join(arena, ", ", cfg.exports.map.keys()));
     if (cfg.shortcuts) |s| {
         var names: std.ArrayList([]const u8) = .empty;

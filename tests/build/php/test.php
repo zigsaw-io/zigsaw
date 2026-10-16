@@ -12,6 +12,7 @@ check("loaded", extension_loaded("zprobe"), true);
 check("constant", ZPROBE_ANSWER, 42);
 check("loaded by its image's .ini", str_contains((string) php_ini_scanned_files(), "zprobe.ini"), true);
 check("config.w32", zprobe_config(), "hello from config.w32, version info: yes");
+check("libraries PHP has", zprobe_libs(), "zlib 1.3.2 crc 3610a686, from libxml2, OpenSSL 3.5.8");
 check("repeat", zprobe_repeat("ab", 3), "ab,ab,ab");
 check("repeat sep", zprobe_repeat("x", 4, "--"), "x--x--x--x");
 check("repeat 0", zprobe_repeat("x", 0), "");

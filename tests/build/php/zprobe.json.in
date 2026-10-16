@@ -2,7 +2,8 @@
   "id": "test.build.phpext",
   "version": "1",
   "command": "about.bat",
-  "env": { "PHP_EXT_ZPROBE": "${app}" },
+  "env": { "PHP_EXT_ZPROBE": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d" },
+  "extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17" },
   "exports": {},
   "sdk": { "phpsdk": "net.php.php.Sdk@@PHPSDK@" },
   "modules": [
@@ -12,7 +13,8 @@
         { "path": "zprobe/config.w32", "dest": "config.w32" },
         { "path": "zprobe/zprobe.c", "dest": "zprobe.c" },
         { "path": "zprobe/src/greet.c", "dest": "src/greet.c" },
-        { "path": "zprobe/src/greet.h", "dest": "src/greet.h" }
+        { "path": "zprobe/src/greet.h", "dest": "src/greet.h" },
+        { "path": "zprobe/src/libs.c", "dest": "src/libs.c" }
       ],
       "build": ["php-ext build"]
     }

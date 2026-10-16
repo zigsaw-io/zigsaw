@@ -87,9 +87,56 @@ pub fn build(arena: Allocator, host: *const std.process.Environ.Map, spec: Spec)
 }
 
 /// Adds a config's variables to `env`, with their placeholders expanded.
-pub fn expand(arena: Allocator, env: *std.ArrayList(Var), placeholders: oci.Placeholders, vars: std.json.ArrayHashMap([]const u8)) !void {
+/// Those named in `join` add to the value `env` has (see `join`); the rest
+/// replace it.
+pub fn expand(arena: Allocator, env: *std.ArrayList(Var), placeholders: oci.Placeholders, vars: std.json.ArrayHashMap([]const u8), joined: []const []const u8) !void {
     var it = vars.map.iterator();
-    while (it.next()) |kv| try set(arena, env, kv.key_ptr.*, try placeholders.expand(arena, kv.value_ptr.*));
+    while (it.next()) |kv| {
+        const value = try placeholders.expand(arena, kv.value_ptr.*);
+        const joins = for (joined) |name| {
+            if (std.os.windows.eqlIgnoreCaseWtf8(name, kv.key_ptr.*)) break true;
+        } else false;
+        try if (joins) join(arena, env, kv.key_ptr.*, value) else set(arena, env, kv.key_ptr.*, value);
+    }
+}
+
+/// Adds the ';'-separated entries of `value` after those of the variable,
+/// leaving out any it has (case-insensitively, as Windows paths compare), as
+/// extension points join variables (see oci.ExtensionPoint).
+pub fn join(arena: Allocator, env: *std.ArrayList(Var), name: []const u8, value: []const u8) !void {
+    for (env.items) |*kv| {
+        if (!std.os.windows.eqlIgnoreCaseWtf8(kv.name, name)) continue;
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(arena, kv.value);
+        var entries = std.mem.tokenizeScalar(u8, value, ';');
+        next: while (entries.next()) |entry| {
+            var have = std.mem.tokenizeScalar(u8, out.items, ';');
+            while (have.next()) |h| if (std.os.windows.eqlIgnoreCaseWtf8(h, entry)) continue :next;
+            if (out.items.len > 0) try out.append(arena, ';');
+            try out.appendSlice(arena, entry);
+        }
+        kv.value = out.items;
+        return;
+    }
+    try env.append(arena, .{ .name = name, .value = value });
+}
+
+test join {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var env: std.ArrayList(Var) = .empty;
+    try join(arena, &env, "SCAN", "C:\\a\\conf.d");
+    try join(arena, &env, "scan", "C:\\b\\conf.d;c:\\A\\conf.d;;C:\\c");
+    try set(arena, &env, "OTHER", "x");
+    try std.testing.expectEqualStrings("C:\\a\\conf.d;C:\\b\\conf.d;C:\\c", env.items[0].value);
+
+    var vars: std.json.ArrayHashMap([]const u8) = .{};
+    try vars.map.put(arena, "Scan", "${app}\\d");
+    try vars.map.put(arena, "OTHER", "${app}");
+    try expand(arena, &env, .{ .app = "D:\\x", .data = "" }, vars, &.{"SCAN"});
+    try std.testing.expectEqualStrings("C:\\a\\conf.d;C:\\b\\conf.d;C:\\c;D:\\x\\d", env.items[0].value);
+    try std.testing.expectEqualStrings("D:\\x", env.items[1].value);
 }
 
 /// Sets a variable, replacing any existing one whose name matches

@@ -12,7 +12,12 @@
 // php_<ext>.dll, conf.d\<ext>.ini and about.bat into --out: $PREFIX in a
 // build, the extension's directory otherwise. The .ini loads the DLL from
 // the directory ${PHP_EXT_<EXT>} names, which an extension image's env
-// sets to ${app}.
+// sets to ${app}. For extensions that build with this one, it also writes
+// the DLL's import library into lib\ and the headers config.w32 installs
+// into include\; extensions whose PHP_EXT_<EXT> names such a directory, as
+// their images do as SDKs of a recipe, can depend on it (ADD_EXTENSION_DEP).
+// The headers and import libraries of the libraries PHP's build is linked
+// with (deps\, from php.net's deps packages) are where config.w32 looks.
 //
 // test runs PHP's run-tests.php with this SDK's php.exe and the given
 // extensions, in parallel, then again one at a time for the tests that
@@ -84,8 +89,14 @@ function build(string $dev, array $args): int
 
     $flags = $config['flags'];
     $base = array_merge(
-        ['-O2', '-fms-extensions', '-Wno-date-time', '-include', "$dev/zigsaw/zig-php.h", "-I$tmp", '-I.'],
+        // Calling an undeclared function is a warning for MSVC (C4013), and
+        // extensions do, as redis does PHP's usleep and gettimeofday.
+        ['-O2', '-fms-extensions', '-Wno-date-time', '-Wno-error=implicit-function-declaration',
+         '-include', "$dev/zigsaw/zig-php.h", "-I$tmp", '-I.'],
         array_map(fn($d) => "-I$dev/include$d", ['', '/main', '/Zend', '/TSRM', '/ext']),
+        // The headers of the libraries PHP's build links with, which its
+        // configure puts on every compile's include path too.
+        is_dir("$dev/deps/include") ? ["-I$dev/deps/include"] : [],
         ['-D_WINDOWS', '-DWINDOWS=1', '-DZEND_WIN32=1', '-DPHP_WIN32=1', '-DWIN32', '-D_MBCS', '-D_USE_MATH_DEFINES',
          '-DNDebug', '-DNDEBUG', '-DZEND_DEBUG=0'],
         msvcFlags($flags['CFLAGS'] ?? ''),
@@ -114,9 +125,11 @@ function build(string $dev, array $args): int
             linkFlags(($flags['LDFLAGS'] ?? '') . ' ' . ($flags["LDFLAGS_$EXT"] ?? '')),
         );
         $dll = "$out/{$ext['dll']}";
-        // The import library, which zig writes next to the DLL otherwise,
-        // named after the first object, stays out of it.
-        $implib = "-Wl,--out-implib,$tmp/" . preg_replace('/\.dll$/i', '.lib', $ext['dll']);
+        // The import library goes in lib\, for extensions that link with
+        // this one (zig writes it next to the DLL otherwise, named after the
+        // first object).
+        if (!is_dir("$out/lib")) mkdir("$out/lib");
+        $implib = "-Wl,--out-implib,$out/lib/" . preg_replace('/\.dll$/i', '.lib', $ext['dll']);
         run(array_merge(['cc', '-shared', '-o', $dll], array_column($compiles, 2), ["$dev/lib/php8.lib"], array_unique($libs), $ldflags, [$implib]));
 
         // The .ini and about.bat an extension image carries.
@@ -131,12 +144,18 @@ function build(string $dev, array $args): int
         file_put_contents("$out/about.bat", implode("\r\n", [
             '@echo off',
             "echo This image is the PHP extension $name, for PHP $php (NTS, x64, API $api).",
-            "echo An app loads it by listing this image in its runtimes, next to PHP's,",
-            "echo and adding its conf.d to PHP_INI_SCAN_DIR, separated by ;",
+            "echo Installed, it joins every run of PHP, and of apps that have PHP as a runtime;",
+            "echo zigsaw run --noextension=^<its id^> leaves it out.",
             '',
         ]));
         fwrite(STDOUT, "php-ext: built $dll\n");
         $built++;
+    }
+    // The headers config.w32 installs, for extensions that build with this one.
+    foreach ($config['headers'] as $h) {
+        $dest = "$out/include/{$h['dest']}";
+        if (!is_dir(dirname($dest))) mkdir(dirname($dest), 0777, true);
+        copy($h['file'], $dest) || throw new RuntimeException("can't copy {$h['file']}");
     }
     removeTree($tmp);
     return $built > 0 ? 0 : 1;
@@ -203,10 +222,11 @@ function linkFlags(string $flags): array
 }
 
 // A library config.w32 names: one of PHP's own (php_foo.lib, in the devel
-// pack), a file in a directory /libpath gave, or one of Windows'.
+// pack), one PHP's build links with (in deps), a file in a directory
+// /libpath gave, or one of Windows'.
 function libArg(string $dev, string $lib): string
 {
-    if (is_file("$dev/lib/$lib")) return "$dev/lib/$lib";
+    foreach (["$dev/lib/$lib", "$dev/deps/lib/$lib"] as $f) if (is_file($f)) return $f;
     return '-l' . preg_replace('/\.lib$/i', '', $lib);
 }
 

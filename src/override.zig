@@ -27,10 +27,17 @@ pub const Settings = struct {
     nofilesystem: []const []const u8 = &.{},
     /// "NAME=VALUE" environment variables, set over the app's own.
     env: []const []const u8 = &.{},
+    /// Installed extensions, by id, that don't join the app's runs, which
+    /// they otherwise do (see extensions.zig).
+    noextension: []const []const u8 = &.{},
+    /// Extensions a layer below leaves out, by id, that this one has join
+    /// the runs again. Merging uses them up: a merge's result has none.
+    extension: []const []const u8 = &.{},
 
     pub fn isEmpty(s: Settings) bool {
         return s.sandbox == null and s.network == null and s.ephemeral == null and
-            s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.env.len == 0;
+            s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.env.len == 0 and
+            s.noextension.len == 0 and s.extension.len == 0;
     }
 
     /// `upper` over `lower`. For the lists, an entry of `upper` replaces
@@ -41,9 +48,10 @@ pub const Settings = struct {
             .sandbox = upper.sandbox orelse lower.sandbox,
             .network = upper.network orelse lower.network,
             .ephemeral = upper.ephemeral orelse lower.ephemeral,
-            .filesystem = try mergeList(arena, try without(arena, lower.filesystem, upper.nofilesystem), upper.filesystem, grantPath),
-            .nofilesystem = try mergeList(arena, try without(arena, lower.nofilesystem, upper.filesystem), upper.nofilesystem, grantPath),
+            .filesystem = try mergeList(arena, try without(arena, lower.filesystem, upper.nofilesystem, grantPath), upper.filesystem, grantPath),
+            .nofilesystem = try mergeList(arena, try without(arena, lower.nofilesystem, upper.filesystem, grantPath), upper.nofilesystem, grantPath),
             .env = try mergeList(arena, lower.env, upper.env, envName),
+            .noextension = try mergeList(arena, try without(arena, lower.noextension, upper.extension, itself), upper.noextension, itself),
         };
     }
 
@@ -51,6 +59,25 @@ pub const Settings = struct {
     /// settings.
     pub fn filesystemFor(s: Settings, arena: Allocator, app_permissions: []const []const u8) ![]const []const u8 {
         return (try merge(arena, .{ .filesystem = app_permissions }, s)).filesystem;
+    }
+
+    /// As saved: without the options left unset, and without the extension
+    /// lists when empty, so that a zigsaw from before them still reads it.
+    pub fn jsonStringify(s: Settings, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (std.meta.fields(Settings)) |f| {
+            const v = @field(s, f.name);
+            const extension_list = comptime std.mem.eql(u8, f.name, "noextension") or std.mem.eql(u8, f.name, "extension");
+            const skip = switch (@typeInfo(f.type)) {
+                .optional => v == null,
+                else => if (extension_list) v.len == 0 else false,
+            };
+            if (!skip) {
+                try jw.objectField(f.name);
+                try jw.write(v);
+            }
+        }
+        try jw.endObject();
     }
 
     /// As the command-line options that set them.
@@ -80,6 +107,14 @@ pub const Settings = struct {
             try w.print("{s}--env={s}", .{ sep, e });
             sep = " ";
         }
+        for (s.noextension) |id| {
+            try w.print("{s}--noextension={s}", .{ sep, id });
+            sep = " ";
+        }
+        for (s.extension) |id| {
+            try w.print("{s}--extension={s}", .{ sep, id });
+            sep = " ";
+        }
     }
 };
 
@@ -100,18 +135,21 @@ fn mergeList(arena: Allocator, lower: []const []const u8, upper: []const []const
     return out.items;
 }
 
-/// The filesystem permissions of `list` whose location none of `locations`
-/// names.
-fn without(arena: Allocator, list: []const []const u8, locations: []const []const u8) ![]const []const u8 {
-    if (locations.len == 0) return list;
+/// The entries of `list` whose key none of `others` has.
+fn without(arena: Allocator, list: []const []const u8, others: []const []const u8, key: fn ([]const u8) []const u8) ![]const []const u8 {
+    if (others.len == 0) return list;
     var out: std.ArrayList([]const u8) = .empty;
-    for (list) |spec| {
-        const named = for (locations) |l| {
-            if (std.os.windows.eqlIgnoreCaseWtf8(grantPath(spec), grantPath(l))) break true;
+    for (list) |entry| {
+        const named = for (others) |o| {
+            if (std.os.windows.eqlIgnoreCaseWtf8(key(entry), key(o))) break true;
         } else false;
-        if (!named) try out.append(arena, spec);
+        if (!named) try out.append(arena, entry);
     }
     return out.items;
+}
+
+fn itself(id: []const u8) []const u8 {
+    return id;
 }
 
 /// A filesystem permission without its ":ro" or ":rw".
@@ -215,6 +253,24 @@ test "Settings.merge: --nofilesystem takes away what the layers below grant, unt
     try std.testing.expect(!(Settings{ .nofilesystem = &.{"cwd"} }).isEmpty());
 }
 
+test "Settings.merge: --noextension leaves an extension out until a layer above has it join again" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const saved: Settings = .{ .noextension = &.{ "net.php.php.Xdebug", "net.php.php.APCu" } };
+    const command_line: Settings = .{ .extension = &.{"NET.php.php.xdebug"}, .noextension = &.{"x.y"} };
+    const s = try Settings.merge(arena, saved, command_line);
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "net.php.php.APCu", "x.y" }), s.noextension);
+    try std.testing.expectEqual(0, s.extension.len);
+    // What `override --extension` saves: nothing, once nothing's left out.
+    try std.testing.expect((try Settings.merge(arena, .{ .noextension = &.{"a"} }, .{ .extension = &.{"a"} })).isEmpty());
+
+    var buf: [256]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    try (Settings{ .noextension = &.{"a"}, .extension = &.{"b"} }).format(&w);
+    try std.testing.expectEqualStrings("--noextension=a --extension=b", w.buffered());
+}
+
 test "Settings round-trips through JSON" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
@@ -222,4 +278,8 @@ test "Settings round-trips through JSON" {
     const s: Settings = .{ .sandbox = .appcontainer, .network = true, .filesystem = &.{"D:\\src:ro"} };
     const json = try oci.toJson(arena, s);
     try std.testing.expectEqualDeep(s, try std.json.parseFromSliceLeaky(Settings, arena, json, .{}));
+    // zigsaw 0.23 reads settings without the extension lists.
+    try std.testing.expect(std.mem.indexOf(u8, json, "extension") == null);
+    const x: Settings = .{ .noextension = &.{"a.b"} };
+    try std.testing.expectEqualDeep(x, try std.json.parseFromSliceLeaky(Settings, arena, try oci.toJson(arena, x), .{}));
 }

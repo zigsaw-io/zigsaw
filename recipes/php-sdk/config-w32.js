@@ -28,6 +28,7 @@ if (!fs.existsSync(configW32)) {
 // What config.w32 records, read by php-ext.php.
 const out = {
   extensions: [], // { name, dll, zend }
+  headers: [], // PHP_INSTALL_HEADERS: { file, dest } under include\
   sources: [], // { file, target }
   flags: {}, // configure_subst: CFLAGS_FOO, LIBS_FOO, LDFLAGS_FOO...
   defines: {}, // AC_DEFINE: name -> value as C source
@@ -58,6 +59,31 @@ function resolve(p) {
   return path.resolve(extDir, String(p).replace(/\\/g, "/"));
 }
 
+// The libraries PHP's build is linked with, as its deps packages have them:
+// headers in include\, import libraries in lib\ (see recipes/php-sdk.json).
+// confutils.js calls this directory PHP_PHP_BUILD.
+const depsDir = path.join(devDir, "deps");
+
+// Directories a pattern names: confutils globs the last part ("libxml2*").
+function globDirs(p) {
+  p = resolve(p);
+  if (!/[*?]/.test(path.basename(p))) return [p];
+  const parent = path.dirname(p);
+  const re = new RegExp("^" + path.basename(p).replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
+  if (!fs.existsSync(parent)) return [];
+  return fs.readdirSync(parent).filter((n) => re.test(n)).sort().map((n) => path.join(parent, n));
+}
+
+// Other extensions built by php-ext that this one may depend on: those whose
+// directory a PHP_EXT_<NAME> variable names, as their images' env does in
+// builds that have them as SDKs. php-ext put their headers in include\ext
+// and their import library, lib\php_<name>.lib, there.
+const peers = Object.keys(process.env)
+  .map((k) => k.match(/^PHP_EXT_([A-Z0-9_]+)$/i))
+  .filter(Boolean)
+  .map((m) => ({ name: m[1].toLowerCase(), dir: process.env[m[0]] }))
+  .filter((p) => fs.existsSync(path.join(p.dir, "lib", "php_" + p.name + ".lib")));
+
 const host = {
   out,
   options,
@@ -71,14 +97,23 @@ const host = {
   isFile: (p) => fs.existsSync(resolve(p)) && fs.statSync(resolve(p)).isFile(),
   isDir: (p) => fs.existsSync(resolve(p)) && fs.statSync(resolve(p)).isDirectory(),
   read: (p) => fs.readFileSync(resolve(p), "latin1"),
-  // Include directories CHECK_HEADER_ADD_INCLUDE searches after its own.
+  globDirs,
+  depsDir: fs.existsSync(depsDir) ? depsDir : "no",
+  // Include directories CHECK_HEADER_ADD_INCLUDE searches after its own:
+  // PHP's, then its libraries', then Windows'.
   includeDirs: [
     path.join(devDir, "include"),
     path.join(devDir, "include", "main"),
     path.join(devDir, "include", "Zend"),
     path.join(devDir, "include", "TSRM"),
     path.join(devDir, "include", "ext"),
-  ].concat((process.env.PHP_EXT_SYSTEM_INCLUDE || "").split(";").filter(Boolean)),
+    path.join(depsDir, "include"),
+  ]
+    .concat(peers.map((p) => path.join(p.dir, "include", "ext", p.name)))
+    .concat((process.env.PHP_EXT_SYSTEM_INCLUDE || "").split(";").filter(Boolean)),
+  // Library directories CHECK_LIB searches after its own.
+  libDirs: [path.join(depsDir, "lib")],
+  peers,
   // Windows' libraries that zig's MinGW import libraries cover, by name.
   systemLibs: new Set((process.env.PHP_EXT_SYSTEM_LIBS || "").split(";").filter(Boolean).map((s) => s.toLowerCase())),
   version: (() => {
@@ -93,7 +128,7 @@ const host = {
 const prelude = String.raw`
 var MODE_PHPIZE = true, PHP_DEBUG = "no", PHP_DEBUG_PACK = "no", PHP_ZTS = "no",
   PHP_ALL_SHARED = "yes", PHP_ANALYZER = "no", PHP_SANITIZER = "no", PHP_PGI = "no", PHP_PGO = "no",
-  PHP_PHP_BUILD = "no", PHP_EXTRA_INCLUDES = "", PHP_EXTRA_LIBS = "", PHP_SECURITY_FLAGS = "yes",
+  PHP_PHP_BUILD = __host.depsDir, PHP_EXTRA_INCLUDES = "", PHP_EXTRA_LIBS = "", PHP_SECURITY_FLAGS = "yes",
   X64 = true, TARGET_ARCH = "x64", HOST_ARCH = "x64", VS_TOOLSET = false, CLANG_TOOLSET = true, ICC_TOOLSET = false,
   VCVERS = 1944, COMPILER_NAME_LONG = "zig cc", COMPILER_NAME_SHORT = "clang", PHP_DIR = "";
 var PHP_VERSION = __host.version.major, PHP_MINOR_VERSION = __host.version.minor,
@@ -101,6 +136,10 @@ var PHP_VERSION = __host.version.major, PHP_MINOR_VERSION = __host.version.minor
 var configure_module_dirname = ".";
 var configure_args = [], configure_hdr = {}, extensions_enabled = [];
 var __first_arg = true;
+// As configure defines them for PHP's NTS build; igbinary tells PHP's
+// version by them.
+DEFINE("PHPDLL", "php" + PHP_VERSION + ".dll");
+DEFINE("PHPLIB", "php" + PHP_VERSION + ".lib");
 
 function __arg(type, optname, helptext, defval) {
   var sym = optname.toUpperCase().replace(/-/g, "_");
@@ -182,22 +221,59 @@ function ADD_EXTENSION_DEP(extname, dependson, optional) {
   return true;
 }
 
+// Libraries PHP's build links into php8.dll, which exports their functions:
+// an extension gets them from php8.lib, as its own build gets them from the
+// static library, whenever PHP has the extension built in.
+var __php8_libs = {
+  "zlib_a.lib": "ZLIB", "zlib.lib": "ZLIB",
+  "libxml2_a.lib": "LIBXML", "libxml2_a_dll.lib": "LIBXML", "libxml2.lib": "LIBXML",
+  "libiconv_a.lib": "ICONV", "libiconv.lib": "ICONV", "iconv_a.lib": "ICONV", "iconv.lib": "ICONV",
+};
+function __builtin(ext) {
+  var v = globalThis["PHP_" + ext];
+  return v != null && v !== false && v != "no" && !globalThis["PHP_" + ext + "_SHARED"];
+}
+
+// The directories a ;-separated list names, patterns expanded.
+function __dirs(list) {
+  var out = [], parts = list ? String(list).split(";") : [];
+  for (var i = 0; i < parts.length; i++) if (parts[i]) out = out.concat(__host.globDirs(parts[i]));
+  return out;
+}
+
+// As confutils': the given directories, the package's own under
+// PHP_PHP_BUILD (common_name, or the target), then the libraries' lib\;
+// in each, the file itself or under lib\, libs\ or Release\.
 function CHECK_LIB(libnames, target, path_to_check, common_name) {
+  if (common_name == null && target != null) common_name = target;
+  var paths = path_to_check ? String(path_to_check) : "";
+  if (common_name != null && PHP_PHP_BUILD != "no")
+    paths += ";" + PHP_PHP_BUILD + "\\" + common_name + "*;" + PHP_PHP_BUILD + "\\lib\\" + common_name + "*";
+  var dirs = __dirs(paths).concat(__host.libDirs);
   var names = String(libnames).split(";");
+  var T = target ? "_" + target.toUpperCase() : "";
   for (var i = 0; i < names.length; i++) {
+    if (!names[i]) continue;
     var lib = names[i].replace(/\.lib$/i, "").toLowerCase();
+    var php8 = __php8_libs[names[i].toLowerCase()];
+    if (php8 && __builtin(php8)) {
+      __host.note("Checking for library " + libnames + " ... php8.lib (PHP has " + php8.toLowerCase() + " built in)");
+      return true;
+    }
     var found = __host.systemLibs.has(lib);
-    if (!found && path_to_check) {
-      var dirs = String(path_to_check).split(";");
-      for (var j = 0; j < dirs.length && !found; j++)
-        if (dirs[j] && (__host.isFile(dirs[j] + "/" + names[i]) || __host.isFile(dirs[j] + "/lib" + lib + ".a"))) {
+    for (var j = 0; j < dirs.length && !found; j++) {
+      var subs = ["", "/lib", "/libs", "/Release"];
+      for (var k = 0; k < subs.length && !found; k++) {
+        var d = dirs[j] + subs[k];
+        if (__host.isFile(d + "/" + names[i]) || __host.isFile(d + "/lib" + lib + ".a")) {
           found = true;
-          ADD_FLAG("LDFLAGS" + (target ? "_" + target.toUpperCase() : ""), "/libpath:" + dirs[j]);
+          ADD_FLAG("LDFLAGS" + T, "/libpath:" + d);
         }
+      }
     }
     if (found) {
       __host.note("Checking for library " + libnames + " ... " + names[i]);
-      ADD_FLAG("LIBS" + (target ? "_" + target.toUpperCase() : ""), names[i]);
+      ADD_FLAG("LIBS" + T, names[i]);
       return true;
     }
   }
@@ -206,7 +282,7 @@ function CHECK_LIB(libnames, target, path_to_check, common_name) {
 }
 
 function __search(header, paths) {
-  var dirs = (paths ? String(paths).split(";") : []).concat(__host.includeDirs);
+  var dirs = __dirs(paths).concat(__host.includeDirs);
   for (var i = 0; i < dirs.length; i++)
     if (dirs[i] && __host.isFile(dirs[i] + "/" + header)) return dirs[i];
   return false;
@@ -241,15 +317,43 @@ function CHECK_FUNC_IN_HEADER(header_name, func_name, path_to_check, add_to_flag
   return have;
 }
 
-// What a phpize build doesn't need: headers to install, dist files.
-function PHP_INSTALL_HEADERS() {}
+// Headers for other extensions to build with, which php-ext copies into
+// include\<dir>, keeping each one's path under the extension's directory.
+function PHP_INSTALL_HEADERS(dir, headers_list) {
+  var list = trim(headers_list).split(/\s+/).sort();
+  dir = String(dir).replace(/\\/g, "/").replace(/\/?$/, "/");
+  for (var i = 0; i < list.length; i++) {
+    if (!list[i]) continue;
+    var src = list[i].replace(/\\/g, "/");
+    var file = (configure_module_dirname + "/" + src).replace(/\\/g, "/");
+    if (!__host.isFile(file)) { __host.note("php-ext: leaving out the header " + src + ", which isn't there"); continue; }
+    __host.out.headers.push({ file: file, dest: dir + src });
+  }
+}
+// What a phpize build doesn't need: dist files.
 function ADD_DIST_FILE() {}
 function ADD_MAKEFILE_FRAGMENT(f) { __host.note("php-ext: leaving out the Makefile fragment " + f); }
 function ADD_DEF_FILE(f) { __host.note("php-ext: leaving out the .def file " + f); }
-// PHP's own build's libraries, which the devel pack doesn't have.
-function SETUP_ZLIB_LIB() { return false; }
-function SETUP_OPENSSL() { return 0; }
-function SETUP_SQLITE3() { return false; }
+// As confutils': zlib is PHP's own when it's built in; OpenSSL 1.1 or later
+// is 2.
+function SETUP_ZLIB_LIB(target, path_to_check) {
+  return __builtin("ZLIB") || CHECK_LIB("zlib_a.lib;zlib.lib", target, path_to_check);
+}
+function SETUP_OPENSSL(target, path_to_check, common_name, use_env, add_dir_part, add_to_flag_only) {
+  var cflags = "CFLAGS_" + target.toUpperCase();
+  if (CHECK_LIB("libcrypto.lib", target, path_to_check) &&
+      CHECK_LIB("libssl.lib", target, path_to_check) &&
+      CHECK_LIB("crypt32.lib", target, path_to_check, common_name) &&
+      CHECK_HEADER_ADD_INCLUDE("openssl/ssl.h", cflags, path_to_check, use_env, add_dir_part, add_to_flag_only))
+    return 2;
+  return 0;
+}
+function SETUP_SQLITE3(target, path_to_check, shared) {
+  var cflags = "CFLAGS_" + target.toUpperCase();
+  return CHECK_LIB(shared ? "libsqlite3.lib;libsqlite3_a.lib" : "libsqlite3_a.lib;libsqlite3.lib", target, path_to_check) &&
+    CHECK_HEADER_ADD_INCLUDE("sqlite3.h", cflags) &&
+    CHECK_HEADER_ADD_INCLUDE("sqlite3ext.h", cflags);
+}
 
 function MESSAGE(msg) { __host.note("" + msg); }
 function WARNING(msg) { __host.note("WARNING: " + msg); }
@@ -282,6 +386,17 @@ try {
   const deps = path.join(devDir, "script", "ext_deps.js");
   vm.runInContext(prelude, context, { filename: "config-w32.js" });
   if (fs.existsSync(deps)) vm.runInContext(fs.readFileSync(deps, "latin1"), context, { filename: deps });
+  // The other extensions found are there as DLLs, as PHP's own shared ones.
+  vm.runInContext(String.raw`
+    for (var __i = 0; __i < __host.peers.length; __i++) {
+      var __p = __host.peers[__i], __N = __p.name.toUpperCase();
+      if (globalThis["PHP_" + __N] != null) continue;
+      globalThis["PHP_" + __N] = "yes";
+      globalThis["PHP_" + __N + "_SHARED"] = true;
+      ADD_FLAG("CFLAGS", '/I "' + __p.dir + '\\include\\ext"');
+      ADD_FLAG("LDFLAGS", "/libpath:" + __p.dir + "\\lib");
+      __host.note("php-ext: " + __p.name + " is there, in " + __p.dir);
+    }`, context, { filename: "config-w32.js" });
   vm.runInContext(fs.readFileSync(configW32, "latin1"), context, { filename: configW32 });
 } catch (e) {
   if (e instanceof ReferenceError) host.fail(`${configW32} uses ${e.message.replace(/ is not defined$/, "")}, which php-ext doesn't provide`);

@@ -1,0 +1,26 @@
+{
+  "id": "net.php.php.SSH2",
+  "version": "1.5.0",
+  "name": "SSH2 for PHP 8.5",
+  "summary": "ssh2, SSH and SFTP for PHP through the libssh2 PHP ships, as an extension built with zig; once installed, PHP loads it",
+  "homepage": "https://pecl.php.net/package/ssh2",
+  "license": "PHP-3.01",
+  "command": "about.bat",
+  "env": { "PHP_EXT_SSH2": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d" },
+  "extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17" },
+  "exports": {},
+  "sdk": { "phpsdk": "net.php.php.Sdk:8.5.11@sha256:b8828d57c9aaf22e1093b84f2e1c2a60004d189a27ca6e884505076af0786656" },
+  "modules": [
+    {
+      "name": "ssh2",
+      "sources": [
+        {
+          "url": "https://pecl.php.net/get/ssh2-1.5.0.tgz",
+          "sha256": "a943427fae39a5503c813179018ae6c500323c8c9fb434e1a9a665fb32a4d7b4",
+          "strip": 1
+        }
+      ],
+      "build": ["php-ext build --with-ssh2"]
+    }
+  ]
+}

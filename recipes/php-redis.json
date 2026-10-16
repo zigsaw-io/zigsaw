@@ -1,0 +1,29 @@
+{
+  "id": "net.php.php.Redis",
+  "version": "6.3.0",
+  "name": "PhpRedis for PHP 8.5",
+  "summary": "PhpRedis, a client for Redis and Valkey, as an extension built with zig, with igbinary's serializer; once installed with igbinary, PHP loads it",
+  "homepage": "https://github.com/phpredis/phpredis",
+  "license": "PHP-3.01",
+  "command": "about.bat",
+  "env": { "PHP_EXT_REDIS": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d" },
+  "extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17", "needs": ["net.php.php.Igbinary"] },
+  "exports": {},
+  "sdk": {
+    "phpsdk": "net.php.php.Sdk:8.5.11@sha256:b8828d57c9aaf22e1093b84f2e1c2a60004d189a27ca6e884505076af0786656",
+    "igbinary": "net.php.php.Igbinary:3.2.17RC1@sha256:8596d692f8949936855ccf855e3eaccb7e463767143d1e1838456b9e924fe64c"
+  },
+  "modules": [
+    {
+      "name": "redis",
+      "sources": [
+        {
+          "url": "https://pecl.php.net/get/redis-6.3.0.tgz",
+          "sha256": "0d5141f634bd1db6c1ddcda053d25ecf2c4fc1c395430d534fd3f8d51dd7f0b5",
+          "strip": 1
+        }
+      ],
+      "build": ["php-ext build --enable-redis --enable-redis-igbinary"]
+    }
+  ]
+}

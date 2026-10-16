@@ -1,0 +1,31 @@
+{
+  "id": "net.php.php.Igbinary",
+  "version": "3.2.17RC1",
+  "name": "igbinary for PHP 8.5",
+  "summary": "igbinary, a compact binary serializer for PHP, as an extension built with zig; once installed, PHP loads it",
+  "homepage": "https://github.com/igbinary/igbinary",
+  "license": "BSD-3-Clause",
+  "command": "about.bat",
+  "env": { "PHP_EXT_IGBINARY": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d" },
+  "extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17" },
+  "exports": {},
+  "sdk": { "phpsdk": "net.php.php.Sdk:8.5.11@sha256:b8828d57c9aaf22e1093b84f2e1c2a60004d189a27ca6e884505076af0786656" },
+  "modules": [
+    {
+      "name": "igbinary",
+      "sources": [
+        {
+          "url": "https://pecl.php.net/get/igbinary-3.2.17RC1.tgz",
+          "sha256": "91da821443db125282a6aea039f24588dd28ff5d71e8187f6ecc41165bceafbc",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "sed -i 's/defined(_MSC_VER) && _MSC_VER >= 1800/1/' src/php7/ig_win32.h",
+        "sed -i 's/^#ifdef _MSC_VER$/#ifdef _WIN32/' src/php7/igbinary_bswap.h",
+        "grep -q '^# if 1$' src/php7/ig_win32.h && grep -q '^#ifdef _WIN32$' src/php7/igbinary_bswap.h",
+        "php-ext build"
+      ]
+    }
+  ]
+}

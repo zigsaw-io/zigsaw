@@ -117,6 +117,52 @@ an [image source](#images-as-sources) can.
 A pinned runtime doesn't change by itself: moving Prettier to a newer Node
 is an edit to its recipe, like a new source hash.
 
+## Extension points
+
+Some images are made to be added to a runtime after the fact, as a
+Flatpak runtime's extensions are: PHP's extensions to PHP. A runtime (or
+any app) declares an extension point, and an image that `extends` it joins
+every run of whatever has the point, once installed, without apps listing
+it. PHP's runtime ([`recipes/php.json`](recipes/php.json)):
+
+```json
+"extensions": {
+  "net.php.php": { "version": "API20250925,NTS,VS17", "join": ["PHP_INI_SCAN_DIR"] }
+}
+```
+
+and an extension ([`recipes/php-redis.json`](recipes/php-redis.json)):
+
+```json
+"env": { "PHP_EXT_REDIS": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d" },
+"extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17", "needs": ["net.php.php.Igbinary"] }
+```
+
+- **Which join**: the installed images that extend one of the run's
+  points (the app's own, then those its runtimes have; an app that has PHP
+  as a runtime has PHP's), at the point's `version`. Another version's
+  don't, with a note on every run saying why, as an extension built for
+  another PHP wouldn't load.
+- **In what order**: by id, each after the extensions it `needs`. An
+  extension whose needs aren't there doesn't join either, with a note.
+- **As what**: like a runtime the app didn't list. Its directory is
+  `${app}` in its own `path` and `env`; its PATH entries go after the
+  runtimes', its variables after theirs and before the app's. The variables
+  a point `join`s add up instead of replacing each other: each value's
+  `;`-separated entries go after those already there, without repeats, so
+  each extension adds its `conf.d` to `PHP_INI_SCAN_DIR`. The app's own
+  entries come last.
+- **Not**: an extension the app lists as a runtime itself (its pinned copy
+  is the one), one `--noextension=<id>` leaves out (`run` or `override`;
+  `--extension=<id>` has it join again), nor anything in builds, which have
+  only the images their recipes pin. An extension's aliases aren't used,
+  and an extension can't have runtimes of its own.
+
+What runs therefore depends on what's installed, as with Flatpak's
+extensions; `zigsaw run -v` lists them, and `list` shows which images have
+points and what extends them. A zigsaw from before 0.24 ignores both
+fields: extensions then install as apps of their own, and join nothing.
+
 ## Images as sources
 
 A module can take another image's own files, as Flatpak makes a runtime
@@ -1046,16 +1092,24 @@ zig's clang, which that PHP loads as it loads MSVC's builds:
 
 - **[`net.php.php.Sdk`](recipes/php-sdk.json)** is PHP's zip with its devel
   pack in `dev` (the headers, the import libraries of `php8.dll` and of the
-  extensions that are DLLs, `run-tests.php`), and `php-ext`, which builds an
-  extension from its sources. Its runtimes are zig, BusyBox and Node, which
-  builds that use it get too. It exports `php-ext`.
+  extensions that are DLLs, `run-tests.php`), the headers and import
+  libraries of the libraries PHP ships in `dev\deps`
+  ([below](#libraries-php-ships)), and `php-ext`, which builds an extension
+  from its sources. Its runtimes are zig, BusyBox and Node, which builds that
+  use it get too. It exports `php-ext`.
 - **[`net.php.php`](recipes/php.json)** is the runtime: the SDK image's files
   without `dev` ([image source](#images-as-sources)). As an app it exports
   `php`, `php-cgi` and `phpdbg`, with the network and the working directory.
-- **[`net.php.php.APCu`](recipes/php-apcu.json)** (APCu 5.1.28) and
-  **[`net.php.php.Xdebug`](recipes/php-xdebug.json)** (Xdebug 3.5.3) are
-  extensions, each an image of its own that apps list as a runtime next to
-  PHP's ([below](#apps-with-extensions)).
+  It has an [extension point](#extension-points), `net.php.php`, which
+  PHP's extensions plug into.
+- **Extensions**, each an image of its own that, installed, joins every run
+  of PHP ([below](#apps-with-extensions)):
+  [`net.php.php.APCu`](recipes/php-apcu.json) (APCu 5.1.28),
+  [`net.php.php.Xdebug`](recipes/php-xdebug.json) (Xdebug 3.5.3, with
+  compression), [`net.php.php.Igbinary`](recipes/php-igbinary.json)
+  (igbinary 3.2.17RC1), [`net.php.php.Redis`](recipes/php-redis.json)
+  (PhpRedis 6.3.0, with igbinary's serializer) and
+  [`net.php.php.SSH2`](recipes/php-ssh2.json) (ssh2 1.5.0).
 
 PHP needs Microsoft's Visual C++ Redistributable (x64), as php.net's zip
 does: its DLLs import `vcruntime140.dll`, and ICU's and intl's
@@ -1107,30 +1161,64 @@ php-ext build [--enable-foo[=...]|--with-foo[=...]|--disable-foo|--without-foo].
   `--out`: `$PREFIX` in a build, the extension's directory otherwise. The
   `.ini` loads the DLL from `${PHP_EXT_<EXT>}`, a variable the extension's
   image sets to its own directory, and `about.bat`, the image's command,
-  says what it is.
+  says what it is. For extensions that build with this one, it also writes
+  the DLL's import library into `lib\` and the headers `config.w32`
+  installs (`PHP_INSTALL_HEADERS`) into `include\`.
 - `CHECK_LIB` finds Windows' own libraries, those zig has import libraries
-  for. The libraries PHP's build links some extensions with (zlib, OpenSSL,
-  libxml2...) aren't in the devel pack, so extensions that need them can't
-  be built yet.
+  for, and [those PHP ships](#libraries-php-ships).
 
 An extension's image ([`recipes/php-xdebug.json`](recipes/php-xdebug.json)):
 
 ```json
 "command": "about.bat",
-"env": { "PHP_EXT_XDEBUG": "${app}" },
+"env": { "PHP_EXT_XDEBUG": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d" },
+"extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17" },
 "exports": {},
 "sdk": { "phpsdk": "net.php.php.Sdk:8.5.11@sha256:..." },
 "modules": [
   {
     "name": "xdebug",
     "sources": [{ "url": "https://pecl.php.net/get/xdebug-3.5.3.tgz", "sha256": "...", "strip": 1 }],
-    "build": ["php-ext build"]
+    "build": ["php-ext build --with-xdebug --with-xdebug-compression"]
   }
 ]
 ```
 
 It's built for the SDK's PHP: another PHP 8.5 loads it, as their extension
 API is the same; another minor version refuses it, with PHP's own message.
+`extends` names PHP's [extension point](#extension-points) and the build
+PHP checks extensions against ("PHP Extension Build" in `php -i`), so a PHP
+of another one doesn't get it.
+
+#### Libraries PHP ships
+
+php.net builds PHP with libraries from its own packages
+([windows.php.net's deps](https://downloads.php.net/~windows/php-sdk/deps/),
+the series `packages-8.5-vs17-x64-stable.txt` names): some are in
+`php8.dll`, which exports their functions (zlib, libxml2, libiconv), and
+some are DLLs beside `php.exe` (OpenSSL, libssh2, SQLite, libsodium,
+nghttp2, libpq, ICU, brotli, GLib, enchant, Cyrus SASL). The SDK has those
+packages' headers and the import libraries of the DLLs, pinned, in
+`dev\deps`, which `config.w32` knows as `PHP_PHP_BUILD`: an extension built
+with them uses the very DLLs PHP loads. (Each package's DLLs are the same,
+byte for byte, as those in PHP's zip.)
+
+- `CHECK_LIB` and `CHECK_HEADER_ADD_INCLUDE` look in `dev\deps\lib` and
+  `dev\deps\include` after the directories `config.w32` gives, as
+  configure looks in `PHP_PHP_BUILD`. `SETUP_OPENSSL`, `SETUP_ZLIB_LIB` and
+  `SETUP_SQLITE3` are configure's.
+- A library in `php8.dll` (`zlib_a.lib`, `libxml2_a_dll.lib`,
+  `libiconv_a.lib`...) is found as `php8.lib`, which every extension links
+  with, as PHP has the extension built in; the official build links its
+  static library into the extension instead.
+- Libraries PHP doesn't ship aren't there: an extension's recipe builds
+  them, with zig.
+
+Extensions that need another extension (`ADD_EXTENSION_DEP`, as redis with
+igbinary's serializer) find it by its `PHP_EXT_<EXT>` variable: a recipe
+lists the other extension's image as an SDK, whose env sets it, and
+`php-ext` takes its headers and import library from there
+([`recipes/php-redis.json`](recipes/php-redis.json)).
 
 `php-ext test` runs an extension's tests in the SDK's PHP, with
 `run-tests.php` or the extension's own (`--runner`, as Xdebug has one); it
@@ -1148,10 +1236,24 @@ DLL there, and `php -d extension=C:\path\to\php_foo.dll` loads it.
 
 ### Apps with extensions
 
-An app lists the extensions it needs as runtimes, and their `conf.d` in
-`PHP_INI_SCAN_DIR` (`;` between directories), as
+Installed, an extension joins every run of PHP, and of apps that have PHP
+as a runtime, through PHP's [extension point](#extension-points): each
+adds its `conf.d` to `PHP_INI_SCAN_DIR`, which the point joins, and PHP
+loads them in that order, an extension after those it `needs` (redis after
+igbinary, whose DLL it links with):
+
+```
+zigsaw pull net.php.php.Xdebug
+php -r "var_dump(extension_loaded('xdebug'));"
+zigsaw run --noextension=net.php.php.Xdebug net.php.php ...
+zigsaw override --noextension=net.php.php.Xdebug <app>
+```
+
+An app that needs an extension can also list it as a runtime, pinned, and
+its `conf.d` in `PHP_INI_SCAN_DIR` (`;` between directories), as
 [`tests/php/consumer.json.in`](tests/php/consumer.json.in) does; its own
-`conf.d` last, for its settings:
+`conf.d` last, for its settings. Then it has its own copy, and the
+installed one of the same id doesn't join:
 
 ```json
 "command": "${php}\\php.exe",
@@ -1166,7 +1268,7 @@ An app lists the extensions it needs as runtimes, and their `conf.d` in
 ```
 
 They're variables, so the PHP processes the app starts load the same
-extensions. Both extensions work under the three sandboxes. Xdebug's step
+extensions. The extensions work under the three sandboxes. Xdebug's step
 debugger connects to an IDE under `soft` and `low`; in an AppContainer it
 can't reach `127.0.0.1` ([known gaps](gaps.md)).
 

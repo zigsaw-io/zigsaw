@@ -231,6 +231,15 @@ PHP_FUNCTION(zprobe_config)
 		zprobe_version_info_size() > 0 ? "yes" : "no"));
 }
 
+/* string zprobe_libs(): zlib, libxml2 and OpenSSL, as PHP has them, called */
+PHP_FUNCTION(zprobe_libs)
+{
+	char out[256];
+	ZEND_PARSE_PARAMETERS_NONE();
+	zprobe_libs(out, sizeof out);
+	RETURN_STRING(out);
+}
+
 /* int zprobe_calls(): module globals */
 PHP_FUNCTION(zprobe_calls)
 {
@@ -302,6 +311,8 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zprobe_calls, 0, 0, IS_LONG, 0)
 ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zprobe_config, 0, 0, IS_STRING, 0)
 ZEND_END_ARG_INFO()
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_zprobe_libs, 0, 0, IS_STRING, 0)
+ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_INFO_EX(arginfo_point_construct, 0, 0, 2)
 	ZEND_ARG_TYPE_INFO(0, x, IS_DOUBLE, 0)
 	ZEND_ARG_TYPE_INFO(0, y, IS_DOUBLE, 0)
@@ -321,6 +332,7 @@ static const zend_function_entry zprobe_functions[] = {
 	PHP_FE(zprobe_format, arginfo_zprobe_format)
 	PHP_FE(zprobe_calls, arginfo_zprobe_calls)
 	PHP_FE(zprobe_config, arginfo_zprobe_config)
+	PHP_FE(zprobe_libs, arginfo_zprobe_libs)
 	PHP_FE_END
 };
 

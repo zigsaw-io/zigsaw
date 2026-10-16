@@ -239,6 +239,36 @@ pub const Runtime = struct {
     /// The runtime's aliases, which runs of the app get too. In them, ${app}
     /// is the runtime's directory. Absent unless it has some.
     aliases: ?std.json.ArrayHashMap(Export) = null,
+    /// The runtime's extension points, which runs of the app have too.
+    /// Absent unless it has some.
+    extensions: ?std.json.ArrayHashMap(ExtensionPoint) = null,
+};
+
+/// Where images that extend an app or runtime plug in, like a Flatpak
+/// runtime's extension points (see extensions.zig): an image whose `extends`
+/// names the point, installed, joins every run of whatever has the point,
+/// itself or as a runtime. PHP's runtime has one for PHP's extensions.
+pub const ExtensionPoint = struct {
+    /// What an extension must have been built for: it joins runs only if its
+    /// own `extends.version` is the same. PHP's is its build id, as PHP
+    /// checks extensions against it ("API20250925,NTS,VS17").
+    version: []const u8,
+    /// Variables each extension adds to, rather than sets: their entries,
+    /// separated by ';', go after those already there. The app's own and its
+    /// runtimes' values for them add up the same way.
+    join: []const []const u8 = &.{},
+};
+
+/// What an extension image plugs into (see `ExtensionPoint`).
+pub const Extends = struct {
+    /// The extension point's name.
+    point: []const u8,
+    /// The point's version the extension was built for.
+    version: []const u8,
+    /// Extensions of the same point that must join a run before this one,
+    /// by id, as one PHP extension that links with another's DLL. Without
+    /// them, it doesn't join. Absent unless there are some.
+    needs: ?[]const []const u8 = null,
 };
 
 /// How an image was built, for anyone checking where it came from.
@@ -306,6 +336,12 @@ pub const AppConfig = struct {
     registry: ?[]const []const u8 = null,
     /// The images the app runs with, by alias, in the order of their layers.
     runtimes: std.json.ArrayHashMap(Runtime) = .{},
+    /// Extension points, by name: where installed images that extend this
+    /// one plug in, in its own runs and those of apps that have it as a
+    /// runtime. Absent unless it has some.
+    extensions: ?std.json.ArrayHashMap(ExtensionPoint) = null,
+    /// The extension point this image plugs into, if it's an extension.
+    extends: ?Extends = null,
     /// Null in images made before iteration 4.
     build: ?Build = null,
 };
@@ -400,6 +436,8 @@ pub fn isValidId(id: []const u8) bool {
 pub fn validateConfig(what: []const u8, c: AppConfig) error{Failed}!void {
     try validateRuntimes(what, c.runtimes);
     try validateEntryPoints(what, c, c.runtimes.map.keys());
+    if (c.extends != null and c.runtimes.map.count() > 0)
+        return fail("{s} extends {s}, so it can't have runtimes: the runs it joins wouldn't have them", .{ what, c.extends.?.point });
 }
 
 /// The checks that don't need the runtimes resolved: recipes run them before
@@ -474,6 +512,76 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
         for (keys[0..i]) |earlier| if (registryKeyWithin(earlier, key) or registryKeyWithin(key, earlier))
             return fail("{s}: registry keys \"{s}\" and \"{s}\" overlap", .{ what, earlier, key });
     };
+    if (c.extensions) |e| try validateExtensionPoints(what, "", e);
+    if (c.extends) |x| {
+        if (!isValidId(x.point))
+            return fail("{s}: extends point \"{s}\" must be an extension point's name: 1-57 characters of letters, digits, '.', '-', '_'", .{ what, x.point });
+        if (!isOneLine(x.version, 64))
+            return fail("{s}: extends version must be 1-64 bytes on one line", .{what});
+        if (x.needs) |needs| for (needs) |id| if (!isValidId(id) or std.ascii.eqlIgnoreCase(id, c.id))
+            return fail("{s}: extends needs \"{s}\", which must be another extension's id", .{ what, id });
+    }
+}
+
+/// Checks an image's extension points, or (`owner` "runtime x's ") those an
+/// app's config copied from a runtime.
+fn validateExtensionPoints(what: []const u8, owner: []const u8, points: std.json.ArrayHashMap(ExtensionPoint)) error{Failed}!void {
+    for (points.map.keys(), points.map.values()) |name, p| {
+        if (!isValidId(name))
+            return fail("{s}: {s}extension point \"{s}\" must be 1-57 characters of letters, digits, '.', '-', '_'", .{ what, owner, name });
+        if (!isOneLine(p.version, 64))
+            return fail("{s}: {s}extension point {s}'s version must be 1-64 bytes on one line", .{ what, owner, name });
+        for (p.join) |v| if (!isValidJoinName(v))
+            return fail("{s}: {s}extension point {s} joins \"{s}\", which must be a variable's name, not PATH (extensions' path entries go on PATH anyway)", .{ what, owner, name, v });
+    }
+}
+
+/// A variable extensions add to: a plain name, and not PATH, which zigsaw
+/// makes itself.
+fn isValidJoinName(name: []const u8) bool {
+    if (name.len == 0 or name.len > 64 or std.ascii.eqlIgnoreCase(name, "PATH")) return false;
+    for (name) |ch| switch (ch) {
+        'a'...'z', 'A'...'Z', '0'...'9', '_', '-', '.', '(', ')' => {},
+        else => return false,
+    };
+    return true;
+}
+
+test "extension points and extends" {
+    const ok: AppConfig = .{ .id = "rt", .version = "1", .command = "x.exe" };
+    var points: std.json.ArrayHashMap(ExtensionPoint) = .{};
+    defer points.map.deinit(std.testing.allocator);
+    try points.map.put(std.testing.allocator, "rt.ext", .{ .version = "API1,NTS", .join = &.{"PHP_INI_SCAN_DIR"} });
+    var c = ok;
+    c.extensions = points;
+    try validateConfig("t", c);
+    c.extends = .{ .point = "other", .version = "1", .needs = &.{"rt.ext.a"} };
+    try validateConfig("t", c);
+
+    var bad: std.json.ArrayHashMap(ExtensionPoint) = .{};
+    defer bad.map.deinit(std.testing.allocator);
+    try bad.map.put(std.testing.allocator, "rt.ext", .{ .version = "1", .join = &.{"Path"} });
+    c = ok;
+    c.extensions = bad;
+    try std.testing.expectError(error.Failed, validateConfig("t", c));
+    bad.map.values()[0].join = &.{"A=B"};
+    try std.testing.expectError(error.Failed, validateConfig("t", c));
+    bad.map.values()[0] = .{ .version = "" };
+    try std.testing.expectError(error.Failed, validateConfig("t", c));
+
+    c = ok;
+    c.extends = .{ .point = "a b", .version = "1" };
+    try std.testing.expectError(error.Failed, validateConfig("t", c));
+    c.extends = .{ .point = "p", .version = "1", .needs = &.{"rt"} };
+    try std.testing.expectError(error.Failed, validateConfig("t", c));
+
+    // Runs that an extension joins wouldn't have its runtimes.
+    c = ok;
+    c.extends = .{ .point = "p", .version = "1" };
+    const digest = "sha256:" ++ "a" ** 64;
+    try c.runtimes.map.put(std.testing.allocator, "r", .{ .id = "r", .version = "1", .image = digest, .layer = digest });
+    defer c.runtimes.map.deinit(std.testing.allocator);
+    try std.testing.expectError(error.Failed, validateConfig("t", c));
 }
 
 /// 1 to `max` bytes, without control characters.
@@ -592,10 +700,10 @@ test isValidRegistryKey {
     for ([_][]const u8{ "Software\\7-Zip", "software\\VideoLAN\\VLC", "Software\\Some App\\Settings" }) |k|
         try std.testing.expect(isValidRegistryKey(k));
     for ([_][]const u8{
-        "",                     "Software",               "Software\\",         "\\Software\\x",
-        "SOFTWARE\\Classes",    "Software\\Microsoft\\x", "Software\\zigsaw",   "Software\\AppDataLow\\x",
-        "Software\\Policies",   "Software\\Wow6432Node",  "System\\x",          "Software\\a\\\\b",
-        "Software\\..\\x",      "Software\\a/b",          "Software\\a\x01",    "HKCU\\Software\\x",
+        "",                   "Software",               "Software\\",       "\\Software\\x",
+        "SOFTWARE\\Classes",  "Software\\Microsoft\\x", "Software\\zigsaw", "Software\\AppDataLow\\x",
+        "Software\\Policies", "Software\\Wow6432Node",  "System\\x",        "Software\\a\\\\b",
+        "Software\\..\\x",    "Software\\a/b",          "Software\\a\x01",  "HKCU\\Software\\x",
     }) |k| try std.testing.expect(!isValidRegistryKey(k));
     try std.testing.expect(registryKeyWithin("Software\\A", "software\\a\\B"));
     try std.testing.expect(registryKeyWithin("Software\\A", "Software\\A"));
@@ -670,11 +778,10 @@ fn validateRuntimes(what: []const u8, runtimes: std.json.ArrayHashMap(Runtime)) 
             return fail("{s}: runtime {s}'s path entry \"{s}\" must be inside it, or start with ${{app}}, ${{data}} or ${{cache}}", .{ what, alias, p });
         for (aliases[0..i], values[0..i]) |earlier_alias, earlier| if (std.ascii.eqlIgnoreCase(earlier.id, r.id))
             return fail("{s}: runtimes {s} and {s} are both {s}", .{ what, earlier_alias, alias, r.id });
-        if (r.aliases) |a| {
-            var owner_buf: [64]u8 = undefined;
-            const owner = std.fmt.bufPrint(&owner_buf, "runtime {s}'s ", .{alias}) catch "a runtime's ";
-            try validateAliases(what, owner, a);
-        }
+        var owner_buf: [64]u8 = undefined;
+        const owner = std.fmt.bufPrint(&owner_buf, "runtime {s}'s ", .{alias}) catch "a runtime's ";
+        if (r.aliases) |a| try validateAliases(what, owner, a);
+        if (r.extensions) |e| try validateExtensionPoints(what, owner, e);
     }
 }
 

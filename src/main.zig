@@ -84,6 +84,9 @@ const usage =
     \\  --share=network                 allow network access
     \\  --unshare=network               deny network access
     \\  --env=NAME=VALUE                set an environment variable
+    \\  --noextension=<id>              leave out an installed extension, which otherwise
+    \\                                  joins the runs of what it extends
+    \\  --extension=<id>                have an extension an override leaves out join again
     \\  --ephemeral                     use a fresh data directory, deleted afterwards
     \\
     \\Data lives in %ZIGSAW_HOME%, or %LOCALAPPDATA%\zigsaw when that isn't set.
@@ -294,6 +297,8 @@ const SettingsParser = struct {
     filesystem: std.ArrayList([]const u8) = .empty,
     nofilesystem: std.ArrayList([]const u8) = .empty,
     env: std.ArrayList([]const u8) = .empty,
+    noextension: std.ArrayList([]const u8) = .empty,
+    extension: std.ArrayList([]const u8) = .empty,
 
     const flags = [_][]const u8{"ephemeral"};
 
@@ -326,6 +331,9 @@ const SettingsParser = struct {
         } else if (std.mem.eql(u8, name, "env")) {
             if (std.mem.indexOfScalar(u8, value, '=') == null) return fail("--env expects NAME=VALUE, got \"{s}\"", .{value});
             try p.env.append(arena, value);
+        } else if (std.mem.eql(u8, name, "noextension") or std.mem.eql(u8, name, "extension")) {
+            if (!oci.isValidId(value)) return fail("--{s} takes an extension's id; got \"{s}\"", .{ name, value });
+            try (if (name[0] == 'n') &p.noextension else &p.extension).append(arena, value);
         } else return false;
         return true;
     }
@@ -335,6 +343,8 @@ const SettingsParser = struct {
         s.filesystem = p.filesystem.items;
         s.nofilesystem = p.nofilesystem.items;
         s.env = p.env.items;
+        s.noextension = p.noextension.items;
+        s.extension = p.extension.items;
         return s;
     }
 };
@@ -445,7 +455,9 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
     if (try ctx.store.readRef(arena, app) == null) return fail("{s} is not installed", .{app});
     const merged = try override.Settings.merge(arena, saved, new);
     try override.save(ctx.store, arena, app, merged);
-    note("{s} now runs with {f}", .{ app, merged });
+    if (merged.isEmpty()) {
+        note("{s} has no overrides now", .{app});
+    } else note("{s} now runs with {f}", .{ app, merged });
 }
 
 fn list(ctx: *Context) !void {
@@ -462,6 +474,8 @@ fn list(ctx: *Context) !void {
         try w.print("{s:<32} {s:<20} {s:<20} {s}", .{ ref.id, ref.version, oci.shortDigest(ref.manifest), try std.mem.join(arena, ", ", names.items) });
         const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
         for (image.config.runtimes.map.values()) |r| try w.print("  (runtime {s} {s})", .{ r.id, r.version });
+        if (image.config.extensions) |e| for (e.map.keys()) |name| try w.print("  (extension point {s})", .{name});
+        if (image.config.extends) |x| try w.print("  (extends {s} {s})", .{ x.point, x.version });
         for (try shortcuts.names(ctx, ref.id)) |name| try w.print("  (shortcut \"{s}\")", .{name});
         const opens = try associations.names(ctx, ref.id);
         if (opens.len > 0) try w.print("  (opens {s})", .{try std.mem.join(arena, ", ", opens)});
@@ -555,6 +569,7 @@ test {
     _ = @import("drive.zig");
     _ = @import("environment.zig");
     _ = @import("exports.zig");
+    _ = @import("extensions.zig");
     _ = @import("folders.zig");
     _ = @import("hkcu.zig");
     _ = @import("info.zig");

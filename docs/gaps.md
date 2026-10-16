@@ -246,16 +246,26 @@
   `--sandbox=appcontainer`: an AppContainer can't reach `127.0.0.1` without
   a loopback exemption (`CheckNetIsolation`), which takes an administrator.
   It does under `soft` and `low`.
-- An extension's image loads only in apps that list it as a runtime and
-  name its `conf.d` in `PHP_INI_SCAN_DIR`: installing it doesn't make the
-  `php` command load it.
-- `php-ext` builds extensions that need only PHP and Windows' own
-  libraries: those PHP's build links some extensions with (zlib, OpenSSL,
-  libxml2, ICU...) aren't in the devel pack, so `CHECK_LIB` doesn't find
-  them. It hasn't been tried with C++ extensions, nor with thread-safe PHP,
-  which isn't packaged. A `config.w32` that calls a configure function its
-  stand-ins don't have fails, naming it.
+- Installed extensions join every run of what they extend: what a run
+  loads depends on what's installed, not only on the app's image, as with
+  Flatpak's extensions. A run notes, each time, an installed extension that
+  doesn't join (built for another version of the point, or missing one it
+  needs), but nothing warns at install. Builds never get installed
+  extensions. An extension's aliases aren't used, and extensions can't have
+  runtimes of their own.
+- `php-ext` finds only the libraries PHP ships, as headers and import
+  libraries for its own DLLs: an extension that needs another (libzstd,
+  libyaml, libmemcached...) needs a recipe that builds it, which no image
+  does yet. The deps packages' static libraries (`*_a.lib`, MSVC's) aren't
+  in the SDK. It hasn't been tried with C++ extensions, nor with thread-safe
+  PHP, which isn't packaged. A `config.w32` that calls a configure function
+  its stand-ins don't have fails, naming it.
 - MinGW's headers define POSIX names that MSVC's don't, and an extension
   that tests for one takes another branch than in MSVC builds of it.
   `zig-php.h` removes those found so far (`P_tmpdir`, `PATH_MAX`,
-  `NAME_MAX`).
+  `NAME_MAX`). Code that tests `_MSC_VER` for "Windows" takes the other
+  branch with clang: igbinary's recipe patches two such tests.
+- ssh2's signal test fails, as it traps `SIGINT` in bash, which Windows has
+  neither of; with MSVC's build too. redis's tests run against miniredis,
+  as Redis has no Windows build: 46 of them fail there for both builds
+  (commands and `INFO` sections miniredis hasn't).

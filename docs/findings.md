@@ -612,6 +612,57 @@ passing them on, so an extension given in both loads twice ("Module is
 already loaded"); and for a test path that doesn't exist it runs nothing,
 and passes.
 
+### With the libraries PHP ships
+
+Iteration 24, 2026-10-16, the same PHP, zig and Visual Studio. The question
+was how extensions that need PHP's third-party libraries can build.
+
+- **PHP ships its libraries two ways.** `php8.dll` has zlib, libxml2 and
+  libiconv linked in, and exports their functions (44 of zlib's, about
+  1440 `xml*`/`html*`, `libiconv*`), as PHP has zlib, libxml and iconv
+  built in. OpenSSL 3.5.8, libssh2 1.11.1, SQLite, libsodium 1.0.22,
+  nghttp2 1.70, libpq 16.15, ICU 77.1, brotli, GLib 2.88.3, enchant and
+  Cyrus SASL are DLLs beside `php.exe`.
+- **Their headers and import libraries are php.net's deps packages**
+  (`downloads.php.net/~windows/php-sdk/deps/vs17/x64/`), versioned zips
+  that stay up once replaced; the series file for 8.5 names exactly the
+  versions PHP 8.5.11 has. Every DLL in those packages that PHP's zip has
+  is the same file, byte for byte. Their static libraries are plain COFF
+  (no `/GL`). libxml2's headers include `iconv.h`.
+- **zig links with MSVC's import libraries** (`libssh2.lib`,
+  `libcrypto.lib`) as with its own, and with `php8.lib` for what
+  `php8.dll` exports, so `zlib_a.lib`, which PHP's build links into
+  extensions, isn't needed.
+- **Extensions built that way pass what their MSVC 14.44 builds pass**,
+  built from the same sources, run the same way:
+
+| | zig | MSVC 14.44 |
+|---|---|---|
+| Xdebug 3.5.3 with compression (zlib), its tests | 744 pass | the same |
+| igbinary 3.2.17RC1's tests | 134 pass, 17 skipped | the same |
+| ssh2 1.5.0's tests, against an SSH server in Go (`tests/php/servers`) | 14 of 15 (not `ssh2_send_signal`: bash and `SIGINT`) | the same |
+| PhpRedis 6.3.0 with igbinary, each of `Redis_Test`'s tests against miniredis | 108 pass, 46 fail, 98 skipped | the same, test by test |
+
+- **What `config.w32`s needed** beyond iteration 23's stand-ins:
+  `get_define("PHPDLL")` (igbinary picks its sources by it); configure's
+  `PHP_PHP_BUILD` search; the official `SETUP_OPENSSL`; and calls to
+  undeclared functions, which MSVC warns of (C4013) and clang makes an
+  error: redis calls PHP's `usleep` and `gettimeofday` without
+  `win32/time.h`. igbinary 3.2.16 includes `php_smart_string.h`, which PHP
+  8.5 removed; 3.2.17RC1, which PECL marks stable, is the one for 8.5. It
+  also tests `_MSC_VER` to mean Windows (its `stdint.h` branch and
+  byte swapping), which clang doesn't define; its recipe patches the two
+  tests.
+- **An extension that links with another extension's DLL** (redis with
+  igbinary's serializer imports `igbinary_serialize` from
+  `php_igbinary.dll`, as PHP's in-tree builds make it) loads only if PHP
+  loaded the other first: Windows matches the import to the loaded
+  module by name. Loaded the other way round, or without it, PHP says only
+  "The specified module could not be found".
+- **PHP's extension build id** is "API20250925,NTS,VS17" (`php -i`, "PHP
+  Extension Build"), which PHP checks extensions against, and which PHP's
+  extension point takes as its version.
+
 ## Other findings
 
 - **Microsoft Defender quarantines zigsaw 0.19.0.** During a build of

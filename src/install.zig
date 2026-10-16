@@ -43,6 +43,8 @@ pub fn install(ctx: *Context, image: Image) !void {
     note("installed {s} {s}\n  manifest {s}", .{ cfg.id, cfg.version, image.manifest_digest });
     var runtimes = cfg.runtimes.map.iterator();
     while (runtimes.next()) |r| note("  runtime  {s}: {s} {s}", .{ r.key_ptr.*, r.value_ptr.id, r.value_ptr.version });
+    if (cfg.extensions) |e| for (e.map.keys(), e.map.values()) |name, p| note("  point    {s} {s}: installed extensions of it join its runs", .{ name, p.version });
+    if (cfg.extends) |x| note("  extends  {s} {s}: joins the runs of what has it", .{ x.point, x.version });
     note("  layer    {s} ({d} bytes)", .{ oci.ownLayer(image.manifest).digest, oci.ownLayer(image.manifest).size });
     if (cfg.build) |b| {
         if (b.network) note("  warning: a build step used the network, so this image may not rebuild the same", .{});

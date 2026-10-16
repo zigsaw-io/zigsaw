@@ -177,6 +177,9 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | PHP (from its SDK) | `net.php.php` | 8.5.11 | `php`, `php-cgi`, `phpdbg` |
 | APCu for PHP 8.5 (built from source) | `net.php.php.APCu` | 5.1.28 | |
 | Xdebug for PHP 8.5 (built from source) | `net.php.php.Xdebug` | 3.5.3 | |
+| igbinary for PHP 8.5 (built from source) | `net.php.php.Igbinary` | 3.2.17RC1 | |
+| PhpRedis for PHP 8.5 (built from source) | `net.php.php.Redis` | 6.3.0 | |
+| SSH2 for PHP 8.5 (built from source) | `net.php.php.SSH2` | 1.5.0 | |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -202,9 +205,11 @@ file they open ([prebuilt GUI apps](#prebuilt-gui-apps)). 7-Zip's image is
 made from its installer, which its standalone `7zr.exe` unpacks.
 PHP is php.net's own Windows build, and needs Microsoft's Visual C++
 Redistributable installed, as that does. Its SDK's `php-ext` builds PHP
-extensions from source with zig, from their `config.w32`, as APCu's and
-Xdebug's images are: apps list them as runtimes next to PHP's
-([PHP](docs/recipes.md#php)).
+extensions from source with zig, from their `config.w32`, against PHP and
+the libraries it ships (OpenSSL, libssh2, zlib...), as the extensions'
+images are. Installed, an extension joins every run of PHP, through PHP's
+[extension point](docs/recipes.md#extension-points); `--noextension`
+leaves it out ([PHP](docs/recipes.md#php)).
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -395,6 +400,7 @@ to finish.
 | `--file=<path>` | Have the app open a file of yours: grants it that file, to read and write, and adds the file's path to the app's arguments (see [below](#opening-a-file)) |
 | `--share=network` / `--unshare=network` | Override the app's network permission |
 | `--env=NAME=VALUE` | Set an environment variable |
+| `--noextension=<id>` | Leave out an installed [extension](docs/recipes.md#extension-points), which otherwise joins the runs of what it extends; `--extension=<id>` has one an override leaves out join again |
 | `--ephemeral` | Use a fresh data directory, deleted after the run |
 | `-v`, `--verbose` | Print the resolved command, environment and grants |
 
@@ -801,11 +807,11 @@ bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash,
 bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes; --file; your folders (fake ones); registry keys kept with an app
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
-bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), PHP extensions with zig, reproducibility
+bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
 bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
-bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; APCu and Xdebug, built with php-ext, pass their test suites; an app with both as runtimes, and Xdebug's step debugger (needs PHP_HOME or BUILD_HOME; local only)
+bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; five extensions built with php-ext join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing

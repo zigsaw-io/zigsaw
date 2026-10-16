@@ -30,6 +30,7 @@ const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const environment = @import("environment.zig");
 const exports = @import("exports.zig");
+const extensions = @import("extensions.zig");
 const folders = @import("folders.zig");
 const hkcu = @import("hkcu.zig");
 const override = @import("override.zig");
@@ -91,6 +92,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const run_dir: ?Store.RunDir = if (settings.ephemeral orelse false) try ctx.store.makeRunDir(arena) else null;
     defer if (run_dir) |d| d.delete(ctx.store, arena);
     const app_aliases = try syncAliases(ctx, image);
+    // Installed images that plug into the app or its runtimes join the run
+    // (see extensions.zig).
+    const found = try extensions.find(ctx.store, arena, cfg, settings.noextension);
+    for (found.skipped) |s| if (s.warn or ctx.verbose) note("note: {s} doesn't join this run: {s}", .{ s.id, s.reason });
     store_lock.release(io);
     const data_dir = if (run_dir) |d| d.path else try ctx.store.path(arena, &.{ "data", cfg.id });
     const profile: environment.Profile = try .init(arena, data_dir);
@@ -102,7 +107,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const cwd = if (cwd_granted) host_cwd else profile.home;
 
     const cache_dir = try std.fs.path.join(arena, &.{ data_dir, "cache" });
-    if (usesCache(cfg)) try Io.Dir.cwd().createDirPath(io, cache_dir);
+    if (usesCache(cfg, found.loaded)) try Io.Dir.cwd().createDirPath(io, cache_dir);
 
     const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
     const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir, cache_dir);
@@ -113,6 +118,11 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     if (app_aliases) |a| try app_path.append(arena, a.dir);
     try app_path.appendSlice(arena, try environment.pathDirs(arena, placeholders, cfg.path));
     for (runtimes.own, cfg.runtimes.map.values()) |p, r| try app_path.appendSlice(arena, try environment.pathDirs(arena, p, r.path));
+    // Then the extensions', as runtimes the app didn't list; in them, ${app}
+    // is the extension's directory.
+    const ext_own = try arena.alloc(oci.Placeholders, found.loaded.len);
+    for (ext_own, found.loaded) |*p, e| p.* = .{ .app = e.dir, .data = data_dir, .cache = cache_dir };
+    for (ext_own, found.loaded) |p, e| try app_path.appendSlice(arena, try environment.pathDirs(arena, p, e.config.path));
     const command = try resolveCommand(io, arena, placeholders, cfg, opts.command, app_path.items, system_root);
     const args = try std.mem.concat(arena, []const u8, &.{ command.args, opts.args, files });
     // Batch files run through cmd.exe; System32's, not ComSpec's.
@@ -125,10 +135,13 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         }
     else
         try process.buildCommandLine(arena, exe, args);
-    // The runtimes' variables first, so the app's win.
+    // The runtimes' variables first, then the extensions', so the app's win;
+    // those the extension points join add up instead.
+    const joined = try extensions.joined(arena, found.points);
     var app_env: std.ArrayList(environment.Var) = .empty;
-    for (runtimes.own, cfg.runtimes.map.values()) |p, r| try environment.expand(arena, &app_env, p, r.env);
-    try environment.expand(arena, &app_env, placeholders, cfg.env);
+    for (runtimes.own, cfg.runtimes.map.values()) |p, r| try environment.expand(arena, &app_env, p, r.env, joined);
+    for (ext_own, found.loaded) |p, e| try environment.expand(arena, &app_env, p, e.config.env, joined);
+    try environment.expand(arena, &app_env, placeholders, cfg.env, joined);
     if (app_aliases) |a| try environment.set(arena, &app_env, "BB_OVERRIDE_APPLETS", a.names);
     const env = try environment.build(arena, ctx.env, .{
         .id = cfg.id,
@@ -146,6 +159,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         note("app      {s} {s} ({s})", .{ cfg.id, cfg.version, image.ref.manifest });
         for (cfg.runtimes.map.keys(), cfg.runtimes.map.values(), image.runtime_dirs) |alias, r, dir|
             note("runtime  {s}: {s} {s} ({s})", .{ alias, r.id, r.version, dir });
+        for (found.loaded) |e| note("extension {s} {s} ({s})", .{ e.id, e.version, e.dir });
         if (app_aliases) |a| note("aliases  {s} ({s})", .{ a.names, a.dir });
         if (!saved.isEmpty()) note("override {f}", .{saved});
         note("sandbox  {t}, network {s}", .{ sandbox, if (network) "on" else "off" });
@@ -171,7 +185,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         }),
         .appcontainer => security = try setUpAppContainer(ctx, cfg.id, .{
             .deploy_dir = image.deploy_dir,
-            .runtime_dirs = image.runtime_dirs,
+            .runtime_dirs = try std.mem.concat(arena, []const u8, &.{ image.runtime_dirs, try extensionDirs(arena, found.loaded) }),
             .alias_dir = if (app_aliases) |a| a.dir else null,
             .data_dir = data_dir,
             .local_app_data = profile.local,
@@ -481,10 +495,17 @@ fn runtimeDirs(arena: Allocator, cfg: oci.AppConfig, dirs: []const []const u8, d
 
 /// Whether the app's entries or its runtimes' use ${cache}, which is then
 /// created before the run.
-fn usesCache(cfg: oci.AppConfig) bool {
+fn usesCache(cfg: oci.AppConfig, exts: []const extensions.Extension) bool {
     if (oci.usesCache(cfg.path, cfg.env)) return true;
     for (cfg.runtimes.map.values()) |r| if (oci.usesCache(r.path, r.env)) return true;
+    for (exts) |e| if (oci.usesCache(e.config.path, e.config.env)) return true;
     return false;
+}
+
+fn extensionDirs(arena: Allocator, exts: []const extensions.Extension) ![]const []const u8 {
+    const dirs = try arena.alloc([]const u8, exts.len);
+    for (dirs, exts) |*d, e| d.* = e.dir;
+    return dirs;
 }
 
 const Command = struct {

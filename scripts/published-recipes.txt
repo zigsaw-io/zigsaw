@@ -32,3 +32,6 @@ php-sdk.json
 php.json
 php-apcu.json
 php-xdebug.json
+php-igbinary.json
+php-redis.json
+php-ssh2.json

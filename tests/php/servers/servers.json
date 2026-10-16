@@ -1,0 +1,26 @@
+{
+  "id": "test.php.servers",
+  "version": "1",
+  "command": "servers.exe",
+  "exports": {},
+  "permissions": { "network": true },
+  "runtimes": {
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "sdk": {
+    "go": "org.golang.go:1.27.1@sha256:f8192fc2cb2be9c04e1ee833a8d135bd292c122f9fb9907dbc8d7d62a134cb8c"
+  },
+  "modules": [
+    {
+      "name": "servers",
+      "sources": [{ "path": "main.go" }, { "path": "go.mod" }, { "path": "go.sum" }],
+      "env": { "CGO_ENABLED": "0" },
+      "vendor": {
+        "commands": ["go mod vendor"],
+        "dir": "vendor",
+        "sha256": "f20a6c87449c380b12e3af46d8624015567ae654a2e5a7a40f06fd2c61ad6531"
+      },
+      "build": ["go build -mod=vendor -ldflags '-s -w' -o \"$PREFIX/servers.exe\" ."]
+    }
+  ]
+}

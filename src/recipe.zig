@@ -131,6 +131,10 @@ pub const Recipe = struct {
     associations: ?std.json.ArrayHashMap(oci.Association) = null,
     /// Keys in HKEY_CURRENT_USER kept with the app's data (see oci.AppConfig).
     registry: ?[]const []const u8 = null,
+    /// Extension points, and the one the image plugs into (see
+    /// oci.ExtensionPoint).
+    extensions: ?std.json.ArrayHashMap(oci.ExtensionPoint) = null,
+    extends: ?oci.Extends = null,
     /// Images the build uses, by alias: references pinned with "@sha256:...".
     sdk: std.json.ArrayHashMap([]const u8) = .{},
     /// Images the app runs with, by alias, pinned the same way. Their
@@ -176,6 +180,8 @@ pub const Recipe = struct {
             .associations = r.associations,
             .registry = r.registry,
             .runtimes = runtimes,
+            .extensions = r.extensions,
+            .extends = r.extends,
             .build = build,
         };
     }
@@ -223,6 +229,8 @@ fn validateDependencies(file_name: []const u8, r: Recipe) error{Failed}!void {
     // Both kinds are on PATH while building, so one alias means one image.
     for (r.sdk.map.keys()) |alias| if (r.runtimes.map.contains(alias))
         return fail("{s}: \"{s}\" is both an sdk and a runtime alias", .{ file_name, alias });
+    if (r.extends != null and r.runtimes.map.count() > 0)
+        return fail("{s}: an extension can't have runtimes, which the runs it joins wouldn't have; its point's image has them", .{file_name});
 }
 
 fn validateModules(file_name: []const u8, modules: []const Module) error{Failed}!void {
