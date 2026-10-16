@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- tests/gtk3.sh's spreadsheet: three numbers, drawn as a line chart and a
+     pie chart, which goffice's plot plugins draw when ssconvert exports the
+     graphs. -->
+<gnm:Workbook xmlns:gnm="http://www.gnumeric.org/v10.dtd">
+  <gnm:Version Epoch="1" Major="12" Minor="62" Full="1.12.62"/>
+  <gnm:SheetNameIndex>
+    <gnm:SheetName gnm:Cols="256" gnm:Rows="65536">Data</gnm:SheetName>
+  </gnm:SheetNameIndex>
+  <gnm:Sheets>
+    <gnm:Sheet>
+      <gnm:Name>Data</gnm:Name>
+      <gnm:MaxCol>8</gnm:MaxCol>
+      <gnm:MaxRow>20</gnm:MaxRow>
+      <gnm:Objects>
+        <gnm:SheetObjectGraph ObjectBound="C1:H9" ObjectOffset="0 0 0 0" Direction="17" Print="1">
+          <GogObject type="GogGraph">
+            <property name="height-pts">100</property>
+            <property name="width-pts">200</property>
+            <property name="theme-name">Default</property>
+            <GogObject role="Chart">
+              <GogObject role="X-Axis">
+                <property name="pos-str">low</property>
+                <property name="id">1</property>
+                <data/>
+              </GogObject>
+              <GogObject role="Y-Axis">
+                <property name="pos-str">low</property>
+                <property name="id">1</property>
+                <data/>
+              </GogObject>
+              <GogObject role="Plot" type="GogLinePlot">
+                <property name="y-axis">1</property>
+                <property name="x-axis">1</property>
+                <GogObject role="Series">
+                  <data>
+                    <dimension id="1" type="GnmGODataVector">Data!$A$1:$A$3</dimension>
+                  </data>
+                </GogObject>
+              </GogObject>
+            </GogObject>
+          </GogObject>
+        </gnm:SheetObjectGraph>
+        <gnm:SheetObjectGraph ObjectBound="C11:H19" ObjectOffset="0 0 0 0" Direction="17" Print="1">
+          <GogObject type="GogGraph">
+            <property name="height-pts">100</property>
+            <property name="width-pts">200</property>
+            <property name="theme-name">Default</property>
+            <GogObject role="Chart">
+              <GogObject role="Plot" type="GogPiePlot">
+                <property name="vary-style-by-element">TRUE</property>
+                <GogObject role="Series">
+                  <data>
+                    <dimension id="1" type="GnmGODataVector">Data!$A$1:$A$3</dimension>
+                  </data>
+                </GogObject>
+              </GogObject>
+            </GogObject>
+          </GogObject>
+        </gnm:SheetObjectGraph>
+      </gnm:Objects>
+      <gnm:Cells>
+        <gnm:Cell Row="0" Col="0" ValueType="40">1</gnm:Cell>
+        <gnm:Cell Row="1" Col="0" ValueType="40">4</gnm:Cell>
+        <gnm:Cell Row="2" Col="0" ValueType="40">2</gnm:Cell>
+      </gnm:Cells>
+    </gnm:Sheet>
+  </gnm:Sheets>
+</gnm:Workbook>

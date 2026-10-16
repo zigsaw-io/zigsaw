@@ -757,6 +757,72 @@ Composer, which doesn't, installs at low.
   whether they're directories, so a walk doesn't enter a junction by
   mistake.
 
+## GTK 3 and Gnumeric
+
+- **GTK 3 needs nothing GTK 4's SDK doesn't have, but ATK.** GTK 3.24.52
+  and ATK (at-spi2-core 2.60.7 with `-Datk_only=true`) build with Meson
+  and zig against GTK 4's SDK in about 3 minutes; GTK 3's runtime is 18 MB
+  compressed, besides GTK 4's 52 MB, which every GTK app shares.
+- **GTK 3 took a missing Desktop for a folder at the path NULL.** Windows
+  gives no Desktop to a run that isn't granted it, and
+  `g_get_user_special_dir()` returns NULL then; GTK 3's file chooser, places
+  sidebar and file button compared that with the home directory, found it
+  different, and went on to `g_file_new_for_path (NULL)`: critical warnings,
+  in the widget factory among others. GTK 4 checks.
+- **zig's `cc` ignores `-mwindows`** (it warns that the argument is
+  unused), so Gnumeric, which links with it, was a console program;
+  `-Wl,--subsystem,windows` works. It takes `-Wl,--export-all-symbols` and
+  ignores it too: a DLL exports what's marked `dllexport`, or everything
+  when nothing is, as with GNU ld's default, but not everything when
+  something is, as GNU ld does with the option.
+- **Autoconf's `configure` under BusyBox finds no program by name.** It
+  chose `:` to separate PATH, as BusyBox's sh doesn't show it `;` where it
+  looks, and split `D:\...` at the drive's colon; and it looks for
+  `pkg-config`, not `pkg-config.exe`, as `ac_executable_extensions` is
+  empty. enchant and gettext had been given every program by name
+  (`PKG_CONFIG` and the rest), which hid it. `PATH_SEPARATOR=;` and
+  `ac_executable_extensions=.exe` fix both.
+- **BusyBox's make (pdpmake)** expands GNU make's `$(shell ...)` to nothing
+  (POSIX 2024's `VAR != command` works, with `\#` in it), has no pattern
+  rules, and sets `$<` in a rule that isn't an inference rule to a
+  prerequisite that's out of date, which can be `Makefile`, where GNU make
+  gives the first. intltool's `po` Makefile lists its catalogs with
+  `$(shell ...)`: Gnumeric built and installed no translation at first, and
+  said nothing.
+- **BusyBox's sh runs `#!/usr/bin/perl` scripts** with the `perl` on PATH,
+  but not ones whose `#!` line names a drive (`Exec format error`), which
+  is what intltool's `configure` writes.
+- **Strawberry Perl reads files as text** unless a script says otherwise:
+  goffice's script that embeds images in its library dropped the carriage
+  returns from a PNG, which GdkPixbuf then couldn't load (a critical warning
+  in every run). `PERLIO=perlio` makes it read as Perl on Unix does.
+- **Perl's image couldn't load XML::Parser**, nor 39 other DLLs Strawberry
+  Perl's XS modules need (`c\bin\*__.dll`): its cleanup left out the whole
+  of `c`, Strawberry's GCC, where they are. They're now beside `perl.exe`
+  (29 MB more).
+- **Gnumeric 1.12.62's own build for Windows doesn't link as released.**
+  Its library exports what a script reads from a list of its headers,
+  which misses the analysis tools' new headers that `ssconvert` uses,
+  `complex.h`, and functions with an array parameter of a given size, which
+  the script's pattern doesn't read (`sheet_style_apply_border`, which the
+  Excel plugin calls): MSYS2's package leaves the Excel plugin out. Its
+  Applix plugin calls an exporter whose code isn't in the release, which
+  Linux's dynamic linking lets pass. It calls
+  `g_option_context_set_delocalize`, which GLib doesn't have. Without the
+  list, lld exports everything, which links everything.
+- **An SDK's headers can put the store's path into what's built.** GTK 3
+  built in a second store differed in one file, `libgtk-3-0.dll`: it holds
+  the path of a GLib header, `gobjectnotifyqueue.c`, which GTK includes and
+  whose `g_return_if_fail` names its own file with `__FILE__`, and GTK 4's
+  SDK, where the header is, is deployed under the store's path. GTK 4's SDK
+  didn't have it, as its own GLib was in `B:\prefix` while it built. GTK 3's
+  recipe maps the SDK's directory to a fixed name
+  (`-fmacro-prefix-map`); builds don't otherwise see their SDKs at fixed
+  paths, as they do their own sources and prefix.
+- **Building Gnumeric takes 16 to 24 minutes**, of which libtool's links
+  under BusyBox are much: its 37 plugins link one directory at a time.
+  Its image is 15 MB compressed, 8.6 MB of it translations.
+
 ## Other findings
 
 - **Microsoft Defender quarantines zigsaw 0.19.0.** During a build of

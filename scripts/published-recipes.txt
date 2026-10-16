@@ -24,6 +24,10 @@ gtk4-sdk.json
 gtk4.json
 gnome-text-editor.json
 rnote.json
+gtk3-sdk.json
+gtk3.json
+gtk3demo.json
+gnumeric.json
 7zip.json
 notepad-plus-plus.json
 sumatrapdf.json

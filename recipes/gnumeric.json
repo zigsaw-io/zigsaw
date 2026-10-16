@@ -1,0 +1,209 @@
+{
+  "id": "org.gnome.Gnumeric",
+  "version": "1.12.62",
+  "name": "Gnumeric",
+  "summary": "A spreadsheet that reads and writes Excel, OpenDocument and many other formats, on GTK 3",
+  "homepage": "https://gnome.pages.gitlab.gnome.org/gnumeric-web/",
+  "license": "GPL-2.0-only OR GPL-3.0-only",
+  "command": "bin/gnumeric.exe",
+  "path": ["bin"],
+  "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
+  "exports": {
+    "gnumeric": { "command": "bin/gnumeric.exe" },
+    "ssconvert": { "command": "bin/ssconvert.exe" },
+    "ssindex": { "command": "bin/ssindex.exe" },
+    "ssgrep": { "command": "bin/ssgrep.exe" },
+    "ssdiff": { "command": "bin/ssdiff.exe" }
+  },
+  "shortcuts": {
+    "Gnumeric": { "command": "gnumeric", "description": "Make and edit spreadsheets", "icon": "share/icons/gnumeric.ico" }
+  },
+  "associations": {
+    ".gnumeric": { "command": "gnumeric", "description": "Gnumeric spreadsheet", "icon": "share/icons/gnumeric.ico" },
+    ".xlsx": { "command": "gnumeric", "description": "Excel spreadsheet", "icon": "share/icons/gnumeric.ico" },
+    ".xls": { "command": "gnumeric", "description": "Excel 97-2003 spreadsheet", "icon": "share/icons/gnumeric.ico" },
+    ".ods": { "command": "gnumeric", "description": "OpenDocument spreadsheet", "icon": "share/icons/gnumeric.ico" },
+    ".csv": { "command": "gnumeric", "description": "Comma-separated values", "icon": "share/icons/gnumeric.ico" }
+  },
+  "runtimes": {
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:28c0ec8ecbe3b4c90b5dcb655d7cd73847669107934666722404b087494731fb",
+    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:9871974c45518fb29de341f715ca0e59d74f6b27c617dd38f2dec2391272b81a"
+  },
+  "sdk": {
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:306a050719faf5662f61c53db889fe5f4e488c6f2e0ec23958de3b56c464074d",
+    "gtk3sdk": "org.gtk.Gtk3.Sdk:3.24.52@sha256:20a0c1d9d8a159df7e91eab846aa3dc3fbd3fad0f9450ca67b29fdc198181152",
+    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
+    "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85"
+  },
+  "cleanup": [
+    "/include",
+    "/lib/cmake",
+    "/lib/pkgconfig",
+    "/lib/xsltConf.sh",
+    "*.a",
+    "*.la",
+    "*.lib",
+    "*-config",
+    "/bin/python3",
+    "/bin/intltool-*",
+    "/bin/intltoolize",
+    "/share/intltool",
+    "/share/aclocal",
+    "/share/applications",
+    "/share/metainfo",
+    "/share/gtk-doc",
+    "/share/man",
+    "/share/doc"
+  ],
+  "modules": [
+    {
+      "name": "build-tools",
+      "build": [
+        "mkdir -p \"$PREFIX/bin\"",
+        "printf '%s\\n' '#!/bin/sh' 'exec python \"$@\"' > \"$PREFIX/bin/python3\""
+      ]
+    },
+    {
+      "name": "crt-noexport",
+      "build": [
+        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
+        "cc -c noexport.s -o noexport.o"
+      ]
+    },
+    {
+      "name": "libxslt",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/libxslt/1.1/libxslt-1.1.45.tar.xz",
+          "sha256": "9acfe68419c4d06a45c550321b3212762d92f41465062ca4ea19e632ee5d216e",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/implibs.sh", "dest": "zigsaw/implibs.sh" }
+      ],
+      "build": [
+        "x=$(pkg-config --variable=prefix libxml-2.0) && mkdir -p zigsaw/libxml2 && sed \"s|B:/prefix|$x|g\" \"$x/lib/cmake/libxml2/libxml2-config.cmake\" > zigsaw/libxml2/libxml2-config.cmake",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DLibXml2_DIR=B:/src/libxslt/zigsaw/libxml2 -DLIBXSLT_WITH_PYTHON=OFF -DLIBXSLT_WITH_TESTS=OFF -DLIBXSLT_WITH_PROGRAMS=OFF -DLIBXSLT_WITH_PROFILER=OFF",
+        "cmake --build out",
+        "cmake --install out",
+        "sh zigsaw/implibs.sh \"$PREFIX/lib\""
+      ]
+    },
+    {
+      "name": "libgsf",
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2", "LD": "sh B:/src/libgsf/zigsaw/ld.sh", "LDFLAGS": "-Wl,-s -Wl,-Brepro", "PATH_SEPARATOR": ";", "PERL": "perl" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/libgsf/1.14/libgsf-1.14.60.tar.xz",
+          "sha256": "83e12c36a099a8a7019bf425e2c24af66eeb2ef5874251e694431a07d9805dae",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
+        { "path": "gtk4-sdk/autotools-ld.sh", "dest": "zigsaw/ld.sh" },
+        { "path": "gtk4-sdk/implibs.sh", "dest": "zigsaw/implibs.sh" }
+      ],
+      "build": [
+        "sh zigsaw/mtimes.sh",
+        "{ echo EXPORTS; cat gsf/libgsf.syms; } > gsf/libgsf.def",
+        "sed -i 's|^\t$(srcdir)/libgsf.syms $(am__append_2)$|\t$(srcdir)/libgsf.def $(am__append_2)|' gsf/Makefile.in",
+        "grep -q '(srcdir)/libgsf.def ' gsf/Makefile.in",
+        "sdk=$(pkg-config --variable=prefix glib-2.0) && sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --disable-dependency-tracking --disable-introspection --disable-gtk-doc --without-gdk-pixbuf --without-bz2 --with-libiconv-prefix=\"$sdk\" --with-libintl-prefix=\"$sdk\" CPPFLAGS=\"-I$sdk/include\" LDFLAGS=\"$LDFLAGS -L$sdk/lib\" ac_executable_extensions=.exe lt_cv_deplibs_check_method=pass_all > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
+        "sed -i 's/ -shared -nostdlib / -shared /' libtool",
+        "make -j\"$(nproc)\" -C gsf",
+        "make -C po",
+        "make -C gsf install",
+        "make -C po install",
+        "make install-pkgconfigDATA",
+        "sh zigsaw/implibs.sh \"$PREFIX/lib\""
+      ]
+    },
+    {
+      "name": "intltool",
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "PATH_SEPARATOR": ";" },
+      "sources": [
+        {
+          "url": "https://launchpad.net/intltool/trunk/0.51.0/+download/intltool-0.51.0.tar.gz",
+          "sha256": "67c74d94196b153b774ab9f89b2fa6c6ba79352407037c8c14d5aeb334e959cd",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" }
+      ],
+      "build": [
+        "sh zigsaw/mtimes.sh",
+        "sed -i 's/^%: %.in Makefile$/.SUFFIXES: .in\\n.in:/' Makefile.in",
+        "grep -q '^\\.in:$' Makefile.in",
+        "sh ./configure --prefix=\"$PREFIX\" ac_executable_extensions=.exe > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
+        "make",
+        "make install",
+        "sed -i '1s|^#!.*/perl.exe|#!/usr/bin/perl|' \"$PREFIX\"/bin/intltool-*",
+        "head -1 \"$PREFIX/bin/intltool-merge\" | grep -q '^#!/usr/bin/perl -w$'"
+      ]
+    },
+    {
+      "name": "goffice",
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2 -Wno-implicit-function-declaration", "CPP": "cc -E", "LD": "sh B:/src/goffice/zigsaw/ld.sh", "LDFLAGS": "-Wl,-s -Wl,-Brepro", "PATH_SEPARATOR": ";", "PERL": "perl", "PERLIO": "perlio" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/goffice/0.10/goffice-0.10.62.tar.xz",
+          "sha256": "500eaff50628faa75adb3cd560236a4db498d9e7c52c036b78fa9a57f21805b3",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
+        { "path": "gtk4-sdk/autotools-ld.sh", "dest": "zigsaw/ld.sh" },
+        { "path": "gnumeric/pdpmake.sh", "dest": "zigsaw/pdpmake.sh" },
+        { "path": "gnumeric/export-all.h", "dest": "zigsaw/export-all.h" }
+      ],
+      "build": [
+        "sh zigsaw/mtimes.sh",
+        "find . -name '*.h.in' -exec touch -t 200001010000.02 {} +",
+        "sh zigsaw/pdpmake.sh",
+        "sed -i 's/-Wl,--enable-runtime-pseudo-reloc,--export-all-symbols/-Wl,--export-all-symbols/' configure",
+        "! grep -q enable-runtime-pseudo-reloc configure",
+        "sdk=$(pkg-config --variable=prefix glib-2.0) && sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --disable-dependency-tracking --disable-introspection --disable-gtk-doc --with-config-backend=keyfile --without-long-double --with-lasem=no --with-libiconv-prefix=\"$sdk\" --with-libintl-prefix=\"$sdk\" CPPFLAGS=\"-I$sdk/include\" LDFLAGS=\"$LDFLAGS -L$sdk/lib\" ac_executable_extensions=.exe lt_cv_deplibs_check_method=pass_all > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
+        "grep -q 'Configuration backend:\tkeyfile' configure.log",
+        "sed -i 's/ -shared -nostdlib / -shared /' libtool",
+        "make -j\"$(nproc)\" CFLAGS=\"$CFLAGS -include B:/src/goffice/zigsaw/export-all.h\"",
+        "make install"
+      ]
+    },
+    {
+      "name": "gnumeric",
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2 -DGNM_VAR_DECL=extern -Wno-implicit-function-declaration", "CPP": "cc -E", "LD": "sh B:/src/gnumeric/zigsaw/ld.sh", "LDFLAGS": "-Wl,-s -Wl,-Brepro", "PATH_SEPARATOR": ";", "PERL": "perl", "PERLIO": "perlio", "YACC": "true", "ITSTOOL": "true", "XMLLINT": "xmllint", "GLIB_GENMARSHAL": "glib-genmarshal" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/gnumeric/1.12/gnumeric-1.12.62.tar.xz",
+          "sha256": "89331121321b9bad72d37af5a6d13a0a636f0fbb0880f0ea1f2cf8b7ab9ae631",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
+        { "path": "gtk4-sdk/autotools-ld.sh", "dest": "zigsaw/ld.sh" },
+        { "path": "gnumeric/pdpmake.sh", "dest": "zigsaw/pdpmake.sh" },
+        { "path": "gnumeric/export-all.h", "dest": "zigsaw/export-all.h" }
+      ],
+      "build": [
+        "sh zigsaw/mtimes.sh",
+        "find . -name '*.h.in' -exec touch -t 200001010000.02 {} +",
+        "sh zigsaw/pdpmake.sh",
+        "sed -i 's/^SUBDIRS = \\(.*\\) templates doc tools schemas test introspection$/SUBDIRS = \\1 templates/' Makefile.in",
+        "grep -q '^SUBDIRS = .* icons @COMPONENT_DIR@ templates$' Makefile.in",
+        "sed -i 's/ plan-perfect applix openoffice / plan-perfect openoffice /' plugins/Makefile.in",
+        "grep -q 'qpro plan-perfect openoffice mps' plugins/Makefile.in",
+        "sed -i 's/^@WITH_NATIVE_WIN32_TRUE@am__append_10 = -no-undefined -export-symbols libspreadsheet.def$/@WITH_NATIVE_WIN32_TRUE@am__append_10 = -no-undefined/' src/Makefile.in",
+        "grep -q '^@WITH_NATIVE_WIN32_TRUE@am__append_10 = -no-undefined$' src/Makefile.in",
+        "sed -i 's/ --include-dir $(srcdir) -i / -I$(srcdir) -i /' src/Makefile.in",
+        "grep -q ' -I$(srcdir) -i ' src/Makefile.in",
+        "sed -i 's/^@WITH_NATIVE_WIN32_TRUE@am__append_6 = -mwindows /@WITH_NATIVE_WIN32_TRUE@am__append_6 = -Wl,--subsystem,windows /' src/Makefile.in",
+        "grep -q '^@WITH_NATIVE_WIN32_TRUE@am__append_6 = -Wl,--subsystem,windows ' src/Makefile.in",
+        "sed -i 's/-Wl,--enable-runtime-pseudo-reloc,--export-all-symbols/-Wl,--export-all-symbols/' configure",
+        "! grep -q enable-runtime-pseudo-reloc configure",
+        "sed -i '/g_option_context_set_delocalize/d' src/main-application.c",
+        "! grep -q set_delocalize src/main-application.c",
+        "sdk=$(pkg-config --variable=prefix glib-2.0) && sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --disable-dependency-tracking --disable-introspection --disable-gtk-doc --without-python --without-perl --with-gda=no --without-psiconv --without-paradox --with-libiconv-prefix=\"$sdk\" --with-libintl-prefix=\"$sdk\" CPPFLAGS=\"-I$sdk/include\" LDFLAGS=\"$LDFLAGS -L$sdk/lib\" ac_executable_extensions=.exe lt_cv_deplibs_check_method=pass_all > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
+        "sed -i 's/ -shared -nostdlib / -shared /' libtool",
+        "make -j\"$(nproc)\" CFLAGS=\"$CFLAGS -include B:/src/gnumeric/zigsaw/export-all.h\"",
+        "make install",
+        "mkdir -p \"$PREFIX/share/icons\" && cp icons/win32-gnumeric.ico \"$PREFIX/share/icons/gnumeric.ico\""
+      ]
+    }
+  ]
+}

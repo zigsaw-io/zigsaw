@@ -795,6 +795,115 @@ rnote-cli create notes.rnote; rnote-cli import notes.rnote -i notes.xopp
 rnote-cli export doc --output-file notes.pdf notes.rnote
 ```
 
+### GTK 3
+
+GTK 3 is built on what GTK 4's SDK already has (GLib, Pango, cairo,
+gdk-pixbuf, librsvg, libepoxy, HarfBuzz, gettext), so its images add only
+what GTK 4's don't:
+
+- **[`org.gtk.Gtk3.Sdk`](recipes/gtk3-sdk.json)** lists GTK 4's SDK as its
+  SDK, and builds ATK (at-spi2-core's, without AT-SPI) and GTK 3.24.52 for
+  Windows, its input methods built in, with its demos, and the legacy
+  Adwaita icons, whose full-colour names GTK 3's widgets use (GTK 4's
+  Adwaita 51 inherits them). It keeps headers, import libraries and
+  pkg-config files, which name GLib's and the rest by pkg-config name, so a
+  build finds them in GTK 4's SDK.
+- **[`org.gtk.Gtk3`](recipes/gtk3.json)** is the runtime, made from it as
+  GTK 4's is. GLib finds the settings schemas next to its own DLL, in GTK
+  4's runtime, so this one names its own with `GSETTINGS_SCHEMA_DIR`.
+
+A GTK 3 app lists both runtimes and both SDKs, as Pinta lists GTK's and
+.NET's, and finds GTK 3's DLLs in one runtime's `bin` and GLib's in the
+other's. The two runtimes are layers of their own, shared with every other
+app that has them:
+
+```json
+"runtimes": {
+  "gtk": "org.gtk.Gtk4:4.24.1@sha256:...",
+  "gtk3": "org.gtk.Gtk3:3.24.52@sha256:..."
+},
+"sdk": {
+  "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:...",
+  "gtk3sdk": "org.gtk.Gtk3.Sdk:3.24.52@sha256:..."
+}
+```
+
+A runtime can't run by itself, as runtimes have no runtimes of their own,
+so GTK 3's demos are an app of their own on both,
+**[`org.gtk.Gtk3demo`](recipes/gtk3demo.json)**, as on Flathub: it exports
+`gtk3-demo`, `gtk3-widget-factory` and `gtk3-icon-browser`, and adds "GTK 3
+Demo" and "GTK 3 Widget Factory" to the Start menu, with icons
+[made of GTK's PNGs](recipes/gtk3/png2ico.sh).
+
+GTK 3 is GTK 4's build, with three changes: its install doesn't run
+`gio-querymodules` for module directories a Windows build doesn't have;
+`gdk-3.0.pc` asks for `-luuid` rather than `-Wl,-luuid`, which zig's `cc`
+refuses; and its file chooser, places sidebar and file button handle a
+Desktop that isn't there. Windows has no Desktop folder for a run that
+isn't given it ([your folders](../README.md#your-folders)), and
+GTK 3 took that for a folder at the path NULL. Its demos are built as GUI
+programs, so they get the windowless shim. And it maps GTK's SDK's
+directory to a fixed name (`-fmacro-prefix-map`): a GLib header GTK
+includes names its own file, which is in the SDK's deployment, whose path
+differs between stores.
+
+### Gnumeric
+
+[Gnumeric](recipes/gnumeric.json) 1.12.62, a spreadsheet on GTK 3, is
+built from its release with goffice 0.10.62 (its charts and file formats'
+support), libgsf 1.14.60 (OLE2 and zip containers), libxslt 1.1.45 and
+intltool, with GTK's SDKs, CMake for libxslt, and Perl for intltool's
+scripts and the build's own. It reads and writes Excel (`.xls`, `.xlsx`),
+OpenDocument, its own `.gnumeric` and a dozen other formats, prints to PDF,
+and has its solvers and its statistics tools; its settings are in a key
+file in its data directory (goffice's `keyfile` backend; on Windows it
+would use the registry). It isn't built with its Python, Perl and database
+plugins, nor its help, which needs yelp; the Applix plugin is left out, as
+its exporter's code isn't in the release.
+
+`ssconvert` converts between formats without a window, and `ssindex`,
+`ssgrep` and `ssdiff` search and compare spreadsheets:
+
+```powershell
+ssconvert sales.csv sales.xlsx
+ssconvert --export-type=Gnumeric_pdf:pdf_assistant sales.xlsx sales.pdf
+```
+
+It's offered for `.gnumeric`, `.xlsx`, `.xls`, `.ods` and `.csv` files,
+and may use the user's Desktop, Documents and Downloads.
+
+libgsf, goffice and Gnumeric build with their releases' `configure` and
+BusyBox's make, like hunspell and enchant above, with more:
+
+- Autoconf's `configure` takes PATH apart at `:` unless told otherwise, as
+  BusyBox's sh gives it one where it can't tell `;` is the separator, and
+  looks for programs only by their bare names, without `.exe`: so it found
+  no `pkg-config` or `windres` by itself. `PATH_SEPARATOR=;` and
+  `ac_executable_extensions=.exe` fix both, the latter on `configure`'s
+  command line (BusyBox's sh upper-cases the names of variables it's given).
+- BusyBox's make has neither GNU make's pattern rules nor `$(shell ...)`:
+  [a script](recipes/gnumeric/pdpmake.sh) turns intltool's rules for
+  translated files into a POSIX suffix rule and its lists of languages into
+  POSIX `!=` assignments (without which no translation was installed), and
+  names the source in rules where GNU make's `$<` would have.
+- intltool's scripts start `#!/usr/bin/perl`, which BusyBox's sh runs with
+  the `perl` on PATH, where a drive letter in the line wouldn't run.
+- Strawberry Perl reads files as text on Windows unless told otherwise,
+  which drops carriage returns: goffice's script that embeds its images
+  into the library broke a PNG. `PERLIO=perlio` reads as Perl does on Unix.
+- `-mwindows` is ignored by zig's `cc` (it says so), so Gnumeric links with
+  `-Wl,--subsystem,windows` to be a GUI program.
+- Gnumeric's plugins are DLLs that GModule looks things up in by name, not
+  all of them marked for export: they're linked with
+  `-Wl,--export-all-symbols`, which zig's linker takes and ignores, exporting
+  only what's marked if anything is. [A header](recipes/gnumeric/export-all.h)
+  makes `G_MODULE_EXPORT` mark nothing, so everything is exported, as GNU ld
+  does. libspreadsheet, Gnumeric's own library, exports everything that way
+  too: the list its build makes from some of its headers misses functions
+  `ssconvert` and the Excel plugin use.
+- `glib-genmarshal` is a Python script; a `python3` in the build runs it with
+  Meson's Python.
+
 ## Rust
 
 The Rust SDK image, [`org.rust-lang.rust`](recipes/rust.json), is the

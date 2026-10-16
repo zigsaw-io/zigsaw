@@ -1,0 +1,88 @@
+{
+  "id": "org.gtk.Gtk3.Sdk",
+  "version": "3.24.52",
+  "name": "GTK 3 SDK",
+  "summary": "GTK 3 and ATK, with headers and import libraries, to build GTK 3 apps with the GTK 4 SDK, which has the rest of the stack",
+  "homepage": "https://www.gtk.org/",
+  "license": "LGPL-2.1-or-later",
+  "command": "about.bat",
+  "path": ["bin"],
+  "exports": {},
+  "sdk": {
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:306a050719faf5662f61c53db889fe5f4e488c6f2e0ec23958de3b56c464074d"
+  },
+  "modules": [
+    {
+      "name": "about",
+      "build": [
+        "printf '%s\\r\\n' '@echo off' 'echo GTK 3 for apps built with zigsaw. It needs the GTK 4 runtime, org.gtk.Gtk4, for GLib, Pango, cairo and the rest:' 'echo an app lists both. gtk3-demo is org.gtk.Gtk3demo.' > \"$PREFIX/about.bat\""
+      ]
+    },
+    {
+      "name": "crt-noexport",
+      "build": [
+        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
+        "cc -c noexport.s -o noexport.o"
+      ]
+    },
+    {
+      "name": "atk",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/at-spi2-core/2.60/at-spi2-core-2.60.7.tar.xz",
+          "sha256": "92893c8188355264ba639ca3d27943437b26ef069971ea9faa4b20de40595b9a",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Datk_only=true -Dintrospection=disabled -Ddocs=false -Dx11=disabled",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "gtk",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu /:output-format coff" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/gtk/3.24/gtk-3.24.52.tar.xz",
+          "sha256": "80931fa472a77b9a164f6740e3c0b444fac6770054632d35a7ff9d679e5e7b9f",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "sed -i '/^    gio_querymodules: gio_module_dirs,$/d' meson.build",
+        "! grep -q gio_querymodules meson.build",
+        "sed -i \"s/^    pc_gdk_extra_libs += \\['-Wl,-luuid'\\]$/    pc_gdk_extra_libs += ['-luuid']/\" meson.build",
+        "! grep -q -- -Wl,-luuid meson.build",
+        "sed -i 's/^  if (g_strcmp0 (desktopdir, g_get_home_dir ()) != 0)$/  if (desktopdir != NULL \\&\\& g_strcmp0 (desktopdir, g_get_home_dir ()) != 0)/' gtk/gtkfilechooserbutton.c",
+        "sed -i 's/^  if (!g_strcmp0 (name, g_get_home_dir ()))$/  if (name == NULL || !g_strcmp0 (name, g_get_home_dir ()))/' gtk/gtkfilechooserwidget.c",
+        "sed -i 's/^  if (path_is_home_dir (name))$/  if (name == NULL || path_is_home_dir (name))/' gtk/gtkplacessidebar.c",
+        "sed -i \"s/^  install: true$/  win_subsystem: 'windows',\\n  install: true/\" demos/gtk-demo/meson.build demos/widget-factory/meson.build demos/icon-browser/meson.build",
+        "[ \"$(cat demos/gtk-demo/meson.build demos/widget-factory/meson.build demos/icon-browser/meson.build | grep -c \"^  win_subsystem: 'windows',$\")\" = 4 ]",
+        "grep -q 'desktopdir != NULL && g_strcmp0' gtk/gtkfilechooserbutton.c && grep -q 'name == NULL || !g_strcmp0 (name, g_get_home_dir' gtk/gtkfilechooserwidget.c && grep -q 'name == NULL || path_is_home_dir (name)' gtk/gtkplacessidebar.c",
+        "sdk=$(pkg-config --variable=prefix glib-2.0) && meson setup out --prefix=\"$PREFIX\" --buildtype=release \"-Dc_args=-fmacro-prefix-map=$sdk=gtksdk\" -Dwin32_backend=true -Dx11_backend=false -Dwayland_backend=false -Dbroadway_backend=false -Dquartz_backend=false -Dxinerama=no -Dcolord=no -Dintrospection=false -Dgtk_doc=false -Dman=false -Ddemos=true -Dexamples=false -Dtests=false -Dinstalled_tests=false -Dbuiltin_immodules=all",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "adwaita-icon-theme-legacy",
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/adwaita-icon-theme-legacy/46/adwaita-icon-theme-legacy-46.2.tar.xz",
+          "sha256": "548480f58589a54b72d18833b755b15ffbd567e3187249d74e2e1f8f99f22fb4",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\"",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "implibs",
+      "sources": [{ "path": "gtk4-sdk/implibs.sh" }],
+      "build": ["sh implibs.sh \"$PREFIX/lib\""]
+    }
+  ]
+}

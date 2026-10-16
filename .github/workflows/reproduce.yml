@@ -56,7 +56,7 @@ jobs:
       - name: Build the published recipes and compare them with the published images
         shell: bash
         env:
-          SKIP_RECIPES: perl.json cargo-c.json gettext.json gtk4-sdk.json gtk4.json gnome-text-editor.json rnote.json
+          SKIP_RECIPES: perl.json cargo-c.json gettext.json gtk4-sdk.json gtk4.json gnome-text-editor.json rnote.json gtk3-sdk.json gtk3.json gtk3demo.json gnumeric.json
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
           bash tests/published.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/published.txt"

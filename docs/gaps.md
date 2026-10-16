@@ -302,3 +302,30 @@
   in a project fails its build, which git would commit as a link.
 - `push --sources` doesn't push a project's files, as they're local, like
   a recipe's local files.
+- A GTK 3 app lists two runtimes, GTK's and GTK 3's, and two SDKs: GTK 3's
+  images have only GTK 3 and ATK, and runtimes can't have runtimes of their
+  own. GTK 3's runtime is built against one GTK runtime, pinned by its
+  app; an app that pinned another one would run GTK 3 on a GLib it wasn't
+  built with. GTK 3's demos are an app (`org.gtk.Gtk3demo`), as a runtime
+  can't run on its own. GTK 3's SDK exports nothing: building GTK 3
+  programs without a recipe takes GTK's SDK's commands, with GTK 3's
+  pkg-config files added to `PKG_CONFIG_PATH` by hand.
+- GTK 3's SDK is built without introspection, GTK's broadway backend and
+  printing to a file (the Unix print dialog's): GTK 3 prints with Windows'
+  own dialog.
+- Gnumeric has no help (it needs yelp), and is built without its Python and
+  Perl plugins, its database plugins (libgda) and the Psiconv and Paradox
+  formats. It doesn't read Applix files: the Applix plugin is left out, as
+  its exporter's code isn't in the release. Its settings are in
+  a key file in its data directory, not the registry, where Gnumeric for
+  Windows usually keeps them.
+- The CMake files of GTK's SDK's libxml2 name the directory GTK's SDK was
+  built in (`B:/prefix`), so CMake's `find_package(LibXml2 CONFIG)` fails
+  against the SDK; Gnumeric's recipe gives libxslt a copy with the SDK's
+  real path. GTK's SDK's `windres` doesn't take `--include-dir` (Gnumeric's
+  recipe passes `-I`).
+- A build sees its SDK and runtime images where the store deployed them, a
+  path that differs between stores. A header in one of them that names its
+  own file (`__FILE__`, as GLib's `g_return_if_fail` does) puts that path
+  into what's built, which then differs from a build in another store; GTK
+  3's recipe maps it to a fixed name with `-fmacro-prefix-map`.

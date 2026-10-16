@@ -7,6 +7,9 @@
   "exports": {
     "perl": { "command": "perl/bin/perl.exe" }
   },
+  "sdk": {
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
   "cleanup": ["/c", "/data", "/win32", "/perl/site", "/perl/html", "/perl/man", "*.pod", "/portableshell.bat", "/relocation.pl.bat", "/update_env.pl.bat", "/README.txt", "/DISTRIBUTIONS.txt"],
   "modules": [
     {
@@ -16,6 +19,22 @@
           "url": "https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54231_64bit/strawberry-perl-5.42.3.1-64bit-portable.zip",
           "sha256": "6a081a811781c30aca51dbc036afd93092af91e3297901f02c17043795a10690"
         }
+      ]
+    },
+    {
+      "name": "xs-dlls",
+      "sources": [
+        {
+          "url": "https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54231_64bit/strawberry-perl-5.42.3.1-64bit-portable.zip",
+          "sha256": "6a081a811781c30aca51dbc036afd93092af91e3297901f02c17043795a10690",
+          "type": "file",
+          "dest": "strawberry.zip"
+        }
+      ],
+      "build": [
+        "unzip -q strawberry.zip 'c/bin/*__.dll'",
+        "test -f c/bin/libexpat-1__.dll",
+        "mkdir -p \"$PREFIX/perl/bin\" && cp c/bin/*__.dll \"$PREFIX/perl/bin/\""
       ]
     }
   ]

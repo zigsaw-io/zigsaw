@@ -1,0 +1,16 @@
+{
+  "id": "test.gtk.hello3",
+  "version": "1",
+  "command": "bin/hello-gtk3.exe",
+  "path": ["bin"],
+  "permissions": { "filesystem": ["cwd"] },
+  "runtimes": { "gtk": "org.gtk.Gtk4@@GTK@", "gtk3": "org.gtk.Gtk3@@GTK3@" },
+  "sdk": { "gtksdk": "org.gtk.Gtk4.Sdk@@GTKSDK@", "gtk3sdk": "org.gtk.Gtk3.Sdk@@GTK3SDK@" },
+  "modules": [
+    {
+      "name": "hello3",
+      "sources": [{ "path": "meson.build" }, { "path": "hello3.c" }],
+      "build": ["meson setup out --prefix=\"$PREFIX\"", "meson install -C out"]
+    }
+  ]
+}

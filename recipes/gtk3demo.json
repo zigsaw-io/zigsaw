@@ -1,0 +1,43 @@
+{
+  "id": "org.gtk.Gtk3demo",
+  "version": "3.24.52",
+  "name": "GTK 3 Demo",
+  "summary": "GTK 3's demos: its widgets and APIs at work, every widget in every state, and its icons",
+  "homepage": "https://www.gtk.org/",
+  "license": "LGPL-2.1-or-later",
+  "command": "${gtk3}/bin/gtk3-demo.exe",
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "gtk3-demo": { "command": "${gtk3}/bin/gtk3-demo.exe" },
+    "gtk3-widget-factory": { "command": "${gtk3}/bin/gtk3-widget-factory.exe" },
+    "gtk3-icon-browser": { "command": "${gtk3}/bin/gtk3-icon-browser.exe" }
+  },
+  "shortcuts": {
+    "GTK 3 Demo": { "command": "gtk3-demo", "description": "GTK 3's widgets and APIs at work", "icon": "gtk3-demo.ico" },
+    "GTK 3 Widget Factory": { "command": "gtk3-widget-factory", "description": "GTK 3's widgets in every state", "icon": "gtk3-widget-factory.ico" }
+  },
+  "runtimes": {
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:28c0ec8ecbe3b4c90b5dcb655d7cd73847669107934666722404b087494731fb",
+    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:9871974c45518fb29de341f715ca0e59d74f6b27c617dd38f2dec2391272b81a"
+  },
+  "sdk": {
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:306a050719faf5662f61c53db889fe5f4e488c6f2e0ec23958de3b56c464074d"
+  },
+  "modules": [
+    {
+      "name": "icons",
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/gtk/3.24/gtk-3.24.52.tar.xz",
+          "sha256": "80931fa472a77b9a164f6740e3c0b444fac6770054632d35a7ff9d679e5e7b9f",
+          "strip": 1
+        },
+        { "path": "gtk3/png2ico.sh", "dest": "zigsaw/png2ico.sh" }
+      ],
+      "build": [
+        "mkdir -p \"$PREFIX\"",
+        "for app in gtk-demo/gtk3-demo widget-factory/gtk3-widget-factory; do d=demos/${app%/*}/data; n=${app#*/}; sh zigsaw/png2ico.sh \"$PREFIX/$n.ico\" 16:$d/16x16/$n.png 24:$d/24x24/$n.png 32:$d/32x32/$n.png 48:$d/48x48/$n.png 256:$d/256x256/$n.png || exit 1; done"
+      ]
+    }
+  ]
+}

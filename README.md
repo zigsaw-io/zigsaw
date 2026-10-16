@@ -164,13 +164,17 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | CMake, with Ninja 1.13.2 | `org.cmake.cmake` | 4.4.4 | `cmake`, `ctest`, `cpack`, `ninja` |
 | zstd (built from source) | `com.github.facebook.zstd` | 1.5.7 | `zstd`, `unzstd`, `zstdcat` |
 | Meson, with Ninja and pkgconf | `com.mesonbuild.meson` | 1.12.1 | `meson` |
-| Perl (Strawberry Perl, for building OpenSSL) | `org.perl.perl` | 5.42.3.1 | `perl` |
+| Perl (Strawberry Perl, for building OpenSSL and Gnumeric) | `org.perl.perl` | 5.42.3.1 | `perl` |
 | cargo-c (for building librsvg) | `com.github.lu-zero.cargo-c` | 0.10.25 | `cargo-cbuild`, `cargo-cinstall` |
 | GNU gettext, with libiconv (built from source, for GTK's SDK) | `org.gnu.gettext` | 1.0 | `gettext`, `ngettext`, `msgfmt`, `msgmerge`, `msginit`, `msgcat`, `msgunfmt`, `xgettext`, `iconv` |
 | GTK SDK (built from source; with zig, Meson and BusyBox) | `org.gtk.Gtk4.Sdk` | 4.24.1 | `cc`, `c++`, `ar`, `rc`, `windres`, `pkg-config`, `meson`, `ninja`, `sh`, `make`, `glib-compile-resources`, `glib-compile-schemas`, `gtk4-builder-tool`, `msgfmt`, `msgmerge`, `xgettext` |
 | GTK, with libadwaita, libsoup, librsvg and enchant (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo`, `gio`, `pango-view`, `pango-list` |
 | GNOME Text Editor (built from source, on GTK) | `org.gnome.TextEditor` | 51.0 | `gnome-text-editor` |
 | Rnote (built from source, on GTK) | `com.github.flxzt.rnote` | 0.14.2 | `rnote`, `rnote-cli` |
+| GTK 3 SDK (built from source, with GTK's SDK) | `org.gtk.Gtk3.Sdk` | 3.24.52 | |
+| GTK 3 (from its SDK; with GTK's runtime) | `org.gtk.Gtk3` | 3.24.52 | |
+| GTK 3's demos (on GTK and GTK 3) | `org.gtk.Gtk3demo` | 3.24.52 | `gtk3-demo`, `gtk3-widget-factory`, `gtk3-icon-browser` |
+| Gnumeric (built from source, on GTK and GTK 3) | `org.gnome.Gnumeric` | 1.12.62 | `gnumeric`, `ssconvert`, `ssindex`, `ssgrep`, `ssdiff` |
 | 7-Zip | `org.7_zip.7zip` | 26.04 | `7z`, `7zfm`, `7zg` |
 | Notepad++ | `org.notepad_plus_plus.NotepadPlusPlus` | 8.9.8.1 | `notepad++` |
 | SumatraPDF | `org.sumatrapdfreader.SumatraPDF` | 3.6.1 | `sumatrapdf` |
@@ -205,6 +209,11 @@ and Rnote are translated. GTK's demos, Text Editor and Rnote are GUI apps:
 they open no console, and get [Start menu shortcuts](#start-menu-shortcuts)
 with their icons. Explorer offers Rnote for `.rnote` and `.xopp` files and
 Text Editor for `.txt`, `.md` and `.log` ([file associations](#file-associations)).
+[GTK 3](docs/recipes.md#gtk-3)'s images add GTK 3 and ATK to GTK's, which
+have the rest of what it's built on: a GTK 3 app lists both runtimes.
+Gnumeric, a spreadsheet that reads and writes Excel and OpenDocument, runs
+on them, with its command-line converter `ssconvert`; Explorer offers it
+for `.gnumeric`, `.xlsx`, `.xls`, `.ods` and `.csv`.
 7-Zip, Notepad++, SumatraPDF and VLC are the programs their projects
 publish, packaged from upstream's archives, with shortcuts and the kinds of
 file they open ([prebuilt GUI apps](#prebuilt-gui-apps)). 7-Zip's image is
@@ -866,6 +875,7 @@ bash tests/shims.sh     # command shims end to end, also for commands installed 
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
 bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
+bash tests/gtk3.sh      # a GTK 3 app built against GTK 3's SDK and GTK's, on both runtimes, in each sandbox; GTK 3's demos; Gnumeric's ssconvert between CSV, Excel and OpenDocument in each sandbox, its file associations, and opening a file with --file (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API (needs PHP_HOME or BUILD_HOME; local only)

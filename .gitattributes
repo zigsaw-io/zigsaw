@@ -20,3 +20,7 @@ tests/install/*.cmd text eol=crlf
 # every checkout.
 recipes/php-sdk/* text eol=lf
 recipes/kanboard/* text eol=lf
+
+# Likewise for GTK's SDK and Gnumeric (windres.c, patches, a header).
+recipes/gtk4-sdk/* text eol=lf
+recipes/gnumeric/* text eol=lf
