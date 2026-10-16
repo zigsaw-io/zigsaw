@@ -729,6 +729,34 @@ Composer, which doesn't, installs at low.
   present (7z)" in a store where 7-Zip's image is installed, through its
   export.
 
+## Projects with their own recipe
+
+- **zigsaw builds itself to the same bytes.** `zigsaw build` in this
+  checkout runs `zig build -Dstrip` in `B:\src\zigsaw`, with zig's image,
+  and its three programs are the same bytes as a `zig build -Dstrip` of the
+  checkout where it is, as `-Dstrip` leaves out the debug information that
+  would name the directory. So are the programs of the release package
+  that scripts/package.sh makes, when that package's own zigsaw builds the
+  checkout.
+- **It takes about 2.5 minutes in a fresh store, a minute after that**:
+  157 s for the build, plus 30 s to pull zig's image the first time; 67 s
+  once zig's `${cache}` has what zig builds once for the target, the rest
+  being zig compiling zigsaw, whose own cache (`.zig-cache`) is fresh in
+  each build. With nothing changed, `zigsaw build` takes the image built
+  before, in under a second.
+- **Taking the files is quick**: zigsaw's 52 files in 10 to 35 ms, read
+  and hashed, which every `zigsaw build` does, even when it then takes the
+  image built before.
+- **git agrees.** A fixture with nested `.gitignore` files, `!`, an
+  anchored pattern, `**`, an upper-case `X.LOG` that `*.log` ignores, a
+  file name with a space and an empty directory gives the same files as
+  `git ls-files -co --exclude-standard` in it, git ignoring case too, as a
+  repository it makes on Windows has `core.ignorecase`.
+- **Windows reports junctions and symbolic links alike**, as reparse
+  points, which Zig's directory iterator gives as links before it looks at
+  whether they're directories, so a walk doesn't enter a junction by
+  mistake.
+
 ## Other findings
 
 - **Microsoft Defender quarantines zigsaw 0.19.0.** During a build of

@@ -291,3 +291,14 @@
   neither of; with MSVC's build too. redis's tests run against miniredis,
   as Redis has no Windows build: 46 of them fail there for both builds
   (commands and `INFO` sections miniredis hasn't).
+- A project built from its `zigsaw.json` builds from scratch each time it
+  changes: zig's `${cache}` keeps zig's compiles quick, but other tools'
+  incremental state, such as cargo's `target\`, isn't kept between builds.
+- Each `zigsaw build` of a project reads all of its files to hash them,
+  even when it then takes the image built before: quick for a source tree,
+  slower for one with large assets that aren't ignored or skipped.
+- A project's files leave out a file that a `.gitignore` ignores but git
+  tracks anyway (added with `git add -f`), which git would commit. A link
+  in a project fails its build, which git would commit as a link.
+- `push --sources` doesn't push a project's files, as they're local, like
+  a recipe's local files.

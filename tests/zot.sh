@@ -87,10 +87,12 @@ else
     cat "$dir"/zot-*.log
     code=1
 fi
-# Ending zigsaw ends zot with it: the run's job object.
+# Ending zigsaw ends zot with it: the run's job object. For a moment, zot
+# may still be exiting, in $dir.
 kill $plain $login 2>/dev/null
 wait 2>/dev/null
-rm -rf "$dir"
+for _ in $(seq 20); do rm -rf "$dir" 2>/dev/null && break; sleep 0.5; done
+[ ! -e "$dir" ] || rm -rf "$dir"
 if $own_store; then
     for id in $ZOT org.golang.go net.frippery.busybox; do z rm --delete-data $id >/dev/null 2>&1; done
     z prune --downloads >/dev/null 2>&1

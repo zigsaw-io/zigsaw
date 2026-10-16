@@ -38,6 +38,7 @@ const Fetcher = @import("fetch.zig");
 const msvc_host = @import("msvc.zig");
 const oci = @import("oci.zig");
 const process = @import("process.zig");
+const project = @import("project.zig");
 const recipe = @import("recipe.zig");
 const Store = @import("Store.zig");
 const win32 = @import("win32.zig");
@@ -66,25 +67,45 @@ pub fn build(ctx: *Context, recipe_path: []const u8, opts: Options) !install.Ima
         return fail("reading {s}: {t}", .{ recipe_path, err });
     const r = try recipe.parse(arena, recipe_path, bytes);
     const source = try Io.Dir.cwd().realPathFileAlloc(io, recipe_path, arena);
+    // A project's own files, once, for the inputs and for the build.
+    const projects = try project.Snapshots.take(ctx, r, recipe_path);
 
     // A host toolchain is an input zigsaw can't pin, so those builds are
     // never reused.
-    const inputs = if (r.host.len == 0) try inputHash(ctx, r, bytes, recipe_path) else null;
+    const inputs = if (r.host.len == 0) try inputHash(ctx, r, bytes, recipe_path, &projects) else null;
     if (inputs) |*h| if (!opts.rebuild and !opts.keep_build_dir) {
         if (try ctx.store.readBuildCache(arena, h)) |digest| if (try ctx.store.readCompleteImage(arena, digest)) |image| {
             if (ctx.verbose) note("{s} {s}: built before from the same inputs ({s}); --rebuild builds it again", .{ r.id, r.version, oci.shortDigest(digest) });
             return .{ .manifest_digest = digest, .manifest = image.manifest, .config = image.config, .source = source };
         };
     };
-    const image = try buildImage(ctx, r, recipe_path, source, opts);
+    const image = try buildImage(ctx, r, recipe_path, source, &projects, opts);
     if (inputs) |*h| try ctx.store.writeBuildCache(arena, h, image.manifest_digest);
     return image;
 }
 
+/// The recipe `zigsaw build` builds: the one given, or the zigsaw.json of
+/// the project directory given (the current one, if none is), as make
+/// builds a directory's Makefile.
+pub fn recipePath(ctx: *Context, arg: ?[]const u8) ![]const u8 {
+    if (arg) |p| {
+        const stat = Io.Dir.cwd().statFile(ctx.io, p, .{}) catch return p;
+        if (stat.kind != .directory) return p;
+    }
+    const dir = arg orelse ".";
+    const manifest = try std.fs.path.join(ctx.arena, &.{ dir, project.manifest_name });
+    if (!try Store.exists(ctx.io, manifest)) {
+        const shown = Io.Dir.cwd().realPathFileAlloc(ctx.io, dir, ctx.arena) catch dir;
+        return fail("{s} has no {s}; give a recipe, or a project directory with one", .{ shown, project.manifest_name });
+    }
+    return manifest;
+}
+
 /// A hash of everything a build's result depends on: this zigsaw, the
-/// recipe, and the contents of its local sources. URL sources, runtimes and
-/// SDK images are pinned by hash in the recipe itself.
-fn inputHash(ctx: *Context, r: recipe.Recipe, bytes: []const u8, recipe_path: []const u8) ![64]u8 {
+/// recipe, and the contents of its local sources, files and directories.
+/// URL sources, runtimes and SDK images are pinned by hash in the recipe
+/// itself.
+fn inputHash(ctx: *Context, r: recipe.Recipe, bytes: []const u8, recipe_path: []const u8, projects: *const project.Snapshots) ![64]u8 {
     const io = ctx.io;
     const arena = ctx.arena;
     var h: std.crypto.hash.sha2.Sha256 = .init(.{});
@@ -92,8 +113,12 @@ fn inputHash(ctx: *Context, r: recipe.Recipe, bytes: []const u8, recipe_path: []
     h.update(&(try Store.sha256File(io, try win32.selfExePath(arena))).hex);
     h.update(bytes);
     const base_dir = std.fs.path.dirname(recipe_path) orelse ".";
-    for (r.modules) |m| for (m.sources) |src| {
+    for (r.modules) |m| for (m.sources, 0..) |src, i| {
         const p = src.path orelse continue;
+        if (projects.get(m.name, i)) |s| {
+            h.update(s.hash);
+            continue;
+        }
         const full = if (std.fs.path.isAbsolute(p)) p else try std.fs.path.join(arena, &.{ base_dir, p });
         const file_hash = Store.sha256File(io, full) catch |err|
             return fail("module {s}: reading {s}: {t}", .{ m.name, full, err });
@@ -102,7 +127,7 @@ fn inputHash(ctx: *Context, r: recipe.Recipe, bytes: []const u8, recipe_path: []
     return std.fmt.bytesToHex(h.finalResult(), .lower);
 }
 
-fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: []const u8, opts: Options) !install.Image {
+fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: []const u8, projects: *const project.Snapshots, opts: Options) !install.Image {
     const arena = ctx.arena;
 
     // Runtimes go into the image and are on PATH while building. The SDK is
@@ -141,7 +166,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
     }
     for (r.modules) |m| build_info.network = build_info.network or m.network;
 
-    var sources: Sources = .{ .ctx = ctx, .fetcher = .{ .ctx = ctx, .base_dir = std.fs.path.dirname(recipe_path) orelse ".", .app = r.id } };
+    var sources: Sources = .{ .ctx = ctx, .fetcher = .{ .ctx = ctx, .base_dir = std.fs.path.dirname(recipe_path) orelse ".", .app = r.id }, .projects = projects };
     defer sources.deinit();
     var tree: Tree = undefined;
     var root: ?BuildRoot = null;
@@ -149,8 +174,8 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
     if (building) {
         // Every download first, so a missing or wrong hash fails the build
         // before anything is built.
-        for (r.modules) |m| for (m.sources) |src| {
-            if (src.image == null) _ = try sources.fetcher.fetch(src);
+        for (r.modules) |m| for (m.sources, 0..) |src, i| {
+            if (src.image == null and projects.get(m.name, i) == null) _ = try sources.fetcher.fetch(src);
         };
         root = try .init(ctx, r, tools.list.items);
         if (root.?.msvc) |tc| {
@@ -160,7 +185,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         // Then every vendor step, for the same reason.
         var vendored: std.json.ArrayHashMap([]const u8) = .{};
         for (r.modules) |m| if (m.vendor != null) {
-            try vendored.map.put(arena, m.name, try root.?.vendor(ctx, m, recipe_path));
+            try vendored.map.put(arena, m.name, try root.?.vendor(ctx, m, recipe_path, projects));
         };
         if (vendored.map.count() > 0) build_info.vendor = vendored;
         tree = try root.?.buildModules(ctx, &sources, r, recipe_path);
@@ -188,6 +213,9 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
     const start = ctx.now();
     const layer_file = try tree.writeLayerFile(ctx, .gzip);
     ctx.timed(start, "write layer ({d} entries)", .{tree.nodes.count()});
+    // Without build commands, a project's files went from its directory
+    // straight into the layer.
+    if (!building) try projects.recheck(ctx, null);
     try layers.append(arena, try ctx.store.putBlobFile(arena, layer_file.path, layer_file.hash, oci.media_type.layer_tar_gzip));
 
     const config_desc = try ctx.store.putBlob(arena, try oci.toJson(arena, config), oci.media_type.config);
@@ -233,6 +261,8 @@ fn checkCommand(ctx: *Context, tree: *const Tree, placeholders: oci.Placeholders
 const Sources = struct {
     ctx: *Context,
     fetcher: Fetcher,
+    /// The files of directory sources, as the build took them.
+    projects: *const project.Snapshots,
     archives: std.ArrayList(*Tree.Archive) = .empty,
     hashes: std.ArrayList([]const u8) = .empty,
     images: std.ArrayList([]const u8) = .empty,
@@ -246,7 +276,15 @@ const Sources = struct {
     fn add(s: *Sources, tree: *Tree, m: recipe.Module, recipe_path: []const u8) !void {
         const ctx = s.ctx;
         const arena = ctx.arena;
-        for (m.sources) |src| {
+        for (m.sources, 0..) |src, i| {
+            if (s.projects.get(m.name, i)) |snapshot| {
+                try s.hashes.append(arena, snapshot.hash);
+                tree.addTree(arena, &snapshot.tree, try Tree.normalizePath(arena, src.dest orelse ".")) catch |err| switch (err) {
+                    error.PathConflict => return fail("{s}: {s} is a file in one source and a directory in another", .{ recipe_path, tree.conflict }),
+                    else => |e| return e,
+                };
+                continue;
+            }
             if (src.image) |reference| {
                 // Its own files, as deployed: pulled if the store doesn't
                 // have the image, and kept like an SDK's.
@@ -516,6 +554,7 @@ const BuildRoot = struct {
             if (m.vendor == null) {
                 const dest = if (m.build.len == 0) prefix else try std.fs.path.join(arena, &.{ b.path, "src", m.name });
                 try writeSources(io, arena, &tree, m, dest);
+                try sources.projects.recheck(ctx, m.name);
             }
             if (m.build.len > 0) try b.runCommands(ctx, m, .build, .fail);
         }
@@ -531,12 +570,12 @@ const BuildRoot = struct {
     /// Either way, the build then starts from the same files: after the
     /// commands run, the module's directory and the build's profile folders
     /// start again from scratch, with only what the step left in its `dir`.
-    fn vendor(b: *const BuildRoot, ctx: *Context, m: recipe.Module, recipe_path: []const u8) ![]const u8 {
+    fn vendor(b: *const BuildRoot, ctx: *Context, m: recipe.Module, recipe_path: []const u8, projects: *const project.Snapshots) ![]const u8 {
         const io = ctx.io;
         const arena = ctx.arena;
         const v = m.vendor.?;
         const dest = try std.fs.path.join(arena, &.{ b.path, "src", m.name });
-        try unpackSources(ctx, m, recipe_path, dest);
+        try unpackSources(ctx, m, recipe_path, projects, dest);
 
         var cached: ?[]const u8 = if (v.sha256) |h| try ctx.store.path(arena, &.{ "cache", "downloads", h }) else null;
         if (cached != null and try Store.exists(io, cached.?)) {
@@ -561,7 +600,7 @@ const BuildRoot = struct {
             if (!std.mem.eql(u8, want, got))
                 return fail("sha256 mismatch for what module {s}'s vendor commands made in {s}\n  expected {s}\n  got      {s}", .{ m.name, v.dir, want, got });
             try Store.deleteTree(io, arena, dest);
-            try unpackSources(ctx, m, recipe_path, dest);
+            try unpackSources(ctx, m, recipe_path, projects, dest);
             try makeScratchDirs(ctx, b.path, .fresh);
             cached = kept;
         } else |err| {
@@ -572,7 +611,7 @@ const BuildRoot = struct {
             defer fetcher.deinit();
             cached = try fetcher.fromSources(v.sha256.?, try std.fmt.allocPrint(arena, "module {s}'s vendored files", .{m.name}), "its vendor commands failed");
             try Store.deleteTree(io, arena, dest);
-            try unpackSources(ctx, m, recipe_path, dest);
+            try unpackSources(ctx, m, recipe_path, projects, dest);
             try makeScratchDirs(ctx, b.path, .fresh);
         }
 
@@ -585,6 +624,7 @@ const BuildRoot = struct {
             else => return fail("module {s}: reading its vendored files ({s}): {t}", .{ m.name, cached.?, err }),
         };
         try writeSources(io, arena, &tree, m, dest);
+        try projects.recheck(ctx, m.name);
         return v.sha256.?;
     }
 
@@ -683,8 +723,8 @@ fn writeSources(io: Io, arena: Allocator, tree: *const Tree, m: recipe.Module, d
 
 /// Unpacks a module's sources into `dest`, all of them already downloaded,
 /// without noting their hashes for the record of the build.
-fn unpackSources(ctx: *Context, m: recipe.Module, recipe_path: []const u8, dest: []const u8) !void {
-    var sources: Sources = .{ .ctx = ctx, .fetcher = .{ .ctx = ctx, .base_dir = std.fs.path.dirname(recipe_path) orelse "." } };
+fn unpackSources(ctx: *Context, m: recipe.Module, recipe_path: []const u8, projects: *const project.Snapshots, dest: []const u8) !void {
+    var sources: Sources = .{ .ctx = ctx, .fetcher = .{ .ctx = ctx, .base_dir = std.fs.path.dirname(recipe_path) orelse "." }, .projects = projects };
     defer sources.deinit();
     var tree: Tree = .{};
     try sources.add(&tree, m, recipe_path);

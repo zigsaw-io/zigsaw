@@ -28,8 +28,9 @@ that make up its files, each with pinned sources:
 
 Modules go into the app's files in order, so a later one can overlay an
 earlier one. Sources are either a `url` (a `sha256` is required; leave it out
-once and the build error prints the hash to pin), a local `path`, or another
-`image` (see [images as sources](#images-as-sources)). A source
+once and the build error prints the hash to pin), a local `path` (a file,
+or a directory, such as a project's own: see [projects](#projects)), or
+another `image` (see [images as sources](#images-as-sources)). A source
 is a single `file`, or an archive (`zip`, `tar`, `tar.gz`/`tgz` or `tar.xz`)
 extracted into `dest` with optional `strip`. The type is inferred from the
 file name, or given as `type` for a URL that doesn't end in one. A link in a
@@ -388,6 +389,78 @@ This suits any tool that puts a project's locked dependencies in a
 directory, such as `cargo vendor` or `go mod vendor`. It relies on the tool
 fetching the same files every time, which a lockfile gives; the pinned hash
 catches it if not.
+
+## Projects
+
+A recipe can live in the project it builds, at its root, as `zigsaw.json`.
+`zigsaw build` with no argument builds the one in the current directory, as
+`make` builds its Makefile, and `zigsaw build <dir>` the one in `<dir>`;
+parent directories aren't searched. Its source is the project's own
+directory, a `path` that names a directory, `.` here. This repository's
+[`zigsaw.json`](../zigsaw.json) builds zigsaw:
+
+```json
+"sdk": { "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac..." },
+"modules": [
+  {
+    "name": "zigsaw",
+    "sources": [{ "path": ".", "skip": ["/.github", "/docs", "/recipes", "/scripts", "/tests", "/README.md"] }],
+    "shell": "cmd",
+    "build": ["zig build -Dstrip -p %PREFIX%"]
+  }
+]
+```
+
+A directory source gives the files git would commit in it:
+
+- **What the `.gitignore` files ignore stays out**: those in the
+  directory and below it, and those above it up to the top of its
+  repository (where `.git` is), with git's rules: `#` comments, `!` to keep
+  what an earlier pattern ignores (but not in an ignored directory, which
+  git doesn't enter, and neither does zigsaw), a trailing `/` for
+  directories only, a leading or middle `/` anchoring the pattern at the
+  `.gitignore`'s directory, `*`, `?`, `[...]` and `**`. Matching ignores
+  case, as git does on Windows (`core.ignorecase`). The global excludes and
+  `.git/info/exclude` don't count, being the machine's rather than the
+  project's.
+- **`.git` stays out**, a directory or a file (in a worktree or a
+  submodule), and so do empty directories, which git doesn't keep. A
+  directory below with `.git` of its own, such as a submodule, has its own
+  `.gitignore` files, not the outer ones.
+- **`skip`** leaves out more, with `cleanup`'s patterns, from the
+  directory: `"/docs"`, `"*.log"`. zigsaw's leaves out what isn't an input
+  to its programs.
+- **A link fails the build**, naming it, as git would commit it as a link,
+  which an image can't hold; `skip` it. So does a directory that has no
+  files to commit, or one that a `.gitignore` above it ignores.
+
+`dest` puts the files in a directory; `sha256`, `type` and `strip` don't
+apply. As line endings are the checkout's, a project whose builds should
+match across machines fixes them in `.gitattributes`, as this one does.
+
+A working tree isn't pinned as a download is. Its files are hashed instead,
+as the build takes them, as a tar in the layer format, as a
+[vendor step's](#vendor-steps) are: the hash depends only on their paths
+and contents.
+
+- **It's one of the build's inputs.** Building again with nothing changed
+  takes the image built before, as does a change to an ignored or skipped
+  file, which isn't one of the files. Each `zigsaw build` reads the files to
+  hash them, 52 files in 35 ms for zigsaw's.
+- **The image records it** under `build.sources`, as it does a local file's
+  hash, so the same files make the same image anywhere. They aren't kept in
+  the download cache, as local files aren't, so `push --sources` doesn't
+  push them.
+- **The build gets those files.** With build commands, they're copied to
+  `B:\src\<module>`, and built there; the project's directory is only read.
+  Without, they go from the directory into the layer. Either way, zigsaw
+  hashes them again afterwards, and fails the build if one changed while it
+  copied them, as its record wouldn't be of what it copied.
+
+A project's own [vendor step](#vendor-steps) works as any other: `cargo
+vendor` in the module's directory, with the project's files. The installed
+app records where its recipe is, so `zigsaw update <app-id>` builds it again
+from the directory as it is then.
 
 ## CMake
 

@@ -3,11 +3,12 @@
 # whose layers travel in its image, and build commands, which build an app
 # from source with SDK images (zig, busybox, CMake, Meson, Rust, Go with and
 # without C, and .NET), tools' caches and aliases, and vendor steps; 7-Zip
-# unpacks a source zigsaw doesn't.
+# unpacks a source zigsaw doesn't; projects with a zigsaw.json, whose own
+# files are a source.
 #
 #   tests/build.sh [path\to\zigsaw.exe]
 #
-# Needs Git Bash and network access (busybox, Node, Prettier, zig, CMake,
+# Needs Git Bash (and its git) and network access (busybox, Node, Prettier, zig, CMake,
 # zlib, SQLite, Rust, Go and .NET downloads, crates from crates.io and a
 # package from nuget.org). Always uses temporary stores, since it removes
 # apps, and deletes them afterwards. To skip downloading what a store already
@@ -400,6 +401,91 @@ sdk_files_only() {
     [ -f "$dir\\include\\y.h" ] && [ ! -e "$dir\\busybox.exe" ] || { echo "files: $(cd "$dir" && find .)"; return 1; }
 }
 check "an image source takes the SDK's own files, not its runtime's" sdk_files_only
+
+# --- projects with a zigsaw.json -----------------------------------------------------
+
+# A project with a zigsaw.json at its root, which `zigsaw build` builds as
+# make builds a Makefile. Its module lists the files and directories it got,
+# which should be those git would commit, less what "skip" leaves out.
+PROJ=test.project.app
+proj="$work\\proj"
+: >"$work\\empty"
+# git with no settings but the repository's, as a fresh clone has.
+pgit() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$work\\empty" git -c core.excludesFile="$work\\empty" -C "$proj" "$@"; }
+mkdir -p "$proj" && (
+    cd "$(cygpath -u "$proj")" || exit 1
+    mkdir -p src out docs/x notes empty/below
+    printf '*.log\n!keep.log\nout/\n/top-only.txt\ndocs/**/draft.md\n' >.gitignore
+    printf 'gen.txt\n' >src/.gitignore
+    for f in a.log keep.log top-only.txt src/top-only.txt src/main.txt src/gen.txt src/X.LOG out/bin.txt docs/index.md docs/x/draft.md notes/skipped.txt 'with space.txt'; do
+        echo "$f" >"$f"
+    done
+    cat >zigsaw.json <<EOF
+{
+  "id": "$PROJ", "version": "1", "command": "files.txt", "exports": {},
+  "sdk": { "busybox": "$BB@$bb_digest" },
+  "modules": [{
+    "name": "files",
+    "sources": [{ "path": ".", "skip": ["/notes"] }],
+    "build": ["find . -type f | cut -c3- >\"\$PREFIX/files.txt\"", "find . -type d >\"\$PREFIX/dirs.txt\""]
+  }]
+}
+EOF
+)
+pgit init -q
+# Everything in it, and what git says of it, to check the build wrote nothing.
+proj_state() { (cd "$(cygpath -u "$proj")" && find . | LC_ALL=C sort) && pgit status --porcelain --ignored; }
+proj_before=$(proj_state)
+
+builds_here() { (cd "$proj" && z build); }
+check "with no argument, build builds the zigsaw.json of the current directory" builds_here
+proj_digest=$(manifest_of $PROJ)
+committed() {
+    local dir="$ZIGSAW_HOME\\deploy\\$(own_layer $PROJ)" want got
+    want=$(pgit ls-files -co --exclude-standard | grep -v '^notes/' | LC_ALL=C sort)
+    got=$(tr -d '\r' <"$dir\\files.txt" | LC_ALL=C sort)
+    [ "$got" = "$want" ] || { echo "got:" $got "want:" $want; return 1; }
+    ! grep -q empty "$dir\\dirs.txt" || { echo "it got the empty directory"; return 1; }
+}
+check "it got the files git would commit, less what skip leaves out, and no empty directory" committed
+untouched() { [ "$(proj_state)" = "$proj_before" ] || { echo "the project's directory changed"; return 1; }; }
+check "the build wrote nothing in the project's directory" untouched
+reused() { (cd "$work" && z -v build "$proj" 2>&1) | grep -q "built before from the same inputs"; }
+check "given the directory, build reuses the image of the same files" reused
+echo changed >"$proj\\a.log"
+check "an ignored file changed, it still does" reused
+echo changed >"$proj\\src\\main.txt"
+rebuilds() { local d; d=$(built_manifest "$proj") && [ -n "$d" ] && [ "$d" != "$proj_digest" ] || { echo "got $d"; return 1; }; }
+check "a committed file changed, it builds a new image" rebuilds
+records_files() {
+    local h
+    h=$(z -v build "$proj" 2>&1 | grep -o "module files: [0-9]* files from .* (sha256 [0-9a-f]*)" | grep -o '[0-9a-f]\{64\}')
+    [ -n "$h" ] && config_of $PROJ | tr -d ' \r\n' | grep -q "\"sources\":\[\"$h\"\]"
+}
+check "the image's record of the build has the hash of its files" records_files
+echo again >"$proj\\src\\main.txt"
+check "update rebuilds it from the directory as it is" sh -c "\"\$0\" update $PROJ 2>&1 | grep -q '^updated $PROJ'" "$zigsaw"
+no_manifest() { (cd "$work" && z build 2>&1) | grep -q "has no zigsaw.json; give a recipe"; }
+check "a directory without one fails, saying so" no_manifest
+
+# Without build commands, a directory's files go into the image as they are.
+printf '{ "id": "test.project.lib", "version": "1", "command": "lib/main.txt", "exports": {},\n  "modules": [{ "name": "lib", "sources": [{ "path": "src", "dest": "lib" }] }] }\n' >"$proj\\lib.json"
+placed() {
+    z build "$proj\\lib.json" >/dev/null 2>&1 || { z build "$proj\\lib.json" 2>&1 | tail -1; return 1; }
+    local dir="$ZIGSAW_HOME\\deploy\\$(own_layer test.project.lib)"
+    [ -f "$dir\\lib\\main.txt" ] && [ -f "$dir\\lib\\top-only.txt" ] && [ ! -e "$dir\\lib\\gen.txt" ] && [ ! -e "$dir\\lib\\X.LOG" ] ||
+        { echo "files: $(cd "$dir" && find . -type f)"; return 1; }
+}
+check "without build commands, a subdirectory's files are placed, with the .gitignore files above it" placed
+printf '{ "id": "test.project.pinned", "version": "1", "command": "x", "exports": {}, "modules": [{ "name": "m", "sources": [{ "path": "src", "sha256": "%064d" }] }] }\n' 0 >"$proj\\pinned.json"
+check "a directory can't be pinned with a sha256" sh -c "\"\$0\" build '$proj\\pinned.json' 2>&1 | grep -q 'is a directory, whose files are hashed'" "$zigsaw"
+# A link: git would commit it as a link, which an image can't hold.
+mkdir -p "$work\\linked" && echo a >"$work\\linked\\a.txt" && cmd /c mklink /J "$work\\linked\\to-src" "$proj\\src" >/dev/null
+linked_recipe() { printf '{ "id": "test.project.linked", "version": "1", "command": "a.txt", "exports": {}, "modules": [{ "name": "m", "sources": [{ "path": "."%s }] }] }\n' "$1" >"$work\\linked\\zigsaw.json"; }
+linked_recipe ""
+check "a link in a project fails the build, naming it" sh -c "\"\$0\" build '$work\\linked' 2>&1 | grep -q 'to-src is a link, which an image can'" "$zigsaw"
+linked_recipe ', "skip": ["/to-src"]'
+check "skipped, the project builds" z build "$work\\linked"
 
 # --- prettier on node --------------------------------------------------------------
 
@@ -972,7 +1058,7 @@ check "php-ext builds it in its directory without a recipe, and PHP's runtime lo
 # builds use stay until prune --downloads, and only zigsaw can delete their
 # protected deployments.
 for id in $APP $SDK $RT test.image.built $XRT $XAPP test.ext.app2 test.ext.a test.ext.b test.ext.c test.ext.old $AAPP $ASDK $TOOL test.alias.built test.alias.files io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP com.mesonbuild.meson $MESONAPP org.sqlite.sqlite3 \
-    test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
+    test.project.app test.project.lib test.project.linked test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
     test.build.vendored org.7_zip.7zip $SEVENZIP org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO \
     com.microsoft.dotnet.Sdk com.microsoft.dotnet $DOTNETAPP $DESKTOP net.php.php.Sdk net.php.php $PHPEXT $PHPAPP; do z rm --delete-data $id >/dev/null 2>&1; done
 z prune --downloads --data >/dev/null 2>&1

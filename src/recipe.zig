@@ -12,7 +12,9 @@ const fail = Context.fail;
 
 pub const Source = struct {
     url: ?[]const u8 = null,
-    /// Local file, relative to the recipe.
+    /// Local file or directory, relative to the recipe. A directory gives
+    /// the files git would commit in it, such as a project's own, with "."
+    /// in the recipe at its root (see project.zig).
     path: ?[]const u8 = null,
     /// Another image's own files, by reference pinned with "@sha256:...",
     /// as an SDK is: how a runtime is made from its SDK without building
@@ -27,6 +29,9 @@ pub const Source = struct {
     dest: ?[]const u8 = null,
     /// For archives: leading directory levels to drop, like `tar --strip-components`.
     strip: u32 = 0,
+    /// For a directory: what to leave out besides what git ignores, as
+    /// cleanup patterns ("/docs" from the directory, "*.log" anywhere).
+    skip: []const []const u8 = &.{},
 
     pub const Kind = enum {
         file,
@@ -266,8 +271,8 @@ fn validateSource(file_name: []const u8, module: []const u8, n: usize, s: Source
     if (given != 1)
         return fail("{s}: module {s} source {d} needs exactly one of \"url\", \"path\" or \"image\"", .{ file_name, module, n });
     if (s.image != null) {
-        if (s.sha256 != null or s.type != null or s.strip != 0)
-            return fail("{s}: module {s} source {d} is an image, pinned by its digest; \"sha256\", \"type\" and \"strip\" don't apply", .{ file_name, module, n });
+        if (s.sha256 != null or s.type != null or s.strip != 0 or s.skip.len > 0)
+            return fail("{s}: module {s} source {d} is an image, pinned by its digest; \"sha256\", \"type\", \"strip\" and \"skip\" don't apply", .{ file_name, module, n });
         if (s.dest) |d| if (!oci.isSafeRelPath(d))
             return fail("{s}: module {s} source {d} dest \"{s}\" must be a relative path inside the app", .{ file_name, module, n, d });
         return;
@@ -278,8 +283,13 @@ fn validateSource(file_name: []const u8, module: []const u8, n: usize, s: Source
         return fail("{s}: module {s} source {d} dest \"{s}\" must be a relative path inside the app", .{ file_name, module, n, d });
     if (s.strip != 0 and !s.kind().isArchive())
         return fail("{s}: module {s} source {d} uses \"strip\", which only applies to archives", .{ file_name, module, n });
-    if (s.kind() == .file and s.dest == null and s.fileName().len == 0)
+    // A path may be a directory, which needs no file name.
+    if (s.url != null and s.kind() == .file and s.dest == null and s.fileName().len == 0)
         return fail("{s}: module {s} source {d} has no file name; set \"dest\"", .{ file_name, module, n });
+    if (s.skip.len > 0 and s.path == null)
+        return fail("{s}: module {s} source {d} uses \"skip\", which only applies to a directory \"path\"", .{ file_name, module, n });
+    for (s.skip) |pattern| if (!isValidCleanupPattern(pattern))
+        return fail("{s}: module {s} source {d} skip pattern \"{s}\" must be \"/<path>\" inside the directory, or a file name pattern without '/' or '\\'", .{ file_name, module, n, pattern });
 }
 
 fn isValidCleanupPattern(pattern: []const u8) bool {
@@ -391,6 +401,13 @@ test "recipe checks" {
     );
     try std.testing.expectEqualStrings("sdk", from_image.modules[0].sources[0].dest.?);
 
+    // A project's own directory, as in the zigsaw.json at its root.
+    const project = try parse(arena, "zigsaw.json",
+        \\{ "id": "x", "version": "1", "command": "bin/a.exe", "exports": {},
+        \\  "modules": [{ "name": "m", "sources": [{ "path": ".", "skip": ["/docs", "*.log"] }, { "path": "src/" }], "build": ["x"] }] }
+    );
+    try std.testing.expectEqualStrings("/docs", project.modules[0].sources[0].skip[0]);
+
     const bad = [_][]const u8{
         // A command in a runtime needs exports.
         \\{ "id": "x", "version": "1", "command": "${node}\\node.exe", "runtimes": { "node": "n" }, "modules": [{ "name": "m", "build": ["x"] }] }
@@ -426,6 +443,18 @@ test "recipe checks" {
         \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "image": "x.sdk@sha256:00", "strip": 1 }] }] }
         ,
         \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "image": "x.sdk@sha256:00", "dest": "../up" }] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "image": "x.sdk@sha256:00", "skip": ["/a"] }] }] }
+        ,
+        // skip: for a directory path, with cleanup's patterns.
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "url": "https://example.com/a.exe", "skip": ["/a"] }] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "path": ".", "skip": ["docs/*.md"] }] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "path": ".", "skip": ["/../x"] }] }] }
+        ,
+        // A URL with no file name, and none given.
+        \\{ "id": "x", "version": "1", "command": "a.exe", "modules": [{ "name": "m", "sources": [{ "url": "https://example.com/" }] }] }
         ,
         // Cleanup patterns.
         \\{ "id": "x", "version": "1", "command": "a.exe", "cleanup": ["/../x"], "modules": [{ "name": "m", "build": ["x"] }] }

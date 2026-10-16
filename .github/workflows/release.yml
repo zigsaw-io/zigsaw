@@ -3,8 +3,9 @@
 # checked by tests/install.sh, as the release's assets (the zip,
 # install.ps1, SHA256SUMS), with notes listing the programs' hashes. The
 # programs are built without debug information, so a build of the tag
-# anywhere, with the same Zig, has those hashes. Images are still published
-# by hand (scripts/publish.sh).
+# anywhere, with the same Zig, has those hashes; tests/self.sh checks that
+# zigsaw building its own zigsaw.json has them too. Images are still
+# published by hand (scripts/publish.sh).
 name: Release
 
 on:
@@ -17,7 +18,7 @@ permissions:
 jobs:
   release:
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,6 +49,14 @@ jobs:
         env:
           PACKAGE_DIR: zig-out\release
         run: bash tests/install.sh
+
+      # The package's zigsaw builds the checkout's zigsaw.json, and makes the
+      # package's programs.
+      - name: tests/self.sh, on the package
+        shell: bash
+        env:
+          PACKAGE_DIR: zig-out\release
+        run: bash tests/self.sh
 
       - name: Publish the release
         shell: bash

@@ -81,6 +81,18 @@ fn ensureDir(t: *Tree, arena: Allocator, path: []const u8) ![]const u8 {
     return spelled;
 }
 
+/// Adds another tree's paths under `base` ('/'-separated, "" for the top),
+/// their contents where that tree has them.
+pub fn addTree(t: *Tree, arena: Allocator, other: *const Tree, base: []const u8) !void {
+    for (other.nodes.values()) |node| {
+        const p = if (base.len == 0) node.path else try std.fmt.allocPrint(arena, "{s}/{s}", .{ base, node.path });
+        switch (node.content) {
+            .dir => try t.addDir(arena, p),
+            else => try t.addFile(arena, p, node.content),
+        }
+    }
+}
+
 pub fn isFile(t: *const Tree, arena: Allocator, path: []const u8) !bool {
     const key = try std.ascii.allocLowerString(arena, try normalizePath(arena, path));
     const node = t.nodes.get(key) orelse return false;
@@ -439,6 +451,17 @@ pub fn writeLayerFile(t: *const Tree, ctx: *Context, compression: oci.Compressio
             .size = try file.length(io),
         },
     };
+}
+
+/// The sha256 of the tree as an uncompressed layer, which depends only on
+/// its paths and its files' contents: what a project's own files are
+/// recorded by (see project.zig), as a vendor step's are.
+pub fn contentHash(t: *const Tree, io: Io, arena: Allocator) ![64]u8 {
+    var buf: [64 * 1024]u8 = undefined;
+    var hashing: Io.Writer.Hashing(std.crypto.hash.sha2.Sha256) = .init(&buf);
+    try t.writeLayer(io, arena, &hashing.writer);
+    try hashing.writer.flush();
+    return std.fmt.bytesToHex(hashing.hasher.finalResult(), .lower);
 }
 
 fn writeLayer(t: *const Tree, io: Io, arena: Allocator, out: *Io.Writer) !void {

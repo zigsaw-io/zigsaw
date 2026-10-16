@@ -28,9 +28,11 @@ const usage =
     \\usage: zigsaw [-v|--verbose] <command> [options]
     \\
     \\commands:
-    \\  build [--rebuild] [--keep-build-dir] <recipe.json>
-    \\                                  build an app from a recipe, install it and its commands;
-    \\                                  --rebuild builds even if an earlier build had the same inputs
+    \\  build [--rebuild] [--keep-build-dir] [<recipe.json> | <dir>]
+    \\                                  build an app from a recipe, or from the zigsaw.json of a
+    \\                                  project's directory (by default the current one), and
+    \\                                  install it and its commands; --rebuild builds even if an
+    \\                                  earlier build had the same inputs
     \\  search [<words>...]             find apps in the default registry's catalog
     \\  info <image>                    show what an app in a registry is, needs and may reach
     \\  pull <image>                    install an app and its commands from a registry
@@ -162,7 +164,7 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
             } else return usageError();
         }
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try install.install(ctx, try builder.build(ctx, recipe_path orelse return usageError(), opts));
+        try install.install(ctx, try builder.build(ctx, try builder.recipePath(ctx, recipe_path), opts));
         return 0;
     }
     if (std.mem.eql(u8, command, "pull")) {
@@ -571,6 +573,7 @@ test {
     _ = @import("exports.zig");
     _ = @import("extensions.zig");
     _ = @import("folders.zig");
+    _ = @import("gitignore.zig");
     _ = @import("hkcu.zig");
     _ = @import("info.zig");
     _ = @import("msvc.zig");
@@ -578,6 +581,7 @@ test {
     _ = @import("override.zig");
     _ = @import("pe.zig");
     _ = @import("process.zig");
+    _ = @import("project.zig");
     _ = @import("prune.zig");
     _ = @import("recipe.zig");
     _ = @import("regkey.zig");

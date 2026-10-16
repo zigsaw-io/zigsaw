@@ -80,8 +80,10 @@ signed. [`scripts/package.sh`](scripts/package.sh) makes the release's files.
 ## Commands
 
 ```
-zigsaw build [--rebuild] [--keep-build-dir] <recipe.json>
-                                       build an app from a recipe, install it and its commands
+zigsaw build [--rebuild] [--keep-build-dir] [<recipe.json> | <dir>]
+                                       build an app from a recipe, or from the zigsaw.json of a
+                                       project's directory (the current one by default), install
+                                       it and its commands
 zigsaw search [<words>...]             find apps in the default registry's catalog
 zigsaw info <image>                    show what an app in a registry is, needs and may reach
 zigsaw pull <image>                    install an app and its commands from a registry
@@ -285,6 +287,51 @@ suites (see [Testing](#testing)) on that runner too.
 The workflow only checks. Images are published by hand
 ([`scripts/publish.sh`](scripts/publish.sh)); zigsaw's own releases by the
 Release workflow (see [Installing zigsaw](#installing-zigsaw)).
+
+## Building your own project
+
+A project can keep its recipe at its root, as `zigsaw.json`, where it would
+keep a Makefile. `zigsaw build` in its directory builds it, as `make` does,
+and installs it:
+
+```powershell
+cd C:\work\hello      # which has zigsaw.json
+zigsaw build          # or, from anywhere: zigsaw build C:\work\hello
+hello                 # its command
+```
+
+Its source is the project itself: a `path` that names a directory, here the
+recipe's own:
+
+```json
+"sdk": { "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac..." },
+"modules": [
+  { "name": "hello", "sources": [{ "path": "." }], "shell": "cmd", "build": ["zig build -Doptimize=ReleaseSafe -p %PREFIX%"] }
+]
+```
+
+- **The build gets the files git would commit**: those the project's
+  `.gitignore` files don't ignore, without `.git` and without empty
+  directories, so not `zig-out`, `target` or `node_modules` when the
+  project ignores them. zigsaw reads the `.gitignore` files itself, as git
+  on Windows does (ignoring case), so git needn't be installed. Your global
+  excludes don't count, so a checkout builds the same on any machine.
+  `"skip": ["/docs", "*.log"]` leaves out more, with
+  [`cleanup`'s](docs/recipes.md#recipes) patterns.
+- **Your checkout stays as it is.** The files are copied to the build's
+  `B:\src\<module>`, and the build happens there.
+- **An unchanged project isn't built again.** The hash of its files is one of
+  the build's inputs, so `zigsaw build` with nothing changed takes the image
+  it built before, as does a change to a file git ignores. The image records
+  the hash, and the same files make the same image anywhere.
+- `zigsaw update <app-id>` builds it again from the directory as it is then.
+
+This repository has one: [`zigsaw.json`](zigsaw.json) builds zigsaw from
+the checkout, in zig's image, with `zig build -Dstrip` as releases are built,
+and its programs are the same bytes as those of a `zig build -Dstrip`
+outside zigsaw ([`tests/self.sh`](tests/self.sh)). It exports nothing, as
+zigsaw's own commands are on PATH already. See
+[projects](docs/recipes.md#projects) for the details.
 
 ## Sharing apps through registries
 
@@ -817,12 +864,13 @@ bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash,
 bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes; --file; your folders (fake ones); registry keys kept with an app
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
-bash tests/build.sh     # building apps: runtimes, images as sources, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
+bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
 bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)
+bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package)
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update, mounts, logins, sources next to images, the catalog, search and info, through local registries (see its header)

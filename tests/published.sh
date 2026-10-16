@@ -9,8 +9,9 @@
 #   publishing is manual (scripts/publish.sh).
 # - An image built with a host toolchain (MSVC) isn't compared, since it isn't
 #   expected to match a build elsewhere.
-# - The pulled app must run, `latest` must be the same image, and the app must
-#   then be up to date.
+# - The pulled app must run (a web server, such as Kanboard's, must serve
+#   its login page), `latest` must be the same image, and the app must then
+#   be up to date.
 # - The programs of an image built with Rust must have all their imports
 #   bound (tests/imports.zig).
 # - The registry's catalog must list the apps published at these versions.
@@ -86,6 +87,23 @@ stays_up_ids=" org.notepad_plus_plus.NotepadPlusPlus org.sumatrapdfreader.Sumatr
 stays_up() {
     ZIGSAW_HOME="$pull_store" timeout 10 "$zigsaw" run "$1" >/dev/null 2>&1
     [ $? -eq 124 ]
+}
+# Apps whose command is a web server, which they open in the browser unless
+# told --no-browser: it must serve its login page at the address --listen
+# gives. zigsaw itself in the background, not a function running it, so
+# that `kill` ends zigsaw, and the run's job the server.
+serves_ids=" org.kanboard.Kanboard "
+serves() {
+    local port=$((9100 + RANDOM % 800)) out="$logs\\$1.serve.log" server page=""
+    ZIGSAW_HOME="$pull_store" "$zigsaw" run --ephemeral "$1" --no-browser --listen=127.0.0.1:$port >"$out" 2>&1 &
+    server=$!
+    for _ in $(seq 40); do
+        page=$(curl -s -m 5 "http://127.0.0.1:$port/?controller=AuthController&action=login") && [ -n "$page" ] && break
+        sleep 0.5
+    done
+    kill $server 2>/dev/null
+    wait $server 2>/dev/null
+    grep -q 'name="csrf_token"' <<<"$page" || { echo "no login page on port $port: $(last_line "$out")"; return 1; }
 }
 ref_digest() { grep -o 'sha256:[0-9a-f]*' "$1\\refs\\$2.json"; }
 # all_bound <store> <manifest digest>: tests/imports.zig on the executables
@@ -172,6 +190,8 @@ for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); 
 
     if [[ $stays_up_ids == *" $id "* ]]; then
         check "$id: runs, and is still running after ten seconds" stays_up "$id"
+    elif [[ $serves_ids == *" $id "* ]]; then
+        check "$id: runs, and serves its login page" serves "$id"
     else
         # shellcheck disable=SC2046 # The arguments are meant to split.
         check "$id: runs" zp run "$id" $(smoke_args "$id")
