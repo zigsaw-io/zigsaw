@@ -1,0 +1,127 @@
+gobject-introspection's scanner on Windows, for GTK's SDK (zig's cc, builds
+on a subst drive):
+
+- a CC that isn't cl or clang-cl is GCC-like (mingw32), not distutils'
+  default, msvc (MSYS2 builds say so with MSYSTEM);
+- libraries are looked for where pkg-config says too, as zig's cc
+  doesn't search the SDK's lib by itself;
+- the dumper links libfoo.dll.a by path, as zig's cc doesn't find it
+  for -lfoo;
+- without any dlltool, the DLL an import library names comes from nm,
+  as with LLVM's;
+- the lexer resolves a file name as Python's os.path.realpath does the
+  scanner's list of files (GetFinalPathNameByHandle), not with
+  GetFullPathName alone: on a subst drive, a header the preprocessor
+  names relatively wasn't one of the scanned files, and what it declares
+  (a library's generated enum types) was left out.
+
+--- a/giscanner/ccompiler.py
++++ b/giscanner/ccompiler.py
+@@ -31,6 +31,7 @@
+ from distutils.sysconfig import get_config_vars
+ from distutils.sysconfig import customize_compiler as orig_customize_compiler
+ 
++from . import pkgconfig
+ from . import utils
+ 
+ 
+@@ -118,10 +119,14 @@
+ 
+     # Figure out if we have a gcc toolchain or llvm one
+     dlltool = os.environ.get('DLLTOOL', 'dlltool.exe')
+-    dlltool_output = subprocess.run(
+-        [dlltool], stdout=subprocess.PIPE,
+-        stderr=subprocess.STDOUT,
+-        universal_newlines=True).stdout
++    try:
++        dlltool_output = subprocess.run(
++            [dlltool], stdout=subprocess.PIPE,
++            stderr=subprocess.STDOUT,
++            universal_newlines=True).stdout
++    except FileNotFoundError:
++        # No dlltool at all (zig's toolchain): nm reads any import library
++        dlltool_output = 'llvm-dlltool'
+     is_llvm = 'llvm-dlltool' in dlltool_output
+ 
+     if not is_llvm:
+@@ -164,6 +169,10 @@
+                 mingw = environ.get('MSYSTEM', '')
+                 if mingw.startswith(('MINGW', 'CLANG', 'UCRT')) and environ.get('VCINSTALLDIR') is None:
+                     compiler_name = 'mingw32'
++                elif os.path.basename(environ.get('CC', 'cl')).lower() not in ('cl', 'cl.exe', 'clang-cl', 'clang-cl.exe'):
++                    # A GCC-like compiler named by CC outside MSYS2,
++                    # such as zig's cc
++                    compiler_name = 'mingw32'
+                 else:
+                     compiler_name = distutils.ccompiler.get_default_compiler()
+             if compiler_name != 'msvc' and \
+@@ -276,7 +285,12 @@
+                 if library.endswith(".la"):
+                     args.append(library)
+                 else:
+-                    args.append('-l' + library)
++                    # A MinGW import library by its path: compilers such
++                    # as zig's cc look for -lfoo as foo.lib or libfoo.a,
++                    # not libfoo.dll.a
++                    implibs = [os.path.join(p, 'lib%s.dll.a' % library) for p in libpaths]
++                    implibs = [i for i in implibs if os.name == 'nt' and os.path.isfile(i)]
++                    args.append(implibs[0] if implibs else '-l' + library)
+ 
+         for envvar in runtime_path_envvar:
+             if envvar in os.environ:
+@@ -422,7 +436,11 @@
+             proc = subprocess.Popen([self.compiler_cmd, '-print-search-dirs'],
+                                     stdout=subprocess.PIPE)
+             o, e = proc.communicate()
+-            libsearch = options.library_paths
++            libsearch = list(options.library_paths)
++            # Where pkg-config says the packages' libraries are, as a
++            # compiler outside MSYS2 doesn't search there by itself
++            libsearch += [flag[2:] for flag in pkgconfig.libs_only_L(options.packages)
++                          if flag.startswith('-L')]
+             for line in o.decode('ascii').splitlines():
+                 if line.startswith('libraries: '):
+                     libsearch += line[len('libraries: '):].split(os.pathsep)
+--- a/giscanner/scannerlexer.l
++++ b/giscanner/scannerlexer.l
+@@ -396,6 +396,9 @@
+  * in giscanner.c.
+  */
+ extern unsigned long __stdcall GetFullPathNameA(const char*, int, char*, char**);
++extern void *__stdcall CreateFileA(const char*, unsigned long, unsigned long, void*, unsigned long, unsigned long, void*);
++extern unsigned long __stdcall GetFinalPathNameByHandleA(void*, char*, unsigned long, unsigned long);
++extern int __stdcall CloseHandle(void*);
+ #endif
+ 
+ static inline char *
+@@ -409,6 +412,30 @@
+   char *buffer;
+   char dummy;
+   int rc, len;
++  void *file;
++
++  /* The file's final path, as Python's os.path.realpath gives the scanner's
++   * file names: links and subst drives resolved, which GetFullPathName
++   * doesn't. Otherwise a header the preprocessor names by another way to the
++   * same file, such as a relative path on a subst drive, isn't one of them,
++   * and what it declares is left out. */
++  file = CreateFileA (path, 0, 1 | 2 | 4 /* FILE_SHARE_READ, _WRITE, _DELETE */,
++                      NULL, 3 /* OPEN_EXISTING */, 0x02000000 /* FILE_FLAG_BACKUP_SEMANTICS */, NULL);
++  if (file != (void *) -1)
++    {
++      char final[4096];
++      unsigned long n = GetFinalPathNameByHandleA (file, final, sizeof final, 0);
++
++      CloseHandle (file);
++      if (n > 0 && n < sizeof final)
++        {
++          if (strncmp (final, "\\\\?\\UNC\\", 8) == 0)
++            return g_strconcat ("\\\\", final + 8, NULL);
++          if (strncmp (final, "\\\\?\\", 4) == 0)
++            return g_strdup (final + 4);
++          return g_strdup (final);
++        }
++    }
+ 
+   rc = GetFullPathNameA (path, 1, &dummy, NULL);
+   if (rc == 0)

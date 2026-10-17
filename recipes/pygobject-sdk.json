@@ -1,0 +1,76 @@
+{
+  "id": "org.gnome.PyGObject.Sdk",
+  "version": "3.58.1",
+  "name": "PyGObject SDK",
+  "summary": "Python 3.14 with PyGObject and pycairo, headers and pkg-config files included, to build Python apps on GTK's SDK",
+  "homepage": "https://pygobject.gnome.org/",
+  "license": "LGPL-2.1-or-later AND PSF-2.0",
+  "command": "python.exe",
+  "path": ["."],
+  "exports": {},
+  "cleanup": ["__pycache__"],
+  "sdk": {
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2"
+  },
+  "modules": [
+    {
+      "name": "crt-noexport",
+      "build": [
+        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
+        "cc -c noexport.s -o noexport.o"
+      ]
+    },
+    {
+      "name": "python",
+      "sources": [
+        {
+          "url": "https://www.nuget.org/api/v2/package/python/3.14.7",
+          "sha256": "46a4da5529a92d18ff894911f6e6033a8253198d705b8161bf28c9123c87d46b",
+          "type": "zip",
+          "dest": "nupkg"
+        },
+        { "path": "pygobject/sitecustomize.py", "dest": "zigsaw/sitecustomize.py" }
+      ],
+      "build": [
+        "cp -r nupkg/tools/. \"$PREFIX/\"",
+        "cp \"$PREFIX/python.exe\" \"$PREFIX/python3.exe\"",
+        "cp zigsaw/sitecustomize.py \"$PREFIX/Lib/site-packages/\"",
+        "mkdir -p \"$PREFIX/Lib/pkgconfig\"",
+        "for pc in python3 python-3.14 python3-embed python-3.14-embed; do printf '%s\\n' 'prefix=${pcfiledir}/../..' 'includedir=${prefix}/include' 'libdir=${prefix}/libs' '' 'Name: Python' 'Description: Python 3.14, the python.org build' 'Version: 3.14.7' 'Libs: -L${libdir} -lpython314' 'Cflags: -I${includedir}' > \"$PREFIX/Lib/pkgconfig/$pc.pc\" || exit 1; done",
+        "pkg-config --modversion python3 && pkg-config --cflags python-3.14"
+      ]
+    },
+    {
+      "name": "pycairo",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o" },
+      "sources": [
+        {
+          "url": "https://github.com/pygobject/pycairo/releases/download/v1.29.2/pycairo-1.29.2.tar.gz",
+          "sha256": "3e69fff74fe64f5ba2dfa31f67c6bdf26413342574047437d2ac520d35e9a489",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release \"-Dpython=$PREFIX/python.exe\" \"-Dpython.platlibdir=$PREFIX/Lib/site-packages\" \"-Dpython.purelibdir=$PREFIX/Lib/site-packages\" -Dtests=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "pygobject",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/pygobject/3.58/pygobject-3.58.1.tar.gz",
+          "sha256": "4c80598ade17fbaa7798e01a25d0bf29ce109740786026a074c5c62bb3e79d23",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release \"-Dpython=$PREFIX/python.exe\" \"-Dpython.platlibdir=$PREFIX/Lib/site-packages\" \"-Dpython.purelibdir=$PREFIX/Lib/site-packages\" -Dpycairo=enabled -Dtests=false",
+        "meson install -C out",
+        "printf '%s\\n' 'import gi, cairo' 'gi.require_version(\"Gtk\", \"4.0\")' 'from gi.repository import GLib, Gtk' 'print(\"PyGObject\", gi.__version__, \"pycairo\", cairo.version, \"GLib\", GLib.MAJOR_VERSION, GLib.MINOR_VERSION, \"GTK\", Gtk.get_major_version(), Gtk.get_minor_version())' > check.py",
+        "sdk=$(pkg-config --variable=prefix gtk4) && PYGI_DLL_PATH=\"$sdk/bin\" \"$PREFIX/python.exe\" -B -P check.py"
+      ]
+    }
+  ]
+}

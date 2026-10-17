@@ -4,7 +4,17 @@
 # one in ZIGSAW_REGISTRY; then the registry's catalog of the apps, which
 # `zigsaw search` reads.
 #
-#   scripts/publish.sh [recipe.json...]     (default: those in published-recipes.txt)
+#   scripts/publish.sh [--skip-unchanged[=REV]] [recipe.json...]
+#                                  (default: those in published-recipes.txt)
+#
+# With --skip-unchanged, only new or changed recipes are built and published,
+# as git sees them: a recipe is changed if it, or a file in the directory
+# named like it (recipes/gtk4-sdk/ for gtk4-sdk.json), differs from REV
+# (default HEAD) in the working tree or isn't tracked yet. Pass the commit the
+# registry was last published from to catch committed changes. A recipe that
+# names the image of a chosen one (meld on GTK, say) is chosen too, and so on
+# down, when both are in this run.
+# The catalog is pushed either way.
 #
 # It refuses recipes in recipes/no-publish/, whose images mustn't be
 # published.
@@ -28,6 +38,25 @@ root=$(cygpath -w "$(cd "$(dirname "$0")/.." && pwd)")
 zigsaw=${ZIGSAW:-$root/zig-out/bin/zigsaw.exe}
 registry=${ZIGSAW_REGISTRY:-ghcr.io/zigsaw-io}
 
+changed=
+skipped=()
+case ${1:-} in
+--skip-unchanged | --skip-unchanged=*)
+    since=${1#--skip-unchanged}
+    since=${since#=}
+    since=${since:-HEAD}
+    shift
+    # Files under recipes/ that differ from $since in the working tree, plus
+    # those git doesn't track yet.
+    changed=$({
+        git -C "$root" diff --name-only "$since" -- recipes
+        git -C "$root" ls-files --others --exclude-standard -- recipes
+    } | tr -d '\r')
+    # Nothing changed must not read as "no filter".
+    changed=${changed:-/nothing}
+    ;;
+esac
+
 if [ $# -eq 0 ]; then
     for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); do set -- "$@" "$root/recipes/$name"; done
 fi
@@ -50,8 +79,41 @@ if [ -z "${ZIGSAW_HOME:-}" ]; then
 fi
 export ZIGSAW_HOME
 
+# With --skip-unchanged: work out which recipes to publish. Those git sees
+# changed, then (until nothing more is added) those that name the image of one
+# already chosen, such as "org.gtk.Gtk3:3.24.52@sha256:...".
+todo=("$@")
+if [ -n "$changed" ]; then
+    declare -A ids pick
+    for recipe in "$@"; do
+        ids[$recipe]=$(grep -o '"id": *"[^"]*"' "$recipe" | head -1 | cut -d'"' -f4)
+        rel=recipes/${recipe##*/recipes/}
+        stem=${rel%.json}
+        if grep -qxE "$rel|$stem/.*" <<<"$changed"; then pick[$recipe]=git; fi
+    done
+    more=true
+    while $more; do
+        more=false
+        for recipe in "$@"; do
+            [ -n "${pick[$recipe]:-}" ] && continue
+            for other in "$@"; do
+                [ -n "${pick[$other]:-}" ] && [ "$other" != "$recipe" ] || continue
+                if grep -qF "\"${ids[$other]}:" "$recipe"; then
+                    pick[$recipe]="uses ${ids[$other]}"
+                    more=true
+                    break
+                fi
+            done
+        done
+    done
+    todo=()
+    for recipe in "$@"; do
+        if [ -n "${pick[$recipe]:-}" ]; then todo+=("$recipe"); else skipped+=("${ids[$recipe]}"); fi
+    done
+fi
+
 published=()
-for recipe in "$@"; do
+for recipe in "${todo[@]}"; do
     id=$(grep -o '"id": *"[^"]*"' "$recipe" | cut -d'"' -f4)
     echo "== $id"
     "$zigsaw" build "$recipe"
@@ -85,6 +147,9 @@ for line in "${published[@]}"; do
     read -r id version digest <<<"$line"
     printf '  %-32s %-22s %s\n' "$id" "$version" "$digest"
 done
+if [ ${#skipped[@]} -gt 0 ]; then
+    echo "Unchanged since $since, not built: ${skipped[*]}"
+fi
 case $registry in
 ghcr.io/*)
     echo

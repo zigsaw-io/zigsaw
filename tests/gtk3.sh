@@ -9,7 +9,9 @@
 # and OpenDocument with ssconvert in each sandbox, draws charts, writes
 # into a folder of the user's it's granted, starts up with a file given with
 # --file, and is registered for its kinds of file (in a scratch registry
-# key).
+# key). Meld (recipes/meld.json), Python on PyGObject's runtime, loads GTK
+# 3, GtkSourceView and GTK 4 through their typelibs, and compares files and
+# folders in each sandbox.
 #
 # Not in CI, like tests/gtk.sh: GTK's SDK takes a quarter of an hour to
 # build, and Gnumeric 25 minutes.
@@ -17,9 +19,10 @@
 #   GTK_HOME=path\to\store bash tests/gtk3.sh [path\to\zigsaw.exe]
 #
 # The store needs GTK 4's SDK and runtime (GTK_HOME, or BUILD_HOME as
-# tests/published.sh leaves it); GTK 3's images, the demos and Gnumeric are
-# built there unless it has them (3 minutes, and Gnumeric 25), and removed
-# afterwards if they were. The apps open windows on the desktop for a moment.
+# tests/published.sh leaves it); GTK 3's images, the demos, Gnumeric,
+# PyGObject's images and Meld are built there unless it has them (5 minutes,
+# and Gnumeric 25), and removed afterwards if they were. The apps open
+# windows on the desktop for a moment.
 set -u
 export MSYS_NO_PATHCONV=1
 
@@ -96,9 +99,11 @@ check "GLib keeps settings in a key file in the app's data" sh -c "timeout 60 \"
 runtime_dir="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of org.gtk.Gtk3 | cut -d: -f2)" | tail -1 | cut -d: -f2)"
 runtime_files() {
     test -f "$runtime_dir\\bin\\libgtk-3-0.dll" -a -f "$runtime_dir\\bin\\libatk-1.0-0.dll" || return 1
-    ! test -e "$runtime_dir\\include" && ! test -e "$runtime_dir\\lib" && ! test -e "$runtime_dir\\bin\\libglib-2.0-0.dll"
+    ! test -e "$runtime_dir\\include" && ! test -e "$runtime_dir\\lib\\pkgconfig" && ! test -e "$runtime_dir\\bin\\libglib-2.0-0.dll" || return 1
+    ! ls "$runtime_dir\\lib" | grep -q -e '\.a$' -e '\.lib$'
 }
 check "GTK 3's runtime has GTK 3 and ATK only: no headers, libraries for linking, or GLib" runtime_files
+check "and their typelibs" test -f "$runtime_dir\\lib\\girepository-1.0\\Gtk-3.0.typelib" -a -f "$runtime_dir\\lib\\girepository-1.0\\Gdk-3.0.typelib" -a -f "$runtime_dir\\lib\\girepository-1.0\\Atk-1.0.typelib"
 check "it has GTK 3's translations" test -f "$runtime_dir\\share\\locale\\de\\LC_MESSAGES\\gtk30.mo"
 
 # stays_up <seconds> <zigsaw run arguments...>: the app is still running
@@ -199,6 +204,72 @@ check "Gnumeric opens a spreadsheet it's given with --file" stays_up 20 --comman
 check "with --sandbox=low" stays_up 20 --sandbox=low --command=gnumeric --file="$docs\\sheet.xlsx" $GNUMERIC
 check "with --sandbox=appcontainer" stays_up 20 --sandbox=appcontainer --command=gnumeric --file="$docs\\sheet.xlsx" $GNUMERIC
 check "the documents' directory was granted to none of the apps" sh -c "! icacls '$docs' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
+
+# Meld, a Python app: PyGObject's runtime runs it, with GTK 3 and GTK 4
+# through their runtimes' typelibs. Built here unless the store has them
+# (about 3 minutes).
+MELD=org.gnome.Meld
+build_image org.gnome.PyGObject.Sdk pygobject-sdk.json
+build_image org.gnome.PyGObject pygobject.json
+build_image $MELD meld.json
+pygobject_dir="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of org.gnome.PyGObject | cut -d: -f2)" | tail -1 | cut -d: -f2)"
+printf '%s\n' 'import gi' 'gi.require_version("Gtk", "3.0")' 'gi.require_version("GtkSource", "4")' \
+    'from gi.repository import Gtk, GtkSource, Pango' \
+    'print("GTK", Gtk.get_major_version(), Gtk.get_minor_version(), Gtk.get_micro_version())' \
+    'print("GtkSourceView", GtkSource.LanguageManager.get_default().get_language("python3").get_name())' \
+    'print("Pango", Pango.version_string())' >"$work\\gi3.py"
+printf '%s\n' 'import gi, cairo' 'gi.require_version("Gtk", "4.0")' 'gi.require_version("Adw", "1")' \
+    'from gi.repository import Gtk, Adw' \
+    'print("GTK", Gtk.get_major_version(), Gtk.get_minor_version(), Gtk.get_micro_version())' \
+    'print("libadwaita", Adw.get_major_version(), Adw.get_minor_version())' \
+    'print("pycairo", cairo.version)' >"$work\\gi4.py"
+# python_says <script> <expected, lines joined by |> <run options...>:
+# what the script prints, without zigsaw's notes of what it granted and
+# GLib's warnings (in an AppContainer, Pango's that DirectWrite can't open
+# per-user fonts).
+python_says() {
+    local script=$1 want=$2 out
+    shift 2
+    out=$(timeout 60 "$zigsaw" run "$@" --command="$pygobject_dir\\python.exe" $MELD "$script" 2>&1 | tr -d '\r' |
+        grep -v -e '^granted ' -e '^labelled ' -e '^\*\* (' -e '^$' | tr '\n' '|')
+    [ "$out" = "$want|" ] || { echo "got: $out"; return 1; }
+}
+check "PyGObject loads GTK 3 and GtkSourceView 4 through their typelibs" python_says gi3.py 'GTK 3 24 52|GtkSourceView Python|Pango 1.58.2'
+check "and GTK 4 and libadwaita, with pycairo" python_says gi4.py 'GTK 4 24 1|libadwaita 1 10|pycairo 1.29.2'
+check "with --sandbox=low" python_says gi3.py 'GTK 3 24 52|GtkSourceView Python|Pango 1.58.2' --sandbox=low
+check "with --sandbox=appcontainer" python_says gi3.py 'GTK 3 24 52|GtkSourceView Python|Pango 1.58.2' --sandbox=appcontainer
+meld_dir="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $MELD | cut -d: -f2)" | tail -1 | cut -d: -f2)"
+# Meld's command is pythonw.exe, which shows nothing: python.exe runs it here.
+check "Meld 3.24.1 is installed" sh -c "timeout 60 \"\$0\" run --command='$pygobject_dir\\python.exe' $MELD '$meld_dir\\bin\\meld' --version 2>&1 | tr -d '\r' | grep -qx 'meld 3.24.1'" "$zigsaw"
+rm -f "$ZIGSAW_HOME\\data\\$MELD\\share\\meld.log"
+printf 'one\ntwo\nthree\n' >"$work\\left.txt"
+printf 'one\n2\nthree\nfour\n' >"$work\\right.txt"
+mkdir -p "$work\\left" "$work\\right"
+cp "$work\\left.txt" "$work\\left\\same.txt"; cp "$work\\left.txt" "$work\\right\\same.txt"
+cp "$work\\left.txt" "$work\\left\\changed.txt"; cp "$work\\right.txt" "$work\\right\\changed.txt"
+# meld_draws <what to compare...> -- <run options...>: Meld opens the
+# comparison and saves a picture of its window, which its CI hook does
+# after 3 s before quitting.
+meld_draws() {
+    local what=() opts=()
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do what+=("$1"); shift; done
+    [ $# -gt 0 ] && shift
+    opts=("$@")
+    rm -f "$work\\meld.png"
+    timeout 90 "$zigsaw" run --env=MELD_SCREENSHOT_AND_EXIT="$work\\meld.png" "${opts[@]}" $MELD "${what[@]}" >/dev/null 2>&1
+    head -c 8 "$work\\meld.png" 2>/dev/null | od -A n -t x1 | tr -d ' \n' | grep -qx '89504e470d0a1a0a' || { echo "no picture"; return 1; }
+    [ "$(wc -c <"$work\\meld.png")" -gt 20000 ] || { echo "a picture of $(wc -c <"$work\\meld.png") bytes"; return 1; }
+}
+check "Meld compares two files and draws its window" meld_draws left.txt right.txt
+check "with --sandbox=low" meld_draws left.txt right.txt -- --sandbox=low
+check "with --sandbox=appcontainer" meld_draws left.txt right.txt -- --sandbox=appcontainer
+check "it compares two folders" meld_draws left right -- --sandbox=low
+check "its log has no Python traceback" sh -c "! grep -q Traceback '$ZIGSAW_HOME\\data\\$MELD\\share\\meld.log'"
+meld_shortcut() {
+    shim_is meld zigsaw-shimw.exe || { echo "meld.exe isn't the windowless shim"; return 1; }
+    case $(lnk_icon "$links\\Meld.lnk") in "$meld_dir\\share\\icons\\org.gnome.Meld.ico,0") ;; *) echo "icon: $(lnk_icon "$links\\Meld.lnk")"; return 1 ;; esac
+}
+check "it gets the windowless shim and a shortcut, with Meld's icon" meld_shortcut
 
 cd "$root" || exit 1
 # The scratch key, and the one above it unless another run has one in it.

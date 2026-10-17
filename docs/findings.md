@@ -823,6 +823,73 @@ Composer, which doesn't, installs at low.
   under BusyBox are much: its 37 plugins link one directory at a time.
   Its image is 15 MB compressed, 8.6 MB of it translations.
 
+## Introspection, PyGObject and Meld
+
+- **gobject-introspection's scanner assumes MSVC or MSYS2 on Windows.**
+  With zig's `cc` it took distutils' default compiler, `msvc`; with
+  `MSYSTEM` set it chose MinGW, but linked its dumper through a temporary
+  shell script it runs with `which($SHELL or sh.exe)`, and a build's PATH
+  has no `sh.exe`. It looked for import libraries only where the compiler
+  searches by itself, which isn't the SDK's `lib` for zig, and linked them
+  as `-lfoo`, which zig's `cc` doesn't take for `libfoo.dll.a`. A patch to
+  `giscanner/ccompiler.py` fixes the four
+  ([`gobject-introspection.patch`](../recipes/gtk4-sdk/gobject-introspection.patch)).
+- **With LLVM's `dlltool`, the scanner finds the DLL behind an import
+  library with `nm`**, the archive's member names. zig has no `nm`;
+  [`nm.c`](../recipes/gtk4-sdk/nm.c) prints what GNU nm does for COFF
+  objects, archives and short import members (60 of 60 comparisons the same
+  under `LC_ALL=C`, besides the symbols bfd makes up when it turns short
+  import members into long ones). Within GTK's SDK's own build, Rust's
+  `dlltool` alias (GNU's) is on PATH, and the scanner uses
+  `dlltool --identify` there; both give the same names.
+- **On a subst drive, the scanner left out what generated headers
+  declare.** Its Python side resolves the files it scans with
+  `os.path.realpath`, which on Windows follows subst drives (`B:` to the
+  build directory); its lexer resolves the preprocessor's line markers with
+  `GetFullPathName`, which doesn't. A generated header the preprocessor
+  named relatively (`./gdk-pixbuf/gdk-pixbuf-enum-types.h`) then wasn't one
+  of the scanned files, and its declarations were dropped without a word:
+  no enum in Pango's, GdkPixbuf's, GDK's or GTK's GIRs had its GType, and
+  `Gtk.get_major_version` was missing. The lexer now resolves as `realpath`
+  does (`GetFinalPathNameByHandle`). The first GTK SDK of this iteration
+  was built without that, and showed it only in the GIRs' contents.
+- **GI's build needs flex and bison.** winflexbison's sources build with
+  MSVC only (its CMake refuses others, and its m4 and gnulib code assumes
+  MSVC's headers), so its release's programs are a pinned download, on
+  PATH for GI's build only.
+- **CPython extensions build with zig against python.org's Python**:
+  NuGet's `python` package is the embeddable zip's build with `include`
+  and `libs\python314.lib`, and `pyconfig.h` defines `MS_WIN64` for
+  `__MINGW32__`, which zig defines. pycairo and PyGObject build with Meson
+  given `-Dpython=` the NuGet `python.exe` (Meson's own Python, the
+  embeddable one, has no headers).
+- **Python since 3.8 doesn't load DLLs from PATH for extensions or ctypes**:
+  PyGObject adds the directories in `PYGI_DLL_PATH` with
+  `os.add_dll_directory()` when `gi` is imported. GLib still loads a
+  typelib's DLL with `LoadLibrary`, which searches PATH: Meld's own
+  GtkSourceView wasn't found until its `bin` was on its PATH.
+- **`ctypes.cdll[name]` raises `AttributeError`, not `OSError`, for a DLL
+  it can't load**, and passes a Python `str` as a `wchar_t *`. Meld's
+  Windows code expects `FileNotFoundError` from it and passes `str` to
+  libintl's `bindtextdomain`: its UI files weren't translated (libintl took
+  the path for `D`) though its Python strings were.
+- **In an AppContainer, Python's multiprocessing can't make its pipes**:
+  named pipes there must be under `\\.\pipe\LOCAL\`, and multiprocessing
+  names them `\\.\pipe\pyc-...` (`PermissionError`, and Meld compared
+  nothing). Under `LOCAL\` they work in every sandbox.
+- **Meld forces `PANGOCAIRO_BACKEND=fontconfig` on Windows**: GTK's Pango has
+  only its Win32 font map, logs a critical warning for the unknown backend
+  and gives no font map, and Meld never draws. Its image sets `win32`.
+- **gnome.post_install runs `update-desktop-database`**, which a Windows
+  build doesn't have, and fails the install.
+- **Times and sizes.** GTK's SDK takes 31 minutes with introspection (26
+  before): gobject-introspection, GLib's second build and each library's
+  scanner. Its layer is 94 MB compressed (73 before), with Python and the
+  GIRs; the typelibs add 1.2 MB to GTK's runtime (53.6 MB) and 0.3 MB to
+  GTK 3's (18.7 MB). PyGObject's runtime is 15 MB compressed, nearly all
+  Python's; Meld's own layer is 2.2 MB, GtkSourceView included, and builds
+  in about a minute.
+
 ## Other findings
 
 - **Microsoft Defender quarantines zigsaw 0.19.0.** During a build of

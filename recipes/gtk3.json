@@ -2,7 +2,7 @@
   "id": "org.gtk.Gtk3",
   "version": "3.24.52",
   "name": "GTK 3",
-  "summary": "GTK 3 and ATK, for GTK 3 apps, which have GTK 4's runtime too for GLib, Pango, cairo and the rest",
+  "summary": "GTK 3 and ATK, with their typelibs, for GTK 3 apps, which have GTK 4's runtime too for GLib, Pango, cairo and the rest",
   "homepage": "https://www.gtk.org/",
   "license": "LGPL-2.1-or-later",
   "command": "about.bat",
@@ -13,7 +13,8 @@
   "exports": {},
   "cleanup": [
     "/include",
-    "/lib",
+    "/lib/pkgconfig",
+    "/share/gir-1.0",
     "/share/aclocal",
     "/share/applications",
     "/share/gettext",
@@ -27,7 +28,7 @@
   "modules": [
     {
       "name": "gtk",
-      "sources": [{ "image": "org.gtk.Gtk3.Sdk:3.24.52@sha256:20a0c1d9d8a159df7e91eab846aa3dc3fbd3fad0f9450ca67b29fdc198181152" }]
+      "sources": [{ "image": "org.gtk.Gtk3.Sdk:3.24.52@sha256:923dc6920094e71840379925793984d56a55d4289eddc3a49703d24e784c17a2" }]
     }
   ]
 }

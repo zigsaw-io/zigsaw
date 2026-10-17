@@ -551,7 +551,10 @@ GTK 4 comes as two images, as Flatpak's GNOME runtime does:
   icon themes and libadwaita 1.10, with its demo; then libsoup 3.8 with
   OpenSSL 3.5 (static), SQLite, nghttp2, libpsl and glib-networking,
   librsvg 2.63 with FreeType, libxml2 and its GdkPixbuf loader, and enchant
-  2.8 with hunspell 1.7 and an en_US dictionary. Its first modules take GNU
+  2.8 with hunspell 1.7 and an en_US dictionary. Each library comes with
+  its introspection data (GIR files and typelibs), which
+  gobject-introspection 1.86 makes, built early in the SDK with Python 3.14
+  ([below](#introspection)). Its first modules take GNU
   gettext 1.0 and libiconv from their own image,
   **[`org.gnu.gettext`](recipes/gettext.json)**, as an
   [image source](#images-as-sources): gettext takes three quarters of an
@@ -566,7 +569,8 @@ GTK 4 comes as two images, as Flatpak's GNOME runtime does:
   as an [image source](#images-as-sources), without the headers, libraries
   and build tools, so it builds in seconds once the SDK is there. Apps list
   it in their `runtimes`. It keeps GIO's modules, GdkPixbuf's loaders and
-  enchant's providers from the SDK's `lib`, and the translations and
+  enchant's providers from the SDK's `lib`, the typelibs and GLib's
+  `libgirepository-2.0`, and the translations and
   gettext's libintl, without gettext's tools. As an app, it runs `gtk4-demo`, exports
   `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`,
   `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo`, `gio`,
@@ -638,7 +642,8 @@ own: `cc` and `c++` (zig's, for the same target as builds), `ar`, `rc`,
 `windres` (GNU windres's command line, for zig's `rc`, as Rust's
 winresource and embed-resource crates run it), `pkg-config` (which finds
 the SDK's libraries), `meson`, `ninja`, `sh`, `make`, gettext's `msgfmt`,
-`msgmerge` and `xgettext`, and GLib's and GTK's tools. Like other exports, they run in the
+`msgmerge` and `xgettext`, `nm`, gobject-introspection's `g-ir-scanner` and
+`g-ir-compiler`, and GLib's and GTK's tools. Like other exports, they run in the
 SDK's environment, with the working directory (the SDK has the `cwd`
 permission), and inside it Meson finds the compiler and the rest through
 the runtimes' aliases. With the store's `bin` on PATH:
@@ -722,9 +727,11 @@ spells out:
   second as their sources, and BusyBox's make remakes a target whose
   prerequisite is as new as it, where GNU make doesn't, so
   [a script](recipes/gtk4-sdk/autotools-mtimes.sh) orders their times first.
-  enchant's library exports what its headers declare, from a `.def` file
-  made from them, as libtool's own way needs `nm`; its providers export only
-  `init_enchant_provider`.
+  enchant's library exports what upstream's `-export-symbols-regex` gives,
+  which libtool turns into a `.def` file with
+  [the SDK's `nm`](recipes/gtk4-sdk/nm.c) (`NM=nm`); its providers export
+  only `init_enchant_provider`, from a `.def` of the recipe's, as they mark
+  nothing for export.
 - gettext and libiconv ([`recipes/gettext.json`](recipes/gettext.json))
   build the same way, with a few more. gnulib looks for grep as
   `EGREP_TRADITIONAL` too. libtool runs `$RC` and `$WINDRES` as GNU windres,
@@ -735,13 +742,18 @@ spells out:
   compiler doesn't (`gl_cv_cc_visibility=no`), so they use `dllexport`.
   Some functions are `dllexport` only for MSVC, relying otherwise on GNU
   ld's `--export-all-symbols` or on a `.def` that libtool makes with `nm`;
-  zig's linker ignores the first and there's no `nm`, so
+  zig's linker ignores the first and gettext's image has no `nm` (GTK's
+  SDK has one since), so
   [the recipe](recipes/gettext/exports.sh) exports them for any Windows
   compiler and leaves the `nm` lists out. gettext's libtool keeps
   `-nostdlib` in a variable of its own. Its manuals, man pages and
   translations come built in the release, and the build leaves them be.
 - Pango's Windows font map gets a one-line patch so that it finds a font
   for text that asks for color glyphs (see above).
+- `nm` is [a small program of the SDK's](recipes/gtk4-sdk/nm.c), as zig
+  has none: it lists the symbols of COFF objects, static libraries and
+  import libraries as GNU nm does, in its BSD and POSIX formats, which is
+  what libtool's export lists and gobject-introspection read.
 - GTK's input method for Windows (`gtkimcontextime.c`) listens to the
   window's messages for the text widget that has the focus, and in 4.24.1
   went on listening for one that was removed while it had it, reading freed
@@ -903,6 +915,134 @@ BusyBox's make, like hunspell and enchant above, with more:
   `ssconvert` and the Excel plugin use.
 - `glib-genmarshal` is a Python script; a `python3` in the build runs it with
   Meson's Python.
+
+### Introspection
+
+GTK's images carry the introspection data that language bindings load
+(PyGObject, GJS): each library's GIR file in the SDK's `share\gir-1.0`,
+and its typelib in `lib\girepository-1.0` in the SDK and the runtimes. GTK's
+have GLib, GObject, Gio, GModule, HarfBuzz, Pango, PangoCairo, cairo,
+GdkPixbuf, Graphene, GDK, GSK and GTK 4, libadwaita, libsoup and librsvg;
+GTK 3's add ATK, GDK 3 and GTK 3. The runtime keeps GLib's
+`libgirepository-2.0`, which loads them.
+
+GTK's SDK builds gobject-introspection 1.86 early, after GLib, cairo and
+their libraries, and then GLib again, with introspection, which needs GI's
+scanner. GI's scanner is Python: the SDK has Python 3.14.7 in `python`, the
+NuGet package of python.org's build (the embeddable one with headers and
+`python314.lib`, for the scanner's C module), with setuptools, whose copy
+of distutils the scanner uses since Python 3.12 has none. GI's build needs
+flex and bison, which are winflexbison's release (MSVC builds its sources
+only), on PATH for that module alone. Then:
+
+- [A patch](recipes/gtk4-sdk/gobject-introspection.patch) makes GI's
+  scanner work with zig's `cc` outside MSYS2: it treats a `CC` that isn't
+  MSVC's as GCC-like, looks for libraries where pkg-config says they are,
+  links `libfoo.dll.a` by its path (zig's `cc` doesn't take it for
+  `-lfoo`), and reads an import library's DLL name with `nm` when there's
+  no `dlltool`. It also has its lexer resolve file names as Python's
+  `realpath` does, through a subst drive such as builds' `B:`: otherwise
+  what a library's generated headers declare (its enums' types) was left
+  out.
+- GI installs `g-ir-scanner` with the Python it was built with,
+  `B:\prefix\python\python.exe`, in its `#!` line, which is only there while
+  the SDK builds; Meson runs scripts by that line.
+  [`g-ir-scanner.exe`](recipes/gtk4-sdk/python-script.c) runs the script
+  next to it with the SDK's Python wherever the SDK is, and GI's pkg-config
+  file names it.
+- HarfBuzz is built with its GObject library, which Pango's GIR includes.
+
+GTK 3's SDK sets `GI_GIR_PATH` to its own GIRs, so that a library built on
+it (GtkSourceView 4, in Meld's recipe) finds `Gtk-3.0.gir`; GTK's SDK's
+are where its scanner looks anyway. Every library's GIR and typelib build
+as part of its own build, which makes GTK's SDK take 31 minutes (26
+before).
+
+## Python apps
+
+PyGObject, Python's binding of GLib and GTK through their typelibs, comes
+as an add-on to GTK's images, like GTK 3's:
+
+- **[`org.gnome.PyGObject.Sdk`](recipes/pygobject-sdk.json)** is built with
+  GTK's SDK as its SDK: Python 3.14.7 (the same NuGet package as GTK's SDK
+  has), pycairo 1.29.2 and PyGObject 3.58.1, which build with Meson and zig
+  against python.org's build of Python. It keeps their headers and
+  pkg-config files, and has pkg-config files for Python itself
+  (`python3.pc`, `python-3.14.pc` and their `-embed` forms) and a
+  `python3.exe`, so Meson's `find_installation('python3')` and
+  `dependency('python3')` find it on its PATH.
+- **[`org.gnome.PyGObject`](recipes/pygobject.json)** is the runtime, made
+  from it. Python keeps its bytecode in the app's data directory
+  (`PYTHONPYCACHEPREFIX`), as the runtime's files are read-only, and has no
+  user site directory. Its
+  [`sitecustomize.py`](recipes/pygobject/sitecustomize.py) names
+  multiprocessing's pipes under `\\.\pipe\LOCAL\`, the only place a
+  process in an AppContainer may make them, so that multiprocessing works
+  in every sandbox.
+
+A Python app on GTK 3 lists three runtimes and three SDKs, and sets where
+its own files, the typelibs and their DLLs are, as [Meld](recipes/meld.json)
+does:
+
+```json
+"command": "${pygobject}\\pythonw.exe",
+"args": ["${app}\\bin\\meld"],
+"path": ["bin"],
+"env": {
+  "PYTHONPATH": "${app}\\Lib\\site-packages",
+  "GI_TYPELIB_PATH": "${app}\\lib\\girepository-1.0;${gtk3}\\lib\\girepository-1.0;${gtk}\\lib\\girepository-1.0",
+  "PYGI_DLL_PATH": "${app}\\bin;${gtk3}\\bin;${gtk}\\bin"
+},
+"runtimes": {
+  "gtk": "org.gtk.Gtk4:4.24.1@sha256:...",
+  "gtk3": "org.gtk.Gtk3:3.24.52@sha256:...",
+  "pygobject": "org.gnome.PyGObject:3.58.1@sha256:..."
+},
+"sdk": {
+  "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:...",
+  "gtk3sdk": "org.gtk.Gtk3.Sdk:3.24.52@sha256:...",
+  "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:..."
+}
+```
+
+- `pythonw.exe` is a GUI program, so the app's commands get the windowless
+  shim; its script runs with the app's own Python packages on
+  `PYTHONPATH`.
+- Python doesn't load the DLLs an extension needs from PATH (since 3.8):
+  PyGObject adds the directories in `PYGI_DLL_PATH` when it's imported.
+  GLib loads a typelib's DLL by its name, from PATH, so a library of the
+  app's own needs the app's `bin` there too.
+- A library's data is found as in a C app: GLib's data directories on
+  Windows include the `share` next to the library asking (GtkSourceView's
+  language files in the app's).
+
+A GTK 4 app lists GTK's runtime and PyGObject's (and their SDKs) only.
+
+### Meld
+
+[Meld](recipes/meld.json) 3.24.1 compares and merges files and folders,
+two or three at a time. Its recipe builds GtkSourceView 4.8.4, the GTK 3
+version, with its typelib, and Meld with Meson in its "wheel" form, where
+its data (its settings schema, compiled; its styles, resources and
+translations) is in its Python package and found from there wherever the
+app is deployed. Its help opens on meld.app, as there's no yelp. It may
+use the run's working directory, Desktop, Documents and Downloads, and
+it's in the Start menu with its own icon. Comparing in version control
+views needs `git` on PATH, which Meld's image doesn't have.
+
+Meld's Windows code expects MSYS2 or its own PyInstaller bundle, so the
+recipe:
+
+- sets `PANGOCAIRO_BACKEND=win32`, as Meld otherwise asks Pango for its
+  fontconfig font map, which GTK's Pango doesn't have, and never draws;
+- imports `gi` before Meld loads libintl with ctypes (ctypes doesn't look
+  on PATH either), asks for it as `libintl-8`, and gives it the locale
+  directory as a wide string (`libintl_wbindtextdomain`): ctypes passes a
+  Python string as `wchar_t *`, and libintl read Meld's path as `D`, so
+  its windows weren't translated;
+- creates the directory of `meld.log` (the app's data `share`), which
+  Meld opens without making;
+- leaves out `gnome.post_install`, which runs `update-desktop-database`.
 
 ## Rust
 

@@ -1,6 +1,10 @@
 {
   "id": "org.gtk.Gtk4.Sdk",
   "version": "4.24.1",
+  "name": "GTK SDK",
+  "summary": "GTK 4, libadwaita and the stack below them, with headers, import libraries, introspection data and the tools to build GTK apps with zig",
+  "homepage": "https://www.gtk.org/",
+  "license": "LGPL-2.1-or-later",
   "command": "bin/gtk4-demo.exe",
   "path": ["bin"],
   "env": {
@@ -24,7 +28,10 @@
     "msgfmt": { "command": "bin/msgfmt.exe" },
     "msgmerge": { "command": "bin/msgmerge.exe" },
     "xgettext": { "command": "bin/xgettext.exe" },
-    "windres": { "command": "bin/windres.exe" }
+    "windres": { "command": "bin/windres.exe" },
+    "nm": { "command": "bin/nm.exe" },
+    "g-ir-scanner": { "command": "bin/g-ir-scanner.exe" },
+    "g-ir-compiler": { "command": "bin/g-ir-compiler.exe" }
   },
   "cleanup": ["__pycache__"],
   "sdk": {
@@ -52,6 +59,14 @@
       "build": [
         "mkdir -p \"$PREFIX/bin\"",
         "cc -O2 -s -municode windres.c -o \"$PREFIX/bin/windres.exe\""
+      ]
+    },
+    {
+      "name": "nm",
+      "sources": [{ "path": "gtk4-sdk/nm.c" }],
+      "build": [
+        "cc -O2 -s nm.c -o \"$PREFIX/bin/nm.exe\"",
+        "nm \"$PREFIX/bin/nm.exe\" 2>&1 | grep -q 'no symbols$'"
       ]
     },
     {
@@ -220,21 +235,6 @@
       ]
     },
     {
-      "name": "harfbuzz",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
-      "sources": [
-        {
-          "url": "https://github.com/harfbuzz/harfbuzz/releases/download/14.4.0/harfbuzz-14.4.0.tar.xz",
-          "sha256": "2357ed966c6ced7bfa720b0640c0231065af01158fbea215093ffa15aed44371",
-          "strip": 1
-        }
-      ],
-      "build": [
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dglib=enabled -Dgobject=disabled -Dcairo=disabled -Dchafa=disabled -Dicu=disabled -Dfreetype=disabled -Dgdi=enabled -Ddirectwrite=enabled -Dtests=disabled -Dintrospection=disabled -Ddocs=disabled -Dutilities=disabled -Dbenchmark=disabled",
-        "meson install -C out"
-      ]
-    },
-    {
       "name": "cairo",
       "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu", "CFLAGS": "-Wno-error=date-time" },
       "sources": [
@@ -246,6 +246,95 @@
       ],
       "build": [
         "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Ddwrite=enabled -Dfontconfig=disabled -Dfreetype=disabled -Dpng=enabled -Dzlib=enabled -Dglib=enabled -Dquartz=disabled -Dxcb=disabled -Dxlib=disabled -Dxlib-xcb=disabled -Dtests=disabled -Dgtk2-utils=disabled -Dspectre=disabled -Dsymbol-lookup=disabled -Dgtk_doc=false",
+        "meson install -C out"
+      ]
+    },
+    {
+      "name": "python",
+      "sources": [
+        {
+          "url": "https://www.nuget.org/api/v2/package/python/3.14.7",
+          "sha256": "46a4da5529a92d18ff894911f6e6033a8253198d705b8161bf28c9123c87d46b",
+          "type": "zip",
+          "dest": "nupkg"
+        },
+        {
+          "url": "https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/setuptools-84.0.0-py3-none-any.whl",
+          "sha256": "51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670",
+          "type": "zip",
+          "dest": "setuptools"
+        }
+      ],
+      "build": [
+        "mkdir -p \"$PREFIX/python\"",
+        "cp -r nupkg/tools/. \"$PREFIX/python/\"",
+        "cp -r setuptools/. \"$PREFIX/python/Lib/site-packages/\"",
+        "\"$PREFIX/python/python.exe\" -B -c 'import distutils.cygwinccompiler'"
+      ]
+    },
+    {
+      "name": "flex-bison",
+      "sources": [
+        {
+          "url": "https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip",
+          "sha256": "8d324b62be33604b2c45ad1dd34ab93d722534448f55a16ca7292de32b6ac135"
+        }
+      ],
+      "build": ["./win_flex.exe --version && ./win_bison.exe --version"]
+    },
+    {
+      "name": "gobject-introspection",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/gobject-introspection/1.86/gobject-introspection-1.86.0.tar.xz",
+          "sha256": "920d1a3fcedeadc32acff95c2e203b319039dd4b4a08dd1a2dfd283d19c0b9ae",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/gobject-introspection.patch", "dest": "zigsaw/gobject-introspection.patch" },
+        { "path": "gtk4-sdk/python-script.c", "dest": "zigsaw/python-script.c" },
+        { "path": "gtk4-sdk/implibs.sh", "dest": "zigsaw/implibs.sh" }
+      ],
+      "build": [
+        "patch -p1 < zigsaw/gobject-introspection.patch",
+        "sh zigsaw/implibs.sh \"$PREFIX/lib\"",
+        "PATH=\"B:/src/flex-bison;$PATH\" meson setup out --prefix=\"$PREFIX\" --buildtype=release \"-Dpython=$PREFIX/python/python.exe\" -Dcairo=enabled -Ddoctool=disabled -Dgtk_doc=false -Dtests=false",
+        "meson install -C out",
+        "cc -O2 -s -municode zigsaw/python-script.c -o \"$PREFIX/bin/g-ir-scanner.exe\"",
+        "cp \"$PREFIX/bin/g-ir-scanner.exe\" \"$PREFIX/bin/g-ir-annotation-tool.exe\"",
+        "sed -i 's|^g_ir_scanner=${bindir}/g-ir-scanner$|g_ir_scanner=${bindir}/g-ir-scanner.exe|' \"$PREFIX/lib/pkgconfig/gobject-introspection-1.0.pc\"",
+        "grep -q '^g_ir_scanner=${bindir}/g-ir-scanner.exe$' \"$PREFIX/lib/pkgconfig/gobject-introspection-1.0.pc\"",
+        "\"$PREFIX/bin/g-ir-scanner.exe\" --version"
+      ]
+    },
+    {
+      "name": "glib-introspection",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o -LB:/prefix/lib", "RC": "rc /:auto-includes gnu", "CFLAGS": "-IB:/prefix/include/mingw-w64-winrt", "CPPFLAGS": "-IB:/prefix/include" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/glib/2.90/glib-2.90.0.tar.xz",
+          "sha256": "17d15cac2af80a33271127408e0abc2748eb297c595c2a26409e81e14e7d1b8f",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtests=false -Dintrospection=enabled -Dman-pages=disabled -Ddocumentation=false -Dsysprof=disabled -Dnls=enabled",
+        "meson install -C out",
+        "ls \"$PREFIX/lib/girepository-1.0/GLib-2.0.typelib\" \"$PREFIX/lib/girepository-1.0/Gio-2.0.typelib\""
+      ]
+    },
+    {
+      "name": "harfbuzz",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "sources": [
+        {
+          "url": "https://github.com/harfbuzz/harfbuzz/releases/download/14.4.0/harfbuzz-14.4.0.tar.xz",
+          "sha256": "2357ed966c6ced7bfa720b0640c0231065af01158fbea215093ffa15aed44371",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dglib=enabled -Dgobject=enabled -Dcairo=disabled -Dchafa=disabled -Dicu=disabled -Dfreetype=disabled -Dgdi=enabled -Ddirectwrite=enabled -Dtests=disabled -Dintrospection=enabled -Ddocs=disabled -Dutilities=disabled -Dbenchmark=disabled",
         "meson install -C out"
       ]
     },
@@ -262,7 +351,7 @@
       "build": [
         "sed -i 's/^\\(              pango_font_description_set_gravity (new_desc,\\)$/              pango_font_description_set_color (new_desc, pango_font_description_get_color (description));\\n\\1/' pango/pangowin32-fontmap.c",
         "grep -q '^              pango_font_description_set_color (new_desc, pango_font_description_get_color (description));$' pango/pangowin32-fontmap.c",
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dcairo=enabled -Dfontconfig=disabled -Dfreetype=disabled -Dxft=disabled -Dlibthai=disabled -Dintrospection=disabled -Ddocumentation=false -Dman-pages=false -Dbuild-testsuite=false -Dbuild-examples=false -Dsysprof=disabled",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dcairo=enabled -Dfontconfig=disabled -Dfreetype=disabled -Dxft=disabled -Dlibthai=disabled -Dintrospection=enabled -Ddocumentation=false -Dman-pages=false -Dbuild-testsuite=false -Dbuild-examples=false -Dsysprof=disabled",
         "meson install -C out"
       ]
     },
@@ -277,7 +366,7 @@
         }
       ],
       "build": [
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dgobject_types=true -Dintrospection=disabled -Dtests=false -Dinstalled_tests=false -Dgtk_doc=false",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dgobject_types=true -Dintrospection=enabled -Dtests=false -Dinstalled_tests=false -Dgtk_doc=false",
         "meson install -C out"
       ]
     },
@@ -307,7 +396,7 @@
         }
       ],
       "build": [
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dpng=enabled -Djpeg=enabled -Dtiff=enabled -Dgif=enabled -Dglycin=disabled -Dothers=disabled -Dbuiltin_loaders=all -Drelocatable=true -Dintrospection=disabled -Dman=false -Dgtk_doc=false -Ddocumentation=false -Dtests=false -Dinstalled_tests=false -Dgio_sniffing=false -Dthumbnailer=disabled",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dpng=enabled -Djpeg=enabled -Dtiff=enabled -Dgif=enabled -Dglycin=disabled -Dothers=disabled -Dbuiltin_loaders=all -Drelocatable=true -Dintrospection=enabled -Dman=false -Dgtk_doc=false -Ddocumentation=false -Dtests=false -Dinstalled_tests=false -Dgio_sniffing=false -Dthumbnailer=disabled",
         "meson install -C out"
       ]
     },
@@ -339,7 +428,7 @@
       ],
       "build": [
         "patch -p1 < zigsaw/ime-filter.patch",
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dwin32-backend=true -Dx11-backend=false -Dwayland-backend=false -Dmacos-backend=false -Dmedia-gstreamer=disabled -Dvulkan=disabled -Dintrospection=disabled -Daccesskit=disabled -Dprint-cpdb=disabled -Dcolord=disabled -Dsysprof=disabled -Dcloudproviders=disabled -Dtracker=disabled -Ddocumentation=false -Dman-pages=false -Dbuild-demos=true -Dbuild-examples=false -Dbuild-tests=false -Dbuild-testsuite=false",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dwin32-backend=true -Dx11-backend=false -Dwayland-backend=false -Dmacos-backend=false -Dmedia-gstreamer=disabled -Dvulkan=disabled -Dintrospection=enabled -Daccesskit=disabled -Dprint-cpdb=disabled -Dcolord=disabled -Dsysprof=disabled -Dcloudproviders=disabled -Dtracker=disabled -Ddocumentation=false -Dman-pages=false -Dbuild-demos=true -Dbuild-examples=false -Dbuild-tests=false -Dbuild-testsuite=false",
         "meson install -C out"
       ]
     },
@@ -386,7 +475,7 @@
         "! grep -q merge_file demo/data/meson.build",
         "sed -i \"s/^demo_kwargs = {}$/demo_kwargs = { 'win_subsystem': 'windows' }/\" demo/meson.build",
         "grep -q \"^demo_kwargs = { 'win_subsystem': 'windows' }$\" demo/meson.build",
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dintrospection=disabled -Dvapi=false -Ddocumentation=false -Dtests=false -Dexamples=true",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dintrospection=enabled -Dvapi=false -Ddocumentation=false -Dtests=false -Dexamples=true",
         "meson install -C out"
       ]
     },
@@ -489,7 +578,7 @@
         }
       ],
       "build": [
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtls_check=false -Dgssapi=disabled -Dntlm=disabled -Dbrotli=disabled -Dzstd=disabled -Dintrospection=disabled -Dvapi=disabled -Ddocs=disabled -Ddoc_tests=false -Dtests=false -Dautobahn=disabled -Dsysprof=disabled -Dpkcs11_tests=disabled",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtls_check=false -Dgssapi=disabled -Dntlm=disabled -Dbrotli=disabled -Dzstd=disabled -Dintrospection=enabled -Dvapi=disabled -Ddocs=disabled -Ddoc_tests=false -Dtests=false -Dautobahn=disabled -Dsysprof=disabled -Dpkcs11_tests=disabled",
         "meson install -C out"
       ]
     },
@@ -546,7 +635,7 @@
         "grep -q \"find_program('nm', required: false, disabler: true)\" rsvg/meson.build && ! grep -q 'link_depends: librsvg_ver' rsvg/meson.build",
         "sed -i 's/^    link_whole: librsvg_c_lib,$/    link_with: librsvg_c_lib,/' rsvg/meson.build",
         "grep -q '^    link_with: librsvg_c_lib,$' rsvg/meson.build",
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtriplet=x86_64-pc-windows-gnu -Dpixbuf=enabled -Dpixbuf-loader=enabled -Drsvg-convert=enabled -Dintrospection=disabled -Dvala=disabled -Ddocs=disabled -Dtests=false -Davif=disabled",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtriplet=x86_64-pc-windows-gnu -Dpixbuf=enabled -Dpixbuf-loader=enabled -Drsvg-convert=enabled -Dintrospection=enabled -Dvala=disabled -Ddocs=disabled -Dtests=false -Davif=disabled",
         "meson install -C out",
         "grep -q 'pixbufloader_svg[.]dll' \"$PREFIX/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache\" && ! grep -q '^\"B:' \"$PREFIX/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache\""
       ]
@@ -574,7 +663,7 @@
     },
     {
       "name": "enchant",
-      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2", "CXXFLAGS": "-O2", "LD": "sh B:/src/enchant/zigsaw/ld.sh", "LDFLAGS": "-Wl,-s -Wl,-Brepro", "PKG_CONFIG": "pkg-config", "DOXYGEN": "true" },
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "NM": "nm", "RM": "rm -f", "CFLAGS": "-O2", "CXXFLAGS": "-O2", "LD": "sh B:/src/enchant/zigsaw/ld.sh", "LDFLAGS": "-Wl,-s -Wl,-Brepro", "PKG_CONFIG": "pkg-config", "DOXYGEN": "true" },
       "sources": [
         {
           "url": "https://github.com/rrthomas/enchant/releases/download/v2.8.21/enchant-2.8.21.tar.gz",
@@ -592,12 +681,12 @@
         "sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-gcc-warnings --with-hunspell --with-winspell --without-aspell --without-nuspell --without-hspell --without-voikko --without-applespell --without-zemberek lt_cv_deplibs_check_method=pass_all > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
         "grep -q '^#define ENABLE_RELOCATABLE 1' config.h && grep -q '^HUNSPELL_LIBS = .*hunspell' providers/Makefile && grep -q '^WINSPELL_CFLAGS = ..' providers/Makefile",
         "sed -i 's/ -shared -nostdlib / -shared /' libtool",
-        "{ echo EXPORTS; sed -n 's/^.*[^a-z0-9_]\\(enchant_[a-z0-9_]*\\) *(.*$/\\1/p' lib/enchant.h lib/enchant-provider.h | sort -u | while read -r f; do grep -q \"^$f (\" lib/*.c && echo \"$f\"; done; } > zigsaw/enchant.def",
         "printf '%s\\n' EXPORTS init_enchant_provider > zigsaw/provider.def",
         "make -C libgnu -j\"$(nproc)\"",
-        "make -C lib -j\"$(nproc)\" nodist_doc_DATA= libenchant_2_la_LDFLAGS='-no-undefined -export-symbols B:/src/enchant/zigsaw/enchant.def -version-info $(VERSION_INFO)'",
+        "make -C lib -j\"$(nproc)\" nodist_doc_DATA=",
+        "grep -q '^ *enchant_broker_init' lib/.libs/libenchant-2-2.dll.def && ! grep -v -e '^EXPORTS' -e '^ *enchant_' lib/.libs/libenchant-2-2.dll.def | grep -q .",
         "make -C providers -j\"$(nproc)\" LDFLAGS=\"$LDFLAGS -export-symbols B:/src/enchant/zigsaw/provider.def\"",
-        "make -C lib install nodist_doc_DATA= libenchant_2_la_LDFLAGS='-no-undefined -export-symbols B:/src/enchant/zigsaw/enchant.def -version-info $(VERSION_INFO)'",
+        "make -C lib install nodist_doc_DATA=",
         "make -C providers install",
         "make install-pkgconfigDATA",
         "cp zigsaw/enchant.ordering \"$PREFIX/share/enchant-2/enchant.ordering\""

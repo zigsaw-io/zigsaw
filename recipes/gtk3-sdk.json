@@ -2,14 +2,15 @@
   "id": "org.gtk.Gtk3.Sdk",
   "version": "3.24.52",
   "name": "GTK 3 SDK",
-  "summary": "GTK 3 and ATK, with headers and import libraries, to build GTK 3 apps with the GTK 4 SDK, which has the rest of the stack",
+  "summary": "GTK 3 and ATK, with headers, import libraries and introspection data, to build GTK 3 apps with the GTK 4 SDK, which has the rest of the stack",
   "homepage": "https://www.gtk.org/",
   "license": "LGPL-2.1-or-later",
   "command": "about.bat",
   "path": ["bin"],
+  "env": { "GI_GIR_PATH": "${app}\\share\\gir-1.0" },
   "exports": {},
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:306a050719faf5662f61c53db889fe5f4e488c6f2e0ec23958de3b56c464074d"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2"
   },
   "modules": [
     {
@@ -36,13 +37,13 @@
         }
       ],
       "build": [
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Datk_only=true -Dintrospection=disabled -Ddocs=false -Dx11=disabled",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Datk_only=true -Dintrospection=enabled -Ddocs=false -Dx11=disabled",
         "meson install -C out"
       ]
     },
     {
       "name": "gtk",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu /:output-format coff" },
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu /:output-format coff", "GI_GIR_PATH": "B:/prefix/share/gir-1.0" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/gtk/3.24/gtk-3.24.52.tar.xz",
@@ -61,7 +62,7 @@
         "sed -i \"s/^  install: true$/  win_subsystem: 'windows',\\n  install: true/\" demos/gtk-demo/meson.build demos/widget-factory/meson.build demos/icon-browser/meson.build",
         "[ \"$(cat demos/gtk-demo/meson.build demos/widget-factory/meson.build demos/icon-browser/meson.build | grep -c \"^  win_subsystem: 'windows',$\")\" = 4 ]",
         "grep -q 'desktopdir != NULL && g_strcmp0' gtk/gtkfilechooserbutton.c && grep -q 'name == NULL || !g_strcmp0 (name, g_get_home_dir' gtk/gtkfilechooserwidget.c && grep -q 'name == NULL || path_is_home_dir (name)' gtk/gtkplacessidebar.c",
-        "sdk=$(pkg-config --variable=prefix glib-2.0) && meson setup out --prefix=\"$PREFIX\" --buildtype=release \"-Dc_args=-fmacro-prefix-map=$sdk=gtksdk\" -Dwin32_backend=true -Dx11_backend=false -Dwayland_backend=false -Dbroadway_backend=false -Dquartz_backend=false -Dxinerama=no -Dcolord=no -Dintrospection=false -Dgtk_doc=false -Dman=false -Ddemos=true -Dexamples=false -Dtests=false -Dinstalled_tests=false -Dbuiltin_immodules=all",
+        "sdk=$(pkg-config --variable=prefix glib-2.0) && meson setup out --prefix=\"$PREFIX\" --buildtype=release \"-Dc_args=-fmacro-prefix-map=$sdk=gtksdk\" -Dwin32_backend=true -Dx11_backend=false -Dwayland_backend=false -Dbroadway_backend=false -Dquartz_backend=false -Dxinerama=no -Dcolord=no -Dintrospection=true -Dgtk_doc=false -Dman=false -Ddemos=true -Dexamples=false -Dtests=false -Dinstalled_tests=false -Dbuiltin_immodules=all",
         "meson install -C out"
       ]
     },

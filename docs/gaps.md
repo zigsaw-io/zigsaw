@@ -310,9 +310,26 @@
   can't run on its own. GTK 3's SDK exports nothing: building GTK 3
   programs without a recipe takes GTK's SDK's commands, with GTK 3's
   pkg-config files added to `PKG_CONFIG_PATH` by hand.
-- GTK 3's SDK is built without introspection, GTK's broadway backend and
-  printing to a file (the Unix print dialog's): GTK 3 prints with Windows'
-  own dialog.
+- GTK 3's SDK is built without GTK's broadway backend and printing to a
+  file (the Unix print dialog's): GTK 3 prints with Windows' own dialog.
+- Text Editor, Rnote, GTK 3's demos and Gnumeric still pin the GTK and GTK
+  3 runtimes from before introspection, as they weren't rebuilt: a store
+  with one of them and Meld has two of each runtime (52 and 18 MB
+  compressed) until they're republished on the new ones.
+- A Python app on GTK 3 lists three runtimes and three SDKs (GTK's, GTK
+  3's, PyGObject's), and sets `PYTHONPATH`, `GI_TYPELIB_PATH` and
+  `PYGI_DLL_PATH` to name its own directories and its runtimes'. There's no
+  GJS for JavaScript apps, and no Vala.
+- PyGObject's runtime has Python's standard library and nothing from PyPI
+  but PyGObject and pycairo; an app that needs more carries it, and its
+  build has no pip (no network in builds; a vendor step would download
+  wheels).
+- Meld's version control views need `git` on PATH, which its image
+  doesn't give it (MinGit is an app, not a runtime). Its help opens on
+  meld.app.
+- gobject-introspection's build uses winflexbison's prebuilt flex and
+  bison (its sources build with MSVC only). They're pinned and only on
+  PATH for that module; nothing of theirs is in the SDK.
 - Gnumeric has no help (it needs yelp), and is built without its Python and
   Perl plugins, its database plugins (libgda) and the Psiconv and Paradox
   formats. It doesn't read Applix files: the Applix plugin is left out, as

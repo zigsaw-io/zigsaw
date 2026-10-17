@@ -28,6 +28,9 @@ gtk3-sdk.json
 gtk3.json
 gtk3demo.json
 gnumeric.json
+pygobject-sdk.json
+pygobject.json
+meld.json
 7zip.json
 notepad-plus-plus.json
 sumatrapdf.json
