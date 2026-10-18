@@ -12,7 +12,11 @@
     "XDG_DATA_HOME": "${data}\\share",
     "XDG_STATE_HOME": "${data}\\state",
     "XDG_CACHE_HOME": "${data}\\cache",
+    "XDG_DATA_DIRS": "${app}\\share",
     "GSETTINGS_BACKEND": "keyfile"
+  },
+  "extensions": {
+    "org.gtk.Gtk4": { "version": "1", "join": ["XDG_DATA_DIRS"] }
   },
   "permissions": { "filesystem": ["cwd"] },
   "exports": {

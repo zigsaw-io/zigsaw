@@ -9,7 +9,7 @@
   "modules": [
     {
       "name": "hello",
-      "sources": [{ "path": "meson.build" }, { "path": "hello.c" }, { "path": "soup.c" }, { "path": "svg.c" }, { "path": "spell.c" }, { "path": "font.c" }],
+      "sources": [{ "path": "meson.build" }, { "path": "hello.c" }, { "path": "soup.c" }, { "path": "svg.c" }, { "path": "spell.c" }, { "path": "font.c" }, { "path": "icon.c" }],
       "build": ["meson setup out --prefix=\"$PREFIX\"", "meson install -C out"]
     }
   ]

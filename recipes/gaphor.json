@@ -1,0 +1,132 @@
+{
+  "id": "org.gaphor.Gaphor",
+  "version": "3.3.2",
+  "name": "Gaphor",
+  "summary": "Model systems and software in UML, SysML, C4 and RAAML, in Python on GTK 4 and libadwaita",
+  "homepage": "https://gaphor.org/",
+  "license": "Apache-2.0",
+  "command": "${pygobject}\\pythonw.exe",
+  "args": ["-m", "gaphor"],
+  "path": ["bin"],
+  "env": {
+    "PYTHONPATH": "${app}\\Lib\\site-packages",
+    "GI_TYPELIB_PATH": "${app}\\lib\\girepository-1.0;${gtk}\\lib\\girepository-1.0",
+    "PYGI_DLL_PATH": "${app}\\bin;${gtk}\\bin",
+    "XDG_DATA_DIRS": "${app}\\share",
+    "GSETTINGS_SCHEMA_DIR": "${app}\\share\\glib-2.0\\schemas"
+  },
+  "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
+  "exports": {
+    "gaphor": { "command": "${pygobject}\\pythonw.exe", "args": ["-m", "gaphor"] }
+  },
+  "shortcuts": {
+    "Gaphor": { "command": "gaphor", "description": "Model systems and software", "icon": "share/icons/org.gaphor.Gaphor.ico" }
+  },
+  "associations": {
+    ".gaphor": { "command": "gaphor", "description": "Gaphor model", "icon": "share/icons/org.gaphor.Gaphor.ico" }
+  },
+  "runtimes": {
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:9a18362a2f85bc8852bdd1f71a8777d4afb981c93ebfb89f37ecebbffc878a4d",
+    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:b4ecf47ba73c14807af39f7c5b0867e123f1593545af2bf7159747dbf51c54e7"
+  },
+  "sdk": {
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2",
+    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:3498644a8ad6c958cbaa35d3f0855779aae0f5fe4c08bad0e1b0de59d7e0c955",
+    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
+  },
+  "cleanup": [
+    "/include",
+    "/lib/pkgconfig",
+    "/share/gir-1.0",
+    "/share/gtksourceview-5/language-specs/check.sh",
+    "/share/gtksourceview-5/language-specs/convert.py",
+    "/share/gtksourceview-5/styles/check.sh",
+    "*.a",
+    "*.lib",
+    "__pycache__"
+  ],
+  "modules": [
+    {
+      "name": "crt-noexport",
+      "build": [
+        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
+        "cc -c noexport.s -o noexport.o"
+      ]
+    },
+    {
+      "name": "gtksourceview",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/gtksourceview/5.22/gtksourceview-5.22.0.tar.xz",
+          "sha256": "3ebce33c781e65590a450ecd3ffade480d8e3135b52ee996f1620d6c7dffbbff",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dbuild-testsuite=false -Dintrospection=enabled -Dvapi=false -Ddocumentation=false -Dsysprof=false",
+        "meson install -C out",
+        "ls \"$PREFIX/lib/girepository-1.0/GtkSource-5.typelib\""
+      ]
+    },
+    {
+      "name": "flex-bison",
+      "sources": [
+        {
+          "url": "https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip",
+          "sha256": "8d324b62be33604b2c45ad1dd34ab93d722534448f55a16ca7292de32b6ac135"
+        }
+      ],
+      "build": ["./win_flex.exe --version && ./win_bison.exe --version"]
+    },
+    {
+      "name": "graphviz",
+      "sources": [
+        {
+          "url": "https://gitlab.com/graphviz/graphviz/-/archive/16.1.0/graphviz-16.1.0.zip",
+          "sha256": "4bb3694c2f0a1f58886a140df4347df636bdb477f0406de30aeaef0258056aca",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DENABLE_LTDL=OFF -DWITH_EXPAT=OFF -DWITH_GVEDIT=OFF -DWITH_SMYRNA=OFF -DWITH_ZLIB=OFF -DENABLE_TCL=OFF -DENABLE_SWIG=OFF -DENABLE_SHARP=OFF -DENABLE_D=OFF -DENABLE_GO=OFF -DENABLE_GUILE=OFF -DENABLE_JAVA=OFF -DENABLE_JAVASCRIPT=OFF -DENABLE_LUA=OFF -DENABLE_PERL=OFF -DENABLE_PHP=OFF -DENABLE_PYTHON=OFF -DENABLE_R=OFF -DENABLE_RUBY=OFF -DWITH_GDK=OFF -DWITH_GHOSTSCRIPT=OFF -DWITH_GTK=OFF -DWITH_POPPLER=OFF -DWITH_QUARTZ=OFF -DWITH_RSVG=OFF -DWITH_WEBP=OFF -DWITH_X=OFF -Duse_win_pre_inst_libs=OFF -Dinstall_win_dependency_dlls=OFF -DCMAKE_DISABLE_FIND_PACKAGE_CAIRO=ON -DCMAKE_DISABLE_FIND_PACKAGE_PANGOCAIRO=ON -DCMAKE_DISABLE_FIND_PACKAGE_GD=ON -DCMAKE_DISABLE_FIND_PACKAGE_GTS=ON -DCMAKE_DISABLE_FIND_PACKAGE_ANN=ON -DCMAKE_DISABLE_FIND_PACKAGE_DevIL=ON -DCMAKE_DISABLE_FIND_PACKAGE_AA=ON -DCMAKE_DISABLE_FIND_PACKAGE_Freetype=ON -DCMAKE_DISABLE_FIND_PACKAGE_LASI=ON -DCMAKE_DISABLE_FIND_PACKAGE_GLUT=ON -DCMAKE_DISABLE_FIND_PACKAGE_Fontconfig=ON -DBISON_EXECUTABLE=B:/src/flex-bison/win_bison.exe -DFLEX_EXECUTABLE=B:/src/flex-bison/win_flex.exe",
+        "cmake --build out --target dot",
+        "mkdir -p \"$PREFIX/bin\" && cp out/cmd/dot/dot.exe \"$PREFIX/bin/\"",
+        "echo 'digraph { a -> b }' | \"$PREFIX/bin/dot.exe\" -Tdot | grep -q 'a -> b'"
+      ]
+    },
+    {
+      "name": "gaphor",
+      "sources": [
+        {
+          "url": "https://files.pythonhosted.org/packages/2e/9f/33c39e6c936a167a299f99a1ac87b0a487974ffd8b8eb33398e20b5566f9/gaphor-3.3.2.tar.gz",
+          "sha256": "dc4cad4df94e861584923091e5eab45fc13e4c84d3bd0bd8606b0f2b3ba2bfba",
+          "strip": 1
+        },
+        { "path": "gaphor/requirements.txt", "dest": "zigsaw/requirements.txt" },
+        { "path": "gaphor/build-requirements.txt", "dest": "zigsaw/build-requirements.txt" },
+        { "path": "gtk4-sdk/svg2ico.sh", "dest": "zigsaw/svg2ico.sh" }
+      ],
+      "vendor": {
+        "commands": [
+          "python3 -m pip download --no-cache-dir --disable-pip-version-check --no-deps --only-binary=:all: --platform win_amd64 --python-version 3.14 --implementation cp --require-hashes -r zigsaw/requirements.txt -r zigsaw/build-requirements.txt -d wheels"
+        ],
+        "dir": "wheels",
+        "sha256": "ed244c802320cb87f8ff9be85fa69072da77ac1aa3a25fed174fd3629bf49379"
+      },
+      "build": [
+        "python3 -m pip install --no-cache-dir --disable-pip-version-check --no-index --find-links wheels --no-deps --no-compile --require-hashes --target B:/build-tools -r zigsaw/build-requirements.txt",
+        "python3 -m pip install --no-cache-dir --disable-pip-version-check --no-index --find-links wheels --no-deps --no-compile --require-hashes --target \"$PREFIX/Lib/site-packages\" -r zigsaw/requirements.txt",
+        "PYTHONPATH=B:/build-tools python3 -m pip install --no-cache-dir --disable-pip-version-check --no-index --no-deps --no-compile --no-build-isolation --target \"$PREFIX/Lib/site-packages\" .",
+        "rm -rf \"$PREFIX/Lib/site-packages/bin\"",
+        "for r in \"$PREFIX\"/Lib/site-packages/*.dist-info/RECORD; do grep -v '^[.][.]/[.][.]/bin/' \"$r\" > zigsaw/RECORD && mv zigsaw/RECORD \"$r\" || exit 1; done",
+        "! grep -l '^[.][.]/[.][.]/bin/' \"$PREFIX\"/Lib/site-packages/*.dist-info/RECORD",
+        "mkdir -p \"$PREFIX/share/glib-2.0/schemas\" \"$PREFIX/share/icons\"",
+        "cp gaphor/ui/installschemas/org.gaphor.Gaphor.gschema.xml \"$PREFIX/share/glib-2.0/schemas/\"",
+        "glib-compile-schemas \"$PREFIX/share/glib-2.0/schemas\"",
+        "sh zigsaw/svg2ico.sh gaphor/ui/icons/hicolor/scalable/apps/org.gaphor.Gaphor.svg \"$PREFIX/share/icons/org.gaphor.Gaphor.ico\"",
+        "ls \"$PREFIX/Lib/site-packages/gaphor/__main__.py\" \"$PREFIX/Lib/site-packages/PIL/__init__.py\" \"$PREFIX/share/glib-2.0/schemas/gschemas.compiled\""
+      ]
+    }
+  ]
+}

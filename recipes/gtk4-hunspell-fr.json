@@ -1,0 +1,27 @@
+{
+  "id": "org.gtk.Gtk4.Hunspell.fr_FR",
+  "version": "7.0",
+  "name": "French dictionary for GTK apps",
+  "summary": "Grammalecte's French dictionary for hunspell, from LibreOffice's, as an extension of GTK's runtime: once installed, GTK apps' spell checking has it",
+  "homepage": "https://grammalecte.net/home.php?prj=fr",
+  "license": "MPL-2.0",
+  "command": "about.bat",
+  "env": { "XDG_DATA_DIRS": "${app}\\share" },
+  "extends": { "point": "org.gtk.Gtk4", "version": "1" },
+  "exports": {},
+  "sdk": { "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d" },
+  "modules": [
+    {
+      "name": "hunspell-fr",
+      "sources": [
+        { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/fr_FR/fr.aff", "sha256": "4730775ff4488c4a9aa4833393c8b2187126336eed766866300a58a75fe874f0", "dest": "share/hunspell/fr.aff" },
+        { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/fr_FR/fr.dic", "sha256": "b99447ab2e655c1e4b64509cfd2e6c24821242bff1f971b49eac723e388a2d19", "dest": "share/hunspell/fr.dic" },
+        { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/fr_FR/README_fr.txt", "sha256": "41af48742037f80ece5338a2a1bbb01111610339af4686ab93f468045659ba6b", "dest": "share/doc/hunspell-fr/README_fr.txt" }
+      ],
+      "build": [
+        "cp -r share \"$PREFIX/\"",
+        "printf '%s\\r\\n' '@echo off' 'echo The French (fr) dictionary for hunspell, an extension of the GTK runtime org.gtk.Gtk4:' 'echo once installed, GTK apps check French spelling with it, in every region (fr_FR, fr_CA and others).' > \"$PREFIX/about.bat\""
+      ]
+    }
+  ]
+}

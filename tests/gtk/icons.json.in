@@ -1,0 +1,16 @@
+{
+  "id": "test.gtk.icons",
+  "version": "1",
+  "command": "about.bat",
+  "env": { "XDG_DATA_DIRS": "${app}\\share" },
+  "extends": { "point": "org.gtk.Gtk4", "version": "1" },
+  "exports": {},
+  "sdk": { "busybox": "net.frippery.busybox@@BUSYBOX@" },
+  "modules": [
+    {
+      "name": "icons",
+      "sources": [{ "path": "t.svg", "dest": "share/icons/hicolor/scalable/apps/test-gtk-icon.svg" }],
+      "build": ["cp -r share \"$PREFIX/\"", "printf '%s\\r\\n' '@echo off' 'echo An icon for tests/gtk.sh.' > \"$PREFIX/about.bat\""]
+    }
+  ]
+}

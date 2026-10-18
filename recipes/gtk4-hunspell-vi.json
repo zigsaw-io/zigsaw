@@ -1,0 +1,28 @@
+{
+  "id": "org.gtk.Gtk4.Hunspell.vi_VN",
+  "version": "1.0.45",
+  "name": "Vietnamese dictionary for GTK apps",
+  "summary": "hunspell's Vietnamese (vi_VN) dictionary from LibreOffice's, as an extension of GTK's runtime: once installed, GTK apps' spell checking has it",
+  "homepage": "https://github.com/LibreOffice/dictionaries/tree/master/vi",
+  "license": "GPL-2.0-only",
+  "command": "about.bat",
+  "env": { "XDG_DATA_DIRS": "${app}\\share" },
+  "extends": { "point": "org.gtk.Gtk4", "version": "1" },
+  "exports": {},
+  "sdk": { "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d" },
+  "modules": [
+    {
+      "name": "hunspell-vi-vn",
+      "sources": [
+        { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/vi/vi_VN.aff", "sha256": "b58b31ba3cfbf1c5a3730f2cceb8652604180770020f291d2cf6c6fecc9721f4", "dest": "share/hunspell/vi_VN.aff" },
+        { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/vi/vi_VN.dic", "sha256": "21d59c8385d2ac8d708bc5dfe83b62753d7769a8b2c9c38d319ce5c57bfba0c7", "dest": "share/hunspell/vi_VN.dic" },
+        { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/vi/LICENSES-en.txt", "sha256": "d32e4c8faf974bdeb87da10a5951556b33744cf9b50a7f06125074e11f30d7f6", "dest": "share/doc/hunspell-vi-vn/LICENSES-en.txt" },
+        { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/vi/LICENSES-vi.txt", "sha256": "e300eee4d3fd59e2886e785b63f6ded6badc7b9c6883cf73e365b59635d6128d", "dest": "share/doc/hunspell-vi-vn/LICENSES-vi.txt" }
+      ],
+      "build": [
+        "cp -r share \"$PREFIX/\"",
+        "printf '%s\\r\\n' '@echo off' 'echo The Vietnamese (vi_VN) dictionary for hunspell, an extension of the GTK runtime org.gtk.Gtk4:' 'echo once installed, GTK apps check Vietnamese spelling with it.' > \"$PREFIX/about.bat\""
+      ]
+    }
+  ]
+}

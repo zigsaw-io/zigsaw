@@ -12,7 +12,8 @@
     "PYTHONPATH": "${app}\\Lib\\site-packages",
     "GI_TYPELIB_PATH": "${app}\\lib\\girepository-1.0;${gtk3}\\lib\\girepository-1.0;${gtk}\\lib\\girepository-1.0",
     "PYGI_DLL_PATH": "${app}\\bin;${gtk3}\\bin;${gtk}\\bin",
-    "PANGOCAIRO_BACKEND": "win32"
+    "PANGOCAIRO_BACKEND": "win32",
+    "XDG_DATA_DIRS": "${app}\\share"
   },
   "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "exports": {
@@ -22,14 +23,14 @@
     "Meld": { "command": "meld", "description": "Compare and merge files and folders", "icon": "share/icons/org.gnome.Meld.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:33809ebd6621b14e1cb4bf7e92c2dbf2e4a3b076791776bc6fcb36c33f3638e5",
-    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:19f68615f72f029d7c47a557a5e0a6df9c1f4b098d6caffa2554c2eff0504447",
-    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:48e6eb75f9958601a76221a4724ca5e209982692ced68f940f684c5de2d44ceb"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:9a18362a2f85bc8852bdd1f71a8777d4afb981c93ebfb89f37ecebbffc878a4d",
+    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:76beb83cf2ffc1b8863b17731136cdbafb6a7a3c6646b3e71e9dbbffd476d51a",
+    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:b4ecf47ba73c14807af39f7c5b0867e123f1593545af2bf7159747dbf51c54e7"
   },
   "sdk": {
     "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2",
     "gtk3sdk": "org.gtk.Gtk3.Sdk:3.24.52@sha256:923dc6920094e71840379925793984d56a55d4289eddc3a49703d24e784c17a2",
-    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:576aa452ed5f46bbdf00f6c276a1848556e9a64c90a68753bb859d448dda20cc"
+    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:3498644a8ad6c958cbaa35d3f0855779aae0f5fe4c08bad0e1b0de59d7e0c955"
   },
   "cleanup": [
     "/include",

@@ -312,24 +312,48 @@
   pkg-config files added to `PKG_CONFIG_PATH` by hand.
 - GTK 3's SDK is built without GTK's broadway backend and printing to a
   file (the Unix print dialog's): GTK 3 prints with Windows' own dialog.
-- Text Editor, Rnote, GTK 3's demos and Gnumeric still pin the GTK and GTK
-  3 runtimes from before introspection, as they weren't rebuilt: a store
-  with one of them and Meld has two of each runtime (52 and 18 MB
-  compressed) until they're republished on the new ones.
+- Rnote, GTK 3's demos and Gnumeric still pin the GTK and GTK 3 runtimes
+  from before introspection, as they weren't rebuilt: a store with one of
+  them and Text Editor, Meld or Gaphor has two of each runtime (52 and 18
+  MB compressed) until they're republished on the new ones. On their old
+  runtime, GTK's extension point isn't there: the dictionaries don't reach
+  them, and their data directories still include `C:\ProgramData` and the
+  Public Documents folder.
+- GTK's extension point adds data only, a `share` directory to
+  `XDG_DATA_DIRS`: an extension can't add GIO modules, GdkPixbuf loaders or
+  enchant providers, which are found next to the runtime's DLLs. Its
+  `share` comes after the runtime's, so it can add files but not replace
+  the runtime's (an icon theme of the same name). An app on the runtime has
+  to name its own `share` in `XDG_DATA_DIRS`, which GLib otherwise found
+  next to its DLLs; an app that doesn't loses its own icons, schemas and
+  data.
+- Under `--sandbox=appcontainer`, Python 3.13 and later (python.org's
+  image, `org.python.python`, among them) can't write in the directories
+  `tempfile` makes: `os.mkdir(path, 0o700)` gives them an ACL that leaves
+  the container out. PyGObject's runtime works around it in its
+  `sitecustomize.py`; Python's own image doesn't, yet.
 - A Python app on GTK 3 lists three runtimes and three SDKs (GTK's, GTK
   3's, PyGObject's), and sets `PYTHONPATH`, `GI_TYPELIB_PATH` and
   `PYGI_DLL_PATH` to name its own directories and its runtimes'. There's no
   GJS for JavaScript apps, and no Vala.
 - PyGObject's runtime has Python's standard library and nothing from PyPI
-  but PyGObject and pycairo; an app that needs more carries it, and its
-  build has no pip (no network in builds; a vendor step would download
-  wheels).
+  but PyGObject and pycairo; an app that needs more carries it, from wheels
+  a vendor step downloads. A package with C code comes as PyPI's wheel,
+  built with MSVC by its project (Gaphor's Pillow), not built with zig; one
+  that has no wheel for CPython 3.14 on Windows can't be had that way.
+  Gaphor's help opens docs.gaphor.org, and Graphviz in it is only `dot`,
+  without its cairo, Pango or image output.
 - Meld's version control views need `git` on PATH, which its image
   doesn't give it (MinGit is an app, not a runtime). Its help opens on
   meld.app.
-- gobject-introspection's build uses winflexbison's prebuilt flex and
-  bison (its sources build with MSVC only). They're pinned and only on
-  PATH for that module; nothing of theirs is in the SDK.
+- gobject-introspection's build, and Graphviz's in Gaphor's, use
+  winflexbison's prebuilt flex and bison (its sources build with MSVC
+  only). They're pinned and only on PATH for that module; nothing of theirs
+  is in the SDK or the app.
+- A link in a zip source becomes a small file holding the link's target, as
+  zigsaw's zip reader doesn't look for links; in a tar, a link to a file
+  becomes a copy of it, and any other link fails the build, one to nothing
+  as well (Graphviz's tarball of its tag has one).
 - Gnumeric has no help (it needs yelp), and is built without its Python and
   Perl plugins, its database plugins (libgda) and the Psiconv and Paradox
   formats. It doesn't read Applix files: the Applix plugin is left out, as

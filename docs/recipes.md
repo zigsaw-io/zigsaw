@@ -386,7 +386,8 @@ downloads:
   `build.vendor`, and the build commands still have no network.
 
 This suits any tool that puts a project's locked dependencies in a
-directory, such as `cargo vendor` or `go mod vendor`. It relies on the tool
+directory, such as `cargo vendor`, `go mod vendor` or `pip download`
+([Python apps](#packages-from-pypi)). It relies on the tool
 fetching the same files every time, which a lockfile gives; the pinned hash
 catches it if not.
 
@@ -634,6 +635,47 @@ for an emoji that wants one (followed by U+FE0F, as GTK's emoji chooser
 shows them), and its Windows font map, which can't tell color fonts from
 others, matched no font at all for that; the SDK's Pango lets any font
 match.
+
+### GTK's data directories and extensions
+
+GLib finds data (icons, settings schemas, dictionaries, GtkSourceView's
+languages) in its system data directories, which on Windows are, unless
+`XDG_DATA_DIRS` names them, the `share` next to the DLL that asks, next to
+GLib's and next to the program, and `C:\ProgramData` and the Public
+Documents folder. The runtime sets `XDG_DATA_DIRS` to its own `share`
+instead, and has an [extension point](#extension-points) that joins it:
+
+```json
+"env": { "XDG_DATA_DIRS": "${app}\\share" },
+"extensions": { "org.gtk.Gtk4": { "version": "1", "join": ["XDG_DATA_DIRS"] } }
+```
+
+So a run's data directories are the runtime's, then each installed
+extension's, then the app's, and none of the machine's. An app on the
+runtime names its own `share` the same way (joined after the others), as
+Text Editor's recipe does, and so does GTK 3's runtime; one that looks its
+settings schema up in the first source only, as Gaphor does, also sets
+`GSETTINGS_SCHEMA_DIR`. The point's version is the layout's, not GTK's: an
+extension at version 1 has a `share` for `XDG_DATA_DIRS`, whichever GTK it's
+installed with.
+
+Two hunspell dictionaries extend it, both from LibreOffice's dictionaries at
+the commit the SDK's en_US comes from:
+[`org.gtk.Gtk4.Hunspell.vi_VN`](recipes/gtk4-hunspell-vi.json) (Vietnamese)
+and [`org.gtk.Gtk4.Hunspell.fr_FR`](recipes/gtk4-hunspell-fr.json) (French,
+Grammalecte's `fr`, which enchant uses for every `fr_*`). Each is a
+`share\hunspell` and:
+
+```json
+"env": { "XDG_DATA_DIRS": "${app}\\share" },
+"extends": { "point": "org.gtk.Gtk4", "version": "1" }
+```
+
+Installed, every GTK app on the runtime checks those languages' spelling
+with hunspell, where Windows has no spell checker for them;
+`--noextension=org.gtk.Gtk4.Hunspell.fr_FR` leaves one out. An icon theme
+would be an extension the same way, its icons in `share\icons`
+([tests/gtk.sh](tests/gtk.sh) has one with an icon).
 
 ### Building without a recipe
 
@@ -978,7 +1020,13 @@ as an add-on to GTK's images, like GTK 3's:
   [`sitecustomize.py`](recipes/pygobject/sitecustomize.py) names
   multiprocessing's pipes under `\\.\pipe\LOCAL\`, the only place a
   process in an AppContainer may make them, so that multiprocessing works
-  in every sandbox.
+  in every sandbox. In an AppContainer it also has `os.mkdir(path, 0o700)`
+  make a directory as other directories are made: since Python 3.13 that
+  mode gives a directory an ACL of its own, for you, SYSTEM and
+  Administrators only, which leaves out the container, so `tempfile`'s
+  directories were made and then couldn't be written in. The directory takes
+  the ACL of where it's made instead, which zigsaw's grants limit to you and
+  the container.
 
 A Python app on GTK 3 lists three runtimes and three SDKs, and sets where
 its own files, the typelibs and their DLLs are, as [Meld](recipes/meld.json)
@@ -991,7 +1039,8 @@ does:
 "env": {
   "PYTHONPATH": "${app}\\Lib\\site-packages",
   "GI_TYPELIB_PATH": "${app}\\lib\\girepository-1.0;${gtk3}\\lib\\girepository-1.0;${gtk}\\lib\\girepository-1.0",
-  "PYGI_DLL_PATH": "${app}\\bin;${gtk3}\\bin;${gtk}\\bin"
+  "PYGI_DLL_PATH": "${app}\\bin;${gtk3}\\bin;${gtk}\\bin",
+  "XDG_DATA_DIRS": "${app}\\share"
 },
 "runtimes": {
   "gtk": "org.gtk.Gtk4:4.24.1@sha256:...",
@@ -1012,11 +1061,93 @@ does:
   PyGObject adds the directories in `PYGI_DLL_PATH` when it's imported.
   GLib loads a typelib's DLL by its name, from PATH, so a library of the
   app's own needs the app's `bin` there too.
-- A library's data is found as in a C app: GLib's data directories on
-  Windows include the `share` next to the library asking (GtkSourceView's
-  language files in the app's).
+- A library's data is found as in a C app: the app's `share` is in
+  `XDG_DATA_DIRS`, after the runtimes' and the extensions'
+  ([GTK's data directories](#gtks-data-directories-and-extensions)), so
+  GtkSourceView finds its language files in the app's.
 
-A GTK 4 app lists GTK's runtime and PyGObject's (and their SDKs) only.
+A GTK 4 app lists GTK's runtime and PyGObject's (and their SDKs) only, as
+[Gaphor](#gaphor) does.
+
+### Packages from PyPI
+
+The runtime has nothing from PyPI but PyGObject and pycairo; an app brings
+the rest in its image, with a [vendor step](#vendor-steps) that runs pip
+(PyGObject's SDK has pip, from the NuGet package) for wheels pinned in a
+requirements file, by version and hash, as a lock file has them:
+
+```json
+"vendor": {
+  "commands": [
+    "python3 -m pip download --no-cache-dir --no-deps --only-binary=:all: --platform win_amd64 --python-version 3.14 --implementation cp --require-hashes -r zigsaw/requirements.txt -d wheels"
+  ],
+  "dir": "wheels",
+  "sha256": "ed244c802320cb87..."
+}
+```
+
+and the build installs them from there, with no network, and without
+bytecode (the runtime's Python keeps it in the app's data):
+
+```sh
+python3 -m pip install --no-index --find-links wheels --no-deps --no-compile --require-hashes --target "$PREFIX/Lib/site-packages" -r zigsaw/requirements.txt
+```
+
+- `python3` is PyGObject's SDK's: the `python` first on a build's PATH is
+  Meson's, which has no pip.
+- `--no-deps` with every package listed: what's installed is the
+  requirements file, not what pip resolves on the day.
+- pip makes a launcher for each command a package declares, which names
+  the Python it was installed with by its path, the SDK's deployment in that
+  store: the recipe removes them (`Lib\site-packages\bin`) and their lines
+  in each package's `RECORD`, or the image differs from store to store. The
+  app runs as `python -m <package>` instead.
+- The app's own package builds from its source distribution with
+  `--no-build-isolation` and its build backend installed beside it from the
+  same wheels (Gaphor's is poetry-core), as an isolated build would
+  download it.
+- Wheels are pure Python where a package has one (`py3-none-any`); one with
+  C code comes as PyPI's wheel for CPython 3.14 on x64 Windows, built with
+  MSVC by its project, as Python itself is python.org's build.
+
+### Gaphor
+
+[Gaphor](recipes/gaphor.json) 3.3.2 models systems and software in UML,
+SysML, C4 and RAAML, on GTK 4 and libadwaita. Its recipe builds:
+
+- GtkSourceView 5.22 with its typelib (Text Editor's has none);
+- Graphviz 16.1.0's `dot`, which its auto layout runs, with CMake and zig:
+  statically, with its layouts and core output formats built in and all
+  its optional libraries off. The release tarball has no CMake files, and
+  GitLab's tarball of the tag has a link to a file it doesn't have, which
+  zigsaw refuses; GitLab's zip of the tag works (zigsaw takes its links for
+  small files). flex and bison are winflexbison's, as in GTK's SDK;
+- its 15 packages from PyPI, as above, at the versions its `poetry.lock`
+  pins, Pillow's being the one with C code;
+- Gaphor from its source distribution on PyPI, which has its translations
+  compiled, then its settings schema, compiled into `share`, and its icon.
+
+```json
+"command": "${pygobject}\\pythonw.exe",
+"args": ["-m", "gaphor"],
+"env": {
+  "PYTHONPATH": "${app}\\Lib\\site-packages",
+  "GI_TYPELIB_PATH": "${app}\\lib\\girepository-1.0;${gtk}\\lib\\girepository-1.0",
+  "PYGI_DLL_PATH": "${app}\\bin;${gtk}\\bin",
+  "XDG_DATA_DIRS": "${app}\\share",
+  "GSETTINGS_SCHEMA_DIR": "${app}\\share\\glib-2.0\\schemas"
+}
+```
+
+It runs as `python -m gaphor`, not the launcher pip makes, which names the
+Python it was installed with by its path. Gaphor looks its schema up in the
+first schema source only, which `GSETTINGS_SCHEMA_DIR` makes its own;
+otherwise it says its settings won't be saved. It needs no changes: its
+Windows support finds GTK's DLLs on PATH. It may use the run's working
+directory, Desktop, Documents and Downloads, opens `.gaphor` files, and is
+in the Start menu. `gaphor self-test`, which its Windows build runs, passes
+in every sandbox (it writes `gaphor-self-test.txt` to the working
+directory).
 
 ### Meld
 

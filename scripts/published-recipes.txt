@@ -22,6 +22,8 @@ cargo-c.json
 gettext.json
 gtk4-sdk.json
 gtk4.json
+gtk4-hunspell-vi.json
+gtk4-hunspell-fr.json
 gnome-text-editor.json
 rnote.json
 gtk3-sdk.json
@@ -31,6 +33,7 @@ gnumeric.json
 pygobject-sdk.json
 pygobject.json
 meld.json
+gaphor.json
 7zip.json
 notepad-plus-plus.json
 sumatrapdf.json

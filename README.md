@@ -169,6 +169,8 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | GNU gettext, with libiconv (built from source, for GTK's SDK) | `org.gnu.gettext` | 1.0 | `gettext`, `ngettext`, `msgfmt`, `msgmerge`, `msginit`, `msgcat`, `msgunfmt`, `xgettext`, `iconv` |
 | GTK SDK (built from source, with introspection data; with zig, Meson and BusyBox) | `org.gtk.Gtk4.Sdk` | 4.24.1 | `cc`, `c++`, `ar`, `rc`, `windres`, `nm`, `pkg-config`, `meson`, `ninja`, `sh`, `make`, `glib-compile-resources`, `glib-compile-schemas`, `gtk4-builder-tool`, `msgfmt`, `msgmerge`, `xgettext`, `g-ir-scanner`, `g-ir-compiler` |
 | GTK, with libadwaita, libsoup, librsvg and enchant (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo`, `gio`, `pango-view`, `pango-list` |
+| Vietnamese dictionary for GTK apps (extends GTK's runtime) | `org.gtk.Gtk4.Hunspell.vi_VN` | 1.0.45 | |
+| French dictionary for GTK apps (extends GTK's runtime) | `org.gtk.Gtk4.Hunspell.fr_FR` | 7.0 | |
 | GNOME Text Editor (built from source, on GTK) | `org.gnome.TextEditor` | 51.0 | `gnome-text-editor` |
 | Rnote (built from source, on GTK) | `com.github.flxzt.rnote` | 0.14.2 | `rnote`, `rnote-cli` |
 | GTK 3 SDK (built from source, with GTK's SDK) | `org.gtk.Gtk3.Sdk` | 3.24.52 | |
@@ -178,6 +180,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | PyGObject SDK, with Python 3.14 and pycairo (built with GTK's SDK) | `org.gnome.PyGObject.Sdk` | 3.58.1 | |
 | PyGObject, with Python 3.14 and pycairo (from its SDK) | `org.gnome.PyGObject` | 3.58.1 | |
 | Meld (built from source, on GTK, GTK 3 and PyGObject) | `org.gnome.Meld` | 3.24.1 | `meld` |
+| Gaphor, with Graphviz's dot (built from source, on GTK and PyGObject; packages from PyPI) | `org.gaphor.Gaphor` | 3.3.2 | `gaphor` |
 | 7-Zip | `org.7_zip.7zip` | 26.04 | `7z`, `7zfm`, `7zg` |
 | Notepad++ | `org.notepad_plus_plus.NotepadPlusPlus` | 8.9.8.1 | `notepad++` |
 | SumatraPDF | `org.sumatrapdfreader.SumatraPDF` | 3.6.1 | `sumatrapdf` |
@@ -219,7 +222,12 @@ on them, with its command-line converter `ssconvert`; Explorer offers it
 for `.gnumeric`, `.xlsx`, `.xls`, `.ods` and `.csv`. GTK's images carry
 their libraries' introspection data, which [PyGObject](docs/recipes.md#python-apps)'s
 images, Python with GTK's Python binding, load: Meld, a Python app that
-compares and merges files and folders, runs on GTK 3 that way.
+compares and merges files and folders, runs on GTK 3 that way, and Gaphor,
+a UML and SysML modeller, on GTK 4 and libadwaita, with its packages from
+PyPI pinned by a [vendor step](docs/recipes.md#packages-from-pypi).
+GTK's runtime has an [extension point](docs/recipes.md#gtks-data-directories-and-extensions):
+installed, the Vietnamese and French dictionaries join every GTK app's
+spell checking.
 7-Zip, Notepad++, SumatraPDF and VLC are the programs their projects
 publish, packaged from upstream's archives, with shortcuts and the kinds of
 file they open ([prebuilt GUI apps](#prebuilt-gui-apps)). 7-Zip's image is
@@ -880,7 +888,7 @@ bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the 
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
-bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
+bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; dictionaries and an icon through the runtime's extension point; Gaphor's self-test in each sandbox; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/gtk3.sh      # a GTK 3 app built against GTK 3's SDK and GTK's, on both runtimes, in each sandbox; GTK 3's demos; Gnumeric's ssconvert between CSV, Excel and OpenDocument in each sandbox, its file associations, and opening a file with --file; PyGObject loading GTK 3 and GTK 4, and Meld comparing files and folders in each sandbox (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)

@@ -21,8 +21,9 @@ tests/install/*.cmd text eol=crlf
 recipes/php-sdk/* text eol=lf
 recipes/kanboard/* text eol=lf
 
-# Likewise for GTK's SDK, Gnumeric and PyGObject's SDK (windres.c, nm.c, patches,
-# a header, sitecustomize.py).
+# Likewise for GTK's SDK, Gnumeric, PyGObject's SDK and Gaphor (windres.c, nm.c,
+# patches, a header, sitecustomize.py, pip's requirements files).
 recipes/gtk4-sdk/* text eol=lf
 recipes/gnumeric/* text eol=lf
 recipes/pygobject/* text eol=lf
+recipes/gaphor/* text eol=lf

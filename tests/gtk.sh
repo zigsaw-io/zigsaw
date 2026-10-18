@@ -7,7 +7,11 @@
 # runtime's own tools run too (Pango's and GIO's among them), its demos get
 # the windowless shim and Start menu shortcuts (in a temporary folder); the
 # SDK's exports build GTK programs without a recipe, and GNOME Text Editor
-# (recipes/gnome-text-editor.json) starts up in each sandbox. The runtime
+# (recipes/gnome-text-editor.json) starts up in each sandbox. Images that
+# extend the runtime's extension point, its French and Vietnamese
+# dictionaries and an icon, join its runs once installed. Gaphor
+# (recipes/gaphor.json), a Python app on the runtime and PyGObject's, passes
+# its own self-test in each sandbox. The runtime
 # speaks the language LANGUAGE names; the SDK has gettext's tools and a
 # windres. Rnote (recipes/rnote.json), a Rust app, converts a Xournal++
 # document with its command-line program and starts up in each sandbox.
@@ -74,7 +78,7 @@ check() {
 z() { "$zigsaw" "$@"; }
 manifest_of() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$1.json"; }
 
-for f in hello.c soup.c svg.c spell.c font.c meson.build; do cp "$root\\tests\\gtk\\$f" "$work\\"; done
+for f in hello.c soup.c svg.c spell.c font.c icon.c meson.build; do cp "$root\\tests\\gtk\\$f" "$work\\"; done
 sed -e "s/@GTK@/$(manifest_of org.gtk.Gtk4)/" -e "s/@GTKSDK@/$(manifest_of org.gtk.Gtk4.Sdk)/" \
     "$root\\tests\\gtk\\hello.json.in" >"$work\\hello.json"
 
@@ -202,9 +206,55 @@ hunspell_only() {
 }
 check "a language neither has has no dictionary (en_ZZ would fall back to English)" hunspell_only
 
+# The runtime's extension point (org.gtk.Gtk4): an image that extends it adds
+# its share directory to XDG_DATA_DIRS in every run of an app on the
+# runtime, once installed, after the runtime's own. The dictionaries
+# (recipes/gtk4-hunspell-*.json) are such images, built here unless the
+# store has them (seconds), and removed afterwards; and so is an icon.
+installed_dicts=false
+if [ ! -f "$ZIGSAW_HOME\\refs\\org.gtk.Gtk4.Hunspell.fr_FR.json" ] || [ ! -f "$ZIGSAW_HOME\\refs\\org.gtk.Gtk4.Hunspell.vi_VN.json" ]; then
+    installed_dicts=true
+fi
+for lang in fr vi; do
+    z build "$root\\recipes\\gtk4-hunspell-$lang.json" >"$work\\dict-$lang.log" 2>&1 || echo "building the $lang dictionary failed: $(tail -1 "$work\\dict-$lang.log")"
+done
+dictionaries() {
+    local out
+    out=$(timeout 60 "$zigsaw" run "$@" --command=bin/spell.exe $APP fr_FR 2>&1 | tr -d '\r')
+    # Grammalecte's is fr, for every fr_*: "the" isn't French.
+    grep -q '^default fr: hunspell$' <<<"$out" && grep -q '^hunspell fr_FR: the misspelled, teh misspelled' <<<"$out" || { echo "got: $(tr '\n' '|' <<<"$out")"; return 1; }
+    out=$(timeout 60 "$zigsaw" run "$@" --command=bin/spell.exe $APP vi_VN 2>&1 | tr -d '\r')
+    grep -q '^default vi_VN: hunspell$' <<<"$out" && grep -q '^hunspell vi_VN: the ok, teh misspelled' <<<"$out" || { echo "got: $(tr '\n' '|' <<<"$out")"; return 1; }
+    # The runtime's own en_US stays.
+    timeout 60 "$zigsaw" run "$@" --command=bin/spell.exe $APP en_US 2>&1 | tr -d '\r' | grep -q '^hunspell en_US: the ok, teh misspelled, suggests the$'
+}
+check "installed, the French and Vietnamese dictionaries join the runtime's runs, with its English" dictionaries
+check "with --sandbox=low" dictionaries --sandbox=low
+check "with --sandbox=appcontainer" dictionaries --sandbox=appcontainer
+no_french() {
+    local out
+    out=$(timeout 60 "$zigsaw" run --noextension=org.gtk.Gtk4.Hunspell.fr_FR --command=bin/spell.exe $APP fr_FR 2>&1 | tr -d '\r')
+    grep -q '^hunspell fr_FR: no dictionary$' <<<"$out" || { echo "got: $(tr '\n' '|' <<<"$out")"; return 1; }
+}
+check "--noextension leaves one out" no_french
+# The SVG from GdkPixbuf's check above, as an app's icon.
+mkdir -p "$work\\icons" && cp "$work\\t.svg" "$work\\icons\\t.svg"
+sed -e "s/@BUSYBOX@/$(manifest_of net.frippery.busybox)/" "$root\\tests\\gtk\\icons.json.in" >"$work\\icons\\icons.json"
+z build "$work\\icons\\icons.json" >"$work\\icons.log" 2>&1 || echo "building test.gtk.icons failed: $(tail -1 "$work\\icons.log")"
+icon() {
+    local out
+    out=$(timeout 60 "$zigsaw" run "$@" --command=bin/icon.exe $APP test-gtk-icon document-open-symbolic 2>&1 | tr -d '\r')
+    grep -q '^icon test-gtk-icon found$' <<<"$out" && grep -q '^icon document-open-symbolic found$' <<<"$out" || { echo "got: $(tr '\n' '|' <<<"$out")"; return 1; }
+}
+check "an icon an extension has is in GTK's icon theme, beside the runtime's" icon
+check "with --sandbox=low" icon --sandbox=low
+check "with --sandbox=appcontainer" icon --sandbox=appcontainer
+z rm --delete-data test.gtk.icons >/dev/null 2>&1
+check "removed, it isn't" sh -c "timeout 60 \"\$0\" run --command=bin/icon.exe $APP test-gtk-icon 2>&1 | tr -d '\r' | grep -q '^icon test-gtk-icon missing$'" "$zigsaw"
+
 # Building without a recipe: the SDK's exports, from the store's bin, as
 # cc, pkg-config and meson; the program then runs on the runtime.
-mkdir -p "$work\\loose" && for f in hello.c soup.c svg.c spell.c font.c meson.build; do cp "$work\\$f" "$work\\loose\\"; done
+mkdir -p "$work\\loose" && for f in hello.c soup.c svg.c spell.c font.c icon.c meson.build; do cp "$work\\$f" "$work\\loose\\"; done
 bin="$ZIGSAW_HOME\\bin"
 loose_cc() {
     (cd "$work\\loose" && "$bin\\cc.exe" hello.c -o hello.exe $("$bin\\pkg-config.exe" --cflags --libs gtk4 libadwaita-1 | tr -d '\r')) || return 1
@@ -330,6 +380,46 @@ echo "a note" >"$docs\\note.txt"
 check "it opens a file it's given with --file" stays_up 15 --command=gnome-text-editor --file="$docs\\note.txt" $EDITOR --standalone
 check "with --sandbox=low" stays_up 15 --sandbox=low --command=gnome-text-editor --file="$docs\\note.txt" $EDITOR --standalone
 check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer --command=gnome-text-editor --file="$docs\\note.txt" $EDITOR --standalone
+
+# Gaphor (recipes/gaphor.json), a Python app on the runtime and PyGObject's,
+# with libadwaita and GtkSourceView 5, its packages from PyPI through a
+# pinned vendor step, and Graphviz's dot for its auto layout. Built here
+# unless the store has it (a few minutes).
+GAPHOR=org.gaphor.Gaphor
+installed_gaphor=false
+if [ ! -f "$ZIGSAW_HOME\\refs\\$GAPHOR.json" ]; then
+    z build "$root\\recipes\\gaphor.json" >"$work\\gaphor.log" 2>&1 || echo "building $GAPHOR failed: $(tail -1 "$work\\gaphor.log")"
+    installed_gaphor=true
+else
+    z build "$root\\recipes\\gaphor.json" >/dev/null 2>&1
+fi
+# Gaphor's pythonw shows nothing: its console python.exe, from PyGObject's
+# runtime, runs it for these.
+pygobject_dir="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of org.gnome.PyGObject | cut -d: -f2)" | tail -1 | cut -d: -f2)"
+gaphor_version() {
+    local out
+    out=$(timeout 60 "$zigsaw" run --command="$pygobject_dir\\python.exe" $GAPHOR -m gaphor --version 2>&1 | tr -d '\r')
+    # And it finds its settings' schema, which it looks for in the first place only.
+    grep -qx 'Gaphor 3\.3\.2' <<<"$out" && ! grep -q 'schema not found' <<<"$out" || { echo "got: $(tr '\n' '|' <<<"$out")"; return 1; }
+}
+check "Gaphor 3.3.2 is installed, and finds its settings" gaphor_version
+# Its self-test, which its own Windows build runs: GTK, libadwaita and
+# GtkSourceView's versions, both schemas, a window with a new model, and an
+# auto layout through dot. On Windows it writes its log to the cwd.
+gaphor_self_test() {
+    rm -f "$work\\gaphor-self-test.txt"
+    timeout 90 "$zigsaw" run "$@" --command="$pygobject_dir\\python.exe" $GAPHOR -m gaphor self-test >/dev/null 2>&1 || { echo "exit $?: $(tr -d '\r' <"$work\\gaphor-self-test.txt" 2>/dev/null | grep -e failed -e Error | tail -2 | tr '\n' '|')"; return 1; }
+    [ "$(tr -d '\r' <"$work\\gaphor-self-test.txt" | grep -c 'selftest INFO test_[a-z_]*: passed$')" = 4 ] || { echo "got: $(tr -d '\r' <"$work\\gaphor-self-test.txt" | grep 'test_' | tr '\n' '|')"; return 1; }
+}
+check "its self-test passes, auto layout through Graphviz's dot included" gaphor_self_test
+check "with --sandbox=low" gaphor_self_test --sandbox=low
+# Python's tempfile makes its directories with mode 0o700, which an
+# AppContainer couldn't write in until PyGObject's sitecustomize.py.
+check "with --sandbox=appcontainer" gaphor_self_test --sandbox=appcontainer
+check "it gets the windowless shim and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\gaphor.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\Gaphor.lnk'"
+check "its shortcut has an icon made from its SVG" has_icon "Gaphor" org.gaphor.Gaphor
+check "it's registered to open .gaphor files" opens_with $GAPHOR gaphor .gaphor org.gaphor.Gaphor.ico
+check "it runs" stays_up 20 $GAPHOR
 
 # Rnote (recipes/rnote.json), a Rust GTK app, on the runtime. Built here
 # unless the store has it, which takes about 20 minutes.
@@ -459,6 +549,8 @@ $installed_pinta && z rm --delete-data $PINTA >/dev/null 2>&1
 $installed_dotnet && { z rm --delete-data com.microsoft.dotnet >/dev/null 2>&1; z rm --delete-data com.microsoft.dotnet.Sdk >/dev/null 2>&1; }
 $installed_rnote && z rm --delete-data $RNOTE >/dev/null 2>&1
 $installed_editor && z rm --delete-data $EDITOR >/dev/null 2>&1
+$installed_gaphor && z rm --delete-data $GAPHOR >/dev/null 2>&1
+$installed_dicts && { z rm --delete-data org.gtk.Gtk4.Hunspell.fr_FR >/dev/null 2>&1; z rm --delete-data org.gtk.Gtk4.Hunspell.vi_VN >/dev/null 2>&1; }
 z rm --delete-data $APP >/dev/null 2>&1
 rm -rf "$work"
 echo

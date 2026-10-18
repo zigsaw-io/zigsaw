@@ -890,6 +890,55 @@ Composer, which doesn't, installs at low.
   Python's; Meld's own layer is 2.2 MB, GtkSourceView included, and builds
   in about a minute.
 
+## GTK's extension point and Gaphor
+
+- **GLib reads `XDG_DATA_DIRS` on Windows too, and it replaces the
+  defaults.** Unset, a run's system data directories were `C:\ProgramData`,
+  `C:\Users\Public\Documents`, the program's `share` and GLib's (the
+  runtime's), and the `share` next to whichever DLL asks (GLib on Windows
+  passes the caller's address). Set to the runtime's `share` and an
+  extension's, they were exactly those two: GTK's icon theme searched both
+  (an SVG in the extension's `share\icons\hicolor` was found, Adwaita's
+  icons still were), the runtime's schemas were still found, and enchant's
+  hunspell provider found the extension's `share\hunspell` dictionaries,
+  with the runtime's en_US still from beside enchant (its relocatable
+  prefix). That's what the extension point joins.
+- **enchant takes a language-only dictionary for a region's tag**:
+  LibreOffice's French is `fr.aff`/`fr.dic`, and a request for `fr_FR`
+  gets it ("default fr: hunspell").
+- **Gaphor looks its settings schema up non-recursively** (`lookup(id,
+  False)`), in the first schema source only: GLib makes that
+  `GSETTINGS_SCHEMA_DIR`'s, else the user data directory's, else the first
+  system data directory's. With its `share` joined last, its settings
+  weren't saved, though its self-test, which looks recursively, passed.
+- **Under AppContainer, Python 3.13+ can't write in the directories
+  `tempfile` makes.** `os.mkdir(path, 0o700)` gives the directory a
+  protected ACL (SYSTEM, Administrators, OWNER RIGHTS), with no entry for
+  the container's capability SID, so the container makes it and then is
+  refused in it. pydot's vendored `tempfile` retries the name 10,000 times
+  on `PermissionError`, so Gaphor's auto layout hung rather than failing.
+  At low integrity it works (the owner has access, and the label is
+  inherited).
+- **pip in a vendor step**: PyGObject's SDK's Python (NuGet's package) has
+  pip 26.2.1. `pip download --only-binary=:all: --platform win_amd64
+  --python-version 3.14 --implementation cp --require-hashes` with every
+  package listed fetched the same 16 wheels again in a new store, to the
+  same hash. The first `python` on a build's PATH is Meson's, without pip;
+  the SDK's `python3.exe` is PyGObject's. `pip install --target` makes
+  launchers (`gaphor.exe`, `pybabel.exe`, dulwich's scripts) naming that
+  Python's path in the store, and lists their hashes in each package's
+  `RECORD`: removing the launchers wasn't enough for the image to be the
+  same in two stores; removing their `RECORD` lines was.
+- **`gi.events`, PyGObject's asyncio loop, works on Windows** (3.58.1), as
+  Gaphor's own Windows builds need: `GLibEventLoopPolicy` and asyncio's
+  `socketpair` work in every sandbox.
+- **Graphviz 16.1.0 builds with CMake and zig as it is**, statically
+  (`BUILD_SHARED_LIBS=OFF`, which links its plugins into `dot`, with no
+  plugin configuration file), in 261 steps, with flex and bison from
+  winflexbison. `dot.exe` imports only KERNEL32 and the UCRT; without git,
+  its build date is "0". Its release tarball has no CMake files; GitLab's
+  tarball of the tag has a link to a file that isn't in it.
+
 ## Other findings
 
 - **Microsoft Defender quarantines zigsaw 0.19.0.** During a build of
