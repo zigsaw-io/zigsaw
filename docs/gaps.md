@@ -312,13 +312,12 @@
   pkg-config files added to `PKG_CONFIG_PATH` by hand.
 - GTK 3's SDK is built without GTK's broadway backend and printing to a
   file (the Unix print dialog's): GTK 3 prints with Windows' own dialog.
-- Rnote, GTK 3's demos and Gnumeric still pin the GTK and GTK 3 runtimes
-  from before introspection, as they weren't rebuilt: a store with one of
-  them and Text Editor, Meld or Gaphor has two of each runtime (52 and 18
-  MB compressed) until they're republished on the new ones. On their old
-  runtime, GTK's extension point isn't there: the dictionaries don't reach
-  them, and their data directories still include `C:\ProgramData` and the
-  Public Documents folder.
+- An app pins the builds of its runtimes by digest, so a new build of a
+  runtime reaches an app only once the app is rebuilt on it and
+  republished; until then, a store with that app and one on the new build
+  has the runtime twice. `scripts/check-pins.sh` warns about published
+  recipes in that state. It reads the registry anonymously, so an image
+  that isn't public yet looks missing to it.
 - GTK's extension point adds data only, a `share` directory to
   `XDG_DATA_DIRS`: an extension can't add GIO modules, GdkPixbuf loaders or
   enchant providers, which are found next to the runtime's DLLs. Its
@@ -327,11 +326,10 @@
   to name its own `share` in `XDG_DATA_DIRS`, which GLib otherwise found
   next to its DLLs; an app that doesn't loses its own icons, schemas and
   data.
-- Under `--sandbox=appcontainer`, Python 3.13 and later (python.org's
-  image, `org.python.python`, among them) can't write in the directories
-  `tempfile` makes: `os.mkdir(path, 0o700)` gives them an ACL that leaves
-  the container out. PyGObject's runtime works around it in its
-  `sitecustomize.py`; Python's own image doesn't, yet.
+- Python's images work around two things an AppContainer refuses Python
+  (`tempfile`'s directories, multiprocessing's pipes) in a
+  `sitecustomize.py`. A Python run with `-S`, which skips `site`, goes
+  without it.
 - A Python app on GTK 3 lists three runtimes and three SDKs (GTK's, GTK
   3's, PyGObject's), and sets `PYTHONPATH`, `GI_TYPELIB_PATH` and
   `PYGI_DLL_PATH` to name its own directories and its runtimes'. There's no
@@ -343,9 +341,9 @@
   that has no wheel for CPython 3.14 on Windows can't be had that way.
   Gaphor's help opens docs.gaphor.org, and Graphviz in it is only `dot`,
   without its cairo, Pango or image output.
-- Meld's version control views need `git` on PATH, which its image
-  doesn't give it (MinGit is an app, not a runtime). Its help opens on
-  meld.app.
+- Meld's git is MinGit's, as a runtime, and runs with Meld's permissions,
+  which have no network: under `--sandbox=appcontainer`, pushing from its
+  version control view fails. Its help opens on meld.app.
 - gobject-introspection's build, and Graphviz's in Gaphor's, use
   winflexbison's prebuilt flex and bison (its sources build with MSVC
   only). They're pinned and only on PATH for that module; nothing of theirs

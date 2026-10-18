@@ -6,6 +6,10 @@
 #   download, and the apps they run, from that build's store;
 # - build: the unit tests, then tests/build.sh, which builds in stores of its
 #   own and downloads what it builds from.
+# And a third, quick one beside them:
+# - pins: every image the published recipes pin is on the registry, so a
+#   fresh store can build them, those published skips included
+#   (scripts/check-pins.sh).
 # It only verifies; scripts/publish.sh publishes.
 name: Reproduce
 
@@ -24,6 +28,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Requests to the registry, no building: Linux is enough.
+  pins:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The published recipes' pins, on the registry
+        run: bash scripts/check-pins.sh
+
   published:
     runs-on: windows-2025
     # One job took 31 minutes after iteration 8, zot's vendor step (561 Go

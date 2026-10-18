@@ -16,6 +16,13 @@
           "sha256": "d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15"
         }
       ]
+    },
+    {
+      "name": "site",
+      "sources": [
+        { "path": "pygobject/sitecustomize.py" },
+        { "path": "python/python314._pth" }
+      ]
     }
   ]
 }

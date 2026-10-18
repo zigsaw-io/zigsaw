@@ -116,7 +116,24 @@ runtime can't have runtimes of its own; an [SDK](#building-from-source) and
 an [image source](#images-as-sources) can.
 
 A pinned runtime doesn't change by itself: moving Prettier to a newer Node
-is an edit to its recipe, like a new source hash.
+is an edit to its recipe, like a new source hash. Apps that pin different
+builds of a runtime each bring their own, deployed side by side;
+[`scripts/check-pins.sh`](scripts/check-pins.sh) warns about a published
+recipe whose runtime pin isn't what that runtime's tag points to now, and
+fails if the registry lacks an image a published recipe pins.
+
+Any image can be a runtime, a tool's as well: [Meld](recipes/meld.json)
+lists MinGit's image as `git`, so `git` is on the PATH of Meld's runs, with
+MinGit's `env`, and nothing is copied into Meld's image:
+
+```json
+"runtimes": {
+  "pygobject": "org.gnome.PyGObject:3.58.1@sha256:...",
+  "git": "org.git_scm.MinGit:2.56.0.windows.1@sha256:636d59bc02546599..."
+}
+```
+
+A runtime's permissions don't carry over: the app's own apply.
 
 ## Extension points
 
@@ -1027,6 +1044,16 @@ as an add-on to GTK's images, like GTK 3's:
   directories were made and then couldn't be written in. The directory takes
   the ACL of where it's made instead, which zigsaw's grants limit to you and
   the container.
+- **Python's own image, [`org.python.python`](recipes/python.json)**,
+  python.org's embeddable distribution, has the same `sitecustomize.py`, and
+  a [`python314._pth`](recipes/python/python314._pth) of its own that turns
+  on `import site`: embeddable Python runs `site`, and so
+  `sitecustomize.py`, only then. Its standard library is a zip, which one
+  loader loads every module of, so `sitecustomize.py` wraps the loader of
+  `multiprocessing.connection` rather than patching it. With `site`, it also
+  has a user site directory, in the app's data, so `pip install --user`
+  would find a place there. The recipe has no build commands: its second
+  module places the two files over the zip's.
 
 A Python app on GTK 3 lists three runtimes and three SDKs, and sets where
 its own files, the typelibs and their DLLs are, as [Meld](recipes/meld.json)
@@ -1158,8 +1185,10 @@ its data (its settings schema, compiled; its styles, resources and
 translations) is in its Python package and found from there wherever the
 app is deployed. Its help opens on meld.app, as there's no yelp. It may
 use the run's working directory, Desktop, Documents and Downloads, and
-it's in the Start menu with its own icon. Comparing in version control
-views needs `git` on PATH, which Meld's image doesn't have.
+it's in the Start menu with its own icon. Its version control views run
+`git`, which it gets from [MinGit](recipes/mingit.json)'s image, listed as
+one of its runtimes (see [Runtimes](#runtimes)): a folder in a git
+repository shows its changes, in every sandbox.
 
 Meld's Windows code expects MSYS2 or its own PyInstaller bundle, so the
 recipe:

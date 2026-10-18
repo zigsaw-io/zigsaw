@@ -14,7 +14,9 @@
 # registry was last published from to catch committed changes. A recipe that
 # names the image of a chosen one (meld on GTK, say) is chosen too, and so on
 # down, when both are in this run.
-# The catalog is pushed either way.
+# The catalog is pushed either way. Last, scripts/check-pins.sh says whether
+# the registry, read anonymously, now has every image the published recipes
+# pin.
 #
 # It refuses recipes in recipes/no-publish/, whose images mustn't be
 # published.
@@ -157,3 +159,9 @@ ghcr.io/*)
     echo "https://github.com/orgs/${registry#ghcr.io/}/packages -> the package -> Package settings."
     ;;
 esac
+
+# What every published recipe pins, as anyone sees the registry now: an image
+# a recipe pins but that wasn't published (or isn't public yet) shows here.
+echo
+echo "== pins"
+bash "$root/scripts/check-pins.sh" || echo "Publish what's missing above, or make it public, before pushing the recipes that pin it."

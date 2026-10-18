@@ -306,6 +306,12 @@ suites (see [Testing](#testing)) on that runner too.
   reproducible, or the recipe changed without a new version.
 - An image built with a [host toolchain](#msvc) isn't compared, since it
   isn't expected to match. (None of the published ones is.)
+- Every image a published recipe pins, as a runtime, an SDK or an image
+  source, must be on the registry, so a fresh store can build the recipe;
+  that covers the recipes the run doesn't build too, such as GTK's
+  ([`scripts/check-pins.sh`](scripts/check-pins.sh), in a job of its own,
+  and at the end of `publish.sh`). A runtime pinned at an older build than
+  its tag is reported, but doesn't fail the run.
 
 The workflow only checks. Images are published by hand
 ([`scripts/publish.sh`](scripts/publish.sh)); zigsaw's own releases by the
@@ -889,7 +895,7 @@ bash tests/shims.sh     # command shims end to end, also for commands installed 
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
 bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; dictionaries and an icon through the runtime's extension point; Gaphor's self-test in each sandbox; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
-bash tests/gtk3.sh      # a GTK 3 app built against GTK 3's SDK and GTK's, on both runtimes, in each sandbox; GTK 3's demos; Gnumeric's ssconvert between CSV, Excel and OpenDocument in each sandbox, its file associations, and opening a file with --file; PyGObject loading GTK 3 and GTK 4, and Meld comparing files and folders in each sandbox (needs GTK_HOME or BUILD_HOME; opens windows; local only)
+bash tests/gtk3.sh      # a GTK 3 app built against GTK 3's SDK and GTK's, on both runtimes, in each sandbox; GTK 3's demos; Gnumeric's ssconvert between CSV, Excel and OpenDocument in each sandbox, its file associations, and opening a file with --file; PyGObject loading GTK 3 and GTK 4, Meld comparing files and folders and showing a git repository's changes in each sandbox, and the published apps all on one build of each GTK runtime (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API (needs PHP_HOME or BUILD_HOME; local only)

@@ -1,0 +1,6 @@
+python314.zip
+.
+
+# zigsaw: site runs, and with it sitecustomize.py, which lets Python's
+# temporary directories and multiprocessing's pipes work in an AppContainer.
+import site

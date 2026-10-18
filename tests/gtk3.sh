@@ -11,7 +11,9 @@
 # --file, and is registered for its kinds of file (in a scratch registry
 # key). Meld (recipes/meld.json), Python on PyGObject's runtime, loads GTK
 # 3, GtkSourceView and GTK 4 through their typelibs, and compares files and
-# folders in each sandbox.
+# folders in each sandbox, and shows a git repository's changes with the git
+# of MinGit's image, one of its runtimes. Last, the published apps in the
+# store, GTK 4's too, are all on the same build of each GTK runtime.
 #
 # Not in CI, like tests/gtk.sh: GTK's SDK takes a quarter of an hour to
 # build, and Gnumeric 25 minutes.
@@ -264,12 +266,57 @@ check "Meld compares two files and draws its window" meld_draws left.txt right.t
 check "with --sandbox=low" meld_draws left.txt right.txt -- --sandbox=low
 check "with --sandbox=appcontainer" meld_draws left.txt right.txt -- --sandbox=appcontainer
 check "it compares two folders" meld_draws left right -- --sandbox=low
+# Meld's version control views run git, which MinGit's image, one of Meld's
+# runtimes, puts on its PATH: here it makes a repository, with a commit, a
+# changed file and a new one, in a run of Meld.
+git_in_meld() { (cd "$work\\repo" && timeout 60 "$zigsaw" run --command=git $MELD -c user.name=t -c user.email=t@example.com "$@" 2>&1); }
+make_repo() {
+    rm -rf "$work\\repo" && mkdir "$work\\repo" || return 1
+    git_in_meld init -q -b main && printf 'one\n' >"$work\\repo\\a.txt" && git_in_meld add a.txt && git_in_meld commit -q -m a || return 1
+    printf 'two\n' >>"$work\\repo\\a.txt"
+    printf 'new\n' >"$work\\repo\\b.txt"
+}
+check "MinGit's runtime gives Meld git, which makes a repository" make_repo
+# Meld's own git support, on the repository in the run's working directory.
+printf '%s\n' 'import os, gi' 'gi.require_version("Gtk", "3.0")' \
+    'from meld.vc import get_vcs' 'from meld.vc.git import Vc' 'repo = os.path.abspath("repo")' \
+    'print("found:", [cls.NAME for cls, enabled in get_vcs(repo) if enabled])' \
+    'vc = Vc(repo)' 'vc.refresh_vc_state()' \
+    'for e in sorted(vc.get_entries(repo), key=lambda e: e.name): print(e.name, e.get_status())' >"$work\\vc.py"
+vc_says='found: ['"'"'Git'"'"']|a.txt Modified|b.txt Unversioned'
+check "Meld's git support finds the repository, and what's changed in it" python_says vc.py "$vc_says"
+check "with --sandbox=low" python_says vc.py "$vc_says" --sandbox=low
+check "with --sandbox=appcontainer" python_says vc.py "$vc_says" --sandbox=appcontainer
+check "it shows the repository's changes in its window" meld_draws repo -- --sandbox=low
 check "its log has no Python traceback" sh -c "! grep -q Traceback '$ZIGSAW_HOME\\data\\$MELD\\share\\meld.log'"
 meld_shortcut() {
     shim_is meld zigsaw-shimw.exe || { echo "meld.exe isn't the windowless shim"; return 1; }
     case $(lnk_icon "$links\\Meld.lnk") in "$meld_dir\\share\\icons\\org.gnome.Meld.ico,0") ;; *) echo "icon: $(lnk_icon "$links\\Meld.lnk")"; return 1 ;; esac
 }
 check "it gets the windowless shim and a shortcut, with Meld's icon" meld_shortcut
+
+# The published apps in the store, GTK 4's included if they're there, are on
+# the same builds of GTK's runtimes: each has the installed runtime's layer
+# (a runtime has one) among its own, so a store with all of them deploys
+# each runtime once.
+layers_of() { grep -o '"digest": *"sha256:[0-9a-f]*"' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of "$1" | cut -d: -f2)" | tail -n +2 | grep -o 'sha256:[0-9a-f]*'; }
+published_ids=$(for name in $(grep -v '^#' "$root\\scripts\\published-recipes.txt" | tr -d '\r'); do
+    grep -o '"id": *"[^"]*"' "$root\\recipes\\$name" | head -1 | cut -d'"' -f4
+done)
+one_build() {
+    local runtime layer id on=0 others=""
+    for runtime in org.gtk.Gtk4 org.gtk.Gtk3; do
+        layer=$(layers_of $runtime)
+        for id in $(z list | tr -d '\r' | grep -F "(runtime $runtime " | cut -d' ' -f1); do
+            grep -qxF "$id" <<<"$published_ids" || continue
+            on=$((on + 1))
+            layers_of "$id" | grep -qxF "$layer" || others="$others $id"
+        done
+    done
+    [ -z "$others" ] || { echo "on other builds of the runtimes:$others"; return 1; }
+    echo "$on app(s)"
+}
+check "the published apps here are all on the same build of each GTK runtime" one_build
 
 cd "$root" || exit 1
 # The scratch key, and the one above it unless another run has one in it.

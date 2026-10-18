@@ -1,4 +1,5 @@
-"""PyGObject's runtime for zigsaw: Python in AppContainers.
+"""Python in AppContainers, for zigsaw's Python images: PyGObject's runtime
+and Python's own (org.python.python).
 
 A process in an AppContainer may create named pipes only in its own
 namespace, \\\\.\\pipe\\LOCAL\\. multiprocessing names its pipes
@@ -48,6 +49,35 @@ if sys.platform == "win32":
     mkdir.__doc__ = _mkdir.__doc__
     os.mkdir = mkdir
 
+    class _MovePipes:
+        """multiprocessing.connection's own loader, which then moves its pipes.
+
+        It wraps the loader rather than patching it: where the standard
+        library is a zip (Python's embeddable distribution), one loader loads
+        every module in it.
+        """
+
+        def __init__(self, loader):
+            self._loader = loader
+
+        def __getattr__(self, name):
+            return getattr(self._loader, name)
+
+        def create_module(self, spec):
+            return self._loader.create_module(spec)
+
+        def exec_module(self, module):
+            self._loader.exec_module(module)
+            original = module.arbitrary_address
+
+            def arbitrary_address(family):
+                address = original(family)
+                if family == "AF_PIPE":
+                    address = address.replace("\\\\.\\pipe\\", "\\\\.\\pipe\\LOCAL\\", 1)
+                return address
+
+            module.arbitrary_address = arbitrary_address
+
     class _LocalPipes:
         def find_spec(self, name, path, target=None):
             if name != "multiprocessing.connection":
@@ -55,21 +85,7 @@ if sys.platform == "win32":
             spec = importlib.machinery.PathFinder.find_spec(name, path)
             if spec is None or spec.loader is None:
                 return spec
-            exec_module = spec.loader.exec_module
-
-            def exec_and_move_pipes(module):
-                exec_module(module)
-                original = module.arbitrary_address
-
-                def arbitrary_address(family):
-                    address = original(family)
-                    if family == "AF_PIPE":
-                        address = address.replace("\\\\.\\pipe\\", "\\\\.\\pipe\\LOCAL\\", 1)
-                    return address
-
-                module.arbitrary_address = arbitrary_address
-
-            spec.loader.exec_module = exec_and_move_pipes
+            spec.loader = _MovePipes(spec.loader)
             return spec
 
     sys.meta_path.insert(0, _LocalPipes())

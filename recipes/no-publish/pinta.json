@@ -7,6 +7,7 @@
   "license": "MIT",
   "command": "bin/Pinta.exe",
   "path": ["bin"],
+  "env": { "XDG_DATA_DIRS": "${app}\\share" },
   "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads", "pictures"] },
   "exports": {
     "pinta": { "command": "bin/Pinta.exe" }
@@ -25,7 +26,7 @@
   },
   "runtimes": {
     "dotnet": "com.microsoft.dotnet:10.0.13@sha256:02a480d6f4386234410f88a2942d5264b4ffd355faed02003fc0431b3ce69b64",
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:28c0ec8ecbe3b4c90b5dcb655d7cd73847669107934666722404b087494731fb"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:9a18362a2f85bc8852bdd1f71a8777d4afb981c93ebfb89f37ecebbffc878a4d"
   },
   "sdk": {
     "dotnetsdk": "com.microsoft.dotnet.Sdk:10.0.402@sha256:af8d05f19b602a7c8784524b6c0108231932cec7123d5a7ba7dc1d08ae32a2e2",

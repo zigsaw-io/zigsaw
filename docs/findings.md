@@ -939,6 +939,37 @@ Composer, which doesn't, installs at low.
   its build date is "0". Its release tarball has no CMake files; GitLab's
   tarball of the tag has a link to a file that isn't in it.
 
+## One build of each runtime, and git for Meld
+
+- **A green Reproduce run doesn't mean every pin is published.** Iteration
+  29's run passed, but the PyGObject SDK it pinned (`3498644a`) had never
+  been pushed: ghcr.io still had iteration 28's. Gaphor, Meld and
+  PyGObject's runtime pin it, and CI skips all three. `scripts/check-pins.sh`
+  now looks every pin in the published recipes up on the registry.
+- **Python's embeddable distribution has the same AppContainer gaps as
+  PyGObject's Python**: `tempfile`'s directories (Permission denied on the
+  first file) and multiprocessing's pipes (`WinError 5` making a Queue).
+  Soft and low runs were fine.
+- **Embeddable Python runs `site`, and so `sitecustomize.py`, only with
+  `import site` in its `._pth`.** Turned on, `sys.path` stayed the same;
+  `site` also enables the user site directory (`%APPDATA%\Python\...`, in a
+  run the app's data), which is added only if it exists.
+- **One loader loads every module of a zipped standard library.** The pipe
+  fix replaced `exec_module` on `multiprocessing.connection`'s loader. With
+  the standard library as files (PyGObject's runtime) each module has its
+  own; with `python314.zip` it's the zip's one `zipimporter`, so every
+  module loaded after it ran the fix's code too and failed
+  (`multiprocessing.util` has no `arbitrary_address`): multiprocessing broke
+  in every sandbox. The fix now wraps the loader in an object of its own.
+- **A module without build commands may replace a file an earlier module
+  placed**: Python's `site` module puts its `python314._pth` over the zip's,
+  and the layer has the second.
+- **Meld starts git with its window hidden** (`STARTF_USESHOWWINDOW`, for
+  every version control call), so no console shows from `pythonw.exe`. With
+  MinGit's image as a runtime, Meld's git support found a repository and
+  its changed and new files in every sandbox, including git refreshing its
+  index in a repository labelled low.
+
 ## Other findings
 
 - **Microsoft Defender quarantines zigsaw 0.19.0.** During a build of

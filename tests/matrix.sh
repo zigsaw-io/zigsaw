@@ -251,6 +251,15 @@ expect ok "$(ac_if final-path-dos)" ok "realpath resolves cwd" run $PY -c 'impor
 expect ok ok ok "https with system certs" run $PY -c 'import urllib.request as u; u.urlopen("https://example.com", timeout=20)'
 expect ok fails ok "network denied by --unshare" run --unshare=network $PY -c 'import urllib.request as u; u.urlopen("https://example.com", timeout=10)'
 expect fails fails fails "can't write into app dir" run $PY -c 'import os, sys; open(os.path.join(sys.prefix, "x.txt"), "w")'
+# Since Python 3.13, os.mkdir(path, 0o700), as tempfile makes its
+# directories, leaves an AppContainer out of the directory's permissions,
+# and an AppContainer may create named pipes only under \\.\pipe\LOCAL\,
+# where multiprocessing doesn't make them: the image's sitecustomize.py sees
+# to both.
+expect ok ok ok "writes in a tempfile directory" run $PY -c 'import os, tempfile; open(os.path.join(tempfile.mkdtemp(), "x"), "w").write("x")'
+in_each mp.py "$(printf '%s\n' 'import multiprocessing' 'if __name__ == "__main__":' '    q = multiprocessing.Queue()' \
+    '    p = multiprocessing.Process(target=q.put, args=(42,))' '    p.start()' '    assert q.get(timeout=30) == 42' '    p.join()')"
+expect ok ok ok "multiprocessing queue between processes" run $PY mp.py
 
 # zig finds its library by its own real path.
 tool zig
