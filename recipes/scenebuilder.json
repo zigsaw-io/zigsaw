@@ -1,0 +1,91 @@
+{
+  "id": "com.gluonhq.SceneBuilder",
+  "version": "26.0.0",
+  "name": "Scene Builder",
+  "summary": "Design JavaFX user interfaces by drag and drop, saved as FXML",
+  "homepage": "https://gluonhq.com/products/scene-builder/",
+  "license": "BSD-3-Clause AND Apache-2.0 AND GPL-2.0-only WITH Classpath-exception-2.0 AND LGPL-2.1-or-later",
+  "command": "${java}\\bin\\javaw.exe",
+  "args": [
+    "--module-path", "${app}\\javafx\\lib",
+    "--add-modules", "javafx.fxml,javafx.media,javafx.swing,javafx.web",
+    "--enable-native-access=javafx.graphics",
+    "--sun-misc-unsafe-memory-access=allow",
+    "--add-opens=javafx.fxml/javafx.fxml=ALL-UNNAMED",
+    "-Djavafx.allowjs=true",
+    "-classpath", "${app}\\scenebuilder.jar",
+    "com.oracle.javafx.scenebuilder.app.SceneBuilderApp"
+  ],
+  "permissions": { "network": true, "filesystem": ["cwd", "desktop", "documents", "downloads"] },
+  "registry": ["Software\\JavaSoft\\Prefs\\com\\oracle\\javafx\\scenebuilder"],
+  "runtimes": { "java": "org.openjdk.java.Sdk:25.0.5_7-ea@sha256:e45ed698dd497b005fcace6cc23542305a2863321bef9e761bdf6b3e899a57a7" },
+  "exports": {
+    "scenebuilder": {
+      "command": "${java}\\bin\\javaw.exe",
+      "args": [
+        "--module-path", "${app}\\javafx\\lib",
+        "--add-modules", "javafx.fxml,javafx.media,javafx.swing,javafx.web",
+        "--enable-native-access=javafx.graphics",
+        "--sun-misc-unsafe-memory-access=allow",
+        "--add-opens=javafx.fxml/javafx.fxml=ALL-UNNAMED",
+        "-Djavafx.allowjs=true",
+        "-classpath", "${app}\\scenebuilder.jar",
+        "com.oracle.javafx.scenebuilder.app.SceneBuilderApp"
+      ]
+    }
+  },
+  "shortcuts": {
+    "Scene Builder": { "command": "scenebuilder", "description": "Design JavaFX user interfaces", "icon": "SceneBuilder.ico" }
+  },
+  "associations": {
+    ".fxml": { "command": "scenebuilder", "description": "FXML document", "icon": "SceneBuilder.ico" }
+  },
+  "sdk": {
+    "maven": "org.apache.maven:3.10.0@sha256:c5d44d3870fc590a71631ec41c31c00f8cc97f39e8ce2a44808bd1fb49ef159c",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "scenebuilder",
+      "sources": [
+        {
+          "url": "https://github.com/gluonhq/scenebuilder/archive/refs/tags/26.0.0.tar.gz",
+          "sha256": "24b17752b1afd86b850c0420b67c798e7fb69121f99279bf1be321d31ef26cd1",
+          "strip": 1
+        },
+        {
+          "url": "https://download2.gluonhq.com/openjfx/26.0.2/openjfx-26.0.2_windows-x64_bin-sdk.zip",
+          "sha256": "02cc5fce8925bdd0ec58aaf88d7c2b0042d1e914a48b5e1abb6ae0d0364e326a",
+          "strip": 1,
+          "dest": "javafx"
+        }
+      ],
+      "vendor": {
+        "commands": [
+          "sed -i 's|<version>3\\.13\\.0</version>|<version>3.14.1</version>|' pom.xml",
+          "grep -q '<version>3\\.14\\.1</version>' pom.xml",
+          "mvn -B -ntp -Dmaven.repo.local=vendor package -DskipTests",
+          "find vendor \\( -name _remote.repositories -o -name '*.lastUpdated' -o -name resolver-status.properties -o -name 'maven-metadata-*.xml' \\) -delete",
+          "rm -rf vendor/.meta"
+        ],
+        "dir": "vendor",
+        "sha256": "28c699520fd30ef3883805bcff62fb4326ee925d323480cef9f092aa7251dde3"
+      },
+      "build": [
+        "sed -i 's|<version>3\\.13\\.0</version>|<version>3.14.1</version>|' pom.xml",
+        "grep -q '<version>3\\.14\\.1</version>' pom.xml",
+        "sed -i 's/<version>26\\.0\\.0-SNAPSHOT</<version>26.0.0</' pom.xml app/pom.xml kit/pom.xml gluon-plugin/pom.xml",
+        "[ $(grep -l '<version>26\\.0\\.0</version>' pom.xml app/pom.xml kit/pom.xml gluon-plugin/pom.xml | wc -l) = 4 ]",
+        "sed -i 's|<buildDate>${maven.build.timestamp}</buildDate>|<buildDate>2026-03-23 13:29:49</buildDate>|' app/pom.xml",
+        "grep -q '<buildDate>2026-03-23 13:29:49</buildDate>' app/pom.xml",
+        "sed -i 's/^        sendTrackingStartupInfo();$//' app/src/main/java/com/oracle/javafx/scenebuilder/app/SceneBuilderApp.java",
+        "[ $(grep -c 'sendTrackingStartupInfo()' app/src/main/java/com/oracle/javafx/scenebuilder/app/SceneBuilderApp.java) = 1 ]",
+        "mvn -B -ntp -o -Dmaven.repo.local=\"$PWD/vendor\" package -DskipTests -Dproject.build.outputTimestamp=2026-03-23T13:29:49Z",
+        "cp app/target/lib/scenebuilder-26.0.0-all.jar \"$PREFIX/scenebuilder.jar\"",
+        "mkdir -p \"$PREFIX/javafx\" && cp -r javafx/lib javafx/bin javafx/legal \"$PREFIX/javafx/\"",
+        "cp LICENSE.txt \"$PREFIX/\"",
+        "cp app/assets/windows/icon-windows.ico \"$PREFIX/SceneBuilder.ico\""
+      ]
+    }
+  ]
+}

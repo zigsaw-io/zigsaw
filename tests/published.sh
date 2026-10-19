@@ -23,8 +23,10 @@
 # Needs Git Bash and network access. Pulls into a temporary store. Builds the
 # recipes in BUILD_HOME if set, e.g. a store that already has their downloads,
 # otherwise in a temporary store. Keeps the build and pull logs in LOG_DIR if
-# set. Skips the recipes SKIP_RECIPES lists (file names, separated by spaces),
-# as CI does with GTK's.
+# set. With GROUP set, checks only the recipes of that group in
+# scripts/published-groups.txt, as each of CI's jobs does with one; either
+# way, every published recipe must be in exactly one group there. Skips the
+# recipes SKIP_RECIPES lists (file names, separated by spaces).
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -83,7 +85,7 @@ smoke_args() {
 }
 # GUI apps with no option that exits: they must still be running after ten
 # seconds, when the run is stopped.
-stays_up_ids=" org.notepad_plus_plus.NotepadPlusPlus org.sumatrapdfreader.SumatraPDF org.gtk.Gtk3demo "
+stays_up_ids=" org.notepad_plus_plus.NotepadPlusPlus org.sumatrapdfreader.SumatraPDF org.gtk.Gtk3demo com.gluonhq.SceneBuilder "
 stays_up() {
     ZIGSAW_HOME="$pull_store" timeout 10 "$zigsaw" run "$1" >/dev/null 2>&1
     [ $? -eq 124 ]
@@ -125,11 +127,45 @@ host_built() {
     tr -d ' \r\n' <"$1\\blobs\\sha256\\${config#sha256:}" | grep -q '"host":{"'
 }
 
+published_recipes=$(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r')
+# Each published recipe's group, and nothing grouped that isn't published.
+declare -A group_of
+problems=()
+while read -r group recipes; do
+    group=${group%:}
+    for name in $recipes; do
+        if [ -n "${group_of[$name]:-}" ]; then
+            problems+=("$name is in both ${group_of[$name]} and $group")
+        else
+            group_of[$name]=$group
+        fi
+        grep -qxF "$name" <<<"$published_recipes" || problems+=("$name ($group) isn't in published-recipes.txt")
+    done
+done < <(grep -v -e '^#' -e '^\s*$' "$root/scripts/published-groups.txt" | tr -d '\r')
+for name in $published_recipes; do
+    [ -n "${group_of[$name]:-}" ] || problems+=("$name is in no group")
+done
+if [ ${#problems[@]} -gt 0 ]; then
+    fail "scripts/published-groups.txt groups each published recipe once" "${problems[@]}"
+    rm -rf "$work"
+    exit 1
+fi
+if [ -n "${GROUP:-}" ] && ! grep -qx "$GROUP" < <(printf '%s\n' "${group_of[@]}"); then
+    echo "no group $GROUP in scripts/published-groups.txt"
+    rm -rf "$work"
+    exit 1
+fi
+
 ids=()
 declare -A names # by id: the recipe's name, if it gives one
 published_versions=()
 skipped=0
-for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); do
+others=0
+for name in $published_recipes; do
+    if [ -n "${GROUP:-}" ] && [ "${group_of[$name]}" != "$GROUP" ]; then
+        others=$((others + 1))
+        continue
+    fi
     case " ${SKIP_RECIPES:-} " in
     *" $name "*)
         printf 'skip  %s\n' "$name"
@@ -254,5 +290,5 @@ if [ -z "${BUILD_HOME:-}" ]; then
 fi
 rm -rf "$work"
 echo
-echo "$failures check(s) failed; $unpublished version(s) not published yet; $skipped recipe(s) skipped."
+echo "$failures check(s) failed; $unpublished version(s) not published yet; $skipped recipe(s) skipped${GROUP:+; $others in groups other than $GROUP}."
 exit $((failures > 0))

@@ -1,0 +1,32 @@
+# The published recipes (scripts/published-recipes.txt), in the groups that
+# the Reproduce workflow checks in parallel jobs, one job a group:
+# GROUP=<group> tests/published.sh. Each recipe is in exactly one group, which
+# tests/published.sh checks. A group builds its recipes in the order
+# published-recipes.txt gives, and pulls the images they pin that other
+# groups build from the registry, so a group needn't hold what its recipes
+# build with; grouping an image with the recipes that pin it only saves the
+# pull. Groups are balanced by how long their builds took on a runner
+# (minutes, after iteration 32).
+#
+#   <group>: <recipe>...      (a group may take several lines)
+#
+# `skip` is left out of CI: GTK's images, the Perl, cargo-c and gettext
+# images only they build with, and the apps on them, until they're stable
+# locally. GTK's SDK alone is a quarter of an hour of building.
+
+# zig 0.7, SQLite 1.7, CMake 0.2, zstd 6.9, Meson 1.5
+c: busybox.json zig.json sqlite.json cmake.json zstd.json meson.json
+# Rust 1.1, ripgrep 1.4, bat 5.5, Go 0.4, fzf 0.3, zot 4.1
+rust-go: rust.json ripgrep.json bat.json go.json fzf.json zot.json
+# prebuilt apps and runtimes 1.5, PHP's images 2.3, Kanboard 0.2
+apps: mingit.json node.json prettier.json python.json
+apps: 7zip.json notepad-plus-plus.json sumatrapdf.json vlc.json
+apps: php-sdk.json php.json php-apcu.json php-xdebug.json php-igbinary.json php-redis.json php-ssh2.json php-yaml.json php-zstd.json composer.json kanboard.json
+# the JDK, JRE, Maven and Gradle 1, PDFBox 1.6, PlantUML 3.8, Logisim 3.1,
+# Scene Builder (about 3)
+java: java-sdk.json java.json maven.json gradle.json pdfbox.json plantuml.json logisim-evolution.json scenebuilder.json
+
+skip: perl.json cargo-c.json gettext.json
+skip: gtk4-sdk.json gtk4.json gtk4-hunspell-vi.json gtk4-hunspell-fr.json gnome-text-editor.json rnote.json
+skip: gtk3-sdk.json gtk3.json gtk3demo.json gnumeric.json
+skip: pygobject-sdk.json pygobject.json meld.json gaphor.json

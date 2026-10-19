@@ -203,6 +203,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Apache PDFBox (built from source with Maven, on Java's runtime) | `org.apache.pdfbox` | 3.0.8 | `pdfbox`, `pdfbox-debugger` |
 | PlantUML (built from source with Gradle, on Java's runtime) | `com.plantuml.PlantUML` | 1.2026.9 | `plantuml`, `plantuml-gui` |
 | Logisim-evolution (built from source with Gradle, on Java's runtime) | `com.github.reds.LogisimEvolution` | 5.0.0 | `logisim`, `logisim-gui` |
+| Scene Builder (built from source with Maven, with OpenJFX, on the JDK) | `com.gluonhq.SceneBuilder` | 26.0.0 | `scenebuilder` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -260,7 +261,9 @@ images point its `user.home` into the app's data. PDFBox, a toolkit for PDF
 documents, PlantUML, which draws diagrams from text, and Logisim-evolution,
 which designs and simulates logic circuits, are built that way; PDFBox's
 debugger opens `.pdf` files and Logisim `.circ` files, and all three keep
-their settings with the app.
+their settings with the app. So is Scene Builder, which designs JavaFX
+user interfaces: it brings its own JavaFX (OpenJFX) and opens `.fxml`
+files.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -311,11 +314,13 @@ sources are pinned by SHA-256, runtimes by image digest, and builds write
 deterministic layers. The
 [Reproduce workflow](.github/workflows/reproduce.yml)
 ([runs](https://github.com/zigsaw-io/zigsaw/actions/workflows/reproduce.yml))
-checks this on every push to `main` and every pull request. On a fresh
-Windows runner, it runs the unit tests, builds each published recipe, and
-compares the digest with the image published for the recipe's version
-([`tests/published.sh`](tests/published.sh)). Then it runs the end-to-end
-suites (see [Testing](#testing)) on that runner too.
+checks this on every push to `main` and every pull request. On fresh
+Windows runners, it builds each published recipe and compares the digest
+with the image published for the recipe's version
+([`tests/published.sh`](tests/published.sh)), in parallel jobs, one for each
+group of [`scripts/published-groups.txt`](scripts/published-groups.txt).
+Beside them, it runs the unit tests and the end-to-end suites (see
+[Testing](#testing)).
 
 - A version that isn't published yet is reported, but doesn't fail the run.
 - A different digest for the same version fails it. Either the build isn't
@@ -927,6 +932,7 @@ bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseud
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update, mounts, logins, sources next to images, the catalog, search and info, through local registries (see its header)
 bash tests/published.sh # fresh builds have the published digests; anonymous pulls, latest, redirects, the catalog
+GROUP=java bash tests/published.sh # only one group of scripts/published-groups.txt, as a CI job does
 ```
 
 The scripts build the recipes they need from [recipes/](recipes/) into
@@ -949,5 +955,8 @@ ZOT_HOME=path/to/a/store/with/zot bash tests/zot.sh bash tests/registry.sh
 ```
 
 The [Reproduce workflow](.github/workflows/reproduce.yml) runs all of them on
-a fresh runner, after `published.sh`, with its build store as
-`SEED_DOWNLOADS`, and as the matrix's store.
+a fresh runner, in a store of the published images the matrix runs and zot
+([`tests/seed-store.sh`](tests/seed-store.sh) pulls them, and builds a
+version that isn't published yet), as `SEED_DOWNLOADS` and the matrix's
+store. The jobs that run `published.sh` check that those images are what
+the recipes build.

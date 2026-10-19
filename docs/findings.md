@@ -1091,6 +1091,19 @@ JDK's image, and compiled on the JRE's):
   Central, which keeps every release; Apache's parent POM names
   repository.apache.org's snapshots, which costs Maven builds a timeout
   warning.
+- **JavaFX, in Scene Builder** (iteration 33):
+  - Temurin's JRE has no `jdk.unsupported.desktop`, which `javafx.swing`
+    requires, so a JavaFX app with Swing interop can't start on it
+    (`FindException` before `main`). The JDK's image has it; it pulls
+    about 33 MB more than the JRE's (88 MB against 55).
+  - `maven-compiler-plugin` 3.13.0 fails on a project compiled for Java 24
+    or newer that has a `module-info.java`: after compiling, it rewrites
+    `module-info.class` with ASM 9.7, which reads class files up to Java 23
+    (`Unsupported class file major version 68`). 3.14.1 has ASM 9.8.
+  - JavaFX's native libraries load from the `bin` folder beside its jars
+    (`../bin` on Windows) before it unpacks them from the jars into
+    `user.home\.openjfx\cache`; with Gluon's SDK nothing is unpacked.
+    Direct3D 9Ex worked in soft, low and AppContainer runs alike.
 
 ## Other findings
 

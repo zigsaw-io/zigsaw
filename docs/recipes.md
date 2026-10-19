@@ -1648,6 +1648,10 @@ windowless shim:
 }
 ```
 
+An app that needs a module the JRE leaves out (`jdk.unsupported.desktop`,
+for JavaFX's Swing interop, or the tools in `jdk.*`) lists the JDK's image
+instead, `org.openjdk.java.Sdk`, as Scene Builder does.
+
 Java builds don't need anything else to reproduce, as long as the archives
 they make don't record when they were made: Maven's plugins take the time
 from `project.build.outputTimestamp` (Apache's parent POM sets one), and
@@ -1778,6 +1782,48 @@ UTC. Its command is its command line (`logisim --tty table circuit.circ`
 simulates without a window), and `logisim-gui` opens its window, which
 Explorer offers for `.circ` files. It keeps
 `HKCU\Software\JavaSoft\Prefs\com\cburch\logisim`.
+
+### Scene Builder
+
+[Scene Builder](recipes/scenebuilder.json) 26.0.0, Gluon's designer for
+JavaFX user interfaces, is built from its GitHub tag with Maven
+(`package`, its jar with its dependencies but not JavaFX's) and brings
+JavaFX itself.
+
+- **JavaFX** comes from Gluon's OpenJFX 26.0.2 SDK for Windows, which the
+  recipe takes as a second source: its modules' jars in `javafx\lib`, their
+  DLLs in `javafx\bin`, with the Visual C++ runtime they need, and their
+  licences in `javafx\legal`.
+  - The app runs with those jars on the module path
+    (`--module-path ${app}\javafx\lib --add-modules ...`) and its own jar on
+    the class path, as upstream's installer runs it.
+  - JavaFX looks for its DLLs in the `bin` folder beside its jars before it
+    unpacks the copies in Maven Central's jars into `user.home\.openjfx`.
+    The SDK's jars have none inside, so nothing is unpacked into the app's
+    data.
+  - JavaFX draws with Direct3D, or in software where there's none (CI's
+    runners), in every sandbox. `-Dprism.verbose=true` (through
+    `--env=JDK_JAVA_OPTIONS=...`) says which.
+- **It runs on the JDK's image** (`org.openjdk.java.Sdk`), not the JRE's.
+  JavaFX's `javafx.swing` needs the module `jdk.unsupported.desktop`, which
+  Temurin's JRE leaves out, and Scene Builder lists Swing's `SwingNode`
+  among its components when it starts.
+- **Three changes to its build**:
+  - `maven-compiler-plugin` 3.13.0 → 3.14.1, in the vendor step too: the
+    older one rewrites the compiled `module-info.class` with an ASM that
+    can't read Java 24's class files (`Unsupported class file major
+    version 68`);
+  - the version `26.0.0-SNAPSHOT` → `26.0.0`, as upstream's release
+    workflow sets it;
+  - the build date in its About box, the tag's commit time.
+- **No usage report.** Once a week it would send Gluon an id, the operating
+  system and Java's version at startup. The recipe removes that call.
+  Checking for updates and registering stay in its Help menu, and its
+  library manager searches Maven repositories, hence `network`.
+- `scenebuilder` opens its window, which Explorer offers for `.fxml` files.
+  It keeps `HKCU\Software\JavaSoft\Prefs\com\oracle\javafx\scenebuilder`
+  (recent files, window layouts); its log and its user library are in its
+  data.
 
 ## PHP
 

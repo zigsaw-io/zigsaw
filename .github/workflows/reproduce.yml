@@ -1,14 +1,17 @@
 # Checks that the published recipes build the same images on a fresh machine,
-# and runs the end-to-end suites there, in two jobs that run side by side:
-# - published: each recipe in scripts/published-recipes.txt built and
-#   compared with the image published for the recipe's version
-#   (tests/published.sh), then the suites in tests/ that take what they'd
-#   download, and the apps they run, from that build's store;
+# and runs the end-to-end suites there, in jobs that run side by side:
+# - published, one job for each group of scripts/published-groups.txt: the
+#   group's recipes built and compared with the images published for the
+#   recipes' versions (tests/published.sh);
+# - suites: the suites in tests/ that run apps, in a store of the published
+#   images (tests/seed-store.sh), which the published jobs check are what the
+#   recipes build;
 # - build: the unit tests, then tests/build.sh, which builds in stores of its
 #   own and downloads what it builds from.
-# And a third, quick one beside them:
+# And two quick ones:
+# - groups: the groups the published jobs are made from;
 # - pins: every image the published recipes pin is on the registry, so a
-#   fresh store can build them, those published skips included
+#   fresh store can build them, those of the skip group included
 #   (scripts/check-pins.sh).
 # It only verifies; scripts/publish.sh publishes.
 name: Reproduce
@@ -40,15 +43,72 @@ jobs:
       - name: The published recipes' pins, on the registry
         run: bash scripts/check-pins.sh
 
+  # The groups of scripts/published-groups.txt but skip, as a JSON list.
+  groups:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      groups: ${{ steps.groups.outputs.groups }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: groups
+        run: |
+          groups=$(grep -v -e '^#' -e '^\s*$' scripts/published-groups.txt | cut -d: -f1 | grep -vx skip | awk '!seen[$0]++' | jq -Rnc '[inputs]')
+          echo "groups=$groups" | tee -a "$GITHUB_OUTPUT"
+
   published:
+    needs: groups
+    name: published (${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.groups.outputs.groups) }}
     runs-on: windows-2025
-    # One job took 31 minutes after iteration 8, zot's vendor step (561 Go
-    # modules) included, 68 with GTK's images in iteration 10, and 55 after
-    # iteration 23 with build.sh in it; build.sh has had its own job since.
-    # GTK's images, the Perl, cargo-c and gettext images only they build
-    # with, and Rnote, which builds with them, are left out until they're
-    # stable locally (see SKIP_RECIPES).
-    timeout-minutes: 60
+    # All the groups in one job took 37 minutes after iteration 32; the
+    # groups are balanced to some 10 to 13 minutes each.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+
+      - name: Paths for the steps below
+        shell: bash
+        run: |
+          t=$RUNNER_TEMP
+          printf '%s\n' "TMP=$t" "TEMP=$t" "BUILD_HOME=$t\\store" "LOG_DIR=$t\\logs" >>"$GITHUB_ENV"
+
+      - name: Build zigsaw
+        run: zig build
+
+      - name: Build the group's recipes and compare them with the published images
+        shell: bash
+        env:
+          GROUP: ${{ matrix.group }}
+        run: |
+          mkdir -p "$(cygpath -u "$LOG_DIR")"
+          bash tests/published.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/published.txt"
+
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: logs-published-${{ matrix.group }}
+          path: ${{ runner.temp }}\logs
+          if-no-files-found: ignore
+
+  suites:
+    runs-on: windows-2025
+    # The suites took 6 minutes after iteration 32, in the job that had built
+    # their apps.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,15 +127,16 @@ jobs:
       - name: Build zigsaw
         run: zig build
 
-      # Not GTK's: its SDK alone is a quarter of an hour of building. Meson's
-      # image stays, as tests/build.sh builds with it.
-      - name: Build the published recipes and compare them with the published images
+      # The apps tests/matrix.sh runs, and zot for tests/zot.sh. BusyBox and
+      # Node are built, for their downloads, which the suites' own stores
+      # are seeded with.
+      - name: The suites' apps, as published (built, if not published yet)
         shell: bash
         env:
-          SKIP_RECIPES: perl.json cargo-c.json gettext.json gtk4-sdk.json gtk4.json gnome-text-editor.json rnote.json gtk3-sdk.json gtk3.json gtk3demo.json gnumeric.json pygobject-sdk.json pygobject.json meld.json gtk4-hunspell-vi.json gtk4-hunspell-fr.json gaphor.json
+          ZIGSAW_HOME: ${{ runner.temp }}\store
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
-          bash tests/published.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/published.txt"
+          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
 
       # The suites run whether or not the steps before them passed.
       - name: tests/store.sh
@@ -109,14 +170,14 @@ jobs:
         shell: bash
         run: bash tests/install.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/install.txt"
 
-      # zot is the app recipes/zot.json builds, which published.sh built in
-      # the build store; tests/zot.sh runs it with zigsaw.
+      # zot is the app recipes/zot.json builds, here as published (which a
+      # published job checks); tests/zot.sh runs it with zigsaw.
       - name: tests/registry.sh, against two local zot registries
         if: ${{ !cancelled() }}
         shell: bash
         run: bash tests/zot.sh bash tests/registry.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/registry.txt"
 
-      # Last, in the build store, whose apps it runs: it changes their data.
+      # Last, in the seeded store, whose apps it runs: it changes their data.
       - name: tests/matrix.sh
         if: ${{ !cancelled() }}
         shell: bash
@@ -131,7 +192,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: logs-published
+          name: logs-suites
           path: ${{ runner.temp }}\logs
           if-no-files-found: ignore
 

@@ -7,17 +7,20 @@
 # draws a sequence and a class diagram with the dot inside its jar, and opens
 # its window; Logisim-evolution (recipes/logisim-evolution.json, a bigger
 # Gradle build) simulates a half adder from the command line and opens it,
-# given with --file, in its window, keeping its recent files with the app.
+# given with --file, in its window, keeping its recent files with the app;
+# Scene Builder (recipes/scenebuilder.json, a JavaFX app built with Maven, on
+# the JDK's image) opens an FXML layout given with --file, with JavaFX's
+# DLLs from its own files, and keeps its recent files with the app.
 # Each in every sandbox; their windowless shims, shortcuts (in a temporary
-# folder) and PDFBox's .pdf and Logisim's .circ registrations (in a scratch
-# registry key) too. Last, the registry: none of their keys stay in HKCU, and
+# folder) and PDFBox's .pdf, Logisim's .circ and Scene Builder's .fxml
+# registrations (in a scratch registry key) too. Last, the registry: none of their keys stay in HKCU, and
 # an HKCU\Software\JavaSoft\Prefs that was there stays.
 #
 #   JAVAAPPS_HOME=path\to\store bash tests/java.sh [path\to\zigsaw.exe]
 #
 # The store (JAVAAPPS_HOME, or BUILD_HOME as tests/published.sh leaves it,
 # or a temporary one) gets the JDK, JRE, Maven and Gradle images and the
-# three apps unless it has them (about 12 minutes in a new store, mostly
+# four apps unless it has them (about 15 minutes in a new store, mostly
 # Maven's and Gradle's downloads), and loses them afterwards if it didn't.
 # The apps open windows on the desktop for a moment.
 set -u
@@ -36,6 +39,7 @@ work=$(cygpath -w "$(mktemp -d)")
 PDFBOX=org.apache.pdfbox
 PLANTUML=com.plantuml.PlantUML
 LOGISIM=com.github.reds.LogisimEvolution
+SCENEBUILDER=com.gluonhq.SceneBuilder
 # Start menu shortcuts go here rather than the user's Start menu.
 links="$work\\links"
 export ZIGSAW_SHORTCUTS_DIR="$links"
@@ -79,6 +83,7 @@ build_image org.gradle.gradle gradle.json
 build_image $PDFBOX pdfbox.json
 build_image $PLANTUML plantuml.json
 build_image $LOGISIM logisim-evolution.json
+build_image $SCENEBUILDER scenebuilder.json
 data() { echo "$ZIGSAW_HOME\\data\\$1"; }
 # Runs from the work directory's sandbox folders, never the repository: the
 # apps have the cwd permission, which low runs label and AppContainer runs
@@ -232,9 +237,33 @@ circ_registered() {
 }
 check "it's registered to open .circ files" circ_registered
 
+# --- Scene Builder ---------------------------------------------------------------
+
+cp "$root\\tests\\java\\hello.fxml" "$docs\\"
+for sb in soft low appcontainer; do
+    check "its window opens a layout given with --file, under $sb" opens_window "$work\\$sb" hello.fxml --sandbox=$sb --file="$docs\\hello.fxml" $SCENEBUILDER
+done
+# JavaFX loads its DLLs from the bin folder beside its jars before it unpacks
+# them into user.home, and the app's jars have none to unpack.
+check "JavaFX's DLLs were loaded from the app, not unpacked into its data" sh -c "! test -e '$(data $SCENEBUILDER)\\home\\.openjfx'"
+scenebuilder_recent_kept() {
+    local out
+    out=$(z run --command=reg $SCENEBUILDER query 'HKCU\Software\JavaSoft\Prefs\com\oracle\javafx\scenebuilder\app\preferences\/S/B_2.0' /v '/R/E/C/E/N/T_/I/T/E/M/S' 2>&1 | tr -d '\r')
+    grep -q 'hello\.fxml' <<<"$out" || { echo "got: $out"; return 1; }
+    [ -f "$(data $SCENEBUILDER)\\registry\\user.dat" ]
+}
+check "its recent files are kept in a hive in its data" scenebuilder_recent_kept
+check "scenebuilder gets the windowless shim, and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\scenebuilder.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\Scene Builder.lnk'"
+fxml_registered() {
+    local prog="Zigsaw.$SCENEBUILDER.fxml"
+    [ "$(reg_value "$prog\\shell\\open\\command")" = "\"$ZIGSAW_HOME\\open\\$SCENEBUILDER\\scenebuilder.exe\" \"%1\"" ] || { echo "got: $(reg_value "$prog\\shell\\open\\command")"; return 1; }
+    reg query "HKCU\\$classes\\.fxml\\OpenWithProgids" /v "$prog" >/dev/null 2>&1
+}
+check "it's registered to open .fxml files" fxml_registered
+
 # --- The registry ------------------------------------------------------------------
 
-check "HKCU has none of the apps' keys between their runs" sh -c "! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\org\\apache\\pdfbox' >/dev/null 2>&1 && ! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\net\\sourceforge\\plantuml' >/dev/null 2>&1 && ! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\com\\cburch' >/dev/null 2>&1"
+check "HKCU has none of the apps' keys between their runs" sh -c "! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\org\\apache\\pdfbox' >/dev/null 2>&1 && ! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\net\\sourceforge\\plantuml' >/dev/null 2>&1 && ! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\com\\cburch' >/dev/null 2>&1 && ! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\com\\oracle\\javafx\\scenebuilder' >/dev/null 2>&1"
 if $had_prefs; then
     check "and HKCU\\Software\\JavaSoft\\Prefs, which was there, still is" reg query 'HKCU\Software\JavaSoft\Prefs'
     # AppContainer runs could read it while they ran, to open their keys
