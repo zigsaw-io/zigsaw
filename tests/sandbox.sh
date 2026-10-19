@@ -309,6 +309,28 @@ check "rm --delete-data settles what a run left, and leaves nothing in HKCU" rm_
 "$zigsaw" rm --delete-data $REG2 >/dev/null 2>&1 </dev/null
 reg delete "HKCU\\$key" /f >/dev/null 2>&1
 
+# A sixth app keeps a key two levels below one that's there and empty, as
+# Java apps keep theirs below an empty HKCU\Software\JavaSoft\Prefs: taking
+# it back deletes the key its run made above it, not the one that was there.
+REG3=test.sandbox.registry3
+deep="Software\\ZigsawTest\\deep-$$"
+sed -e "s/\"net.frippery.busybox\"/\"$REG3\"/" \
+    -e "s/\"command\": \"busybox.exe\",/&\n  \"registry\": [\"Software\\\\\\\\ZigsawTest\\\\\\\\deep-$$\\\\\\\\made\\\\\\\\settings\"],/" \
+    "$root/recipes/busybox.json" >"$work\\$REG3.json"
+"$zigsaw" build "$work\\$REG3.json" >/dev/null 2>&1 || { echo "building $REG3 failed"; exit 1; }
+only_what_it_made() {
+    # Without values, as Java leaves Prefs: reg.exe would give it an empty
+    # default value.
+    powershell -NoProfile -Command "New-Item -Path 'HKCU:\\$deep' -Force | Out-Null" || return 1
+    z run --command=reg $REG3 add "HKCU\\$deep\\made\\settings" /v x /d 1 /f || return 1
+    reg query "HKCU\\$deep" >/dev/null 2>&1 || { echo "the key that was there went"; return 1; }
+    ! reg query "HKCU\\$deep\\made" >/dev/null 2>&1 || { echo "the key its run made stayed"; return 1; }
+    z run --command=reg $REG3 query "HKCU\\$deep\\made\\settings" /v x
+}
+check "taking a key back deletes the keys above it its run made, not an empty one that was there" only_what_it_made
+"$zigsaw" rm --delete-data $REG3 >/dev/null 2>&1 </dev/null
+reg delete "HKCU\\$deep" /f >/dev/null 2>&1
+
 # --- Labels two apps share, labels zigsaw didn't make, and rm ---------------------
 
 check "a second app's low run writes the same path" writes $OTHER low "$work\\rw\\g" --filesystem="$work\\rw"

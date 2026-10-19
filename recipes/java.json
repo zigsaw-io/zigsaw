@@ -1,0 +1,27 @@
+{
+  "id": "org.openjdk.java",
+  "version": "25.0.5_7-ea",
+  "name": "OpenJDK Runtime",
+  "summary": "Java's runtime, Eclipse Temurin's build of the OpenJDK 25 JRE, for Java apps to run on",
+  "homepage": "https://adoptium.net/",
+  "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+  "command": "bin/java.exe",
+  "env": {
+    "JAVA_HOME": "${app}",
+    "JAVA_TOOL_OPTIONS": "\"-Duser.home=${data}\\home\" -Dsun.font.layout.ffm=false"
+  },
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {},
+  "modules": [
+    {
+      "name": "jre",
+      "sources": [
+        {
+          "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B7-ea-beta/OpenJDK25U-jre_x64_windows_hotspot_25.0.5_7-ea.zip",
+          "sha256": "0a1b45b0aeb468a97fd24a27186abfec366e9c8eeb8fcd24fd7d89a9d23648fd",
+          "strip": 1
+        }
+      ]
+    }
+  ]
+}

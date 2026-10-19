@@ -237,7 +237,8 @@ pub fn letChildrenQueryUs(arena: Allocator) !void {
 // Registry keys
 //
 // For the keys an app keeps (hkcu.zig), which are only in HKEY_CURRENT_USER
-// while it runs: zigsaw deletes them afterwards, so nothing is undone here.
+// while it runs: zigsaw deletes them afterwards, so nothing is undone here,
+// except the read access an AppContainer gets to the keys above them.
 
 /// Labels HKCU\<sub> low integrity, and through inheritance the keys in it,
 /// so that low-integrity processes can write there and make keys.
@@ -267,6 +268,31 @@ pub fn grantKey(arena: Allocator, sub: []const u8, sid: win32.PSID) !void {
         .Trustee = .{ .ptstrName = sid },
     }};
     try dacl.addEntries(&entries);
+}
+
+/// Grants `sid` read access to HKCU\<sub> itself, not the keys in it, unless
+/// an ACE grants it already: for an AppContainer to open the keys above one
+/// its app keeps. `revokeKey` takes it back.
+pub fn grantKeyRead(arena: Allocator, sub: []const u8, sid: win32.PSID) !void {
+    var dacl = try Dacl.readObject(arena, try keyObjectName(arena, sub), win32.SE_REGISTRY_KEY);
+    defer dacl.deinit();
+    if (dacl.find(win32.ACCESS_ALLOWED_ACE_TYPE, sid, win32.KEY_READ, .any) != null) return;
+    var entries = [1]win32.EXPLICIT_ACCESS_W{.{
+        .grfAccessPermissions = win32.KEY_READ,
+        .grfAccessMode = win32.GRANT_ACCESS,
+        .grfInheritance = win32.NO_INHERITANCE,
+        .Trustee = .{ .ptstrName = sid },
+    }};
+    try dacl.addEntries(&entries);
+}
+
+/// Removes `sid`'s explicit allow ACEs from HKCU\<sub>, if it has any.
+pub fn revokeKey(arena: Allocator, sub: []const u8, sid: win32.PSID) !void {
+    var dacl = try Dacl.readObject(arena, try keyObjectName(arena, sub), win32.SE_REGISTRY_KEY);
+    defer dacl.deinit();
+    const entries = try dacl.revocations(arena, .{ .sids = &.{sid} }, null);
+    if (entries.items.len == 0) return;
+    try dacl.addEntries(entries.items);
 }
 
 fn keyObjectName(arena: Allocator, sub: []const u8) ![]u8 {

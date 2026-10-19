@@ -45,6 +45,11 @@ if [ -z "${ZIGSAW_HOME:-}" ]; then
 fi
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
+# The user's folders apps may use (PDFBox's and PlantUML's Desktop,
+# Documents and Downloads) are these, not yours, which low and AppContainer
+# runs would label and grant.
+for f in Desktop Documents Downloads; do mkdir -p "$work\\folders\\$f"; done
+export ZIGSAW_USER_FOLDERS="$work\\folders"
 
 BB=net.frippery.busybox
 RG=com.github.BurntSushi.ripgrep
@@ -58,13 +63,16 @@ FZF=com.github.junegunn.fzf
 ZOT=dev.zotregistry.zot
 CMAKE=org.cmake.cmake
 ZSTD=com.github.facebook.zstd
+PDFBOX=org.apache.pdfbox
+PUML=com.plantuml.PlantUML
 
 # --- Setup -------------------------------------------------------------------
 
 installed=$("$zigsaw" list)
 # zig and rust before ripgrep and bat, go before fzf and zot, and zig and cmake
-# before zstd, which build with them.
-for recipe in busybox zig rust ripgrep bat go fzf zot cmake zstd mingit node python; do
+# before zstd, which build with them; the JDK, its JRE, Maven and Gradle before
+# PDFBox and PlantUML.
+for recipe in busybox zig rust ripgrep bat go fzf zot cmake zstd mingit node python java-sdk java maven gradle pdfbox plantuml; do
     id=$(grep -o '"id": *"[^"]*"' "$root/recipes/$recipe.json" | cut -d'"' -f4)
     if ! grep -q "^$id " <<<"$installed"; then
         echo "building $id..."
@@ -307,6 +315,27 @@ expect ok ok ok "compresses and restores in granted cwd" zstd_round_trip
 # (What it writes to stdout is compressed, binary.)
 zstd_reads_outside() { run $ZSTD -q -c "$outside\\secret.txt" >/dev/null; }
 expect ok fails ok "read ungranted host file" zstd_reads_outside
+
+# Java apps, on OpenJDK's runtime image. In an AppContainer, JDK 25 can't
+# resolve a path with toRealPath, which lists each directory from the drive
+# root down: its java.security file (before 25.0.5, JDK-8352728) and its
+# HarfBuzz binding needed it; the images turn that binding off
+# (sun.font.layout.ffm=false).
+tool pdfbox
+in_each in.txt 'hello from zigsaw'
+pdf_round_trip() { run $PDFBOX fromtext -i in.txt -o out.pdf >/dev/null && run $PDFBOX export:text -console -i out.pdf | grep -q '^hello from zigsaw'; }
+expect ok ok ok "makes a PDF from text, reads it back" pdf_round_trip
+expect ok ok ok "renders it to PNG, fonts cached in data" run $PDFBOX render -i out.pdf -format png -dpi 40
+# PDFBox exits 0 even when it can't read its input, so whether it made the
+# PDF says.
+pdf_reads_outside() { run $PDFBOX fromtext -i "$outside\\secret.txt" -o secret.pdf >/dev/null; [ -s secret.pdf ]; }
+expect ok fails ok "read ungranted host file" pdf_reads_outside
+
+tool plantuml
+in_each cls.puml "$(printf '%s\n' '@startuml' 'class Store' 'class App' 'Store *-- App' '@enduml')"
+# Laid out with the dot PlantUML carries in its jar, unpacked into its data.
+plantuml_svg() { run $PUML -tsvg cls.puml >/dev/null && grep -q '>Store<' cls.svg; }
+expect ok ok ok "draws a class diagram as SVG" plantuml_svg
 
 # --- Report ------------------------------------------------------------------
 

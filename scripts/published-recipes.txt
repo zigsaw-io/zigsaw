@@ -49,3 +49,9 @@ php-yaml.json
 php-zstd.json
 composer.json
 kanboard.json
+java-sdk.json
+java.json
+maven.json
+gradle.json
+pdfbox.json
+plantuml.json

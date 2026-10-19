@@ -196,6 +196,12 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Zstandard for PHP 8.5, with libzstd (built from source) | `net.php.php.Zstd` | 0.18.0 | |
 | Composer (on PHP) | `org.getcomposer.composer` | 2.10.3 | `composer` |
 | Kanboard (on PHP; dependencies installed by Composer) | `org.kanboard.Kanboard` | 1.2.54 | `kanboard`, `kanboard-cli` |
+| OpenJDK, Eclipse Temurin's JDK | `org.openjdk.java.Sdk` | 25.0.5_7-ea | `java`, `javaw`, `javac`, `jar`, `jshell`, `javadoc`, `jdeps`, `jlink`, `keytool` |
+| OpenJDK Runtime, Eclipse Temurin's JRE | `org.openjdk.java` | 25.0.5_7-ea | |
+| Apache Maven (on the JDK) | `org.apache.maven` | 3.10.0 | `mvn` |
+| Gradle (on the JDK) | `org.gradle.gradle` | 9.8.1 | `gradle`, `gradle-vendor` |
+| Apache PDFBox (built from source with Maven, on Java's runtime) | `org.apache.pdfbox` | 3.0.8 | `pdfbox`, `pdfbox-debugger` |
+| PlantUML (built from source with Gradle, on Java's runtime) | `com.plantuml.PlantUML` | 1.2026.9 | `plantuml`, `plantuml-gui` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -245,6 +251,14 @@ its dependencies with it, from their lock file. Kanboard is a web app:
 `kanboard` serves it with PHP's built-in web server on `127.0.0.1:8471` and
 opens it in your browser (its Start menu shortcut does that too), with its
 database in the app's data.
+[Java](docs/recipes.md#java)'s images are Eclipse Temurin's builds of
+OpenJDK 25: Java apps run on its JRE, and its JDK builds them, with Maven or
+Gradle, whose images run on it and whose dependencies a recipe pins with a
+vendor step. Java finds the user's profile without the environment, so the
+images point its `user.home` into the app's data. PDFBox, a toolkit for PDF
+documents, and PlantUML, which draws diagrams from text, are built that way;
+PDFBox's debugger opens `.pdf` files, and both keep their settings with the
+app.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -652,7 +666,12 @@ settings, and zigsaw keeps those with the app's data:
   first run copies them in, the last to end copies them back and deletes
   them. Each run labels them low or grants them to the app, as its sandbox
   needs, so 7-Zip saves its settings at low integrity and in an AppContainer
-  too, which can't write the registry otherwise.
+  too, which can't write the registry otherwise. In an AppContainer the app
+  may also read the keys above them, below `Software`, which a program opens
+  on its way there (Java's preferences open each key from
+  `Software\JavaSoft\Prefs` down), until the keys go back.
+- **Keys above them that weren't there** are made with them, and deleted
+  with them while they're empty; keys that were there, empty or not, stay.
 - **A key of the same name that was there**, such as the settings of a 7-Zip
   installed the usual way, is moved aside to `HKCU\Software\zigsaw\aside` for
   the time the app runs, and put back after.
@@ -663,7 +682,8 @@ settings, and zigsaw keeps those with the app's data:
 
 Only keys below `Software`, and not the ones Windows keeps for everyone
 (`Classes`, `Microsoft`, `Policies`...), can be declared. 7-Zip's recipe
-declares `Software\7-Zip`.
+declares `Software\7-Zip`; PDFBox's, where Java keeps its debugger's
+preferences, `Software\JavaSoft\Prefs\org\apache\pdfbox`.
 
 Recipes for such programs leave out what makes them write next to their
 executable, which zigsaw installs read-only (Notepad++'s `doLocalConf.xml`),

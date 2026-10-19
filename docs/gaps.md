@@ -368,3 +368,28 @@
   own file (`__FILE__`, as GLib's `g_return_if_fail` does) puts that path
   into what's built, which then differs from a build in another store; GTK
   3's recipe maps it to a fixed name with `-fmacro-prefix-map`.
+- Java's images set `JAVA_TOOL_OPTIONS`, so every Java program in a run
+  prints `Picked up JAVA_TOOL_OPTIONS: ...` on stderr, and an app's own
+  `JAVA_TOOL_OPTIONS` (in its `env`, or with `--env`) replaces the images',
+  `user.home` with it.
+- In an AppContainer, Java's `Path.toRealPath()` fails for every path, as
+  no drive root lets application packages list it: a Java program that
+  calls it there fails, whatever its permissions. OpenJDK 25.0.5 doesn't use
+  it to load its security settings any more, and Java's images turn off the
+  text shaping that does; others may remain. In an AppContainer, `jps` and
+  `jcmd` can't see the program either (no `hsperfdata`).
+- Maven's `mvn` doesn't read `.mvn/jvm.config` or `MAVEN_OPTS`, and takes
+  the working directory as the project's top (`.mvn/maven.config` and
+  extensions are read from there). Neither a Maven nor a Gradle vendor step
+  can pin dependencies given as version ranges, `latest` or SNAPSHOT
+  versions; Gradle's offline builds serve Maven repositories only, not Ivy
+  ones.
+- Java apps keep their preferences with the app only if their recipe
+  declares the key (`Software\JavaSoft\Prefs\<package>`). In an
+  AppContainer, an app that does may read the keys above its own (which
+  other Java apps' keys are in: their names, not what's in them) while it
+  runs.
+- OpenJDK's images are Temurin's builds, published as they come; they
+  aren't built from source, which needs MSVC and Cygwin. Each Java app
+  carries its jar, not a runtime made for it with `jlink`, and there's no
+  JavaFX.

@@ -2,15 +2,17 @@
 # End-to-end checks for building apps: runtimes, which an app runs with and
 # whose layers travel in its image, and build commands, which build an app
 # from source with SDK images (zig, busybox, CMake, Meson, Rust, Go with and
-# without C, and .NET), tools' caches and aliases, and vendor steps; 7-Zip
+# without C, .NET, and Java with Maven and Gradle), tools' caches and
+# aliases, and vendor steps; 7-Zip
 # unpacks a source zigsaw doesn't; projects with a zigsaw.json, whose own
 # files are a source.
 #
 #   tests/build.sh [path\to\zigsaw.exe]
 #
 # Needs Git Bash (and its git) and network access (busybox, Node, Prettier, zig, CMake,
-# zlib, SQLite, Rust, Go and .NET downloads, crates from crates.io and a
-# package from nuget.org). Always uses temporary stores, since it removes
+# zlib, SQLite, Rust, Go, .NET, OpenJDK, Maven and Gradle downloads, crates
+# from crates.io, a package from nuget.org, and packages and plugins from
+# Maven Central and Gradle's plugin portal). Always uses temporary stores, since it removes
 # apps, and deletes them afterwards. To skip downloading what a store already
 # has (zig's is 97 MB, Rust's 150 MB, .NET's SDK 300 MB),
 # set SEED_DOWNLOADS to its cache\downloads directory; its files are linked,
@@ -1003,6 +1005,101 @@ check "its form and its window come up, under soft, low and appcontainer" deskto
 desktop_again() { [ "$(rebuilt_manifest "$work\\dotnetdesktop\\desktop.json")" = "$desktop_digest" ]; }
 check "built again, it's the same image" desktop_again
 
+# --- Java from source ---------------------------------------------------------------
+
+# Eclipse Temurin's builds of OpenJDK: the JDK as the SDK image, its JRE as the
+# runtime image Java apps run on. Java takes its user.home from
+# SHGetKnownFolderPath, which a run's USERPROFILE doesn't move, so both images
+# set it in JAVA_TOOL_OPTIONS, and every JVM says so on stderr.
+check "java-sdk.json builds the JDK image" z build "$root\\recipes\\java-sdk.json"
+check "java.json builds the JRE image" z build "$root\\recipes\\java.json"
+jre_dir() { echo "$ZIGSAW_HOME\\deploy\\$(own_layer org.openjdk.java)"; }
+jre_files() {
+    [ -e "$(jre_dir)\\bin\\java.exe" ] && [ -e "$(jre_dir)\\bin\\javaw.exe" ] || { echo "no java.exe or javaw.exe"; return 1; }
+    [ ! -e "$(jre_dir)\\bin\\javac.exe" ] || { echo "has javac.exe"; return 1; }
+}
+check "the JRE has java and javaw, not the JDK's javac" jre_files
+mkdir -p "$work\\javatiny"
+printf 'public class Tiny { public static void main(String[] a) { System.out.println("home " + System.getProperty("user.home")); } }\n' >"$work\\javatiny\\Tiny.java"
+jdk_runs_cwd() {
+    local sb out
+    for sb in soft low appcontainer; do
+        out=$(cd "$work\\javatiny" && z run --sandbox=$sb org.openjdk.java.Sdk Tiny.java 2>/dev/null | tr -d '\r')
+        [ "$out" = "home $ZIGSAW_HOME\\data\\org.openjdk.java.Sdk\\home" ] || { echo "$sb, got: $out"; return 1; }
+    done
+}
+check "the JDK run as an app runs a program in the working directory, its user.home in its data, under soft, low and appcontainer" jdk_runs_cwd
+# java_fixture <dir> <files...>: copies tests/build/<dir>'s files to the work
+# directory, and its recipe with the images' digests.
+java_fixture() {
+    local dir=$1 f
+    shift
+    mkdir -p "$work\\$dir" || return 1
+    for f in "$@"; do cp "$(cygpath -u "$root")/tests/build/$dir/$f" "$(cygpath -u "$work")/$dir/" || return 1; done
+    for f in "$(cygpath -u "$root")/tests/build/$dir"/*.json.in; do
+        sed -e "s/@JAVASDK@/$(manifest_of org.openjdk.java.Sdk)/" -e "s/@JAVA@/$(manifest_of org.openjdk.java)/" \
+            -e "s/@MAVEN@/$(manifest_of org.apache.maven 2>/dev/null)/" -e "s/@GRADLE@/$(manifest_of org.gradle.gradle 2>/dev/null)/" \
+            -e "s/@BUSYBOX@/$bb_digest/" "$f" >"$(cygpath -u "$work")/$dir/$(basename "$f" .in)"
+    done
+}
+# A Swing program that lays out its text, as diagrams and documents do: in an
+# AppContainer, JDK 25's HarfBuzz through its foreign function interface
+# can't find the C runtime (it resolves System32 with toRealPath, which needs
+# the drive root listed), so the images turn it off (sun.font.layout.ffm).
+SWING=test.build.swing
+java_fixture swing Swing.java
+check "a Swing program builds with the JDK image's javac and jar" z build "$work\\swing\\swing.json"
+swing_digest=$(manifest_of $SWING)
+swing_runs() {
+    local sb out
+    for sb in soft low appcontainer; do
+        out=$(z run --sandbox=$sb $SWING 2>/dev/null | tr -d '\r')
+        [ "$out" = "Swing: a window came up and drew its text" ] || { echo "$sb, got: $out"; return 1; }
+    done
+}
+check "it runs on the JRE image, and its window draws its text, under soft, low and appcontainer" swing_runs
+swing_again() { [ "$(rebuilt_manifest "$work\\swing\\swing.json")" = "$swing_digest" ]; }
+check "built again, it's the same image" swing_again
+# java_app_runs <id> <how it says it was built>: the fixture's program, from a
+# vendored package, on the JRE, with its home in its data, in each sandbox.
+java_app_runs() {
+    local id=$1 built=$2 sb out
+    for sb in soft low appcontainer; do
+        out=$(z run --sandbox=$sb $id zigsaw 2>/dev/null | tr -d '\r')
+        [ "$(sed -E 's/from Java [0-9][^,]*/from Java (version)/' <<<"$out")" = "hello, zigsaw, from Java (version)$built
+Built with a vendored package
+runs on $(jre_dir)
+home is $ZIGSAW_HOME\\data\\$id\\home" ] || { echo "$sb, got: $out"; return 1; }
+    done
+}
+# Maven, on the JDK: its vendor step is the build itself, with the local
+# repository in the module's directory, less the files that record when and
+# from where (maven-metadata, _remote.repositories, *.lastUpdated); then the
+# build runs offline from it.
+check "maven.json builds Maven's image, on the JDK's" z build "$root\\recipes\\maven.json"
+check "  mvn runs" sh -c "'$zigsaw' run org.apache.maven -v 2>/dev/null | grep -q '^Apache Maven 3'"
+MAVENAPP=test.build.maven
+java_fixture maven pom.xml Hello.java
+check "a Maven project builds, its dependencies and plugins vendored and the build offline" z build "$work\\maven\\hello.json"
+maven_digest=$(manifest_of $MAVENAPP)
+check "it runs on the JRE image, under soft, low and appcontainer" java_app_runs $MAVENAPP ""
+maven_again() { [ "$(rebuilt_manifest "$work\\maven\\hello.json")" = "$maven_digest" ]; }
+check "built again, from the vendored repository in the cache, it's the same image" maven_again
+# Gradle, on the JDK: its vendor step builds with a Gradle home of its own,
+# and gradle-vendor makes the files Gradle downloaded a Maven repository; the
+# build points every repository there (ZIGSAW_GRADLE_REPO, read by the init
+# script in Gradle's image), offline. The project has a settings plugin from
+# Gradle's plugin portal.
+check "gradle.json builds Gradle's image, on the JDK's" z build "$root\\recipes\\gradle.json"
+check "  gradle runs" sh -c "'$zigsaw' run org.gradle.gradle --version 2>/dev/null | grep -q '^Gradle 9'"
+GRADLEAPP=test.build.gradle
+java_fixture gradle settings.gradle build.gradle Hello.java
+check "a Gradle project builds, its plugin and dependencies vendored and the build offline" z build "$work\\gradle\\hello.json"
+gradle_digest=$(manifest_of $GRADLEAPP)
+check "it runs on the JRE image, under soft, low and appcontainer" java_app_runs $GRADLEAPP ", built by Gradle"
+gradle_again() { [ "$(rebuilt_manifest "$work\\gradle\\hello.json")" = "$gradle_digest" ]; }
+check "built again, from the vendored repository in the cache, it's the same image" gradle_again
+
 # --- PHP extensions with zig ------------------------------------------------------
 
 # PHP's official Windows build, which MSVC builds, in an SDK image with its
@@ -1060,7 +1157,7 @@ check "php-ext builds it in its directory without a recipe, and PHP's runtime lo
 for id in $APP $SDK $RT test.image.built $XRT $XAPP test.ext.app2 test.ext.a test.ext.b test.ext.c test.ext.old $AAPP $ASDK $TOOL test.alias.built test.alias.files io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP com.mesonbuild.meson $MESONAPP org.sqlite.sqlite3 \
     test.project.app test.project.lib test.project.linked test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
     test.build.vendored org.7_zip.7zip $SEVENZIP org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO \
-    com.microsoft.dotnet.Sdk com.microsoft.dotnet $DOTNETAPP $DESKTOP net.php.php.Sdk net.php.php $PHPEXT $PHPAPP; do z rm --delete-data $id >/dev/null 2>&1; done
+    com.microsoft.dotnet.Sdk com.microsoft.dotnet $DOTNETAPP $DESKTOP org.openjdk.java.Sdk org.openjdk.java org.apache.maven org.gradle.gradle $SWING $MAVENAPP $GRADLEAPP net.php.php.Sdk net.php.php $PHPEXT $PHPAPP; do z rm --delete-data $id >/dev/null 2>&1; done
 z prune --downloads --data >/dev/null 2>&1
 check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
 rm -rf "$ZIGSAW_HOME" "$work"

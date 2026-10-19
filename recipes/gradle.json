@@ -1,0 +1,60 @@
+{
+  "id": "org.gradle.gradle",
+  "version": "9.8.1",
+  "name": "Gradle",
+  "summary": "A build tool for Java and other JVM languages, on OpenJDK; as an SDK, it gives builds gradle and gradle-vendor commands",
+  "homepage": "https://gradle.org/",
+  "license": "Apache-2.0",
+  "command": "${java}\\bin\\java.exe",
+  "args": [
+    "-Xmx64m", "-Xms64m",
+    "-javaagent:${app}\\lib\\agents\\gradle-instrumentation-agent-9.8.1.jar",
+    "-Dorg.gradle.appname=gradle", "-Dorg.gradle.daemon=false",
+    "-jar", "${app}\\lib\\gradle-gradle-cli-main-9.8.1.jar"
+  ],
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "runtimes": { "java": "org.openjdk.java.Sdk:25.0.5_7-ea@sha256:e45ed698dd497b005fcace6cc23542305a2863321bef9e761bdf6b3e899a57a7" },
+  "exports": {
+    "gradle": {
+      "command": "${java}\\bin\\java.exe",
+      "args": [
+        "-Xmx64m", "-Xms64m",
+        "-javaagent:${app}\\lib\\agents\\gradle-instrumentation-agent-9.8.1.jar",
+        "-Dorg.gradle.appname=gradle", "-Dorg.gradle.daemon=false",
+        "-jar", "${app}\\lib\\gradle-gradle-cli-main-9.8.1.jar"
+      ]
+    },
+    "gradle-vendor": { "command": "${java}\\bin\\java.exe", "args": ["${app}\\zigsaw\\GradleVendor.java"] }
+  },
+  "aliases": {
+    "gradle": {
+      "command": "${java}\\bin\\java.exe",
+      "args": [
+        "-Xmx64m", "-Xms64m",
+        "-javaagent:${app}\\lib\\agents\\gradle-instrumentation-agent-9.8.1.jar",
+        "-Dorg.gradle.appname=gradle", "-Dorg.gradle.daemon=false",
+        "-jar", "${app}\\lib\\gradle-gradle-cli-main-9.8.1.jar"
+      ]
+    },
+    "gradle-vendor": { "command": "${java}\\bin\\java.exe", "args": ["${app}\\zigsaw\\GradleVendor.java"] }
+  },
+  "modules": [
+    {
+      "name": "gradle",
+      "sources": [
+        {
+          "url": "https://services.gradle.org/distributions/gradle-9.8.1-bin.zip",
+          "sha256": "dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f",
+          "strip": 1
+        }
+      ]
+    },
+    {
+      "name": "zigsaw",
+      "sources": [
+        { "path": "gradle/zigsaw-offline.gradle", "dest": "init.d/zigsaw-offline.gradle" },
+        { "path": "gradle/GradleVendor.java", "dest": "zigsaw/GradleVendor.java" }
+      ]
+    }
+  ]
+}

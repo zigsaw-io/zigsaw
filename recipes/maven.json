@@ -1,0 +1,63 @@
+{
+  "id": "org.apache.maven",
+  "version": "3.10.0",
+  "name": "Apache Maven",
+  "summary": "Java's build tool and dependency manager, on OpenJDK; as an SDK, it gives builds a mvn command",
+  "homepage": "https://maven.apache.org/",
+  "license": "Apache-2.0",
+  "command": "${java}\\bin\\java.exe",
+  "args": [
+    "--enable-native-access=ALL-UNNAMED",
+    "-classpath", "${app}\\boot\\plexus-classworlds-2.12.1.jar",
+    "-Dclassworlds.conf=${app}\\bin\\m2.conf",
+    "-Dmaven.home=${app}",
+    "-Dlibrary.jline.path=${app}\\lib\\jline-native",
+    "-Dorg.jline.terminal.exec.redirectPipeCreationMode=native,reflection",
+    "-Dmaven.multiModuleProjectDirectory=.",
+    "org.codehaus.plexus.classworlds.launcher.Launcher"
+  ],
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "runtimes": { "java": "org.openjdk.java.Sdk:25.0.5_7-ea@sha256:e45ed698dd497b005fcace6cc23542305a2863321bef9e761bdf6b3e899a57a7" },
+  "exports": {
+    "mvn": {
+      "command": "${java}\\bin\\java.exe",
+      "args": [
+        "--enable-native-access=ALL-UNNAMED",
+        "-classpath", "${app}\\boot\\plexus-classworlds-2.12.1.jar",
+        "-Dclassworlds.conf=${app}\\bin\\m2.conf",
+        "-Dmaven.home=${app}",
+        "-Dlibrary.jline.path=${app}\\lib\\jline-native",
+        "-Dorg.jline.terminal.exec.redirectPipeCreationMode=native,reflection",
+        "-Dmaven.multiModuleProjectDirectory=.",
+        "org.codehaus.plexus.classworlds.launcher.Launcher"
+      ]
+    }
+  },
+  "aliases": {
+    "mvn": {
+      "command": "${java}\\bin\\java.exe",
+      "args": [
+        "--enable-native-access=ALL-UNNAMED",
+        "-classpath", "${app}\\boot\\plexus-classworlds-2.12.1.jar",
+        "-Dclassworlds.conf=${app}\\bin\\m2.conf",
+        "-Dmaven.home=${app}",
+        "-Dlibrary.jline.path=${app}\\lib\\jline-native",
+        "-Dorg.jline.terminal.exec.redirectPipeCreationMode=native,reflection",
+        "-Dmaven.multiModuleProjectDirectory=.",
+        "org.codehaus.plexus.classworlds.launcher.Launcher"
+      ]
+    }
+  },
+  "modules": [
+    {
+      "name": "maven",
+      "sources": [
+        {
+          "url": "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.10.0/apache-maven-3.10.0-bin.zip",
+          "sha256": "1f6d9909266510f039f59aa0e13dcd2c66da85f043e56276e41f2918f8bddaff",
+          "strip": 1
+        }
+      ]
+    }
+  ]
+}

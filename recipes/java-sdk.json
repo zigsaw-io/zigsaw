@@ -1,0 +1,39 @@
+{
+  "id": "org.openjdk.java.Sdk",
+  "version": "25.0.5_7-ea",
+  "name": "OpenJDK",
+  "summary": "Java's development kit, Eclipse Temurin's build of OpenJDK 25: java, javac, jar, jshell, jlink and the rest",
+  "homepage": "https://adoptium.net/",
+  "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+  "command": "bin/java.exe",
+  "path": ["bin"],
+  "env": {
+    "JAVA_HOME": "${app}",
+    "JAVA_TOOL_OPTIONS": "\"-Duser.home=${data}\\home\" -Dsun.font.layout.ffm=false"
+  },
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "exports": {
+    "java": { "command": "bin/java.exe" },
+    "javaw": { "command": "bin/javaw.exe" },
+    "javac": { "command": "bin/javac.exe" },
+    "jar": { "command": "bin/jar.exe" },
+    "jshell": { "command": "bin/jshell.exe" },
+    "javadoc": { "command": "bin/javadoc.exe" },
+    "jdeps": { "command": "bin/jdeps.exe" },
+    "jlink": { "command": "bin/jlink.exe" },
+    "keytool": { "command": "bin/keytool.exe" }
+  },
+  "cleanup": ["/lib/src.zip"],
+  "modules": [
+    {
+      "name": "jdk",
+      "sources": [
+        {
+          "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B7-ea-beta/OpenJDK25U-jdk_x64_windows_hotspot_25.0.5_7-ea.zip",
+          "sha256": "6f23408555a76d83cad9e01aea45a79a07ff6cf9dcc3826af66fbf31fcf12c7b",
+          "strip": 1
+        }
+      ]
+    }
+  ]
+}

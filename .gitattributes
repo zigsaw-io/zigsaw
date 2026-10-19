@@ -28,3 +28,6 @@ recipes/gnumeric/* text eol=lf
 recipes/pygobject/* text eol=lf
 recipes/gaphor/* text eol=lf
 recipes/python/* text eol=lf
+
+# And Gradle's image (its offline init script and gradle-vendor).
+recipes/gradle/* text eol=lf

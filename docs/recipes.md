@@ -1587,6 +1587,176 @@ network, the working directory and the user's six folders. It runs in the
 storage APIs refuse a program without a package, and Files shows no drives
 ([findings](findings.md#files)).
 
+## Java
+
+Java's images are Eclipse Temurin's builds of OpenJDK 25, the current
+long-term release, from Adoptium's zips: the JDK as the SDK image, and
+Temurin's own JRE as the runtime image apps run on. OpenJDK's licence is the
+GPL 2 with the Classpath Exception, so they're published like the others.
+Each brings the C runtime DLLs it needs, so nothing has to be installed on
+the machine.
+
+- **[`org.openjdk.java.Sdk`](recipes/java-sdk.json)** is the JDK: `java`,
+  `javac`, `jar`, `jshell`, `javadoc`, `jdeps`, `jlink` and `keytool`, which
+  it exports, without its sources (`lib/src.zip`). Its `bin` is on the PATH
+  of builds that list it as an SDK. Run as an app, it builds and runs Java in
+  the working directory: `java Hello.java` runs a program from its source.
+- **[`org.openjdk.java`](recipes/java.json)** is the JRE: `java` and
+  `javaw`, and the modules programs use, without the compiler and the tools.
+  Apps list it in their `runtimes`. Its layer is 58 MB.
+- **[`org.apache.maven`](recipes/maven.json)** and
+  **[`org.gradle.gradle`](recipes/gradle.json)** are Java's two build tools,
+  each on the JDK's image as its runtime, as [Composer](#composer-and-php-apps)
+  is on PHP's: they export `mvn` and `gradle`, and give builds that list them
+  as SDKs the same commands, with the JDK.
+
+Both Java images set:
+
+```json
+"JAVA_HOME": "${app}",
+"JAVA_TOOL_OPTIONS": "\"-Duser.home=${data}\\home\" -Dsun.font.layout.ffm=false"
+```
+
+- `user.home`: Java takes it from `SHGetKnownFolderPath`, which a run's
+  `USERPROFILE` doesn't move ([findings](findings.md#java)), so without it
+  Maven's `.m2`, Gradle's `.gradle` and the settings folders apps keep there
+  would be in your real profile. Every Java program in a run reads
+  `JAVA_TOOL_OPTIONS`, those Maven and Gradle start too, and prints that it
+  did, on stderr: `Picked up JAVA_TOOL_OPTIONS: ...`.
+- `sun.font.layout.ffm=false`: JDK 25 shapes text with HarfBuzz through its
+  foreign function interface, which can't find the C runtime in an
+  AppContainer; this uses its other binding, through JNI, in every sandbox.
+
+Apps that keep settings with `java.util.prefs` keep them in
+`HKCU\Software\JavaSoft\Prefs\<their package>`: a recipe names that key in
+`registry` ([registry settings](#registry-settings-kept-with-the-app)), not
+the `Prefs` key above it, which all Java apps share.
+
+### Apps on Java's runtime
+
+An app's command is the runtime's `java.exe`, with its jar; a window of its
+own gets `javaw.exe`, which has no console, so zigsaw gives it the
+windowless shim:
+
+```json
+"command": "${java}\\bin\\java.exe",
+"args": ["-jar", "${app}\\pdfbox-app.jar"],
+"runtimes": { "java": "org.openjdk.java:25.0.5@sha256:..." },
+"exports": {
+  "pdfbox": { "command": "${java}\\bin\\java.exe", "args": ["-jar", "${app}\\pdfbox-app.jar"] },
+  "pdfbox-debugger": { "command": "${java}\\bin\\javaw.exe", "args": ["-jar", "${app}\\pdfbox-app.jar", "debug"] }
+}
+```
+
+Java builds don't need anything else to reproduce, as long as the archives
+they make don't record when they were made: Maven's plugins take the time
+from `project.build.outputTimestamp` (Apache's parent POM sets one), and
+Gradle 9's archives have fixed times. A JAR made with `jar` itself takes
+`--date`. One more thing to know about builds: Java resolves the build drive,
+`B:`, to the build directory's real path whenever a program asks for a
+canonical path (`File.getCanonicalPath`), so a tool that compares paths that
+way may not match `B:\...` with what it found elsewhere.
+
+### Maven
+
+A Maven module vendors its dependencies and plugins by running its own build
+with the local repository in the module's directory, then deletes what
+records when and from where Maven fetched each file, and builds offline from
+what's left, as [`tests/build/maven`](tests/build/maven) does:
+
+```json
+"vendor": {
+  "commands": [
+    "mvn -B -ntp -Dmaven.repo.local=vendor package -DskipTests",
+    "find vendor \\( -name _remote.repositories -o -name '*.lastUpdated' -o -name resolver-status.properties -o -name 'maven-metadata-*.xml' \\) -delete"
+  ],
+  "dir": "vendor",
+  "sha256": "..."
+},
+"build": ["mvn -B -ntp -o -Dmaven.repo.local=\"$PWD/vendor\" package -DskipTests", "..."]
+```
+
+- The vendor commands run the goals the build will, so the plugins Maven
+  resolves only while it builds are vendored too. Files on Maven Central
+  never change, and Maven takes the versions a project names, so the step
+  makes the same files each time; the pinned hash would say otherwise.
+- Without `_remote.repositories`, Maven takes the files it finds as ones
+  installed locally, which an offline build may use.
+- A project with version ranges or SNAPSHOT dependencies needs
+  `maven-metadata` files, which change: it can't be vendored this way.
+- `mvn` is Maven's launcher run with the JDK's `java.exe`, not `mvn.cmd`,
+  so that builds can run it: `maven.multiModuleProjectDirectory`, which
+  Maven 3 requires, is the working directory. A module builds from its
+  directory, where `.mvn` would be, but the launcher doesn't read
+  `.mvn/jvm.config` or `MAVEN_OPTS`.
+- Select a project of a multi-module build by its artifact ID,
+  `-pl :pdfbox-app`, not its directory: Maven compares canonical paths, and
+  a directory on `B:` matches nothing.
+
+### Gradle
+
+A Gradle module vendors by building with a Gradle home of its own, then
+turning what Gradle downloaded into a Maven repository with `gradle-vendor`,
+a command of Gradle's image; the build points every repository at it, as
+[`tests/build/gradle`](tests/build/gradle) does:
+
+```json
+"vendor": {
+  "commands": ["gradle -g gradle-home stage", "gradle-vendor gradle-home vendor"],
+  "dir": "vendor",
+  "sha256": "..."
+},
+"build": ["ZIGSAW_GRADLE_REPO=\"$PWD/vendor\" gradle --offline stage", "..."]
+```
+
+- Gradle keeps each file it downloads as
+  `caches/modules-2/files-2.1/<group>/<module>/<version>/<hash>/<file>`,
+  plugins and their markers too, and records about them that change from
+  run to run. [`gradle-vendor`](recipes/gradle/GradleVendor.java), a Java
+  program the JDK runs from its source, copies only the files, as
+  `<group as directories>/<module>/<version>/<file>`, which is a Maven
+  repository.
+- [`zigsaw-offline.gradle`](recipes/gradle/zigsaw-offline.gradle), in the
+  image's `init.d`, runs in every Gradle build, and does something only when
+  `ZIGSAW_GRADLE_REPO` names a directory: then every Maven repository a
+  build declares, in its settings, its build scripts or its projects, its
+  plugins' included, whenever it declares it, is that directory. A
+  repository of another kind (Ivy) stops the build.
+- Dependencies whose versions are ranges or `latest`, and SNAPSHOT
+  versions, can't be found in it: their metadata isn't kept.
+- `gradle` is Gradle's launcher run with the JDK's `java.exe`, as
+  `gradle.bat` would, with the daemon off
+  (`-Dorg.gradle.daemon=false`): a run's job would end it anyway. Builds
+  that ask for other JVM settings get a daemon for that build only.
+- The image is Gradle's current release, 9.8.1; a project's wrapper may name
+  another, which the recipe can take or not (PlantUML's names 9.3.1).
+
+### PDFBox
+
+[PDFBox](recipes/pdfbox.json) 3.0.8, Apache's library for PDF documents,
+built from its source release on Maven Central (`-pl :pdfbox-app -am
+package`), as one jar with its dependencies. Its command is its command
+line (`pdfbox export:text`, `render`, `merge`, `fromtext` and more), and
+`pdfbox-debugger` opens a document in its debugger, which Explorer offers
+for `.pdf` files. Its font cache (`.pdfbox.cache`, from the fonts in
+`C:\Windows\Fonts`) is in its data's `home`, and the debugger's window and
+recent files are in `HKCU\Software\JavaSoft\Prefs\org\apache\pdfbox`, which
+it keeps. Its tests download their documents, so the recipe skips them
+(`-DskipTests`, which also skips the downloads). It has the working
+directory and the user's Desktop, Documents and Downloads, in every sandbox.
+
+### PlantUML
+
+[PlantUML](recipes/plantuml.json) 1.2026.9 draws UML and other diagrams
+from text. The recipe builds its GPL jar from its GitHub tag
+(`gradle -Pfast jar`), without its git properties (the archive has no
+`.git`), and fills in its version, commit and commit time, as upstream's CI
+does, so `plantuml -version` says which it is. Its jar carries a small
+build of Graphviz's `dot` 2.44.1, which it unpacks into its data's TEMP and
+lays out class and component diagrams with, so it needs no other image.
+`plantuml-gui` opens its window, which draws the diagrams in a folder as
+they change. It keeps `HKCU\Software\JavaSoft\Prefs\net\sourceforge\plantuml`.
+
 ## PHP
 
 PHP's images are made from php.net's own Windows build of PHP 8.5 (NTS,

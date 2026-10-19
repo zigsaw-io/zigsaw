@@ -10,7 +10,9 @@
 //! puts that key back. Each run labels the keys low, or grants them to the
 //! app's capability, as its sandbox needs, so that the app can save its
 //! settings in every sandbox: the keys are deleted afterwards, and the label
-//! and the grant with them. Nothing else in HKCU is kept from the app.
+//! and the grant with them. An AppContainer also gets read access to the keys
+//! above them, which it opens on its way there, until they're taken back.
+//! Nothing else in HKCU is kept from the app.
 //!
 //! HKCU\Software\zigsaw\keys\<the key, with '/' for '\'> records which data
 //! directory a key in HKCU belongs to, and how far putting it there or
@@ -29,6 +31,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const win32 = @import("win32.zig");
 const acl = @import("acl.zig");
+const appcontainer = @import("appcontainer.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const Key = @import("regkey.zig").Key;
@@ -100,7 +103,10 @@ pub fn enter(ctx: *Context, id: []const u8, keys: ?[]const []const u8, data_dir:
         switch (access) {
             .none => {},
             .low => try acl.labelKeyLow(arena, key),
-            .capability => |sid| try acl.grantKey(arena, key, sid),
+            .capability => |sid| {
+                try acl.grantKey(arena, key, sid);
+                try grantAbove(arena, key, sid);
+            },
         }
     }
     return .{ .id = id, .keys = list, .data_dir = data_dir, .lock_path = lock_path, .lock = lock, .keep = keep };
@@ -200,7 +206,10 @@ fn putInPlace(ctx: *Context, id: []const u8, key: []const u8, data_dir: []const 
         defer from.close();
         try to.copyFrom(arena, from);
     }
-    try Record.write(arena, key, .{ .data = data_dir, .app = id, .aside = native, .state = .moving });
+    // A key that was there had the keys above it. Otherwise creating it makes
+    // those that aren't there yet, which taking it back deletes, and no others.
+    const made = if (native) null else try outermostMissing(arena, key);
+    try Record.write(arena, key, .{ .data = data_dir, .app = id, .aside = native, .state = .moving, .made = made });
     if (native) {
         try deleteKey(arena, key);
         note("moved HKCU\\{s} aside while {s} runs; it comes back when the app ends", .{ key, id });
@@ -242,7 +251,31 @@ fn settle(ctx: *Context, key: []const u8, r: Record, keep: bool) !void {
         defer a.close();
         try a.deleteTree(arena, name);
     }
-    if (!r.aside) try deleteEmptyParents(arena, key);
+    if (!r.aside) if (r.made) |outermost| try deleteEmptyParents(arena, key, outermost);
+    try revokeAbove(arena, key, r.app);
+}
+
+/// Lets the app's AppContainer read the keys above `key`, below Software,
+/// which it opens on the way to `key`: Java's preferences open theirs from
+/// their root, HKCU\Software\JavaSoft\Prefs, one key at a time. Read access
+/// to each key itself, not the keys in it; taking `key` back takes it away.
+fn grantAbove(arena: Allocator, key: []const u8, sid: win32.PSID) !void {
+    var parent = std.fs.path.dirnameWindows(key) orelse return;
+    while (std.mem.indexOfScalar(u8, parent, '\\') != null) {
+        if (try Key.exists(arena, hkcu, parent)) try acl.grantKeyRead(arena, parent, sid);
+        parent = std.fs.path.dirnameWindows(parent) orelse return;
+    }
+}
+
+/// Takes back what `grantAbove` gave the app's AppContainer, if it did.
+fn revokeAbove(arena: Allocator, key: []const u8, app: []const u8) !void {
+    if (app.len == 0) return;
+    const sid = try appcontainer.appCapability(arena, app);
+    var parent = std.fs.path.dirnameWindows(key) orelse return;
+    while (std.mem.indexOfScalar(u8, parent, '\\') != null) {
+        if (try Key.exists(arena, hkcu, parent)) try acl.revokeKey(arena, parent, sid);
+        parent = std.fs.path.dirnameWindows(parent) orelse return;
+    }
 }
 
 /// Replaces the hive's copy of the key with HKCU's, if the data directory is
@@ -266,11 +299,28 @@ fn deleteKey(arena: Allocator, key: []const u8) !void {
     try root.deleteTree(arena, key);
 }
 
-/// Deletes the keys `key` was in, from the innermost, while they're empty;
-/// never Software itself. Putting it in place made them.
-fn deleteEmptyParents(arena: Allocator, key: []const u8) !void {
-    var parent = std.fs.path.dirnameWindows(key) orelse return;
+/// The outermost of the keys `key` is in that HKCU doesn't have, below
+/// Software; null if it has them all.
+fn outermostMissing(arena: Allocator, key: []const u8) !?[]const u8 {
+    var missing: ?[]const u8 = null;
+    var parent = std.fs.path.dirnameWindows(key) orelse return null;
     while (std.mem.indexOfScalar(u8, parent, '\\') != null) {
+        if (try Key.exists(arena, hkcu, parent)) break;
+        missing = parent;
+        parent = std.fs.path.dirnameWindows(parent) orelse break;
+    }
+    return missing;
+}
+
+/// Deletes the keys `key` was in that putting it in place made, from the
+/// innermost out to `outermost`, while they're empty (another app's key may
+/// be in them by now). Keys that were there before, empty or not, stay:
+/// `HKCU\Software\JavaSoft\Prefs` is often there and empty, and Java apps
+/// keep keys below it.
+fn deleteEmptyParents(arena: Allocator, key: []const u8, outermost: []const u8) !void {
+    if (!isAbove(outermost, key)) return;
+    var parent = std.fs.path.dirnameWindows(key) orelse return;
+    while (parent.len >= outermost.len) {
         const k = try Key.open(arena, hkcu, parent, win32.KEY_READ) orelse return;
         const empty = try k.isEmpty();
         k.close();
@@ -278,6 +328,12 @@ fn deleteEmptyParents(arena: Allocator, key: []const u8) !void {
         if (win32.RegDeleteKeyW(hkcu, try win32.wide(arena, parent)) != 0) return;
         parent = std.fs.path.dirnameWindows(parent) orelse return;
     }
+}
+
+/// Whether `outer` is a key that `key` is in, below Software.
+fn isAbove(outer: []const u8, key: []const u8) bool {
+    return std.mem.indexOfScalar(u8, outer, '\\') != null and key.len > outer.len + 1 and
+        std.ascii.eqlIgnoreCase(key[0..outer.len], outer) and key[outer.len] == '\\';
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +346,11 @@ const Record = struct {
     /// Whether a key that was there is aside, to be put back.
     aside: bool,
     state: State,
+    /// The outermost of the keys above it that putting it in place made,
+    /// which taking it back deletes while empty; null if they were all
+    /// there (and in records of zigsaw 0.26 and earlier, which deleted
+    /// every empty key above it, made or not).
+    made: ?[]const u8 = null,
 
     const State = enum {
         moving,
@@ -321,6 +382,7 @@ const Record = struct {
             .app = try k.getString(arena, "App") orelse "",
             .aside = std.mem.eql(u8, try k.getString(arena, "Aside") orelse "", "yes"),
             .state = state,
+            .made = try k.getString(arena, "Made"),
         };
     }
 
@@ -331,6 +393,7 @@ const Record = struct {
         try k.setString(arena, "App", r.app);
         try k.setString(arena, "Aside", if (r.aside) "yes" else "no");
         try k.setString(arena, "State", r.state.text());
+        if (r.made) |m| try k.setString(arena, "Made", m);
     }
 
     fn setState(arena: Allocator, key: []const u8, state: State) !void {
@@ -435,4 +498,13 @@ test "escaped key names" {
     try std.testing.expect(isInStore("C:\\Store\\data\\app", "c:\\store\\"));
     try std.testing.expect(!isInStore("C:\\Store2\\data\\app", "C:\\Store"));
     try std.testing.expect(samePath("C:\\a\\data\\x\\", "c:\\A\\data\\X"));
+}
+
+test "keys above a key" {
+    try std.testing.expect(isAbove("Software\\JavaSoft\\Prefs\\org", "Software\\JavaSoft\\Prefs\\org\\apache\\pdfbox"));
+    try std.testing.expect(isAbove("software\\javasoft", "Software\\JavaSoft\\Prefs"));
+    try std.testing.expect(!isAbove("Software", "Software\\JavaSoft"));
+    try std.testing.expect(!isAbove("Software\\Java", "Software\\JavaSoft\\Prefs"));
+    try std.testing.expect(!isAbove("Software\\JavaSoft\\Prefs", "Software\\JavaSoft\\Prefs"));
+    try std.testing.expect(!isAbove("Software\\Other", "Software\\JavaSoft\\Prefs"));
 }

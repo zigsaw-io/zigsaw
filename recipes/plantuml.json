@@ -1,0 +1,51 @@
+{
+  "id": "com.plantuml.PlantUML",
+  "version": "1.2026.9",
+  "name": "PlantUML",
+  "summary": "Draw UML and other diagrams from plain text, from the command line or in its window",
+  "homepage": "https://plantuml.com/",
+  "license": "GPL-3.0-or-later",
+  "command": "${java}\\bin\\java.exe",
+  "args": ["-jar", "${app}\\plantuml.jar"],
+  "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
+  "registry": ["Software\\JavaSoft\\Prefs\\net\\sourceforge\\plantuml"],
+  "runtimes": { "java": "org.openjdk.java:25.0.5_7-ea@sha256:4d05838bfe75a80fc0140a081fadf508a41504aa7dde26a9324b138f51217958" },
+  "exports": {
+    "plantuml": { "command": "${java}\\bin\\java.exe", "args": ["-jar", "${app}\\plantuml.jar"] },
+    "plantuml-gui": { "command": "${java}\\bin\\javaw.exe", "args": ["-jar", "${app}\\plantuml.jar", "-gui"] }
+  },
+  "shortcuts": {
+    "PlantUML": { "command": "plantuml-gui", "description": "Draw diagrams from the text files in a folder" }
+  },
+  "sdk": {
+    "gradle": "org.gradle.gradle:9.8.1@sha256:3e65c987c3cc6c7bcb271f41984976197cf3a7770ca2ce5d6099dd20f4587912",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "plantuml",
+      "sources": [
+        {
+          "url": "https://github.com/plantuml/plantuml/archive/refs/tags/v1.2026.9.tar.gz",
+          "sha256": "9998e5afacf3dc532acae52fe6992e4de21828d34857aaff12a43dc98b9acdf6",
+          "strip": 1
+        }
+      ],
+      "vendor": {
+        "commands": [
+          "gradle -g gradle-home -Pfast jar -x generateGitProperties",
+          "gradle-vendor gradle-home vendor"
+        ],
+        "dir": "vendor",
+        "sha256": "323a3b85317bc39b7366667588a0d3e374a04004939951eab372c2c1ad78b3f8"
+      },
+      "build": [
+        "sed -i -e 's/\\$version\\$/1.2026.9/' -e 's/\\$git\\.commit\\.id\\$/18d0aae/' -e 's/COMPILE_TIMESTAMP = 000L/COMPILE_TIMESTAMP = 1792224379000L/' src/main/java/net/sourceforge/plantuml/version/CompilationInfo.java",
+        "grep -q '\"1.2026.9\"' src/main/java/net/sourceforge/plantuml/version/CompilationInfo.java",
+        "ZIGSAW_GRADLE_REPO=\"$PWD/vendor\" gradle --offline -Pfast jar -x generateGitProperties",
+        "cp build/libs/plantuml-1.2026.9.jar \"$PREFIX/plantuml.jar\"",
+        "cp COPYING \"$PREFIX/\""
+      ]
+    }
+  ]
+}

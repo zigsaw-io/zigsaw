@@ -1,0 +1,27 @@
+// zigsaw's offline builds (docs/recipes.md, "Gradle"): when ZIGSAW_GRADLE_REPO
+// names a directory, a Maven repository that gradle-vendor made from a build's
+// downloads, every Maven repository a build declares, wherever and whenever it
+// declares it (plugins, settings, build scripts, projects, included builds),
+// is that directory instead.
+def zigsawRepo = System.getenv('ZIGSAW_GRADLE_REPO')
+if (zigsawRepo) {
+    def uri = new File(zigsawRepo).absoluteFile.toURI()
+    def redirect = { RepositoryHandler repositories ->
+        repositories.configureEach { repo ->
+            if (repo instanceof MavenArtifactRepository) {
+                repo.url = uri
+            } else {
+                throw new GradleException("zigsaw's offline build can't serve the ${repo.class.simpleName} repository ${repo.name}; only Maven repositories")
+            }
+        }
+    }
+    beforeSettings { settings ->
+        redirect(settings.buildscript.repositories)
+        redirect(settings.pluginManagement.repositories)
+        redirect(settings.dependencyResolutionManagement.repositories)
+    }
+    beforeProject { project ->
+        redirect(project.buildscript.repositories)
+        redirect(project.repositories)
+    }
+}

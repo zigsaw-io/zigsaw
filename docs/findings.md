@@ -988,6 +988,97 @@ Composer, which doesn't, installs at low.
   its changed and new files in every sandbox, including git refreshing its
   index in a repository labelled low.
 
+## Java
+
+Iteration 31, 2026-10-19, Windows 11 26300, with Eclipse Temurin's builds
+of OpenJDK 25: 25.0.4.1+1 (the latest release that day) and 25.0.5+7, an
+early-access build of the update due on 2026-10-20.
+
+**Where Java's programs look**, from a probe (`java Probe.java` with the
+JDK's image, and compiled on the JRE's):
+
+| | soft | low | appcontainer |
+|---|---|---|---|
+| `user.home`, without settings | your real profile (`SHGetKnownFolderPath(FOLDERID_Profile)`, `java_props_md.c`) | the same, read-only | the same, unreadable |
+| `user.home`, with `JAVA_TOOL_OPTIONS="-Duser.home=..."` (quoted: the store's path may have spaces) | the app's data's `home` | the same | the same |
+| `java.io.tmpdir` | the data's TEMP | the same | the container's Temp in data |
+| `java.util.prefs` (`HKCU\Software\JavaSoft\Prefs`) | the real registry | "Could not create windows registry node", `BackingStoreException` | `SecurityException`: the root key is denied |
+| `hsperfdata` (what `jps` and `jcmd` find JVMs by) | in TEMP | in TEMP | not made |
+| A Swing window that draws, closed by itself | ok, Direct3D | ok, Direct3D | ok, Direct3D |
+
+- **Temurin's JDK and JRE carry their C runtime** (`vcruntime140.dll`,
+  `vcruntime140_1.dll`, `msvcp140.dll`, `ucrtbase.dll` and the
+  `api-ms-win-*` forwarders), so nothing needs installing, unlike PHP's
+  build. The JRE has 42 modules (`java.desktop`, `jdk.unsupported`,
+  `jdk.localedata`...), the JDK 62 (with `jdk.compiler`).
+- **`Path.toRealPath()` fails for every path in an AppContainer.** On
+  Windows it calls `FindFirstFile` on each directory from the drive root
+  down, which needs the root listed, and no drive root here lets
+  application packages list it (`C:\Windows` fails as well as the store).
+  JDK 25 used it in two places a program meets early:
+  - Loading `conf\security\java.security`, since security properties files
+    may include others (JDK 24): any hash, signature or TLS, and
+    `Files.createTempFile` (its `SecureRandom`), failed with "Error
+    loading java.security file". This is JDK-8352728, fixed in 25.0.5;
+    25.0.4.1 has it.
+  - Its HarfBuzz binding through the foreign function interface: the
+    lookup of the C runtime (`ucrtbase.dll`) resolves its path with
+    `toRealPath`, finds nothing, and laying out text fails
+    (`ExceptionInInitializerError` in `HBShaper`): PlantUML's class
+    diagrams in 25.0.5 too. `-Dsun.font.layout.ffm=false` uses the JNI
+    binding, which works; both images set it.
+- **`File.getCanonicalPath()` resolves a `subst` drive** (and so the build
+  drive `B:`) to its target, while `toRealPath` and `getAbsolutePath` keep
+  it. Maven's `-pl app` compares canonical paths with the reactor's own,
+  which aren't: "Could not find the selected project in the reactor"
+  (`-pl :pdfbox-app` works). Gradle's reports name the build directory's real
+  path. Neither changed what the builds made: every image was the same in
+  two stores.
+- **The launchers.** Maven 3.10 refuses to start without
+  `maven.multiModuleProjectDirectory`, which `mvn.cmd` sets from the nearest
+  `.mvn`; Gradle 9.8.1's `gradle.bat` starts its `gradle-cli-main` jar with
+  an instrumentation agent. Both images start `java.exe` themselves, as
+  aliases must (they can't be batch files).
+- **Vendoring Maven**: running the build with the local repository in the
+  module, then deleting `_remote.repositories`, `*.lastUpdated`,
+  `resolver-status.properties` and `maven-metadata-*.xml`, made the same
+  files in runs in two stores, and the offline build took them as installed.
+  PDFBox's vendor step takes 90 s, the build 40 s.
+- **Vendoring Gradle**: its `files-2.1` cache, copied into Maven's layout,
+  served the fixture's settings plugin (from the plugin portal) and
+  PlantUML's plugins (git-properties, TeaVM, and `kotlin-dsl` for its
+  included build) offline, the same files in two runs. PlantUML's vendor step
+  takes 3 minutes, the build 2.
+- **PlantUML carries Graphviz**: its jar has `graphviz.dat`, a small
+  Windows build of `dot` 2.44.1, which it unpacks into `%TEMP%\_graphviz`
+  and uses when no other `dot` is set (`GRAPHVIZ_DOT`, or on PATH). Its
+  local builds keep `$version$` in place of their version until
+  `patchCompilationInfo`, which upstream's CI runs, fills it.
+- **Two zigsaw bugs in keeping registry keys**, found by Java's deep
+  preferences keys, both fixed in 0.31.0:
+  - Taking a key back deleted every empty key above it, up to `Software`,
+    as if zigsaw had made them all. PDFBox keeps
+    `Software\JavaSoft\Prefs\org\apache\pdfbox`; after its run, this
+    machine's own (empty) `HKCU\Software\JavaSoft\Prefs`, there since
+    February, and then `JavaSoft` were gone. zigsaw now records the
+    outermost key it made above the kept one, and deletes no further.
+  - In an AppContainer, Java opens `Software\JavaSoft\Prefs` and each key
+    below it before the app's own, read-only when it may not create keys
+    there; the container could open none, so Preferences threw and PDFBox's
+    debugger and PlantUML's window never appeared. AppContainer runs now get
+    read access to the keys above an app's kept keys (each key itself, not
+    those in it), taken back with the keys.
+
+  With both, the debugger kept its window and the files it opened in its
+  hive, from soft, low and AppContainer runs alike, and `Prefs` was left as
+  it was.
+- **archive.apache.org, downloads.apache.org and repository.apache.org
+  didn't answer here** (connections timed out), while dlcdn.apache.org and
+  Maven Central did. Maven's and PDFBox's recipes download from Maven
+  Central, which keeps every release; Apache's parent POM names
+  repository.apache.org's snapshots, which costs Maven builds a timeout
+  warning.
+
 ## Other findings
 
 - **Microsoft Defender quarantines zigsaw 0.19.0.** During a build of

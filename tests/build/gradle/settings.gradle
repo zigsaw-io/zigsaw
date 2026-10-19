@@ -1,0 +1,7 @@
+// A settings plugin from the Gradle plugin portal, resolved before the rest of
+// this file runs, as many projects have.
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+rootProject.name = 'hello'

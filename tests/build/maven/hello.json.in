@@ -1,0 +1,30 @@
+{
+  "id": "test.build.maven",
+  "version": "1",
+  "command": "${java}\\bin\\java.exe",
+  "args": ["-jar", "${app}\\hello.jar"],
+  "exports": {},
+  "runtimes": { "java": "org.openjdk.java@@JAVA@" },
+  "sdk": {
+    "maven": "org.apache.maven@@MAVEN@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "modules": [
+    {
+      "name": "hello",
+      "sources": [{ "path": "pom.xml" }, { "path": "Hello.java", "dest": "src/main/java/Hello.java" }],
+      "vendor": {
+        "commands": [
+          "mvn -B -ntp -Dmaven.repo.local=vendor package -DskipTests",
+          "find vendor \\( -name _remote.repositories -o -name '*.lastUpdated' -o -name resolver-status.properties -o -name 'maven-metadata-*.xml' \\) -delete"
+        ],
+        "dir": "vendor",
+        "sha256": "cb39792bae811ce38323cfd2208d54ce169ddc2474477725338a3d29c0ae28eb"
+      },
+      "build": [
+        "mvn -B -ntp -o -Dmaven.repo.local=\"$PWD/vendor\" package -DskipTests",
+        "cp target/hello.jar \"$PREFIX/\" && cp -r target/lib \"$PREFIX/\""
+      ]
+    }
+  ]
+}

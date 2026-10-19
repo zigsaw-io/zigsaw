@@ -343,6 +343,7 @@ pub const DACL_SECURITY_INFORMATION: DWORD = 0x00000004;
 pub const GRANT_ACCESS: c_int = 1;
 pub const REVOKE_ACCESS: c_int = 4;
 pub const SUB_CONTAINERS_AND_OBJECTS_INHERIT: DWORD = 0x3;
+pub const NO_INHERITANCE: DWORD = 0x0;
 pub const NO_MULTIPLE_TRUSTEE: c_int = 0;
 pub const TRUSTEE_IS_SID: c_int = 0;
 pub const TRUSTEE_IS_UNKNOWN: c_int = 0;
