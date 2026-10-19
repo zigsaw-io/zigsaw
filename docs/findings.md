@@ -523,6 +523,24 @@ Files lists folders with Win32, but makes each drive's entry from a
   which ReadyToRun's code followed; `Files.App.Server.winmd`, written by
   CsWinRT for an authored component, had a new module ID and timestamp each
   time. The vendor step reproduced.
+- **CsWinRT needs an installed Windows SDK unless it's given metadata**
+  (2026-10-19). Files built here, where Visual Studio installed the Windows
+  SDK 10.0.26100, but not on a machine without it. Four of Files' projects
+  run `cswinrt.exe` with `-input 10.0.26100.0` (their
+  `CsWinRTWindowsMetadata`, or CsWinRT's default, `TargetPlatformVersion`),
+  and CsWinRT's source generator does the same for the components Files
+  authors. cswinrt then reads the SDK's directory from the registry
+  (`KitsRoot10`, under `Windows Kits\Installed Roots` in HKLM) and the 33
+  contracts its `Platform.xml` lists; without the key it stops with "Could
+  not find the Windows SDK in the registry". So the build also depended on
+  which release of the SDK was installed. Microsoft.Windows.SDK.Contracts on
+  NuGet has the same `.winmd` files (10.0.26100.8249's 93 match this
+  machine's SDK byte for byte), and cswinrt takes a directory as `-input`. The only other use of the SDK in
+  MSBuild's log is the XAML compiler's `WindowsSdkPath`, which is empty
+  without the SDK; with both changed, the build made the same layer as
+  before. Everything else it runs comes from NuGet packages:
+  `makepri.exe`, `mt.exe` and `signtool.exe` from
+  Microsoft.Windows.SDK.BuildTools, `XamlCompiler.exe` from WinUI's.
 - **MSBuild's environment properties lose to a project's.** `env` set
   `RuntimeIdentifiers`, `SelfContained` and `PublishAot` in vain: Files'
   projects and publish profiles set them.

@@ -1481,6 +1481,10 @@ NuGet packages, then builds offline from them, as
   in SDK projects, and the paths it writes into DLLs and PDBs are on `B:`.
   Two code generators that WinUI projects use aren't: CsWinRT's AOT
   optimizer and its `.winmd` writer ([Files](#files) has what to do).
+- CsWinRT reads Windows' types from the Windows SDK installed on the
+  machine, by its version, which fails where there's none. A recipe gives
+  it a directory of `.winmd` files from NuGet instead, with
+  `-p:CsWinRTWindowsMetadata=`, as [Files](#files) does.
 - MSBuild reads variables as properties, so the module's `env` sets them:
   `"TargetFramework": "net10.0"` rebuilds a project for an older .NET for
   this one, if the project lets the environment set it, as Pinta's does. A
@@ -1560,6 +1564,17 @@ one, and builds it from its release tarball:
   app, CsWinRT makes those helpers at run time) and leaves the `.winmd` out
   (Files reads it only to activate the server). The image is then the same
   in two stores.
+- CsWinRT, which writes the C# code for Files' own WinRT types and those it
+  uses from the Windows App SDK, reads Windows' types from the Windows SDK
+  installed on the machine. Files' projects give it a version
+  (`CsWinRTWindowsMetadata`, `10.0.26100.0`), and CsWinRT looks that SDK up
+  in the registry, so a machine without it stops with "Could not find the
+  Windows SDK in the registry". The recipe passes the same files from NuGet
+  instead: the contracts in Microsoft.Windows.SDK.Contracts 10.0.26100.8249,
+  byte for byte those of the SDK 10.0.26100 that Files was first built
+  with. It also empties `WindowsSdkPath`, which the XAML compiler is handed
+  and doesn't need. So a machine with the SDK builds Files as one without
+  it does, into the same image.
 
 The vendor step restores both projects for x64: 3.3 GB of packages (the
 Windows App SDK and its AI and ML parts, which Files excludes from its build

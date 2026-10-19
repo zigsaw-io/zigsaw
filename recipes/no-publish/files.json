@@ -36,7 +36,13 @@
           "strip": 1
         },
         { "path": "files/unpackaged.patch", "dest": "zigsaw/unpackaged.patch" },
-        { "path": "files/name.patch", "dest": "zigsaw/name.patch" }
+        { "path": "files/name.patch", "dest": "zigsaw/name.patch" },
+        {
+          "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.contracts/10.0.26100.8249/microsoft.windows.sdk.contracts.10.0.26100.8249.nupkg",
+          "sha256": "0e1c25793ed1265d49ed5846f1f9dd5a5a32fd44d3e9c16e74b7fda018e5fbd8",
+          "type": "zip",
+          "dest": "zigsaw/contracts"
+        }
       ],
       "vendor": {
         "commands": [
@@ -52,7 +58,7 @@
         "patch -p1 < zigsaw/name.patch",
         "printf '%s\\n' '<?xml version=\"1.0\" encoding=\"utf-8\"?>' '<configuration>' '  <packageSources>' '    <clear />' '    <add key=\"vendor\" value=\"vendor\" />' '  </packageSources>' '</configuration>' > nuget.config",
         "dotnet restore src/Files.App.Server/Files.App.Server.csproj --packages vendor -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifiers=win-x64 -p:PublishAot=false -p:SelfContained=false -p:PublishReadyToRun=true",
-        "dotnet publish src/Files.App/Files.App.csproj --packages vendor -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifiers=win-x64 -p:PublishAot=false -p:SelfContained=false -p:PublishReadyToRun=true -p:AppxBundle=Never -p:GenerateAppxPackageOnBuild=false -p:CsWinRTAotOptimizerEnabled=false -o \"$PREFIX/bin\"",
+        "dotnet publish src/Files.App/Files.App.csproj --packages vendor -p:Configuration=Release -p:Platform=x64 -p:RuntimeIdentifiers=win-x64 -p:PublishAot=false -p:SelfContained=false -p:PublishReadyToRun=true -p:AppxBundle=Never -p:GenerateAppxPackageOnBuild=false -p:CsWinRTAotOptimizerEnabled=false \"-p:CsWinRTWindowsMetadata=$PWD/zigsaw/contracts/ref/netstandard2.0\" -p:WindowsSdkPath= -o \"$PREFIX/bin\"",
         "rm \"$PREFIX/bin/Files.App.Server.winmd\"",
         "cp -r src/Files.App/Assets/. \"$PREFIX/bin/Assets/\"",
         "rm -r \"$PREFIX/bin/Assets/Libraries\" \"$PREFIX/bin/Assets/AppTiles/Preview\" \"$PREFIX/bin/Assets/AppTiles/Release\"",
