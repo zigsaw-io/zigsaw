@@ -55,3 +55,4 @@ maven.json
 gradle.json
 pdfbox.json
 plantuml.json
+logisim-evolution.json

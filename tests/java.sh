@@ -5,18 +5,21 @@
 # directory, and its debugger opens a PDF given with --file, keeping its
 # settings with the app; PlantUML (recipes/plantuml.json, built with Gradle)
 # draws a sequence and a class diagram with the dot inside its jar, and opens
-# its window. Each in every sandbox; their windowless shims, shortcuts (in a
-# temporary folder) and PDFBox's .pdf registration (in a scratch registry
-# key) too. Last, the registry: none of their keys stay in HKCU, and an
-# HKCU\Software\JavaSoft\Prefs that was there stays.
+# its window; Logisim-evolution (recipes/logisim-evolution.json, a bigger
+# Gradle build) simulates a half adder from the command line and opens it,
+# given with --file, in its window, keeping its recent files with the app.
+# Each in every sandbox; their windowless shims, shortcuts (in a temporary
+# folder) and PDFBox's .pdf and Logisim's .circ registrations (in a scratch
+# registry key) too. Last, the registry: none of their keys stay in HKCU, and
+# an HKCU\Software\JavaSoft\Prefs that was there stays.
 #
 #   JAVAAPPS_HOME=path\to\store bash tests/java.sh [path\to\zigsaw.exe]
 #
 # The store (JAVAAPPS_HOME, or BUILD_HOME as tests/published.sh leaves it,
-# or a temporary one) gets the JDK, JRE, Maven and Gradle images and the two
-# apps unless it has them (about 8 minutes in a new store, mostly Maven's and
-# Gradle's downloads), and loses them afterwards if it didn't. The apps open
-# windows on the desktop for a moment.
+# or a temporary one) gets the JDK, JRE, Maven and Gradle images and the
+# three apps unless it has them (about 12 minutes in a new store, mostly
+# Maven's and Gradle's downloads), and loses them afterwards if it didn't.
+# The apps open windows on the desktop for a moment.
 set -u
 export MSYS_NO_PATHCONV=1
 
@@ -32,6 +35,7 @@ export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
 PDFBOX=org.apache.pdfbox
 PLANTUML=com.plantuml.PlantUML
+LOGISIM=com.github.reds.LogisimEvolution
 # Start menu shortcuts go here rather than the user's Start menu.
 links="$work\\links"
 export ZIGSAW_SHORTCUTS_DIR="$links"
@@ -74,6 +78,7 @@ build_image org.apache.maven maven.json
 build_image org.gradle.gradle gradle.json
 build_image $PDFBOX pdfbox.json
 build_image $PLANTUML plantuml.json
+build_image $LOGISIM logisim-evolution.json
 data() { echo "$ZIGSAW_HOME\\data\\$1"; }
 # Runs from the work directory's sandbox folders, never the repository: the
 # apps have the cwd permission, which low runs label and AppContainer runs
@@ -189,9 +194,47 @@ for sb in soft low appcontainer; do
 done
 check "plantuml gets the console shim, plantuml-gui the windowless one, and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\plantuml.exe' '$shim_dir\\zigsaw-shim.exe' && cmp -s '$ZIGSAW_HOME\\bin\\plantuml-gui.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\PlantUML.lnk'"
 
+# --- Logisim-evolution ----------------------------------------------------------
+
+# simulates <sandbox>: the truth table of tests/java/half-adder.circ (A XOR B
+# and A AND B), from Logisim's command line, which runs headless.
+simulates() {
+    local out
+    cd "$work\\$1" || return 1
+    cp "$root\\tests\\java\\half-adder.circ" . || return 1
+    out=$(z run --sandbox=$1 $LOGISIM --tty table half-adder.circ 2>/dev/null | tr -d '\r')
+    [ "$out" = "A B S C
+0 0 0 0
+0 1 1 0
+1 0 1 0
+1 1 0 1" ] || { echo "got: $out"; return 1; }
+}
+for sb in soft low appcontainer; do
+    check "Logisim-evolution simulates a half adder from its command line, under $sb" simulates $sb
+done
+check "its version names the release and the time of its tag's commit" sh -c "'$zigsaw' run $LOGISIM --version 2>/dev/null | tr -d '\r' | grep -q '^(Not built from Git repo) (2026-09-12T04:03:35+0000)'"
+cp "$root\\tests\\java\\half-adder.circ" "$docs\\"
+for sb in soft low appcontainer; do
+    check "its window opens a circuit given with --file, under $sb" opens_window "$work\\$sb" "main of half-adder" --sandbox=$sb --command=logisim-gui --file="$docs\\half-adder.circ" $LOGISIM
+done
+logisim_recent_kept() {
+    local out
+    out=$(z run --command=reg $LOGISIM query 'HKCU\Software\JavaSoft\Prefs\com\cburch\logisim' 2>&1 | tr -d '\r')
+    grep -q 'recent[0-9]* .*half-adder\.circ' <<<"$out" || { echo "got: $out"; return 1; }
+    [ -f "$(data $LOGISIM)\\registry\\user.dat" ]
+}
+check "its recent files are kept in a hive in its data" logisim_recent_kept
+check "logisim gets the console shim, logisim-gui the windowless one, and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\logisim.exe' '$shim_dir\\zigsaw-shim.exe' && cmp -s '$ZIGSAW_HOME\\bin\\logisim-gui.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\Logisim-evolution.lnk'"
+circ_registered() {
+    local prog="Zigsaw.$LOGISIM.circ"
+    [ "$(reg_value "$prog\\shell\\open\\command")" = "\"$ZIGSAW_HOME\\open\\$LOGISIM\\logisim-gui.exe\" \"%1\"" ] || { echo "got: $(reg_value "$prog\\shell\\open\\command")"; return 1; }
+    reg query "HKCU\\$classes\\.circ\\OpenWithProgids" /v "$prog" >/dev/null 2>&1
+}
+check "it's registered to open .circ files" circ_registered
+
 # --- The registry ------------------------------------------------------------------
 
-check "HKCU has neither app's keys between their runs" sh -c "! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\org\\apache\\pdfbox' >/dev/null 2>&1 && ! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\net\\sourceforge\\plantuml' >/dev/null 2>&1"
+check "HKCU has none of the apps' keys between their runs" sh -c "! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\org\\apache\\pdfbox' >/dev/null 2>&1 && ! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\net\\sourceforge\\plantuml' >/dev/null 2>&1 && ! reg query 'HKCU\\Software\\JavaSoft\\Prefs\\com\\cburch' >/dev/null 2>&1"
 if $had_prefs; then
     check "and HKCU\\Software\\JavaSoft\\Prefs, which was there, still is" reg query 'HKCU\Software\JavaSoft\Prefs'
     # AppContainer runs could read it while they ran, to open their keys

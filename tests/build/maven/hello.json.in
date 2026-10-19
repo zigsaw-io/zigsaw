@@ -16,10 +16,11 @@
       "vendor": {
         "commands": [
           "mvn -B -ntp -Dmaven.repo.local=vendor package -DskipTests",
-          "find vendor \\( -name _remote.repositories -o -name '*.lastUpdated' -o -name resolver-status.properties -o -name 'maven-metadata-*.xml' \\) -delete"
+          "find vendor \\( -name _remote.repositories -o -name '*.lastUpdated' -o -name resolver-status.properties -o -name 'maven-metadata-*.xml' \\) -delete",
+          "rm -rf vendor/.meta"
         ],
         "dir": "vendor",
-        "sha256": "cb39792bae811ce38323cfd2208d54ce169ddc2474477725338a3d29c0ae28eb"
+        "sha256": "3f72db4166c475a5d0cdcf9206660561efdc6c1b71fb65de84def6d9dd7673a4"
       },
       "build": [
         "mvn -B -ntp -o -Dmaven.repo.local=\"$PWD/vendor\" package -DskipTests",

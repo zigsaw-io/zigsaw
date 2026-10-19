@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<project source="5.0.0" version="1.0">
+  This file is intended to be loaded by Logisim-evolution v5.0.0(https://github.com/logisim-evolution/).
+
+  <lib desc="#Wiring" name="0"/>
+  <lib desc="#Gates" name="1"/>
+  <main name="main"/>
+  <circuit name="main">
+    <a name="circuit" val="main"/>
+    <comp lib="0" loc="(100,80)" name="Pin">
+      <a name="label" val="A"/>
+    </comp>
+    <comp lib="0" loc="(100,120)" name="Pin">
+      <a name="label" val="B"/>
+    </comp>
+    <comp lib="1" loc="(300,100)" name="XOR Gate">
+      <a name="inputs" val="2"/>
+      <a name="size" val="50"/>
+    </comp>
+    <comp lib="1" loc="(300,200)" name="AND Gate">
+      <a name="inputs" val="2"/>
+      <a name="size" val="50"/>
+    </comp>
+    <comp lib="0" loc="(330,100)" name="Pin">
+      <a name="facing" val="west"/>
+      <a name="output" val="true"/>
+      <a name="label" val="S"/>
+    </comp>
+    <comp lib="0" loc="(330,200)" name="Pin">
+      <a name="facing" val="west"/>
+      <a name="output" val="true"/>
+      <a name="label" val="C"/>
+    </comp>
+    <wire from="(100,80)" to="(200,80)"/>
+    <wire from="(200,80)" to="(240,80)"/>
+    <wire from="(200,80)" to="(200,180)"/>
+    <wire from="(200,180)" to="(250,180)"/>
+    <wire from="(100,120)" to="(180,120)"/>
+    <wire from="(180,120)" to="(240,120)"/>
+    <wire from="(180,120)" to="(180,220)"/>
+    <wire from="(180,220)" to="(250,220)"/>
+    <wire from="(300,100)" to="(330,100)"/>
+    <wire from="(300,200)" to="(330,200)"/>
+  </circuit>
+</project>

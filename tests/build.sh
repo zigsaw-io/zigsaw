@@ -1074,8 +1074,9 @@ home is $ZIGSAW_HOME\\data\\$id\\home" ] || { echo "$sb, got: $out"; return 1; }
 }
 # Maven, on the JDK: its vendor step is the build itself, with the local
 # repository in the module's directory, less the files that record when and
-# from where (maven-metadata, _remote.repositories, *.lastUpdated); then the
-# build runs offline from it.
+# from where (maven-metadata, _remote.repositories, *.lastUpdated) and the
+# prefix lists Maven fetches from each repository into .meta, which change
+# upstream; then the build runs offline from it.
 check "maven.json builds Maven's image, on the JDK's" z build "$root\\recipes\\maven.json"
 check "  mvn runs" sh -c "'$zigsaw' run org.apache.maven -v 2>/dev/null | grep -q '^Apache Maven 3'"
 MAVENAPP=test.build.maven

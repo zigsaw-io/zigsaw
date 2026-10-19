@@ -1,0 +1,54 @@
+{
+  "id": "com.github.reds.LogisimEvolution",
+  "version": "5.0.0",
+  "name": "Logisim-evolution",
+  "summary": "Design and simulate digital logic circuits, in its window or from the command line",
+  "homepage": "https://github.com/logisim-evolution/logisim-evolution",
+  "license": "GPL-3.0-or-later",
+  "command": "${java}\\bin\\java.exe",
+  "args": ["--enable-native-access=ALL-UNNAMED", "-jar", "${app}\\logisim-evolution.jar"],
+  "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
+  "registry": ["Software\\JavaSoft\\Prefs\\com\\cburch\\logisim"],
+  "runtimes": { "java": "org.openjdk.java:25.0.5_7-ea@sha256:4d05838bfe75a80fc0140a081fadf508a41504aa7dde26a9324b138f51217958" },
+  "exports": {
+    "logisim": { "command": "${java}\\bin\\java.exe", "args": ["--enable-native-access=ALL-UNNAMED", "-jar", "${app}\\logisim-evolution.jar"] },
+    "logisim-gui": { "command": "${java}\\bin\\javaw.exe", "args": ["--enable-native-access=ALL-UNNAMED", "-jar", "${app}\\logisim-evolution.jar"] }
+  },
+  "shortcuts": {
+    "Logisim-evolution": { "command": "logisim-gui", "description": "Design and simulate digital logic circuits", "icon": "Logisim-evolution.ico" }
+  },
+  "associations": {
+    ".circ": { "command": "logisim-gui", "description": "Logisim circuit", "icon": "Logisim-evolution.ico" }
+  },
+  "sdk": {
+    "gradle": "org.gradle.gradle:9.8.1@sha256:3e65c987c3cc6c7bcb271f41984976197cf3a7770ca2ce5d6099dd20f4587912",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "logisim-evolution",
+      "sources": [
+        {
+          "url": "https://github.com/logisim-evolution/logisim-evolution/archive/refs/tags/v5.0.0.tar.gz",
+          "sha256": "f988340da25e65ae3e8e8b29e6b16b4014661ed730a8952fc5c618337828f9ca",
+          "strip": 1
+        }
+      ],
+      "vendor": {
+        "commands": [
+          "gradle -g gradle-home shadowJar",
+          "gradle-vendor gradle-home vendor"
+        ],
+        "dir": "vendor",
+        "sha256": "e780a6a296e1df3987e950f5ce9627fb63c97d8789ad2ccf61fff1fc6211ac5c"
+      },
+      "build": [
+        "sed -i -e 's/val now = Date()/val now = Date(1789185815000L)/' -e 's/val nowIso = SimpleDateFormat(.*/val nowIso = \"2026-09-12T04:03:35+0000\"/' -e 's/val currentMillis = Date().time/val currentMillis = now.time/' -e 's/val buildYear = SimpleDateFormat(\"yyyy\").format(now)/val buildYear = \"2026\"/' build.gradle.kts",
+        "[ $(grep -c -e 'Date(1789185815000L)' -e '\"2026-09-12T04:03:35+0000\"' -e 'currentMillis = now.time' -e 'buildYear = \"2026\"' build.gradle.kts) = 4 ]",
+        "ZIGSAW_GRADLE_REPO=\"$PWD/vendor\" gradle --offline shadowJar",
+        "cp build/libs/logisim-evolution-5.0.0-all.jar \"$PREFIX/logisim-evolution.jar\"",
+        "cp LICENSE.md support/jpackage/windows/Logisim-evolution.ico \"$PREFIX/\""
+      ]
+    }
+  ]
+}

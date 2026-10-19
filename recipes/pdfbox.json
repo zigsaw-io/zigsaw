@@ -37,10 +37,11 @@
       "vendor": {
         "commands": [
           "mvn -B -ntp -Dmaven.repo.local=vendor -pl :pdfbox-app -am package -DskipTests",
-          "find vendor \\( -name _remote.repositories -o -name '*.lastUpdated' -o -name resolver-status.properties -o -name 'maven-metadata-*.xml' \\) -delete"
+          "find vendor \\( -name _remote.repositories -o -name '*.lastUpdated' -o -name resolver-status.properties -o -name 'maven-metadata-*.xml' \\) -delete",
+          "rm -rf vendor/.meta"
         ],
         "dir": "vendor",
-        "sha256": "ee567f18aa706c1c0835655fd896d857f1b38321942ff2112e676129a23582d6"
+        "sha256": "c542ae044edaa623249e1daff91f6da76c57777564d9e0819670cd1d7a34d5e1"
       },
       "build": [
         "mvn -B -ntp -o -Dmaven.repo.local=\"$PWD/vendor\" -pl :pdfbox-app -am package -DskipTests",

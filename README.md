@@ -202,6 +202,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Gradle (on the JDK) | `org.gradle.gradle` | 9.8.1 | `gradle`, `gradle-vendor` |
 | Apache PDFBox (built from source with Maven, on Java's runtime) | `org.apache.pdfbox` | 3.0.8 | `pdfbox`, `pdfbox-debugger` |
 | PlantUML (built from source with Gradle, on Java's runtime) | `com.plantuml.PlantUML` | 1.2026.9 | `plantuml`, `plantuml-gui` |
+| Logisim-evolution (built from source with Gradle, on Java's runtime) | `com.github.reds.LogisimEvolution` | 5.0.0 | `logisim`, `logisim-gui` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -256,9 +257,10 @@ OpenJDK 25: Java apps run on its JRE, and its JDK builds them, with Maven or
 Gradle, whose images run on it and whose dependencies a recipe pins with a
 vendor step. Java finds the user's profile without the environment, so the
 images point its `user.home` into the app's data. PDFBox, a toolkit for PDF
-documents, and PlantUML, which draws diagrams from text, are built that way;
-PDFBox's debugger opens `.pdf` files, and both keep their settings with the
-app.
+documents, PlantUML, which draws diagrams from text, and Logisim-evolution,
+which designs and simulates logic circuits, are built that way; PDFBox's
+debugger opens `.pdf` files and Logisim `.circ` files, and all three keep
+their settings with the app.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.

@@ -1043,7 +1043,20 @@ JDK's image, and compiled on the JRE's):
   module, then deleting `_remote.repositories`, `*.lastUpdated`,
   `resolver-status.properties` and `maven-metadata-*.xml`, made the same
   files in runs in two stores, and the offline build took them as installed.
-  PDFBox's vendor step takes 90 s, the build 40 s.
+  PDFBox's vendor step takes 90 s, the build 40 s. Not over time, though
+  (iteration 32): Maven 3.10 also writes the prefix list it fetches from
+  each repository into `.meta/prefixes-<repository>.txt`, which Central
+  regenerates; two local runs agreed, CI's run hours later didn't (it also
+  got one for apache.snapshots). Vendor steps now delete `.meta`
+  too; that was the only difference between the old and new vendor trees.
+- **Logisim-evolution's Gradle build offline** (iteration 32): a Kotlin
+  build script with the configuration cache on, three plugin-portal plugins
+  (Shadow 9.6.1, SonarQube 7.5, Versions 0.61), Checkstyle resolved while
+  configuring, and a second source set run during the build: 350 files
+  vendored, built offline the first time, the same image in two stores
+  (the second vendored from the network again). Its `genBuildInfo` writes
+  `new Date()` and that date in the JVM's time zone into the program; the
+  recipe sets the tag's commit time in UTC.
 - **Vendoring Gradle**: its `files-2.1` cache, copied into Maven's layout,
   served the fixture's settings plugin (from the plugin portal) and
   PlantUML's plugins (git-properties, TeaVM, and `kotlin-dsl` for its

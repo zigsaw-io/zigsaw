@@ -1668,7 +1668,8 @@ what's left, as [`tests/build/maven`](tests/build/maven) does:
 "vendor": {
   "commands": [
     "mvn -B -ntp -Dmaven.repo.local=vendor package -DskipTests",
-    "find vendor \\( -name _remote.repositories -o -name '*.lastUpdated' -o -name resolver-status.properties -o -name 'maven-metadata-*.xml' \\) -delete"
+    "find vendor \\( -name _remote.repositories -o -name '*.lastUpdated' -o -name resolver-status.properties -o -name 'maven-metadata-*.xml' \\) -delete",
+    "rm -rf vendor/.meta"
   ],
   "dir": "vendor",
   "sha256": "..."
@@ -1682,6 +1683,10 @@ what's left, as [`tests/build/maven`](tests/build/maven) does:
   makes the same files each time; the pinned hash would say otherwise.
 - Without `_remote.repositories`, Maven takes the files it finds as ones
   installed locally, which an offline build may use.
+- Maven 3.10 also fetches each repository's list of the group prefixes it
+  serves into the local repository's `.meta`. Central regenerates its list,
+  so a vendor directory that kept it would hash differently from week to
+  week (iteration 31's PDFBox did, in CI); an offline build doesn't read it.
 - A project with version ranges or SNAPSHOT dependencies needs
   `maven-metadata` files, which change: it can't be vendored this way.
 - `mvn` is Maven's launcher run with the JDK's `java.exe`, not `mvn.cmd`,
@@ -1756,6 +1761,23 @@ build of Graphviz's `dot` 2.44.1, which it unpacks into its data's TEMP and
 lays out class and component diagrams with, so it needs no other image.
 `plantuml-gui` opens its window, which draws the diagrams in a folder as
 they change. It keeps `HKCU\Software\JavaSoft\Prefs\net\sourceforge\plantuml`.
+
+### Logisim-evolution
+
+[Logisim-evolution](recipes/logisim-evolution.json) 5.0.0 designs and
+simulates digital logic circuits. The recipe builds its GPL jar from its
+GitHub tag with Gradle (`shadowJar`, all dependencies in one jar), the way
+PlantUML's does. The build is bigger: a Kotlin build script, three plugins
+from Gradle's plugin portal (Shadow, SonarQube, Versions), Checkstyle
+resolved while Gradle configures the build, a second source set that runs
+during the build to make the help files, and the configuration cache on.
+Its offline build needed nothing beyond the vendor step and the init script.
+Its build script writes the time of the build, in the build machine's time
+zone, into the program, so the recipe sets the time of the tag's commit, in
+UTC. Its command is its command line (`logisim --tty table circuit.circ`
+simulates without a window), and `logisim-gui` opens its window, which
+Explorer offers for `.circ` files. It keeps
+`HKCU\Software\JavaSoft\Prefs\com\cburch\logisim`.
 
 ## PHP
 

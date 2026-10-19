@@ -393,3 +393,8 @@
   aren't built from source, which needs MSVC and Cygwin. Each Java app
   carries its jar, not a runtime made for it with `jlink`, and there's no
   JavaFX.
+- Logisim-evolution's FPGA commands run the vendor's tools (Quartus,
+  Vivado, ISE) from where they're installed on the host, which its runs
+  aren't granted: synthesis and download from Logisim fail unless the run
+  is given those folders (`--filesystem`); this wasn't tried. Designing and
+  simulating work in every sandbox.
