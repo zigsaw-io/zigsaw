@@ -164,6 +164,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | CMake, with Ninja 1.13.2 | `org.cmake.cmake` | 4.4.4 | `cmake`, `ctest`, `cpack`, `ninja` |
 | zstd (built from source) | `com.github.facebook.zstd` | 1.5.7 | `zstd`, `unzstd`, `zstdcat` |
 | Meson, with Ninja and pkgconf | `com.mesonbuild.meson` | 1.12.1 | `meson` |
+| ZLS, the Zig language server (built from source with zig, on zig) | `org.zigtools.zls` | 0.16.1 | `zls` |
 | Perl (Strawberry Perl, for building OpenSSL and Gnumeric) | `org.perl.perl` | 5.42.3.1 | `perl` |
 | cargo-c (for building librsvg) | `com.github.lu-zero.cargo-c` | 0.10.25 | `cargo-cbuild`, `cargo-cinstall` |
 | GNU gettext, with libiconv (built from source, for GTK's SDK) | `org.gnu.gettext` | 1.0 | `gettext`, `ngettext`, `msgfmt`, `msgmerge`, `msginit`, `msgcat`, `msgunfmt`, `xgettext`, `iconv` |
@@ -211,7 +212,10 @@ zot and zstd are [built from source](#building-from-source): SQLite with zig
 and BusyBox, ripgrep and bat with [Rust](#rust), zig and BusyBox, fzf and
 zot with [Go](#go) and BusyBox, zstd with [CMake](#cmake), zig and BusyBox,
 whose images are their SDK. bat's C libraries (oniguruma, libgit2, zlib) are
-compiled by zig. Pulling them doesn't need those. [GTK](#gtk)'s SDK is built
+compiled by zig. Pulling them doesn't need those. ZLS, the language server
+for Zig, is built with `zig build`, its packages fetched in a
+[vendor step](docs/recipes.md#zig), and runs on zig's image, which it finds
+on its PATH: point an editor at its `zls` command. [GTK](#gtk)'s SDK is built
 with Meson, CMake, zig, Perl (for OpenSSL), Rust and cargo-c (for librsvg),
 takes gettext's files from its image, and has zig, Meson and BusyBox as
 runtimes, so that it builds GTK programs
@@ -320,7 +324,8 @@ with the image published for the recipe's version
 ([`tests/published.sh`](tests/published.sh)), in parallel jobs, one for each
 group of [`scripts/published-groups.txt`](scripts/published-groups.txt).
 Beside them, it runs the unit tests and the end-to-end suites (see
-[Testing](#testing)).
+[Testing](#testing)), `tests/build.sh` in jobs of its own, one for each
+group of its sections.
 
 - A version that isn't published yet is reported, but doesn't fail the run.
 - A different digest for the same version fails it. Either the build isn't
@@ -921,10 +926,12 @@ bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the 
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
+GROUP=langs bash tests/build.sh # only one group of its sections (tests/build.sh --groups lists them), as a CI job does
 bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; dictionaries and an icon through the runtime's extension point; Gaphor's self-test in each sandbox; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/gtk3.sh      # a GTK 3 app built against GTK 3's SDK and GTK's, on both runtimes, in each sandbox; GTK 3's demos; Gnumeric's ssconvert between CSV, Excel and OpenDocument in each sandbox, its file associations, and opening a file with --file; PyGObject loading GTK 3 and GTK 4, Meld comparing files and folders and showing a git repository's changes in each sandbox, and the published apps all on one build of each GTK runtime (needs GTK_HOME or BUILD_HOME; opens windows; local only)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
+bash tests/zls.sh       # ZLS's language server sessions over stdio in each sandbox: the standard library's documentation, a module a project's build.zig declares, a syntax error; its shim (needs ZLS_HOME or BUILD_HOME, or builds it)
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)
 bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package)
@@ -958,5 +965,6 @@ The [Reproduce workflow](.github/workflows/reproduce.yml) runs all of them on
 a fresh runner, in a store of the published images the matrix runs and zot
 ([`tests/seed-store.sh`](tests/seed-store.sh) pulls them, and builds a
 version that isn't published yet), as `SEED_DOWNLOADS` and the matrix's
-store. The jobs that run `published.sh` check that those images are what
-the recipes build.
+and ZLS's store. The jobs that run `published.sh` check that those images
+are what the recipes build. `tests/build.sh` runs in jobs of its own, one
+for each group of its sections, beside them.

@@ -71,6 +71,7 @@
         "dir": "vendor",
         "sha256": "28c699520fd30ef3883805bcff62fb4326ee925d323480cef9f092aa7251dde3"
       },
+      "env": { "JDK_JAVA_OPTIONS": "-Duser.timezone=UTC" },
       "build": [
         "sed -i 's|<version>3\\.13\\.0</version>|<version>3.14.1</version>|' pom.xml",
         "grep -q '<version>3\\.14\\.1</version>' pom.xml",

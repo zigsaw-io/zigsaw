@@ -404,7 +404,8 @@ downloads:
 
 This suits any tool that puts a project's locked dependencies in a
 directory, such as `cargo vendor`, `go mod vendor` or `pip download`
-([Python apps](#packages-from-pypi)). It relies on the tool
+([Python apps](#packages-from-pypi)), or `zig build --fetch`
+([Zig](#zig)). It relies on the tool
 fetching the same files every time, which a lockfile gives; the pinned hash
 catches it if not.
 
@@ -479,6 +480,60 @@ A project's own [vendor step](#vendor-steps) works as any other: `cargo
 vendor` in the module's directory, with the project's files. The installed
 app records where its recipe is, so `zigsaw update <app-id>` builds it again
 from the directory as it is then.
+
+## Zig
+
+A Zig project builds with `zig build` from [zig's image](#building-from-source),
+which the recipe lists as an SDK, or as a runtime if the app runs zig too
+(both are on the build's PATH). Two options keep its image the same
+wherever it's built:
+
+- **`-Dcpu=baseline`**: `zig build` targets the build machine's own CPU by
+  default, so the program, and the image, would depend on where it was
+  built (and might not run on an older CPU). zigsaw's own releases are
+  built this way too.
+- **`--system zig-pkg`**, after a vendor step, for a project with
+  dependencies. zig 0.16 unpacks a project's packages into `zig-pkg`, beside
+  its `build.zig.zon`, each in a directory named after its hash; that's the
+  step's `dir`. `--system` turns fetching off and reads them from there:
+
+```json
+"vendor": {
+  "commands": ["zig build --fetch"],
+  "dir": "zig-pkg",
+  "sha256": "4f200d86b78e8b6b..."
+},
+"build": ["zig build --system zig-pkg -Doptimize=ReleaseSafe -Dcpu=baseline -p \"$PREFIX\""]
+```
+
+`--fetch` leaves out lazy dependencies the build doesn't need;
+`--fetch=all` takes them too. zig also keeps a compressed copy of each
+package in its global cache, which is zig's [tool cache](#building-from-source)
+in builds: don't vendor that (`--global-cache-dir vendor`, say), as the
+build looks in `zig-pkg`, and only the step's `dir` is pinned.
+
+### ZLS
+
+[ZLS](recipes/zls.json) 0.16.1, the Zig language server, is built from its
+GitHub tag this way: its three packages (known-folders, diffz, lsp-kit) are
+fetched by the vendor step, and `-Dversion-string=0.16.1` saves its build a
+`git describe`, which a tarball can't answer.
+
+- **zig's image is its runtime**, with `${zig}` on its PATH. ZLS finds
+  `zig.exe` there, and zig's library beside it, for the standard library's
+  completions and documentation, and runs zig to learn the modules and
+  packages a project's `build.zig` declares. zig's version must be one ZLS
+  supports: 0.16.x for ZLS 0.16.
+- **It has the working directory**, which editors start it in, as the
+  project's folder. For files elsewhere, `zigsaw override
+  --filesystem=<dir> org.zigtools.zls`, as the editor starts it through its
+  shim.
+- **Its configuration, cache and log are in its data**: `zls.json` goes in
+  `<data>\home\AppData\Local` (`zls env` says where, per sandbox).
+- **In an editor**, the language server's path is the `zls` shim in the
+  store's `bin`, e.g. VS Code's Zig extension's `zig.zls.path` setting
+  (with `zig.zls.enabled` on). It talks over stdin and stdout, which the
+  shim passes straight through.
 
 ## CMake
 
@@ -1816,6 +1871,12 @@ JavaFX itself.
   - the version `26.0.0-SNAPSHOT` → `26.0.0`, as upstream's release
     workflow sets it;
   - the build date in its About box, the tag's commit time.
+- **Its build's JVM runs on UTC** (`JDK_JAVA_OPTIONS=-Duser.timezone=UTC`
+  in the module's env). Its jar with dependencies is made by
+  maven-shade-plugin 3.2.4, which copies the dependencies' entries with
+  their own times; those of jars that store them in UTC (Woodstox and three
+  others, 1,224 of its 6,237 entries) come out in the JVM's time zone. Built
+  on UTC+7, they were 7 hours off those of a build on CI's UTC.
 - **No usage report.** Once a week it would send Gluon an id, the operating
   system and Java's version at startup. The recipe removes that call.
   Checking for updates and registering stay in its Help menu, and its

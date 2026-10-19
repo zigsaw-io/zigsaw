@@ -8,6 +8,11 @@
 # files are a source.
 #
 #   tests/build.sh [path\to\zigsaw.exe]
+#   GROUP=<group> tests/build.sh [path\to\zigsaw.exe]
+#   tests/build.sh --groups
+#
+# GROUP runs only that group's sections (see groups below), as each of the
+# Reproduce workflow's build jobs does; --groups lists the groups.
 #
 # Needs Git Bash (and its git) and network access (busybox, Node, Prettier, zig, CMake,
 # zlib, SQLite, Rust, Go, .NET, OpenJDK, Maven and Gradle downloads, crates
@@ -23,6 +28,36 @@
 
 set -u
 export MSYS_NO_PATHCONV=1
+
+# The sections below (`if section <name>`), in the groups the Reproduce
+# workflow runs in parallel jobs, one job a group. A group runs its sections
+# in this file's order, each in exactly one group. The minutes are what the
+# sections took on a runner in iteration 33, without the setup every group
+# has (BusyBox's image), and with zig's image where a group builds with it.
+groups=(
+    "base: runtimes images extensions aliases projects prettier msvc sevenzip" # 2
+    "zig: commands sqlite"                                                     # 7
+    "cmake-meson: cmake meson"                                                 # 7
+    "langs: rust go dotnet java php"                                           # 9
+)
+if [ "${1:-}" = --groups ]; then
+    printf '%s\n' "${groups[@]%%:*}"
+    exit 0
+fi
+sections=$(grep -oE '^if section [a-z-]+' "${BASH_SOURCE[0]}" | cut -d' ' -f3)
+grouped=$(printf '%s\n' "${groups[@]#*:}" | tr ' ' '\n' | grep -v '^$')
+problems=$({ printf '%s\n' $sections $grouped | sort | uniq -u; printf '%s\n' $grouped | sort | uniq -d; } | tr '\n' ' ')
+[ -z "$problems" ] || { echo "sections in no group, in two, or not in this file: $problems"; exit 1; }
+[ -z "${GROUP:-}" ] || printf '%s\n' "${groups[@]%%:*}" | grep -qx "$GROUP" || { echo "no group $GROUP"; exit 1; }
+# section <name>: whether this run checks that section: all do without GROUP.
+section() {
+    [ -n "${GROUP:-}" ] || return 0
+    local g
+    for g in "${groups[@]}"; do
+        [ "${g%%:*}" = "$GROUP" ] && [[ " ${g#*:} " == *" $1 "* ]] && return 0
+    done
+    return 1
+}
 
 root=$(cygpath -w "$(cd "$(dirname "$0")/.." && pwd)")
 zigsaw=${1:-$root/zig-out/bin/zigsaw.exe}
@@ -75,11 +110,24 @@ own_layer() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifes
 config_of() { cat "$ZIGSAW_HOME\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of "$1" | cut -d: -f2)" | head -1 | cut -d: -f2)"; }
 drive_free() { ! subst | grep -q '^B:'; }
 no_build_root() { ! ls "$ZIGSAW_HOME\\tmp" | grep -q '^zigsaw-build-'; }
+free_afterwards() { drive_free && no_build_root; }
+# Builds a recipe again, even if nothing changed, and prints its digest.
+rebuilt_manifest() { z build --rebuild "$1" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2; }
+# need_zig: builds zig's image, once, for the sections that build with it.
+zig_digest=
+need_zig() {
+    [ -z "$zig_digest" ] || return 0
+    z build "$root\\recipes\\zig.json" >/dev/null 2>&1 || { echo "building zig failed"; exit 1; }
+    zig_digest=$(manifest_of org.ziglang.zig)
+}
+
+# Every section but a few builds with BusyBox's image, or runs it.
+z build "$root\\recipes\\busybox.json" >/dev/null 2>&1 || { echo "building busybox failed"; exit 1; }
+bb_digest=$(manifest_of $BB)
 
 # --- runtimes ---------------------------------------------------------------------
 
-z build "$root\\recipes\\busybox.json" >/dev/null 2>&1 || { echo "building busybox failed"; exit 1; }
-bb_digest=$(manifest_of $BB)
+if section runtimes; then
 
 # An app whose command is busybox's sh, from a busybox runtime, running a
 # script of its own. <runtime> is the runtime reference, <command> its command.
@@ -138,9 +186,11 @@ app_recipe "$BB@$bb_digest" nope.exe >"$work\\missing.json"
 check "a command the runtime doesn't have fails the build" sh -c "\"\$0\" build '$work\\missing.json' 2>&1 | grep -q 'not a file in that runtime'" "$zigsaw"
 app_recipe "$APP@$app_digest" busybox.exe test.runtime.nested >"$work\\nested.json"
 check "a runtime with runtimes of its own is refused" sh -c "\"\$0\" build '$work\\nested.json' 2>&1 | grep -q 'has runtimes of its own'" "$zigsaw"
+fi
 
 # --- images as sources -------------------------------------------------------------
 
+if section images; then
 # A runtime made from its SDK without building again: a module takes the SDK
 # image's own files, and cleanup leaves out what only builds need. The SDK
 # here is busybox with a header, a library and a pkg-config file.
@@ -186,9 +236,11 @@ search_paths() {
     esac
 }
 check "a building module gets them under dest; PATH starts with B:\\prefix\\bin, PKG_CONFIG_PATH and CMAKE_PREFIX_PATH name the prefix, then the SDK" search_paths
+fi
 
 # --- extension points -----------------------------------------------------------------
 
+if section extensions; then
 # A runtime, BusyBox, with an extension point that joins EXT_DIRS; images
 # that extend it, each adding its directory: a, b (which needs c), c, and old
 # (for another version of the point); an app with the runtime that adds a
@@ -277,9 +329,11 @@ removed_ext() { z rm test.ext.a >/dev/null 2>&1 && expect_dirs "$xc;$xb;$(dir_of
 check "an extension removed doesn't join any more" removed_ext
 printf '{ "id": "test.ext.bad", "version": "1", "command": "marker.txt", "exports": {}, "extends": { "point": "%s", "version": "1" }, "runtimes": { "rt": "%s@%s" },\n  "modules": [{ "name": "m", "sources": [{ "path": "marker-a.txt", "dest": "marker.txt" }] }] }\n' $XRT $XRT "$xrt_digest" >"$work\\ext\\bad.json"
 check "an extension with runtimes is refused" sh -c "\"\$0\" build '$work\\ext\\bad.json' 2>&1 | grep -q 'an extension can.t have runtimes'" "$zigsaw"
+fi
 
 # --- aliases in runs, and SDKs with runtimes ------------------------------------------
 
+if section aliases; then
 # A tool image with aliases, all BusyBox: greet echoes "tool:", ar echoes
 # (over BusyBox's own ar applet), fail exits 7, shout drops --quiet. An app
 # that has it as a runtime and an alias greet of its own, another, rt, that
@@ -403,9 +457,11 @@ sdk_files_only() {
     [ -f "$dir\\include\\y.h" ] && [ ! -e "$dir\\busybox.exe" ] || { echo "files: $(cd "$dir" && find .)"; return 1; }
 }
 check "an image source takes the SDK's own files, not its runtime's" sdk_files_only
+fi
 
 # --- projects with a zigsaw.json -----------------------------------------------------
 
+if section projects; then
 # A project with a zigsaw.json at its root, which `zigsaw build` builds as
 # make builds a Makefile. Its module lists the files and directories it got,
 # which should be those git would commit, less what "skip" leaves out.
@@ -488,9 +544,11 @@ linked_recipe ""
 check "a link in a project fails the build, naming it" sh -c "\"\$0\" build '$work\\linked' 2>&1 | grep -q 'to-src is a link, which an image can'" "$zigsaw"
 linked_recipe ', "skip": ["/to-src"]'
 check "skipped, the project builds" z build "$work\\linked"
+fi
 
 # --- prettier on node --------------------------------------------------------------
 
+if section prettier; then
 z build "$root\\recipes\\node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
 check "prettier builds on the node runtime its recipe pins" z build "$root\\recipes\\prettier.json"
 formats() {
@@ -502,12 +560,13 @@ npm_prefix() {
     [ "$(z run --command=node io.prettier.prettier -e 'console.log(process.env.NPM_CONFIG_PREFIX)' | tr -d '\r')" = "$ZIGSAW_HOME\\data\\io.prettier.prettier\\npm" ]
 }
 check "node's variables point into prettier's data directory" npm_prefix
+fi
 
 # --- build commands ---------------------------------------------------------------
 
+if section commands; then
 HELLO=test.build.hello
-z build "$root\\recipes\\zig.json" >/dev/null 2>&1 || { echo "building zig failed"; exit 1; }
-zig_digest=$(manifest_of org.ziglang.zig)
+need_zig
 
 # The C app, built with zig's aliases: module greet installs a library of C
 # and C++, module app links it with a resource, and module notes runs
@@ -553,12 +612,10 @@ gzip_layer() {
 check "its layer is a gzip-compressed tar, which tar lists" gzip_layer
 records_sdk() { config_of $HELLO | tr -d ' \r\n' | grep -q "\"sdk\":{\"zig\":\"$zig_digest\",\"busybox\":\"$bb_digest\"}"; }
 check "the config records the SDK" records_sdk
-free_afterwards() { drive_free && no_build_root; }
 check "the build drive is free afterwards, and the build root gone" free_afterwards
 
 # zig's image puts its cache in ${cache}, which builds keep: building again
 # doesn't build zig's C runtime again, and makes the same image.
-rebuilt_manifest() { z build --rebuild "$1" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2; }
 warm_hello() {
     [ -d "$ZIGSAW_HOME\\cache\\tools\\org.ziglang.zig" ] || { echo "no cache\\tools\\org.ziglang.zig"; return 1; }
     [ "$(rebuilt_manifest "$work\\c\\hello.json")" = "$hello_digest" ]
@@ -567,65 +624,6 @@ start=$SECONDS
 check "a rebuild with zig's kept cache makes the same image" warm_hello
 printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$hello_time"
 check "zig run as an app has its cache in its data directory" sh -c "\"\$0\" run org.ziglang.zig env | grep '\.global_cache_dir' | grep -qF 'data\\\\org.ziglang.zig\\\\cache\"'" "$zigsaw"
-
-# The C app's sources again, built with CMake and Ninja from CMake's image:
-# zig's image tells CMake its compilers (CC, CXX, RC) and how to link
-# reproducibly (LDFLAGS). Its program links as C++, with zig's libc++.
-CMAKEAPP=test.build.cmake
-check "cmake.json builds CMake's image, with Ninja" z build "$root\\recipes\\cmake.json"
-mkdir -p "$work\\cmake" && cp "$(cygpath -u "$root")"/tests/build/c/*.{c,h,cpp,rc} "$(cygpath -u "$root")"/tests/build/cmake/CMakeLists.txt "$(cygpath -u "$work")/cmake/" &&
-    sed -e "s/@CMAKE@/$(manifest_of org.cmake.cmake)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
-        "$root\\tests\\build\\cmake\\hello.json.in" >"$work\\cmake\\hello.json"
-start=$SECONDS
-check "a CMake project of C, C++ and resources builds with CMake's and zig's images" z build "$work\\cmake\\hello.json"
-cmake_time=$((SECONDS - start))
-cmake_app_digest=$(manifest_of $CMAKEAPP)
-cmake_runs() {
-    local out
-    out=$(z run $CMAKEAPP zigsaw | tr -d '\r')
-    [ "$out" = "hello, zigsaw
-built from B:/src/hello/main.c
-twice 21 is 42
-a string from its resources" ] || { echo "got: $out"; return 1; }
-    [ ! -e "$ZIGSAW_HOME\\deploy\\$(own_layer $CMAKEAPP)\\lib" ] || { echo "cleanup left lib"; return 1; }
-}
-check "it runs, as cmake --install installed it" cmake_runs
-start=$SECONDS
-cmake_again() { [ "$(rebuilt_manifest "$work\\cmake\\hello.json")" = "$cmake_app_digest" ]; }
-check "built again, it's the same image" cmake_again
-printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$cmake_time"
-
-# The same sources with Meson, from meson's image (Python, Meson, Ninja,
-# pkgconf), and zig's compilers: one module installs a DLL of C and C++ with a
-# pkg-config file, and the next finds it with pkg-config, in B:\prefix, and
-# links it into a program with resources (zig's rc, which Meson takes for
-# Microsoft's).
-MESONAPP=test.build.meson
-check "meson.json builds Meson's image, with Ninja and pkgconf" z build "$root\\recipes\\meson.json"
-mkdir -p "$work\\meson\\greet" "$work\\meson\\hello" &&
-    cp "$(cygpath -u "$root")"/tests/build/c/*.{c,h,cpp,rc} "$(cygpath -u "$work")/meson/" &&
-    cp "$(cygpath -u "$root")/tests/build/meson/greet/meson.build" "$(cygpath -u "$work")/meson/greet/" &&
-    cp "$(cygpath -u "$root")/tests/build/meson/hello/meson.build" "$(cygpath -u "$work")/meson/hello/" &&
-    sed -e "s/@MESON@/$(manifest_of com.mesonbuild.meson)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
-        "$root\\tests\\build\\meson\\hello.json.in" >"$work\\meson\\hello.json"
-start=$SECONDS
-check "a Meson project linking an earlier module's DLL through pkg-config builds" z build "$work\\meson\\hello.json"
-meson_time=$((SECONDS - start))
-meson_app_digest=$(manifest_of $MESONAPP)
-meson_runs() {
-    local out dir="$ZIGSAW_HOME\\deploy\\$(own_layer $MESONAPP)"
-    out=$(z run $MESONAPP zigsaw | tr -d '\r')
-    [ "$out" = "hello, zigsaw
-built from ../main.c
-twice 21 is 42
-a string from its resources" ] || { echo "got: $out"; return 1; }
-    [ -f "$dir\\bin\\libgreet.dll" ] && [ ! -e "$dir\\lib" ] || { echo "want bin\\libgreet.dll and no lib"; return 1; }
-}
-check "it runs, with the DLL next to it" meson_runs
-start=$SECONDS
-meson_again() { [ "$(rebuilt_manifest "$work\\meson\\hello.json")" = "$meson_app_digest" ]; }
-check "built again, it's the same image" meson_again
-printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$meson_time"
 
 # A tool of our own whose image declares a cache: each build sees what
 # earlier ones left there. It also gives builds a command, greet, which
@@ -796,9 +794,80 @@ refused_link() {
     no_build_root || { echo "left in tmp: $(ls "$ZIGSAW_HOME\\tmp" | tr '\n' ' ')"; return 1; }
 }
 check "a link left in the prefix fails the build" refused_link
+fi
+
+# --- CMake --------------------------------------------------------------------------
+
+if section cmake; then
+need_zig
+# The C app's sources again, built with CMake and Ninja from CMake's image:
+# zig's image tells CMake its compilers (CC, CXX, RC) and how to link
+# reproducibly (LDFLAGS). Its program links as C++, with zig's libc++.
+CMAKEAPP=test.build.cmake
+check "cmake.json builds CMake's image, with Ninja" z build "$root\\recipes\\cmake.json"
+mkdir -p "$work\\cmake" && cp "$(cygpath -u "$root")"/tests/build/c/*.{c,h,cpp,rc} "$(cygpath -u "$root")"/tests/build/cmake/CMakeLists.txt "$(cygpath -u "$work")/cmake/" &&
+    sed -e "s/@CMAKE@/$(manifest_of org.cmake.cmake)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\cmake\\hello.json.in" >"$work\\cmake\\hello.json"
+start=$SECONDS
+check "a CMake project of C, C++ and resources builds with CMake's and zig's images" z build "$work\\cmake\\hello.json"
+cmake_time=$((SECONDS - start))
+cmake_app_digest=$(manifest_of $CMAKEAPP)
+cmake_runs() {
+    local out
+    out=$(z run $CMAKEAPP zigsaw | tr -d '\r')
+    [ "$out" = "hello, zigsaw
+built from B:/src/hello/main.c
+twice 21 is 42
+a string from its resources" ] || { echo "got: $out"; return 1; }
+    [ ! -e "$ZIGSAW_HOME\\deploy\\$(own_layer $CMAKEAPP)\\lib" ] || { echo "cleanup left lib"; return 1; }
+}
+check "it runs, as cmake --install installed it" cmake_runs
+start=$SECONDS
+cmake_again() { [ "$(rebuilt_manifest "$work\\cmake\\hello.json")" = "$cmake_app_digest" ]; }
+check "built again, it's the same image" cmake_again
+printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$cmake_time"
+fi
+
+# --- Meson --------------------------------------------------------------------------
+
+if section meson; then
+need_zig
+# The same sources with Meson, from meson's image (Python, Meson, Ninja,
+# pkgconf), and zig's compilers: one module installs a DLL of C and C++ with a
+# pkg-config file, and the next finds it with pkg-config, in B:\prefix, and
+# links it into a program with resources (zig's rc, which Meson takes for
+# Microsoft's).
+MESONAPP=test.build.meson
+check "meson.json builds Meson's image, with Ninja and pkgconf" z build "$root\\recipes\\meson.json"
+mkdir -p "$work\\meson\\greet" "$work\\meson\\hello" &&
+    cp "$(cygpath -u "$root")"/tests/build/c/*.{c,h,cpp,rc} "$(cygpath -u "$work")/meson/" &&
+    cp "$(cygpath -u "$root")/tests/build/meson/greet/meson.build" "$(cygpath -u "$work")/meson/greet/" &&
+    cp "$(cygpath -u "$root")/tests/build/meson/hello/meson.build" "$(cygpath -u "$work")/meson/hello/" &&
+    sed -e "s/@MESON@/$(manifest_of com.mesonbuild.meson)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\meson\\hello.json.in" >"$work\\meson\\hello.json"
+start=$SECONDS
+check "a Meson project linking an earlier module's DLL through pkg-config builds" z build "$work\\meson\\hello.json"
+meson_time=$((SECONDS - start))
+meson_app_digest=$(manifest_of $MESONAPP)
+meson_runs() {
+    local out dir="$ZIGSAW_HOME\\deploy\\$(own_layer $MESONAPP)"
+    out=$(z run $MESONAPP zigsaw | tr -d '\r')
+    [ "$out" = "hello, zigsaw
+built from ../main.c
+twice 21 is 42
+a string from its resources" ] || { echo "got: $out"; return 1; }
+    [ -f "$dir\\bin\\libgreet.dll" ] && [ ! -e "$dir\\lib" ] || { echo "want bin\\libgreet.dll and no lib"; return 1; }
+}
+check "it runs, with the DLL next to it" meson_runs
+start=$SECONDS
+meson_again() { [ "$(rebuilt_manifest "$work\\meson\\hello.json")" = "$meson_app_digest" ]; }
+check "built again, it's the same image" meson_again
+printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$meson_time"
+fi
 
 # --- MSVC, if Visual Studio is installed ----------------------------------------------
 
+if section msvc; then
 vswhere="$(cygpath -u "$(printenv 'ProgramFiles(x86)')")/Microsoft Visual Studio/Installer/vswhere.exe"
 if [ -f "$vswhere" ]; then
     MSVC=test.build.msvc
@@ -811,14 +880,18 @@ if [ -f "$vswhere" ]; then
 else
     echo "skip  MSVC: no Visual Studio installer ($vswhere)"
 fi
+fi
 
 # --- SQLite from source ------------------------------------------------------------
 
+if section sqlite; then
 check "sqlite.json builds SQLite and zlib from source" z build "$root\\recipes\\sqlite.json"
 check "sqlite3 runs, with zlib" sh -c "[ \"\$(\"\$0\" run org.sqlite.sqlite3 :memory: 'select sqlite_version(), length(sqlar_uncompress(sqlar_compress(zeroblob(1000)), 1000))' | tr -d '\r')\" = '3.53.4|1000' ]" "$zigsaw"
+fi
 
 # --- 7-Zip, for sources zigsaw doesn't unpack -----------------------------------------
 
+if section sevenzip; then
 check "7zip.json makes 7-Zip's image from its installer, which its 7zr unpacks" z build "$root\\recipes\\7zip.json"
 # A .7z, made with 7-Zip's image, is the source of a recipe that has 7-Zip
 # in its sdk to unpack it, as recipes can for installers and .7z downloads.
@@ -829,9 +902,12 @@ sed -e "s/@SEVENZIP@/$(manifest_of org.7_zip.7zip)/" -e "s/@BUSYBOX@/$bb_digest/
     "$root\\tests\\build\\sevenzip\\hello.json.in" >"$work\\7z\\hello.json"
 check "a recipe with 7-Zip in its sdk unpacks a .7z source" z build "$work\\7z\\hello.json"
 check "what it unpacked runs" sh -c "[ \"\$(\"\$0\" run $SEVENZIP | tr -d '\r')\" = 'hello from a .7z' ]" "$zigsaw"
+fi
 
 # --- Rust from source ---------------------------------------------------------------
 
+if section rust; then
+need_zig
 check "rust.json builds the Rust SDK image" z build "$root\\recipes\\rust.json"
 # Rust's image keeps cargo's home in its data directory, whose bin is on its
 # PATH, so what `cargo install` installs gets a shim.
@@ -874,9 +950,12 @@ check "the loader binds all its imports" rust_bound
 # executable would show.
 rust_again() { [ "$(rebuilt_manifest "$work\\rust\\hello.json")" = "$rust_app_digest" ]; }
 check "built again, from the vendored crates in the cache, it's the same image" rust_again
+fi
 
 # --- Go from source -----------------------------------------------------------------
 
+if section go; then
+need_zig
 check "go.json builds the Go SDK image" z build "$root\\recipes\\go.json"
 # Go's image keeps GOPATH in its data directory, whose bin is on its PATH, so
 # what `go install` installs gets a shim.
@@ -929,9 +1008,11 @@ C sees this process: true" ] || { echo "got: $out"; return 1; }
 check "it runs, calling its C, which calls Windows" cgo_runs
 cgo_again() { [ "$(rebuilt_manifest "$work\\cgo\\hello.json")" = "$cgo_app_digest" ]; }
 check "built again, it's the same image" cgo_again
+fi
 
 # --- .NET from source ---------------------------------------------------------------
 
+if section dotnet; then
 # Microsoft's licence for its Windows binaries doesn't let them be published,
 # so .NET's recipes are in recipes/no-publish: the images are built here from
 # Microsoft's download, and the runtime from the SDK image's own files.
@@ -1004,9 +1085,11 @@ WPF: a window came up and drew its content" ] || { echo "$sb, got: $out"; return
 check "its form and its window come up, under soft, low and appcontainer" desktop_runs
 desktop_again() { [ "$(rebuilt_manifest "$work\\dotnetdesktop\\desktop.json")" = "$desktop_digest" ]; }
 check "built again, it's the same image" desktop_again
+fi
 
 # --- Java from source ---------------------------------------------------------------
 
+if section java; then
 # Eclipse Temurin's builds of OpenJDK: the JDK as the SDK image, its JRE as the
 # runtime image Java apps run on. Java takes its user.home from
 # SHGetKnownFolderPath, which a run's USERPROFILE doesn't move, so both images
@@ -1100,9 +1183,11 @@ gradle_digest=$(manifest_of $GRADLEAPP)
 check "it runs on the JRE image, under soft, low and appcontainer" java_app_runs $GRADLEAPP ", built by Gradle"
 gradle_again() { [ "$(rebuilt_manifest "$work\\gradle\\hello.json")" = "$gradle_digest" ]; }
 check "built again, from the vendored repository in the cache, it's the same image" gradle_again
+fi
 
 # --- PHP extensions with zig ------------------------------------------------------
 
+if section php; then
 # PHP's official Windows build, which MSVC builds, in an SDK image with its
 # headers and php-ext, which runs an extension's config.w32 under Node and
 # builds it with zig; the runtime is the SDK image's files without those.
@@ -1151,17 +1236,16 @@ php_ext_no_recipe() {
     [ "$out" = "hello from config.w32, version info: yes" ] || { echo "got: $out"; return 1; }
 }
 check "php-ext builds it in its directory without a recipe, and PHP's runtime loads it" php_ext_no_recipe
+fi
 
 # Removing the apps also deletes their AppContainer profiles. The images
 # builds use stay until prune --downloads, and only zigsaw can delete their
-# protected deployments.
-for id in $APP $SDK $RT test.image.built $XRT $XAPP test.ext.app2 test.ext.a test.ext.b test.ext.c test.ext.old $AAPP $ASDK $TOOL test.alias.built test.alias.files io.prettier.prettier org.nodejs.node $BB $HELLO org.ziglang.zig org.cmake.cmake $CMAKEAPP com.mesonbuild.meson $MESONAPP org.sqlite.sqlite3 \
-    test.project.app test.project.lib test.project.linked test.build.online test.build.ok test.build.slow test.build.msvc test.build.noted test.tool.cachey test.build.cached \
-    test.build.vendored org.7_zip.7zip $SEVENZIP org.rust-lang.rust $RUST org.golang.go $GOAPP $CGO \
-    com.microsoft.dotnet.Sdk com.microsoft.dotnet $DOTNETAPP $DESKTOP org.openjdk.java.Sdk org.openjdk.java org.apache.maven org.gradle.gradle $SWING $MAVENAPP $GRADLEAPP net.php.php.Sdk net.php.php $PHPEXT $PHPAPP; do z rm --delete-data $id >/dev/null 2>&1; done
+# protected deployments. Every installed app has refs\<id>.json.
+for id in $(ls "$ZIGSAW_HOME\\refs" | sed 's/\.json$//'); do z rm --delete-data "$id" >/dev/null 2>&1; done
+check "every app is removed" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\refs')\" ]"
 z prune --downloads --data >/dev/null 2>&1
 check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
 rm -rf "$ZIGSAW_HOME" "$work"
 echo
-echo "$failures check(s) failed."
+echo "$failures check(s) failed${GROUP:+ in group $GROUP}."
 exit $((failures > 0))

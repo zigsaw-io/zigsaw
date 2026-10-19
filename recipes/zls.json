@@ -1,0 +1,36 @@
+{
+  "id": "org.zigtools.zls",
+  "version": "0.16.1",
+  "name": "ZLS",
+  "summary": "The Zig language server: completions, hover, go to definition and diagnostics for Zig in your editor",
+  "homepage": "https://github.com/zigtools/zls",
+  "license": "MIT",
+  "command": "bin\\zls.exe",
+  "path": ["${zig}"],
+  "permissions": { "filesystem": ["cwd"] },
+  "runtimes": { "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355" },
+  "sdk": {
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "zls",
+      "sources": [
+        {
+          "url": "https://github.com/zigtools/zls/archive/refs/tags/0.16.1.tar.gz",
+          "sha256": "5cf982551d492780be9e33da860094286ee87a08145e08d5f3dd69a204772ba8",
+          "strip": 1
+        }
+      ],
+      "vendor": {
+        "commands": ["zig build --fetch"],
+        "dir": "zig-pkg",
+        "sha256": "4f200d86b78e8b6be46308350103c430dad4b87e5a82b12a6a099fb0f6b8efdb"
+      },
+      "build": [
+        "zig build --system zig-pkg -Doptimize=ReleaseSafe -Dcpu=baseline -Dstrip -Dversion-string=0.16.1 -p \"$PREFIX\"",
+        "cp LICENSE \"$PREFIX/\""
+      ]
+    }
+  ]
+}

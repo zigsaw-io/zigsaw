@@ -6,10 +6,11 @@
 # - suites: the suites in tests/ that run apps, in a store of the published
 #   images (tests/seed-store.sh), which the published jobs check are what the
 #   recipes build;
-# - build: the unit tests, then tests/build.sh, which builds in stores of its
-#   own and downloads what it builds from.
+# - build, one job for each group of tests/build.sh's sections: the group's
+#   checks, in stores of their own, downloading what they build from; the
+#   base group's job runs the unit tests first.
 # And two quick ones:
-# - groups: the groups the published jobs are made from;
+# - groups: the groups the published and build jobs are made from;
 # - pins: every image the published recipes pin is on the registry, so a
 #   fresh store can build them, those of the skip group included
 #   (scripts/check-pins.sh).
@@ -43,12 +44,14 @@ jobs:
       - name: The published recipes' pins, on the registry
         run: bash scripts/check-pins.sh
 
-  # The groups of scripts/published-groups.txt but skip, as a JSON list.
+  # The groups of scripts/published-groups.txt but skip, and those of
+  # tests/build.sh, as JSON lists.
   groups:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       groups: ${{ steps.groups.outputs.groups }}
+      build: ${{ steps.groups.outputs.build }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,6 +61,8 @@ jobs:
         run: |
           groups=$(grep -v -e '^#' -e '^\s*$' scripts/published-groups.txt | cut -d: -f1 | grep -vx skip | awk '!seen[$0]++' | jq -Rnc '[inputs]')
           echo "groups=$groups" | tee -a "$GITHUB_OUTPUT"
+          build=$(bash tests/build.sh --groups | jq -Rnc '[inputs]')
+          echo "build=$build" | tee -a "$GITHUB_OUTPUT"
 
   published:
     needs: groups
@@ -127,16 +132,16 @@ jobs:
       - name: Build zigsaw
         run: zig build
 
-      # The apps tests/matrix.sh runs, and zot for tests/zot.sh. BusyBox and
-      # Node are built, for their downloads, which the suites' own stores
-      # are seeded with.
+      # The apps tests/matrix.sh runs, zot for tests/zot.sh and ZLS for
+      # tests/zls.sh. BusyBox and Node are built, for their downloads, which
+      # the suites' own stores are seeded with.
       - name: The suites' apps, as published (built, if not published yet)
         shell: bash
         env:
           ZIGSAW_HOME: ${{ runner.temp }}\store
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
-          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
+          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
 
       # The suites run whether or not the steps before them passed.
       - name: tests/store.sh
@@ -177,6 +182,14 @@ jobs:
         shell: bash
         run: bash tests/zot.sh bash tests/registry.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/registry.txt"
 
+      # ZLS as published (which a published job checks), in the seeded store.
+      - name: tests/zls.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          ZLS_HOME: ${{ runner.temp }}\store
+        run: bash tests/zls.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/zls.txt"
+
       # Last, in the seeded store, whose apps it runs: it changes their data.
       - name: tests/matrix.sh
         if: ${{ !cancelled() }}
@@ -197,11 +210,18 @@ jobs:
           if-no-files-found: ignore
 
   build:
+    needs: groups
+    name: build (${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.groups.outputs.build) }}
     runs-on: windows-2025
-    # tests/build.sh took 19 minutes in iteration 23, with published.sh's
-    # downloads; here it downloads them itself (BusyBox's from the sources
-    # pushed next to its image, as frippery.org refuses runners).
-    timeout-minutes: 60
+    # All of tests/build.sh in one job took 22 minutes in iteration 33; its
+    # groups are balanced to some 3 to 10 minutes each. They download what
+    # they build from (BusyBox's from the sources pushed next to its image,
+    # as frippery.org refuses runners).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -218,13 +238,16 @@ jobs:
           printf '%s\n' "TMP=$t" "TEMP=$t" "LOG_DIR=$t\\logs" >>"$GITHUB_ENV"
 
       - name: Unit tests
+        if: matrix.group == 'base'
         run: zig build test --summary all
 
       - name: Build zigsaw
         run: zig build
 
-      - name: tests/build.sh
+      - name: tests/build.sh, the group's sections
         shell: bash
+        env:
+          GROUP: ${{ matrix.group }}
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
           bash tests/build.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/build.txt"
@@ -233,6 +256,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: logs-build
+          name: logs-build-${{ matrix.group }}
           path: ${{ runner.temp }}\logs
           if-no-files-found: ignore

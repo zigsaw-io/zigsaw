@@ -17,6 +17,7 @@ zot.json
 cmake.json
 zstd.json
 meson.json
+zls.json
 perl.json
 cargo-c.json
 gettext.json

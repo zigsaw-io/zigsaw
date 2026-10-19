@@ -775,6 +775,32 @@ Composer, which doesn't, installs at low.
   whether they're directories, so a walk doesn't enter a junction by
   mistake.
 
+## Zig's packages, and ZLS
+
+- **zig 0.16 unpacks a project's packages into `zig-pkg`**, beside its
+  `build.zig.zon`, one directory per package hash, and keeps a compressed
+  copy of each (`p\<hash>.tar.gz`) in its global cache. Only the unpacked
+  ones serve `--system <pkgdir>`: pointed at a global cache's `p`, it
+  reports every package "not found". In a build, the global cache is zig's
+  tool cache (`${cache}`), which builds keep, so a vendor step must pin
+  `zig-pkg`, or a warm store would build what a fresh one can't.
+- **ZLS 0.16.1 builds offline from it.** Its vendor step (three packages)
+  took under 40 s, zig's image pulled first; the build 1.5 minutes. It made
+  the same image built again, and in a new store, where the step fetched
+  the packages again.
+- **zig as ZLS's runtime is enough.** A runtime is on the build's PATH too,
+  so zig needn't be listed in the SDK as well (zigsaw refuses one alias for
+  both). With `${zig}` on its PATH, ZLS found `zig.exe` and zig's library,
+  and ran the project's `build.zig` with it to learn the modules it
+  declares, in about 10 s with zig's caches cold, in soft, low and
+  AppContainer runs alike.
+- **The session is interactive through zigsaw.** ZLS's replies arrive as
+  it writes them (under 0.1 s for a hover) through `zigsaw run` and through
+  its shim, both passing stdin and stdout straight through, so an editor
+  can hold a session with it.
+- **ZLS publishes diagnostics only to clients that say they take them**
+  (`textDocument.publishDiagnostics` in `initialize`'s capabilities).
+
 ## GTK 3 and Gnumeric
 
 - **GTK 3 needs nothing GTK 4's SDK doesn't have, but ATK.** GTK 3.24.52
@@ -1104,6 +1130,18 @@ JDK's image, and compiled on the JRE's):
     (`../bin` on Windows) before it unpacks them from the jars into
     `user.home\.openjfx\cache`; with Gluon's SDK nothing is unpacked.
     Direct3D 9Ex worked in soft, low and AppContainer runs alike.
+- **A Maven build that depends on the time zone** (iteration 34): Scene
+  Builder made the same image twice here (UTC+7) but another on CI's
+  runner (UTC), the files differing only in its jar with dependencies.
+  maven-shade-plugin 3.2.4 copies each dependency's entries with their own
+  times; for jars that also store them in UTC (an extended timestamp:
+  Woodstox, stax2, MSV, a JAXB jar), it writes them in the JVM's time zone,
+  so 1,224 of 6,237 entries came out 7 hours apart. With the build's JVM on
+  UTC (`JDK_JAVA_OPTIONS=-Duser.timezone=UTC`), this machine makes the
+  runner's image. `project.build.outputTimestamp` doesn't reach them:
+  shade only honours it from 3.3.0. PDFBox, PlantUML and Logisim-evolution
+  made the same images on both. A second store on the same machine can't
+  catch this; only another time zone can.
 
 ## Other findings
 
