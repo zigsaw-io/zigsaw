@@ -11,8 +11,16 @@
 # - build, one job for each group of tests/build.sh's sections: the group's
 #   checks, in stores of their own, downloading what they build from; the
 #   base group's job runs the unit tests first.
+# GTK's family (its published groups, and gtk-suites) takes most of a run's
+# time, and changes rarely: a push or pull request checks it only if a file
+# it's built or tested from changed since the last commit a run passed on
+# (scripts/ci-groups.sh). The weekly run, and one started by hand, check
+# everything, so a change to zigsaw that a GTK image no longer reproduces
+# with shows within a week.
+#
 # And two quick ones:
-# - groups: the groups the published and build jobs are made from;
+# - groups: the groups the published and build jobs are made from, and
+#   whether GTK's family is checked;
 # - pins: every image the published recipes pin is on the registry, so a
 #   fresh store can build them (scripts/check-pins.sh).
 # It only verifies; scripts/publish.sh publishes.
@@ -23,6 +31,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Mondays, 03:17 UTC.
+    - cron: '17 3 * * 1'
 
 permissions:
   contents: read
@@ -45,23 +56,43 @@ jobs:
       - name: The published recipes' pins, on the registry
         run: bash scripts/check-pins.sh
 
-  # The groups of scripts/published-groups.txt but skip, and those of
-  # tests/build.sh, as JSON lists.
+  # The groups of scripts/published-groups.txt this run checks, and those of
+  # tests/build.sh, as JSON lists, and whether gtk-suites runs.
   groups:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # To find the last run that passed.
+      actions: read
     outputs:
       groups: ${{ steps.groups.outputs.groups }}
+      gtk: ${{ steps.groups.outputs.gtk }}
       build: ${{ steps.groups.outputs.build }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The history, to compare with the last commit a run passed on.
+          fetch-depth: 0
 
       - id: groups
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          groups=$(grep -v -e '^#' -e '^\s*$' scripts/published-groups.txt | cut -d: -f1 | grep -vx skip | awk '!seen[$0]++' | jq -Rnc '[inputs]')
-          echo "groups=$groups" | tee -a "$GITHUB_OUTPUT"
+          # A push is compared with the last commit a run on its branch passed
+          # on, a pull request with its base; the weekly run and one started
+          # by hand check everything.
+          base=""
+          case $EVENT in
+          push) base=$(gh run list -R "$GITHUB_REPOSITORY" --workflow reproduce.yml --branch "$GITHUB_REF_NAME" --status success -L 1 --json headSha -q '.[0].headSha' || true) ;;
+          pull_request) base=$PR_BASE ;;
+          esac
+          [ "$base" != null ] || base=""
+          bash scripts/ci-groups.sh $base 2>why.txt | tee -a "$GITHUB_OUTPUT"
+          cat why.txt | tee -a "$GITHUB_STEP_SUMMARY"
           build=$(bash tests/build.sh --groups | jq -Rnc '[inputs]')
           echo "build=$build" | tee -a "$GITHUB_OUTPUT"
 
@@ -212,6 +243,8 @@ jobs:
           if-no-files-found: ignore
 
   gtk-suites:
+    needs: groups
+    if: needs.groups.outputs.gtk == 'true'
     runs-on: windows-2025
     timeout-minutes: 45
     steps:

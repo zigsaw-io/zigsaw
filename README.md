@@ -326,7 +326,11 @@ with the image published for the recipe's version
 group of [`scripts/published-groups.txt`](scripts/published-groups.txt).
 Beside them, it runs the unit tests and the end-to-end suites (see
 [Testing](#testing)), `tests/build.sh` in jobs of its own, one for each
-group of its sections.
+group of its sections. GTK's family, whose builds take most of a run (GTK's
+SDK alone is 55 minutes on a runner), is checked only when something it's
+built or tested from changed since the last commit a run passed on
+([`scripts/ci-groups.sh`](scripts/ci-groups.sh)), and by a weekly run that
+checks everything.
 
 - A version that isn't published yet is reported, but doesn't fail the run.
 - A different digest for the same version fails it. Either the build isn't
@@ -975,6 +979,8 @@ version that isn't published yet), as `SEED_DOWNLOADS` and the matrix's
 and ZLS's store. The jobs that run `published.sh` check that those images
 are what the recipes build. `tests/gtk.sh` and `tests/gtk3.sh` run the
 same way, in a job of their own, in a store of GTK's published images and
-the apps on them, which they install again rather than build; the runner has
-no GPU, so GTK's OpenGL check is a known gap there. `tests/build.sh` runs in
+the apps on them, which they install again rather than build, when GTK's
+family is checked; the runner has no GPU, so GTK's OpenGL check is a known
+gap there; and it runs Windows Server 2025, where Meld's window in an
+AppContainer is one too. `tests/build.sh` runs in
 jobs of its own, one for each group of its sections, beside them.

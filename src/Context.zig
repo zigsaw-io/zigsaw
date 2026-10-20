@@ -67,6 +67,43 @@ pub fn now(ctx: *const Context) std.Io.Timestamp {
     return .now(ctx.io, .awake);
 }
 
+/// How long since `start`, as `Duration` shows it.
+pub fn since(ctx: *const Context, start: std.Io.Timestamp) Duration {
+    return .{ .ms = @intCast(@max(0, start.untilNow(ctx.io, .awake).toMilliseconds())) };
+}
+
+/// A duration as a build's log shows it, `{f}`: "850 ms", "12.3 s",
+/// "4m 07s", "1h 03m".
+pub const Duration = struct {
+    ms: u64,
+
+    pub fn format(d: Duration, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        const s = d.ms / 1000;
+        if (d.ms < 1000) {
+            try w.print("{d} ms", .{d.ms});
+        } else if (s < 60) {
+            try w.print("{d}.{d} s", .{ s, d.ms % 1000 / 100 });
+        } else if (s < 3600) {
+            try w.print("{d}m {d:0>2}s", .{ s / 60, s % 60 });
+        } else {
+            try w.print("{d}h {d:0>2}m", .{ s / 3600, s % 3600 / 60 });
+        }
+    }
+};
+
+test Duration {
+    const cases = [_]struct { u64, []const u8 }{
+        .{ 0, "0 ms" },         .{ 850, "850 ms" },        .{ 1000, "1.0 s" },
+        .{ 12_345, "12.3 s" },  .{ 59_999, "59.9 s" },     .{ 60_000, "1m 00s" },
+        .{ 247_000, "4m 07s" }, .{ 3_599_000, "59m 59s" }, .{ 3_780_000, "1h 03m" },
+    };
+    for (cases) |c| {
+        const got = try std.fmt.allocPrint(std.testing.allocator, "{f}", .{Duration{ .ms = c[0] }});
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqualStrings(c[1], got);
+    }
+}
+
 /// In verbose mode, reports how long a step that began at `start` took.
 pub fn timed(ctx: *const Context, start: std.Io.Timestamp, comptime what: []const u8, args: anytype) void {
     reportTime(ctx.io, ctx.verbose, start, what, args);

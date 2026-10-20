@@ -123,6 +123,58 @@ all_bound() {
 manifest() { cat "$1\\blobs\\sha256\\${2#sha256:}"; }
 # The digests a manifest lists: <store> <manifest digest> config|layers
 listed() { manifest "$1" "$2" | tr -d ' \r\n' | grep -o "\"$3\":\(\[[^]]*\]\|{[^}]*}\)" | grep -o 'sha256:[0-9a-f]*'; }
+# files_diff <id> <built manifest digest> <published manifest digest>: for
+# each layer of the built image that isn't the published image's layer at
+# the same place, the files that differ between the two: a list in
+# $logs\<id>.files-diff.txt ("differs", "only built", "only published"), and
+# the files themselves, up to 200 MB in all, in $logs\<id>.differ\built and
+# \published, so a build on another machine can be compared with this one's.
+files_diff() {
+    local id=$1 list="$logs\\$1.files-diff.txt" dir differ i=0 b p side kind path size left=$((200 * 1024 * 1024)) skipped=0
+    local built_layers published_layers
+    dir=$(cygpath -u "$work\\diff\\$id")
+    differ=$(cygpath -u "$logs\\$id.differ")
+    read -ra built_layers <<<"$(listed "$build_store" "$2" layers | tr '\n' ' ')"
+    read -ra published_layers <<<"$(listed "$pull_store" "$3" layers | tr '\n' ' ')"
+    : >"$list"
+    for b in "${built_layers[@]}"; do
+        p=${published_layers[$i]:-}
+        i=$((i + 1))
+        [ "$b" = "$p" ] && continue
+        echo "layer $i: built $b, published ${p:-none}" >>"$list"
+        rm -rf "$dir" && mkdir -p "$dir/built" "$dir/published"
+        tar -xf "$(cygpath -u "$build_store\\blobs\\sha256\\${b#sha256:}")" -C "$dir/built" || echo "  can't unpack the built layer" >>"$list"
+        [ -n "$p" ] && { tar -xf "$(cygpath -u "$pull_store\\blobs\\sha256\\${p#sha256:}")" -C "$dir/published" || echo "  can't unpack the published layer" >>"$list"; }
+        for side in built published; do
+            (cd "$dir/$side" && find . -type f -print0 | xargs -0 -r sha256sum) >"$dir/$side.sums"
+        done
+        # "<kind> <path>", for each path whose hash isn't the same on both sides.
+        awk '
+            FNR == 1 { side++ }
+            { hash = $1; sub(/^[0-9a-f]+ [ *]/, ""); h[side, $0] = hash; seen[$0] = 1 }
+            END {
+                for (f in seen) {
+                    if (!((1, f) in h)) print "only published " f
+                    else if (!((2, f) in h)) print "only built " f
+                    else if (h[1, f] != h[2, f]) print "differs " f
+                }
+            }' "$dir/built.sums" "$dir/published.sums" | sort -k2 >"$dir/differ.txt"
+        sed 's/^/  /' "$dir/differ.txt" >>"$list"
+        echo "  $(grep -c . "$dir/differ.txt") of $(grep -c . "$dir/built.sums") built file(s)" >>"$list"
+        while read -r kind path; do
+            [ "$kind" = only ] && path=${path#* }
+            for side in built published; do
+                [ -f "$dir/$side/$path" ] || continue
+                size=$(stat -c %s "$dir/$side/$path")
+                if [ "$size" -gt "$left" ]; then skipped=$((skipped + 1)); continue; fi
+                left=$((left - size))
+                mkdir -p "$differ/$side" && (cd "$dir/$side" && cp --parents "$path" "$differ/$side/")
+            done
+        done <"$dir/differ.txt"
+        rm -rf "$dir"
+    done
+    [ "$skipped" -eq 0 ] || echo "$skipped file(s) not copied into $id.differ: over 200 MB in all" >>"$list"
+}
 # Whether an image was built with a host toolchain, such as MSVC, and so
 # isn't expected to match a build on another machine: <store> <manifest digest>
 host_built() {
@@ -160,6 +212,11 @@ if [ -n "${GROUP:-}" ] && ! grep -qx "$GROUP" < <(printf '%s\n' "${group_of[@]}"
     exit 1
 fi
 
+# The job's summary, in CI: each recipe's build time, for balancing the
+# groups (a build log says where its time went).
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf '### %s\n\n| recipe | build |\n|---|---|\n' "${GROUP:-all groups}" >>"$GITHUB_STEP_SUMMARY"
+fi
 ids=()
 declare -A names # by id: the recipe's name, if it gives one
 published_versions=()
@@ -181,10 +238,14 @@ for name in $published_recipes; do
     id=$(grep -o '"id": *"[^"]*"' "$recipe" | cut -d'"' -f4)
     ids+=("$id")
     names[$id]=$(grep -o '^  "name": *"[^"]*"' "$recipe" | cut -d'"' -f4)
+    started=$SECONDS
     if ! zb build "$recipe" >"$logs\\$id.build.log" 2>&1; then
         fail "$id: builds" "$(last_line "$logs\\$id.build.log")"
         continue
     fi
+    took=$((SECONDS - started))
+    printf 'time  %s: built in %dm %02ds\n' "$id" $((took / 60)) $((took % 60))
+    [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '| %s | %dm %02ds |\n' "$id" $((took / 60)) $((took % 60)) >>"$GITHUB_STEP_SUMMARY"
     built=$(ref_digest "$build_store" "$id")
     version=$(zb list | awk -v id="$id" '$1 == id { print $2 }')
 
@@ -216,8 +277,10 @@ for name in $published_recipes; do
         differ=""
         [ "$(listed "$build_store" "$built" config)" = "$(listed "$pull_store" "$published" config)" ] ||
             differ="the config (the recipe's settings)"
-        [ "$(listed "$build_store" "$built" layers)" = "$(listed "$pull_store" "$published" layers)" ] ||
+        if [ "$(listed "$build_store" "$built" layers)" != "$(listed "$pull_store" "$published" layers)" ]; then
             differ="${differ:+$differ and }the files"
+            files_diff "$id" "$built" "$published"
+        fi
         details=(
             "published $published"
             "built     $built"
@@ -225,6 +288,7 @@ for name in $published_recipes; do
             "Either the build isn't reproducible, or the recipe changed without a new version."
         )
         [ -n "${LOG_DIR:-}" ] && details+=("Both manifests are in $LOG_DIR.")
+        [ -n "${LOG_DIR:-}" ] && [ -f "$logs\\$id.files-diff.txt" ] && details+=("The files that differ: $id.files-diff.txt and $id.differ there.")
         fail "$id $version: has the digest of a fresh build" "${details[@]}"
     fi
 

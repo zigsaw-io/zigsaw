@@ -405,3 +405,13 @@
   Server 2025, in an AppContainer, it finds neither zig's library nor a
   project's modules, as `zig env` fails there (no hover on the standard
   library); on Windows 11 26300 it does.
+- On Windows Server 2025, in an AppContainer, Python on PyGObject's runtime
+  first warns `Failed to find real location of …\python.exe` (CPython's
+  getpath can't resolve its own path there, as zig can't), then runs; and
+  Meld draws no window. That Meld's cause is the same isn't confirmed yet:
+  tests/gtk3.sh leaves its log in CI's artifact. On Windows 11 26300 both
+  work.
+- CI checks GTK's family (its images and suites) on a push only when
+  something they're built or tested from changed, and weekly otherwise: a
+  change to zigsaw that a GTK image no longer reproduces with shows up to a
+  week later.

@@ -17,7 +17,8 @@
 //!   B:\home\          the profile folders of the build's tools, fresh for each build
 //!   B:\data\          the data directory runtimes' variables point to while building
 //!   B:\cache\<id>\    ${cache} of a tool that uses it, kept between builds in the
-//!                     store's cache\tools\<id>, and moved here for the build
+//!                     store's cache\tools\<id>, and moved here for the build;
+//!                     zig's local cache is the module's B:\src\<module>\.zig-cache
 //!   B:\bin\           shims for the commands the tools' images alias, first on PATH
 //!
 //! Commands run in an environment built from scratch, as apps do, with
@@ -85,7 +86,9 @@ pub fn build(ctx: *Context, recipe_path: []const u8, opts: Options) !install.Ima
             return .{ .manifest_digest = digest, .manifest = image.manifest, .config = image.config, .source = source };
         };
     };
+    const start = ctx.now();
     const image = try buildImage(ctx, r, recipe_path, source, &projects, work, opts);
+    if (r.hasBuildCommands()) note("built {s} {s} in {f}", .{ r.id, r.version, ctx.since(start) });
     if (inputs) |*h| try ctx.store.writeBuildCache(arena, h, image.manifest_digest);
     return image;
 }
@@ -681,6 +684,15 @@ const BuildRoot = struct {
         try environment.set(arena, &vars, "PREFIX", letter ++ "\\prefix");
         try environment.set(arena, &vars, "SOURCE_DATE_EPOCH", source_date_epoch);
         try environment.set(arena, &vars, "ZIGSAW_BUILD", "1");
+        // zig keeps what it compiles in its local cache, which is its global
+        // one, ${cache}, unless this says otherwise; and a cache hit doesn't
+        // repeat clang's warnings, so a check that a flag compiles without
+        // any (cc-rs's) answers otherwise once it has run before: cargo-c
+        // gained AVX-512 code in a store that had built it twice. So each
+        // module has its own, in its directory, as `zig build` has by
+        // default: fresh for each build, unless the module keeps its work
+        // directory. ${cache} keeps zig's libc and compiler-rt.
+        try environment.set(arena, &vars, "ZIG_LOCAL_CACHE_DIR", try std.fmt.allocPrint(arena, "{s}\\src\\{s}\\.zig-cache", .{ letter, m.name }));
         if (step == .build and !m.network) {
             // Discouraged, not prevented: tools that honor proxy variables
             // fail to connect, and nothing else is stopped.
@@ -703,12 +715,16 @@ const BuildRoot = struct {
         const label = if (step == .vendor) " vendor" else "";
         for (commands, 1..) |command, n| {
             note("[{s}{s} {d}/{d}] {s}", .{ m.name, label, n, commands.len, command });
+            const start = ctx.now();
             const code = try process.spawn(arena, .{
                 .exe = shell.exe,
                 .command_line = try shell.commandLine(arena, command),
                 .env_block = block,
                 .cwd = cwd,
             });
+            // So a log shows where a build's time goes.
+            const took = ctx.since(start);
+            if (took.ms >= 1000) note("[{s}{s} {d}/{d}] took {f}", .{ m.name, label, n, commands.len, took });
             if (code != 0) switch (on_failure) {
                 .fail => return fail("module {s}: {t} command {d} exited with code {d}:\n  {s}", .{ m.name, step, n, code, command }),
                 .warn => {

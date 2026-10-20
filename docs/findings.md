@@ -1237,6 +1237,42 @@ JDK's image, and compiled on the JRE's):
 - **All six recipes rebuild to identical digests**, including the 378 MB zig
   layer.
 
+## GTK's first run in CI (iteration 36)
+
+- **GTK's family reproduces on a runner**: GTK's SDK and runtime, GTK 3's,
+  PyGObject's, the dictionaries, Text Editor's and Rnote's files, Meld,
+  Gaphor, Gnumeric and GTK 3's demos all built to the published layers in
+  iteration 35's run, the first since iteration 10.
+- **Recipe files need fixed line endings.** Rnote's and Text Editor's
+  configs differed there, their layers didn't: an image records the hash of
+  each file its recipe carries, and the runner's git (`core.autocrlf=true`)
+  checked out `recipes/rnote/*` and `recipes/gnome-text-editor/*` with CRLF,
+  which `.gitattributes` didn't cover. One rule now covers every file under
+  `recipes/`.
+- **zig's cache made cargo-c build two images.** The runner built cargo-c
+  0.10.25 as `5c3ab826`, the image GTK's SDK pins, but the version's tag
+  was `c17e0473`, built here: the same config, and programs with 17 KB more
+  code, BLAKE3's AVX-512 code. BLAKE3's build script asks cc-rs whether `cc`
+  takes `-mavx512f -mavx512vl`, which cc-rs answers yes only if the test
+  compile prints nothing. The recipe's `-D__MSVCRT_VERSION__=0x700`
+  redefines zig's own, and clang warns; but when zig takes the object from
+  its cache, it prints none of the warnings clang gave. So a fresh store
+  builds `5c3ab826` twice, and `c17e0473` from the third build on, once
+  both probes are cached; this machine's long-used stores had built
+  `c17e0473` since 2026-10-14. A fresh `ZIG_LOCAL_CACHE_DIR` makes zig
+  compile again, warnings and all, while its global cache keeps the C
+  runtime (a link took 1.2 s, against 124 s with nothing cached). So from
+  0.36.0 each module's zig local cache is its own directory's `.zig-cache`,
+  fresh for each build, and `5c3ab826` comes out of the store that had
+  built `c17e0473`. A report for zig's issue tracker is drafted, not yet
+  filed.
+- On Windows Server 2025, in an AppContainer, CPython's getpath can't find
+  its own executable's real path (the probe's `self-path-dos`), warns, and
+  goes on.
+- On a runner's four CPUs, GTK's SDK takes 55 minutes to build, gettext
+  39, Gnumeric 27 and Rnote 15; here,
+  with sixteen, GTK's SDK is 15.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

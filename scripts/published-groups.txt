@@ -12,9 +12,11 @@
 #
 # A group named `skip` would be left out of CI; none is now. GTK's family
 # was, until iteration 35. Its groups get a longer timeout (the workflow's
-# gtk*, rnote and gnumeric jobs): GTK's SDK alone is a quarter of an hour of
-# building here, Rnote 20 minutes and Gnumeric 25 (minutes here, not yet on a
-# runner).
+# gtk*, rnote and gnumeric jobs): on a runner, GTK's SDK took 55 minutes,
+# gettext 39, Gnumeric 27 and Rnote 15 (iteration 35's run). So a push
+# checks them only when something they're built or tested from changed
+# (scripts/ci-groups.sh, whose changed_only lists them), and the weekly run
+# always.
 
 # zig 0.7, SQLite 1.7, CMake 0.2, zstd 6.9, Meson 1.5, ZLS (about 2)
 c: busybox.json zig.json sqlite.json cmake.json zstd.json meson.json zls.json

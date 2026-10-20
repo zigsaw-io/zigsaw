@@ -16,18 +16,9 @@ tests/install/*.cmd text eol=crlf
 # Hashed for releases (SHA256SUMS), so the same bytes on every checkout.
 *.ps1 text eol=lf
 
-# Files PHP's SDK image and Kanboard's carry, so they have the same digest on
-# every checkout.
-recipes/php-sdk/* text eol=lf
-recipes/kanboard/* text eol=lf
-
-# Likewise for GTK's SDK, Gnumeric, PyGObject's SDK, Gaphor and Python (windres.c,
-# nm.c, patches, a header, sitecustomize.py, pip's requirements files, a ._pth).
-recipes/gtk4-sdk/* text eol=lf
-recipes/gnumeric/* text eol=lf
-recipes/pygobject/* text eol=lf
-recipes/gaphor/* text eol=lf
-recipes/python/* text eol=lf
-
-# And Gradle's image (its offline init script and gradle-vendor).
-recipes/gradle/* text eol=lf
+# Every file a recipe carries (patches, headers, scripts, a ._pth): an image
+# records each one's hash, so it must have the same bytes on every checkout,
+# a runner's (core.autocrlf=true) too. Rnote's and Text Editor's lacked this
+# until iteration 36, so CI's builds of them had other configs. text=auto
+# leaves a binary file alone.
+recipes/** text=auto eol=lf

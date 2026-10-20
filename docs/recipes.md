@@ -311,12 +311,22 @@ at `${cache}`, as zig's does:
 
 In a build, `${cache}` is `B:\cache\<tool id>`, a directory zigsaw keeps
 between builds in the store and moves onto `B:` for each one. zig keeps the C
-runtime it builds on first use there, about 30 s of work, and the objects it
-compiles, so building SQLite takes 2 s instead of 42 the second time.
-`${cache}` is only for caches that are safe to keep, being keyed by the
-contents of their inputs, as zig's is: a build with a warm cache makes the
-same image as one without. Whatever else a tool keeps in its profile folders
-is still fresh in each build.
+runtime it builds on first use there, about 30 s of work (minutes on a
+runner). `${cache}` is only for caches that are safe to keep, being keyed by
+the contents of their inputs: a build with a warm cache must make the same
+image as one without. Whatever else a tool keeps in its profile folders is
+still fresh in each build.
+
+The objects zig compiles are **not** kept between builds: each module's
+`ZIG_LOCAL_CACHE_DIR` is its own `B:\src\<module>\.zig-cache`, as `zig build`
+has by default, so it's fresh for each build unless the module keeps its work
+directory (see [incremental builds](#incremental-builds)). Until iteration
+36 they were kept, in `${cache}`, and that wasn't safe: a cached object
+comes back without the warnings clang gave when it compiled it, so a
+build script that checks a flag compiles without any warning (cc-rs's
+`is_flag_supported`, as BLAKE3's does for AVX-512) answers otherwise once the
+check is cached. cargo-c built two different images in the same store that
+way (docs/findings.md).
 
 **Images can give builds commands.** An SDK or runtime image can provide a
 command under a name that other tools look for. zig's provides a C compiler
@@ -1393,8 +1403,9 @@ hermetic and reproducible by default:
   any store. It applies to `go build` run as an app too.
 - `-modcacherw`: Go's module cache can be deleted like any other directory,
   as builds delete theirs.
-- `GOCACHE=${cache}`: compiled packages are kept between builds, as zig's
-  cache is.
+- `GOCACHE=${cache}`: compiled packages are kept between builds. Go's cache
+  keeps a compile's output with its result, and shows it again; the C code
+  of cgo is compiled by zig, with the module's own cache.
 
 A Go module vendors its dependencies, then builds offline from them:
 

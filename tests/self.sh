@@ -83,7 +83,9 @@ copy_builds() { (cd "$copy" && z build --rebuild); }
 start=$SECONDS
 check "a copy of it builds, with a work directory of its own" copy_builds
 printf '      (%d s)\n' $((SECONDS - start))
-sed -i 's/find apps in the default registry'"'"'s catalog/find apps in the catalog of the default registry/' "$copy\\src\\main.zig"
+# A POSIX path, so sed writes its temporary file beside it, not in the
+# working directory (which may be on another volume than TMP).
+sed -i 's/find apps in the default registry'"'"'s catalog/find apps in the catalog of the default registry/' "$(cygpath -u "$copy\\src\\main.zig")"
 start=$SECONDS
 incremental() { (cd "$copy" && z -v build 2>&1) | grep -q "module zigsaw: its work directory from the last build, 1 file(s) rewritten"; }
 check "changed, it builds again in the work directory the last build left" incremental
