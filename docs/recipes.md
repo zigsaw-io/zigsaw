@@ -680,8 +680,21 @@ GTK 4 comes as two images, as Flatpak's GNOME runtime does:
   by listing it in their `sdk`. Its runtimes are zig, Meson and BusyBox,
   which it builds with and which builds that use it get too, and it exports
   their commands, so it builds programs
-  [without a recipe](#building-without-a-recipe). It takes about 35 minutes
-  to build from scratch, once gettext's image is there.
+  [without a recipe](#building-without-a-recipe).
+  - It's built in two halves, so CI builds them at once. The first,
+    **[`org.gtk.Gtk4.Sdk.Base`](recipes/gtk4-sdk-base.json)**, holds the
+    SDK's modules up to and including GTK. The SDK takes its files as an
+    image source, then builds the rest: the icon themes, libadwaita,
+    libsoup's stack, librsvg and enchant. Each module sees the same
+    `$PREFIX` it would in one build, so the SDK's files are what one build
+    makes, byte for byte.
+  - The base has the SDK's SDKs and runtimes too, so its modules build with
+    the same tools. It exports nothing; build against the SDK.
+  - The SDK repeats the base's first module (crt-noexport, below), whose
+    object its other modules link, since a module's own directory isn't
+    in an image.
+  - Each half takes about 20 minutes here from scratch, once gettext's
+    image is there; on a 4-CPU runner, one build took 57.
 - **[`org.gtk.Gtk4`](recipes/gtk4.json)** is the runtime: the SDK's files
   as an [image source](#images-as-sources), without the headers, libraries
   and build tools, so it builds in seconds once the SDK is there. Apps list

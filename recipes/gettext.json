@@ -47,7 +47,7 @@
         "sed -i 's/^#elif defined _MSC_VER && BUILDING_LIBCHARSET$/#elif defined _WIN32 \\&\\& BUILDING_LIBCHARSET/' libcharset/include/localcharset.h.build.in",
         "grep -q '^#elif defined _WIN32 && BUILDING_LIBICONV$' include/iconv.h.build.in && grep -q '^#elif defined _WIN32 && BUILDING_LIBCHARSET$' libcharset/include/localcharset.h.build.in",
         "sh zigsaw/mtimes.sh",
-        "sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-nls lt_cv_deplibs_check_method=pass_all gl_cv_cc_visibility=no > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
+        "sh ./configure --disable-dependency-tracking --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-nls lt_cv_deplibs_check_method=pass_all gl_cv_cc_visibility=no > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
         "for f in libtool libcharset/libtool; do sed -i 's/ -shared -nostdlib / -shared /' $f; done",
         "make -j\"$(nproc)\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",
         "make install > install.log 2>&1 || { tail -60 install.log; exit 1; }",
@@ -71,7 +71,7 @@
       ],
       "build": [
         "sh zigsaw/mtimes.sh",
-        "sh ./configure -C --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-java --disable-csharp --disable-openmp --disable-curses --disable-libasprintf --without-emacs --without-git --without-cvs --without-bzip2 --without-xz --enable-threads=windows --with-libiconv-prefix=B:/prefix lt_cv_deplibs_check_method=pass_all gl_cv_cc_visibility=no > configure.log 2>&1 || { tail -40 configure.log; for f in config.log */config.log; do echo \"== $f\"; tail -60 $f; done; exit 1; }",
+        "sh ./configure -C --disable-dependency-tracking --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-java --disable-csharp --disable-openmp --disable-curses --disable-libasprintf --without-emacs --without-git --without-cvs --without-bzip2 --without-xz --enable-threads=windows --with-libiconv-prefix=B:/prefix lt_cv_deplibs_check_method=pass_all gl_cv_cc_visibility=no > configure.log 2>&1 || { tail -40 configure.log; for f in config.log */config.log; do echo \"== $f\"; tail -60 $f; done; exit 1; }",
         "for d in gettext-runtime libtextstyle gettext-tools; do sed -i -e 's/ -shared -nostdlib / -shared /' -e 's/^stdlibflag=-nostdlib$/stdlibflag=/' $d/libtool; done",
         "sh zigsaw/exports.sh",
         "make -j\"$(nproc)\" MAKEINFO=true HELP2MAN=true LDFLAGS=\"$LDFLAGS -Wc,B:/src/crt-noexport/noexport.o\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",

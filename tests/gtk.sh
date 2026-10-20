@@ -135,12 +135,19 @@ check "GLib keeps its files in the app's data directory, and settings in a key f
 
 # libsoup, with GIO's TLS from glib-networking's OpenSSL module, which trusts
 # Windows' root certificates. ghcr.io answers 401 to anonymous requests.
+# badssl.com's host with an untrusted root sometimes drops the connection
+# before TLS says anything: then the run is tried once more.
+untrusted=${SOUP_UNTRUSTED:-https://untrusted-root.badssl.com/}
 soup() {
-    local out
-    out=$(timeout 120 "$zigsaw" run "$@" --command=bin/soup-get.exe $APP https://ghcr.io/v2/ https://untrusted-root.badssl.com/ 2>&1 | tr -d '\r')
+    local out try
+    for try in 1 2; do
+        out=$(timeout 120 "$zigsaw" run "$@" --command=bin/soup-get.exe $APP https://ghcr.io/v2/ "$untrusted" 2>&1 | tr -d '\r')
+        grep -qE "^GET $untrusted: error: (Error receiving data|Error sending data|Could not connect|Connection terminated unexpectedly|Socket I/O timed out|Error resolving)" <<<"$out" || break
+        [ $try = 1 ] && echo "a network error on $untrusted; once more" >&2
+    done
     grep -q '^libsoup 3\.8\.0$' <<<"$out" && grep -q '^tls backend GTlsBackendOpenssl$' <<<"$out" &&
         grep -qF 'GET https://ghcr.io/v2/: 401 over HTTP/2' <<<"$out" &&
-        grep -qF 'GET https://untrusted-root.badssl.com/: error: Unacceptable TLS certificate' <<<"$out" || { echo "got: $out"; return 1; }
+        grep -qF "GET $untrusted: error: Unacceptable TLS certificate" <<<"$out" || { echo "got: $out"; return 1; }
 }
 check "libsoup 3.8.0 gets an HTTPS URL over HTTP/2, trusting Windows' root certificates, and refuses an untrusted root" soup
 check "with --sandbox=low" soup --sandbox=low

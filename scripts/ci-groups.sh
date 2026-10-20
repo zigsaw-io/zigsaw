@@ -14,14 +14,15 @@
 # the last commit a Reproduce run passed on: its recipes and their
 # directories, GTK's suites and what they build, and what checks any group
 # (tests/published.sh, this script, the workflow). Its builds take most of a
-# run (GTK's SDK alone is 55 minutes on a runner), and they change rarely.
+# run (GTK's SDK took 57 minutes on a runner in one build), and they change
+# rarely.
 # Without a commit, or one git can't compare with, every group is checked:
 # as in the workflow's weekly run, which also catches a change to zigsaw
 # that a GTK image no longer reproduces with.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-changed_only="gtk-tools gtk gtk-apps rnote gnumeric"
+changed_only="gtk-tools gettext gtk-base gtk gtk-apps rnote gnumeric"
 
 groups_file=scripts/published-groups.txt
 all=$(grep -v -e '^#' -e '^\s*$' "$groups_file" | cut -d: -f1 | grep -vx skip | awk '!seen[$0]++')

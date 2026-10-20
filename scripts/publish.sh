@@ -8,8 +8,9 @@
 #                                  (default: those in published-recipes.txt)
 #
 # With --skip-unchanged, only new or changed recipes are built and published,
-# as git sees them: a recipe is changed if it, or a file in the directory
-# named like it (recipes/gtk4-sdk/ for gtk4-sdk.json), differs from REV
+# as git sees them: a recipe is changed if it, a file in the directory
+# named like it (recipes/gtk4-sdk/ for gtk4-sdk.json), or a file one of its
+# sources names by "path" (in or under recipes/), differs from REV
 # (default HEAD) in the working tree or isn't tracked yet. Pass the commit the
 # registry was last published from to catch committed changes. A recipe that
 # names the image of a chosen one (meld on GTK, say) is chosen too, and so on
@@ -92,6 +93,11 @@ if [ -n "$changed" ]; then
         rel=recipes/${recipe##*/recipes/}
         stem=${rel%.json}
         if grep -qxE "$rel|$stem/.*" <<<"$changed"; then pick[$recipe]=git; fi
+        # And the files its sources name, wherever they are (GTK's SDK base
+        # takes its patches from recipes/gtk4-sdk/).
+        for path in $(grep -o '"path": *"[^"]*"' "$recipe" | cut -d'"' -f4); do
+            if grep -qxF -e "recipes/$path" <<<"$changed" || grep -q "^recipes/$path/" <<<"$changed"; then pick[$recipe]=git; fi
+        done
     done
     more=true
     while $more; do

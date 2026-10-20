@@ -106,8 +106,9 @@ jobs:
     runs-on: windows-2025
     # All the groups in one job took 37 minutes after iteration 32; the
     # groups are balanced to some 10 to 13 minutes each. GTK's family takes
-    # longer: its SDK alone, Rnote and Gnumeric are 15 to 25 minutes each.
-    timeout-minutes: ${{ (startsWith(matrix.group, 'gtk') || matrix.group == 'rnote' || matrix.group == 'gnumeric') && 75 || 30 }}
+    # longer: each half of its SDK, gettext, Rnote and Gnumeric are 18 to
+    # 40 minutes each.
+    timeout-minutes: ${{ (startsWith(matrix.group, 'gtk') || matrix.group == 'gettext' || matrix.group == 'rnote' || matrix.group == 'gnumeric') && 75 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -134,13 +135,16 @@ jobs:
           mkdir -p "$(cygpath -u "$LOG_DIR")"
           bash tests/published.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/published.txt"
 
+      # On every run, not only a failed one: each build log says how long
+      # each of its commands took.
       - name: Upload the logs
-        if: failure()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-published-${{ matrix.group }}
           path: ${{ runner.temp }}\logs
           if-no-files-found: ignore
+          retention-days: 14
 
   suites:
     runs-on: windows-2025

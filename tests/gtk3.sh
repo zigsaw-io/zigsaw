@@ -18,9 +18,10 @@
 # Where Windows denies an AppContainer its own executable's real path
 # (tests/acprobe.sh: self-path-dos, as on Server 2025), CPython's getpath
 # warns that it can't find it, and goes on: the Python checks leave that
-# line out there. Meld's window under AppContainer is a known gap there, its
-# cause not yet confirmed: with LOG_DIR set, a failed draw leaves the run's
-# output and Meld's log there.
+# line out there. Where it denies NUL too (nul, as on Server 2025), Meld
+# can't open os.devnull for its output, and git can't open /dev/null: Meld's
+# window and its git support under AppContainer are known gaps there. With
+# LOG_DIR set, a failed draw leaves the run's output and Meld's log there.
 #
 # In CI, as tests/gtk.sh, in a store of the published images, which it
 # installs again rather than building (GTK's SDK takes a quarter of an hour
@@ -314,7 +315,7 @@ meld_logs() {
 }
 check "Meld compares two files and draws its window" meld_draws left.txt right.txt
 check "with --sandbox=low" meld_draws left.txt right.txt -- --sandbox=low
-check_want "$(ac_if self-path-dos)" "with --sandbox=appcontainer" meld_draws left.txt right.txt -- --sandbox=appcontainer
+check_want "$(ac_if nul)" "with --sandbox=appcontainer" meld_draws left.txt right.txt -- --sandbox=appcontainer
 check "it compares two folders" meld_draws left right -- --sandbox=low
 # Meld's version control views run git, which MinGit's image, one of Meld's
 # runtimes, puts on its PATH: here it makes a repository, with a commit, a
@@ -336,7 +337,7 @@ printf '%s\n' 'import os, gi' 'gi.require_version("Gtk", "3.0")' \
 vc_says='found: ['"'"'Git'"'"']|a.txt Modified|b.txt Unversioned'
 check "Meld's git support finds the repository, and what's changed in it" python_says vc.py "$vc_says"
 check "with --sandbox=low" python_says vc.py "$vc_says" --sandbox=low
-check "with --sandbox=appcontainer" python_says vc.py "$vc_says" --sandbox=appcontainer
+check_want "$(ac_if nul)" "with --sandbox=appcontainer" python_says vc.py "$vc_says" --sandbox=appcontainer
 check "it shows the repository's changes in its window" meld_draws repo -- --sandbox=low
 check "its log has no Python traceback" sh -c "! grep -q Traceback '$ZIGSAW_HOME\\data\\$MELD\\share\\meld.log'"
 meld_shortcut() {

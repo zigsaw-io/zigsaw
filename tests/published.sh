@@ -70,6 +70,23 @@ check() {
     fi
 }
 last_line() { grep -v '^\s*$' "$1" | tail -1 | cut -c1-110; }
+# slowest <build log>: its five slowest commands, slowest first, as
+# "<took>\t[<module> <n>/<count>]\t<command, cut short>". zigsaw logs each
+# command as "[<module> <n>/<count>] <command>", and when it took a second
+# or more, "[...] took 4m 07s" (or "12.3 s", "1h 03m") after it.
+slowest() {
+    tr -d '\r' <"$1" | awk '
+        match($0, /^\[[^]]+ [0-9]+\/[0-9]+\] /) {
+            step = substr($0, 1, RLENGTH - 1); rest = substr($0, RLENGTH + 1)
+            if (rest ~ /^took ([0-9]+h [0-9]+m|[0-9]+m [0-9]+s|[0-9.]+ s)$/) {
+                split(substr(rest, 6), p, " "); s = 0
+                if (p[1] ~ /h$/) s = p[1] * 3600 + p[2] * 60
+                else if (p[1] ~ /m$/) s = p[1] * 60 + p[2]
+                else s = p[1]
+                printf "%d\t%s\t%s\t%s\n", s * 10, substr(rest, 6), step, substr(command[step], 1, 100)
+            } else command[step] = rest
+        }' | sort -t$'\t' -k1,1nr | head -5 | cut -f2-
+}
 
 # Arguments for a quick run of each app that exits 0, within two minutes (a
 # run still going then fails, rather than holding up the job).
@@ -246,6 +263,10 @@ for name in $published_recipes; do
     took=$((SECONDS - started))
     printf 'time  %s: built in %dm %02ds\n' "$id" $((took / 60)) $((took % 60))
     [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '| %s | %dm %02ds |\n' "$id" $((took / 60)) $((took % 60)) >>"$GITHUB_STEP_SUMMARY"
+    slowest "$logs\\$id.build.log" | while IFS=$'\t' read -r dur step command; do
+        printf 'slow    %8s  %s %s\n' "$dur" "$step" "$command"
+        [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '| &nbsp;&nbsp;%s `%s` | %s |\n' "$step" "$(tr '|`' '/'"'" <<<"$command")" "$dur" >>"$GITHUB_STEP_SUMMARY"
+    done
     built=$(ref_digest "$build_store" "$id")
     version=$(zb list | awk -v id="$id" '$1 == id { print $2 }')
 

@@ -12,11 +12,11 @@
 #
 # A group named `skip` would be left out of CI; none is now. GTK's family
 # was, until iteration 35. Its groups get a longer timeout (the workflow's
-# gtk*, rnote and gnumeric jobs): on a runner, GTK's SDK took 55 minutes,
-# gettext 39, Gnumeric 27 and Rnote 15 (iteration 35's run). So a push
-# checks them only when something they're built or tested from changed
-# (scripts/ci-groups.sh, whose changed_only lists them), and the weekly run
-# always.
+# gtk*, gettext, rnote and gnumeric jobs): on a runner, GTK's SDK took 57
+# minutes in one build, gettext 39, Rnote 24, Gnumeric 18 and cargo-c 13
+# (iteration 36's run). So a push checks them only when something they're
+# built or tested from changed (scripts/ci-groups.sh, whose changed_only
+# lists them), and the weekly run always.
 
 # zig 0.7, SQLite 1.7, CMake 0.2, zstd 6.9, Meson 1.5, ZLS (about 2)
 c: busybox.json zig.json sqlite.json cmake.json zstd.json meson.json zls.json
@@ -30,14 +30,18 @@ apps: php-sdk.json php.json php-apcu.json php-xdebug.json php-igbinary.json php-
 # Scene Builder (about 3)
 java: java-sdk.json java.json maven.json gradle.json pdfbox.json plantuml.json logisim-evolution.json scenebuilder.json
 
-# What GTK's SDK builds with: Perl (prebuilt), cargo-c and gettext
-gtk-tools: perl.json cargo-c.json gettext.json
-# GTK's SDK (about 15 here), its runtime and the dictionaries
+# What GTK's SDK builds with: Perl (prebuilt) and cargo-c (13); gettext
+# (39) alone
+gtk-tools: perl.json cargo-c.json
+gettext: gettext.json
+# GTK's SDK in two halves, each alone: its base, then the SDK on it, with
+# GTK's runtime and the dictionaries (about 20 each here)
+gtk-base: gtk4-sdk-base.json
 gtk: gtk4-sdk.json gtk4.json gtk4-hunspell-vi.json gtk4-hunspell-fr.json
 # Text Editor; GTK 3's images and its demos; PyGObject's, Meld and Gaphor
 gtk-apps: gnome-text-editor.json
 gtk-apps: gtk3-sdk.json gtk3.json gtk3demo.json
 gtk-apps: pygobject-sdk.json pygobject.json meld.json gaphor.json
-# Rnote (about 20 here) and Gnumeric (about 25), each alone
+# Rnote (24) and Gnumeric (18), each alone
 rnote: rnote.json
 gnumeric: gnumeric.json

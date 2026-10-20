@@ -407,10 +407,12 @@
   library); on Windows 11 26300 it does.
 - On Windows Server 2025, in an AppContainer, Python on PyGObject's runtime
   first warns `Failed to find real location of …\python.exe` (CPython's
-  getpath can't resolve its own path there, as zig can't), then runs; and
-  Meld draws no window. That Meld's cause is the same isn't confirmed yet:
-  tests/gtk3.sh leaves its log in CI's artifact. On Windows 11 26300 both
-  work.
+  getpath can't resolve its own path there, as zig can't), then runs. NUL
+  is denied there too, so Meld draws no window (its launcher opens
+  `os.devnull` for pythonw's missing output and stops on
+  `PermissionError: 'nul'`), and git, from MinGit's image, can't open
+  `/dev/null`, so Meld's version control views don't work. A non-admin
+  can't change NUL's access. On Windows 11 26300 all of it works.
 - CI checks GTK's family (its images and suites) on a push only when
   something they're built or tested from changed, and weekly otherwise: a
   change to zigsaw that a GTK image no longer reproduces with shows up to a

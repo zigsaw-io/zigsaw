@@ -21,6 +21,7 @@ zls.json
 perl.json
 cargo-c.json
 gettext.json
+gtk4-sdk-base.json
 gtk4-sdk.json
 gtk4.json
 gtk4-hunspell-vi.json
