@@ -410,6 +410,87 @@ pub fn writeFiles(t: *const Tree, io: Io, arena: Allocator, dest_path: []const u
     }
 }
 
+pub const Synced = struct {
+    /// The tree's file paths, as written or found ('/'-separated).
+    files: []const []const u8,
+    written: usize = 0,
+    removed: usize = 0,
+};
+
+/// Makes `dest_path` (which must exist) hold the tree's files, as
+/// `writeFiles` would, but leaves a file that already has the same contents
+/// alone, timestamps and all, so tools that compare them (make, ninja,
+/// cargo) see only what changed as new. Of `previous`, the file paths an
+/// earlier sync wrote, those the tree no longer has are deleted. Whatever
+/// else is there, such as a build's own output, is left as it is.
+pub fn syncFiles(t: *const Tree, io: Io, arena: Allocator, dest_path: []const u8, previous: []const []const u8) !Synced {
+    var dest = try Io.Dir.cwd().openDir(io, dest_path, .{});
+    defer dest.close(io);
+    const zip = try arena.create(zipfile.Content);
+    var read_buf: [64 * 1024]u8 = undefined;
+    var write_buf: [64 * 1024]u8 = undefined;
+    var files: std.ArrayList([]const u8) = .empty;
+    var synced: Synced = .{ .files = &.{} };
+    for (try t.sorted(arena)) |node| {
+        if (node.content == .dir) {
+            try dest.createDirPath(io, node.path);
+            continue;
+        }
+        try files.append(arena, node.path);
+        if (try sameContents(io, zip, dest, node, &read_buf, &write_buf)) continue;
+        // A directory where the file goes, left by the build.
+        if (dest.statFile(io, node.path, .{})) |stat| {
+            if (stat.kind == .directory) try dest.deleteTree(io, node.path);
+        } else |_| {}
+        var file_reader: Io.File.Reader = undefined;
+        const src = try openContent(io, node.content, zip, &file_reader, &read_buf);
+        defer if (src.file) |f| f.close(io);
+        var out = try dest.createFile(io, node.path, .{});
+        defer out.close(io);
+        var writer = out.writer(io, &write_buf);
+        try src.reader.streamExact64(&writer.interface, src.size);
+        try writer.interface.flush();
+        synced.written += 1;
+    }
+    for (previous) |p| {
+        const key = try std.ascii.allocLowerString(arena, p);
+        if (t.nodes.get(key)) |node| if (node.content != .dir) continue;
+        dest.deleteFile(io, p) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            // A directory now, which the build made.
+            error.IsDir => continue,
+            else => |e| return e,
+        };
+        synced.removed += 1;
+    }
+    synced.files = files.items;
+    return synced;
+}
+
+/// Whether the file at the node's path in `dest` holds the node's bytes.
+fn sameContents(io: Io, zip: *zipfile.Content, dest: Io.Dir, node: Node, src_buf: []u8, dest_buf: []u8) !bool {
+    const stat = dest.statFile(io, node.path, .{}) catch return false;
+    if (stat.kind != .file) return false;
+    var file_reader: Io.File.Reader = undefined;
+    const src = try openContent(io, node.content, zip, &file_reader, src_buf);
+    defer if (src.file) |f| f.close(io);
+    if (stat.size != src.size) return false;
+    const file = dest.openFile(io, node.path, .{}) catch return false;
+    defer file.close(io);
+    var dest_reader = file.reader(io, dest_buf);
+    var left = src.size;
+    var a: [4096]u8 = undefined;
+    var b: [4096]u8 = undefined;
+    while (left > 0) {
+        const n: usize = @intCast(@min(left, a.len));
+        try src.reader.readSliceAll(a[0..n]);
+        dest_reader.interface.readSliceAll(b[0..n]) catch return false;
+        if (!std.mem.eql(u8, a[0..n], b[0..n])) return false;
+        left -= n;
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // To a layer
 
@@ -712,4 +793,45 @@ test "trees go to disk and back" {
     try std.testing.expect(try back.isFile(arena, "sub/b.txt"));
     try std.testing.expectEqual(3, back.nodes.count());
     try std.testing.expectEqualStrings("replaced", try readTestFile(arena, prefix, "a.txt"));
+}
+
+test "syncing rewrites only files whose contents differ, and removes what's gone" {
+    const io = std.testing.io;
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "src/sub");
+    try tmp.dir.createDirPath(io, "work");
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/a.txt", .data = "one" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/b.txt", .data = "two" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/sub/c.txt", .data = "three" });
+    const base = try tmp.dir.realPathFileAlloc(io, ".", arena);
+    const src = try std.fs.path.join(arena, &.{ base, "src" });
+    const work = try std.fs.path.join(arena, &.{ base, "work" });
+
+    const first = try (try fromDir(io, arena, src)).syncFiles(io, arena, work, &.{});
+    try std.testing.expectEqual(3, first.written);
+    try std.testing.expectEqual(3, first.files.len);
+
+    // The build leaves its output, and edits a source, as a sed would; then
+    // a source changes (to as many bytes) and another goes.
+    try tmp.dir.writeFile(io, .{ .sub_path = "work/out.o", .data = "built" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "work/b.txt", .data = "TWO" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/a.txt", .data = "uno" });
+    try tmp.dir.deleteFile(io, "src/sub/c.txt");
+    const second = try (try fromDir(io, arena, src)).syncFiles(io, arena, work, first.files);
+    try std.testing.expectEqual(2, second.written);
+    try std.testing.expectEqual(1, second.removed);
+    try std.testing.expectEqualStrings("uno", try readTestFile(arena, work, "a.txt"));
+    try std.testing.expectEqualStrings("two", try readTestFile(arena, work, "b.txt"));
+    try std.testing.expectEqualStrings("built", try readTestFile(arena, work, "out.o"));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, "work/sub/c.txt", .{}));
+
+    // Nothing changed: nothing is written.
+    const third = try (try fromDir(io, arena, src)).syncFiles(io, arena, work, second.files);
+    try std.testing.expectEqual(0, third.written);
+    try std.testing.expectEqual(0, third.removed);
 }

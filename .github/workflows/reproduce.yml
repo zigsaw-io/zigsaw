@@ -6,14 +6,15 @@
 # - suites: the suites in tests/ that run apps, in a store of the published
 #   images (tests/seed-store.sh), which the published jobs check are what the
 #   recipes build;
+# - gtk-suites: tests/gtk.sh and tests/gtk3.sh, the same way, in a store of
+#   GTK's published images and the apps on them;
 # - build, one job for each group of tests/build.sh's sections: the group's
 #   checks, in stores of their own, downloading what they build from; the
 #   base group's job runs the unit tests first.
 # And two quick ones:
 # - groups: the groups the published and build jobs are made from;
 # - pins: every image the published recipes pin is on the registry, so a
-#   fresh store can build them, those of the skip group included
-#   (scripts/check-pins.sh).
+#   fresh store can build them (scripts/check-pins.sh).
 # It only verifies; scripts/publish.sh publishes.
 name: Reproduce
 
@@ -73,8 +74,9 @@ jobs:
         group: ${{ fromJSON(needs.groups.outputs.groups) }}
     runs-on: windows-2025
     # All the groups in one job took 37 minutes after iteration 32; the
-    # groups are balanced to some 10 to 13 minutes each.
-    timeout-minutes: 30
+    # groups are balanced to some 10 to 13 minutes each. GTK's family takes
+    # longer: its SDK alone, Rnote and Gnumeric are 15 to 25 minutes each.
+    timeout-minutes: ${{ (startsWith(matrix.group, 'gtk') || matrix.group == 'rnote' || matrix.group == 'gnumeric') && 75 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -206,6 +208,56 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-suites
+          path: ${{ runner.temp }}\logs
+          if-no-files-found: ignore
+
+  gtk-suites:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+
+      - name: Paths for the steps below
+        shell: bash
+        run: |
+          t=$RUNNER_TEMP
+          printf '%s\n' "TMP=$t" "TEMP=$t" "GTK_HOME=$t\\store" "LOG_DIR=$t\\logs" >>"$GITHUB_ENV"
+
+      - name: Build zigsaw
+        run: zig build
+
+      # GTK's images and the apps on them, as published; the suites install
+      # them again rather than building them. (They build Pinta, which isn't
+      # published, and .NET's images, from their recipes.)
+      - name: The GTK suites' images, as published (built, if not published yet)
+        shell: bash
+        env:
+          ZIGSAW_HOME: ${{ runner.temp }}\store
+        run: |
+          mkdir -p "$(cygpath -u "$LOG_DIR")"
+          bash tests/seed-store.sh --pull busybox zig meson mingit gtk4-sdk gtk4 gtk4-hunspell-vi gtk4-hunspell-fr gnome-text-editor rnote gtk3-sdk gtk3 gtk3demo gnumeric pygobject-sdk pygobject meld gaphor 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
+
+      - name: tests/gtk.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/gtk.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/gtk.txt"
+
+      - name: tests/gtk3.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/gtk3.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/gtk3.txt"
+
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: logs-gtk-suites
           path: ${{ runner.temp }}\logs
           if-no-files-found: ignore
 

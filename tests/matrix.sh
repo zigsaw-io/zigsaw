@@ -83,26 +83,11 @@ done
 outside="$work\\outside"
 mkdir -p "$outside" && echo secret >"$outside\\secret.txt"
 
-# What this Windows denies AppContainers: the probe, as an app of its own,
-# run in one, from a granted directory.
-PROBE=test.matrix.acprobe
-(cd "$root" && zig build acprobe) || { echo "building the AppContainer probe failed"; exit 1; }
-mkdir -p "$work\\acprobe\\cwd" && cp "$root\\zig-out\\test\\zigsaw-acprobe.exe" "$work\\acprobe\\"
-printf '{ "id": "%s", "version": "1", "command": "zigsaw-acprobe.exe", "exports": {}, "permissions": { "filesystem": ["cwd"] },\n  "modules": [{ "name": "probe", "sources": [{ "path": "zigsaw-acprobe.exe" }] }] }\n' \
-    $PROBE >"$work\\acprobe\\acprobe.json"
-out=$("$zigsaw" build "$work\\acprobe\\acprobe.json" 2>&1) || { echo "$out"; exit 1; }
-probe=$(cd "$work\\acprobe\\cwd" && "$zigsaw" run --sandbox=appcontainer $PROBE 2>/dev/null | tr -d '\r')
-grep -q '^nul ' <<<"$probe" || { echo "the AppContainer probe didn't run: $probe"; exit 1; }
-
-# ac_if <check...>: the intended outcome under AppContainer of a known gap
-# whose causes are those probe checks: "ok" where they all passed, else "gap".
-ac_if() {
-    local check
-    for check in "$@"; do
-        grep -qx "$check ok" <<<"$probe" || { echo gap; return; }
-    done
-    echo ok
-}
+# What this Windows denies AppContainers (tests/acprobe.sh): $probe, and
+# ac_if <check...>, the intended outcome under AppContainer of a known gap
+# whose causes are those probe checks.
+. "$(cygpath -u "$root")/tests/acprobe.sh"
+acprobe_run "$zigsaw" "$root" "$work"
 
 # --- Harness -----------------------------------------------------------------
 
@@ -340,15 +325,14 @@ expect ok ok ok "draws a class diagram as SVG" plantuml_svg
 # --- Report ------------------------------------------------------------------
 
 echo
-echo "In an AppContainer on $(cmd /c ver | tr -d '\r' | grep -v '^$') (tests/acprobe.zig):"
-grep -v '^#' <<<"$probe" | sed 's/^/  /'
+acprobe_report
 echo
 printf '%-8s %-38s %-20s %-20s %s\n' TOOL CHECK SOFT APPCONTAINER LOW
 printf '%s\n' "${rows[@]}"
 echo
 echo "$mismatches result(s) differ from the intended behaviour, and $gaps known gap(s) failed. The checks took $((SECONDS - started))s."
 
-"$zigsaw" rm --delete-data $PROBE >/dev/null 2>&1
+acprobe_rm "$zigsaw"
 if $own_store; then
     for id in $BB $RG $BAT $GIT $NODE $PY $ZIG $GO $FZF $ZOT $CMAKE $ZSTD; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
     rm -rf "$ZIGSAW_HOME"

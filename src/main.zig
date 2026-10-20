@@ -28,11 +28,12 @@ const usage =
     \\usage: zigsaw [-v|--verbose] <command> [options]
     \\
     \\commands:
-    \\  build [--rebuild] [--keep-build-dir] [<recipe.json> | <dir>]
+    \\  build [--rebuild] [--clean] [--keep-build-dir] [<recipe.json> | <dir>]
     \\                                  build an app from a recipe, or from the zigsaw.json of a
     \\                                  project's directory (by default the current one), and
     \\                                  install it and its commands; --rebuild builds even if an
-    \\                                  earlier build had the same inputs
+    \\                                  earlier build had the same inputs, and --clean also starts
+    \\                                  a project's modules without their kept work directories
     \\  search [<words>...]             find apps in the default registry's catalog
     \\  info <image>                    show what an app in a registry is, needs and may reach
     \\  pull <image>                    install an app and its commands from a registry
@@ -159,6 +160,8 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
                 opts.keep_build_dir = true;
             } else if (isFlag(arg, "rebuild")) {
                 opts.rebuild = true;
+            } else if (isFlag(arg, "clean")) {
+                opts.clean = true;
             } else if (recipe_path == null and !std.mem.startsWith(u8, arg, "-")) {
                 recipe_path = arg;
             } else return usageError();

@@ -8,6 +8,11 @@
 # project declares; it reports a syntax error; and it exits when told to.
 # Last, its shim, which editors start.
 #
+# Where Windows denies AppContainers what zig needs to find itself
+# (tests/acprobe.sh: self-path-dos, as on Server 2025), `zig env` fails in
+# one, so ZLS finds neither zig's library nor the modules: those two checks
+# are known gaps there, as zig's are in tests/matrix.sh.
+#
 #   ZLS_HOME=path\to\store bash tests/zls.sh [path\to\zigsaw.exe]
 #
 # The store (ZLS_HOME, or BUILD_HOME as tests/published.sh leaves it, or a
@@ -31,6 +36,7 @@ work=$(cygpath -w "$(mktemp -d)")
 ZLS=org.zigtools.zls
 
 failures=0
+gaps=0
 check() {
     local label=$1
     shift
@@ -43,12 +49,30 @@ check() {
     fi
 }
 
+# check_want <ok|gap> <label> <command...>: check, but a failure where the
+# probe says a known gap's causes are there counts as that gap.
+check_want() {
+    local want=$1 label=$2
+    shift 2
+    [ "$want" = gap ] || { check "$label" "$@"; return; }
+    local out
+    if out=$("$@" 2>&1); then
+        printf 'ok    %s  (a known gap that passes now)\n' "$label"
+    else
+        printf 'gap   %s  (known gap)\n      %s\n' "$label" "$(grep -v '^\s*$' <<<"$out" | tail -1 | cut -c1-110)"
+        gaps=$((gaps + 1))
+    fi
+}
+
 z() { "$zigsaw" "$@"; }
 installed_here=""
 if [ ! -f "$ZIGSAW_HOME\\refs\\$ZLS.json" ]; then
     installed_here=$ZLS
     z build "$root\\recipes\\zls.json" >"$work\\build.log" 2>&1 || echo "building zls.json failed: $(tail -1 "$work\\build.log")"
 fi
+. "$(cygpath -u "$root")/tests/acprobe.sh"
+acprobe_run "$zigsaw" "$root" "$work"
+
 # Runs from the work directory's sandbox folders, never the repository: ZLS
 # has the cwd permission, which low runs label and AppContainer runs grant.
 cd "$work" || exit 1
@@ -129,8 +153,10 @@ for sb in soft low appcontainer; do
     check "under $sb: it starts, and answers initialize" reply 1
     send '{"jsonrpc":"2.0","method":"initialized","params":{}}'
     send '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$uri"'/main.zig","languageId":"zig","version":1,"text":"'"$main_text"'"}}}'
-    check "  hover shows the standard library's documentation, from the zig image" std_hover
-    check "  it learns the module build.zig declares, running it with that zig" module_hover
+    want=ok
+    [ "$sb" = appcontainer ] && want=$(ac_if self-path-dos)
+    check_want $want "  hover shows the standard library's documentation, from the zig image" std_hover
+    check_want $want "  it learns the module build.zig declares, running it with that zig" module_hover
     check "  it reports a syntax error" syntax_error
     send '{"jsonrpc":"2.0","id":99,"method":"shutdown","params":null}'
     reply 99 >/dev/null
@@ -144,6 +170,7 @@ check "its shim runs it, as an editor would" sh -c "[ \"\$(\"$ZIGSAW_HOME\\\\bin
 check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
 cd "$root" || exit 1
+acprobe_rm "$zigsaw"
 for id in $installed_here; do z rm --delete-data "$id" >/dev/null 2>&1; done
 if [ -n "$temp_store" ]; then
     z prune --downloads --data >/dev/null 2>&1
@@ -151,5 +178,7 @@ if [ -n "$temp_store" ]; then
 fi
 rm -rf "$work"
 echo
-echo "$failures check(s) failed."
+acprobe_report
+echo
+echo "$failures check(s) failed, and $gaps known gap(s)."
 exit $((failures > 0))

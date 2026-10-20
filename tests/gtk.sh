@@ -22,8 +22,10 @@
 # --file in each sandbox. GTK built with MSVC (recipes/gtk4-msvc.json) runs
 # its demos, if the store has it.
 #
-# Not in CI: the SDK takes a quarter of an hour to build, and the runner has
-# no GPU for the OpenGL check.
+# In CI (the Reproduce workflow's gtk-suites job), it runs in a store of the
+# published images (tests/seed-store.sh), which it installs again rather
+# than building; the runner has no GPU, so the OpenGL check is a known gap
+# there.
 #
 #   GTK_HOME=path\to\store bash tests/gtk.sh [path\to\zigsaw.exe]
 #
@@ -77,6 +79,19 @@ check() {
 
 z() { "$zigsaw" "$@"; }
 manifest_of() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$1.json"; }
+# install_again <id> <recipe>: installs an app the store has again, as the
+# store got it: from the build cache, if it built it, or the registry it was
+# pulled from (as the Reproduce workflow's store pulls the published
+# images), so its shortcuts and file associations go to this test's folder
+# and registry key. Builds the recipe if the store hasn't the app.
+install_again() {
+    local source=""
+    [ -f "$ZIGSAW_HOME\\refs\\$1.json" ] && source=$(grep -o '"source": *"[^"]*"' "$ZIGSAW_HOME\\refs\\$1.json" | cut -d'"' -f4)
+    case $source in
+    "" | *.json) z build "$root\\recipes\\$2" ;;
+    *) z pull "$source" ;;
+    esac
+}
 
 for f in hello.c soup.c svg.c spell.c font.c icon.c meson.build; do cp "$root\\tests\\gtk\\$f" "$work\\"; done
 sed -e "s/@GTK@/$(manifest_of org.gtk.Gtk4)/" -e "s/@GTKSDK@/$(manifest_of org.gtk.Gtk4.Sdk)/" \
@@ -95,7 +110,15 @@ check "with --sandbox=low" drew --sandbox=low
 check "with --sandbox=appcontainer" drew --sandbox=appcontainer
 adwaita() { timeout 120 "$zigsaw" run $APP 2>&1 | tr -d '\r' | grep -q '^libadwaita 1\.10\.0$'; }
 check "the runtime has libadwaita 1.10.0" adwaita
-check "with GDK_DEBUG=dcomp, GTK draws with OpenGL" sh -c "timeout 120 \"\$0\" run --env=GDK_DEBUG=dcomp $APP 2>&1 | grep -q '^drew a frame with GskGLRenderer'" "$zigsaw"
+# A machine without a GPU, as a CI runner, has only Windows' basic display
+# adapter, and GTK falls back to cairo: a known gap there.
+gl_frame() { timeout 120 "$zigsaw" run --env=GDK_DEBUG=dcomp $APP 2>&1 | tr -d '\r' | grep -q '^drew a frame with GskGLRenderer'; }
+gpus=$(powershell -NoProfile -Command "(Get-CimInstance Win32_VideoController).Name" | tr -d '\r' | grep -v -i -e '^$' -e 'basic display' -e 'basic render' -e 'hyper-v')
+if [ -n "$gpus" ] || gl_frame; then
+    check "with GDK_DEBUG=dcomp, GTK draws with OpenGL" gl_frame
+else
+    printf 'gap   %s  (known gap: no GPU)\n' "with GDK_DEBUG=dcomp, GTK draws with OpenGL"
+fi
 settings() { timeout 60 "$zigsaw" run --command=gtk4-query-settings org.gtk.Gtk4 | grep -q 'gtk-theme-name: "Default"'; }
 check "the runtime's gtk4-query-settings reads GTK's settings" settings
 check "its gtk4-demo is GTK 4.24.1" sh -c "timeout 60 \"\$0\" run --command=gtk4-demo org.gtk.Gtk4 --version | grep -q 'gtk4-demo.exe 4.24.1'" "$zigsaw"
@@ -304,9 +327,8 @@ check "the SDK's windres compiles a resource script that cc links" loose_windres
 check "a relative --command says how to name a program of yours" sh -c "\"\$0\" run --command=loose\\\\hello.exe org.gtk.Gtk4 2>&1 | grep -qF 'give its absolute path'" "$zigsaw"
 
 # GUI programs get the shim that opens no console, and declared shortcuts.
-# Installing the runtime again (from the build cache) puts its shortcuts in
-# the test's folder.
-z build "$root\\recipes\\gtk4.json" >/dev/null 2>&1
+# Installing the runtime again puts its shortcuts in the test's folder.
+install_again org.gtk.Gtk4 gtk4.json >/dev/null 2>&1
 shim_dir=$(dirname "$zigsaw")
 shim_is() { cmp -s "$ZIGSAW_HOME\\bin\\$1.exe" "$shim_dir\\$2"; }
 gui_shims() { shim_is gtk4-demo zigsaw-shimw.exe && shim_is adwaita-1-demo zigsaw-shimw.exe && shim_is gtk4-query-settings zigsaw-shim.exe; }
@@ -364,7 +386,7 @@ if [ ! -f "$ZIGSAW_HOME\\refs\\$EDITOR.json" ]; then
     z build "$root\\recipes\\gnome-text-editor.json" >"$work\\editor.log" 2>&1 || echo "building $EDITOR failed: $(tail -1 "$work\\editor.log")"
     installed_editor=true
 else
-    z build "$root\\recipes\\gnome-text-editor.json" >/dev/null 2>&1
+    install_again $EDITOR gnome-text-editor.json >/dev/null 2>&1
 fi
 editor_version() { timeout 60 "$zigsaw" run $EDITOR --version | tr -d '\r' | grep -q '^Text Editor 51\.0 '; }
 check "Text Editor 51.0 is installed" editor_version
@@ -391,7 +413,7 @@ if [ ! -f "$ZIGSAW_HOME\\refs\\$GAPHOR.json" ]; then
     z build "$root\\recipes\\gaphor.json" >"$work\\gaphor.log" 2>&1 || echo "building $GAPHOR failed: $(tail -1 "$work\\gaphor.log")"
     installed_gaphor=true
 else
-    z build "$root\\recipes\\gaphor.json" >/dev/null 2>&1
+    install_again $GAPHOR gaphor.json >/dev/null 2>&1
 fi
 # Gaphor's pythonw shows nothing: its console python.exe, from PyGObject's
 # runtime, runs it for these.
@@ -428,7 +450,7 @@ if [ ! -f "$ZIGSAW_HOME\\refs\\$RNOTE.json" ]; then
     z build "$root\\recipes\\rnote.json" >"$work\\rnote.log" 2>&1 || echo "building $RNOTE failed: $(tail -1 "$work\\rnote.log")"
     installed_rnote=true
 else
-    z build "$root\\recipes\\rnote.json" >/dev/null 2>&1
+    install_again $RNOTE rnote.json >/dev/null 2>&1
 fi
 rnote_manifest="$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $RNOTE | cut -d: -f2)"
 rnote_dir="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$rnote_manifest" | tail -1 | cut -d: -f2)"

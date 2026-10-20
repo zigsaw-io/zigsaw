@@ -476,6 +476,40 @@ and contents.
   hashes them again afterwards, and fails the build if one changed while it
   copied them, as its record wouldn't be of what it copied.
 
+### Incremental builds
+
+A module whose sources include a project's own files keeps its work
+directory, `B:\src\<module>`, between builds, as makepkg keeps `src/`. So
+whatever its build leaves there is still there the next time: zig's
+`.zig-cache`, CMake's or Meson's build directory, cargo's `target`.
+
+- **Its sources are brought up to date in it.** A file whose contents
+  differ from the source's is written again, whether the project changed it
+  or the last build edited it in place (a `sed -i`, which then edits a fresh
+  copy, as in a first build). A file the project no longer has is deleted.
+  The other files are left as they are, timestamps and all, so make, ninja
+  and cargo see only what changed as new.
+- **It starts afresh** when zigsaw, the recipe, or the recipe's other local
+  files change, as their builds' state may no longer hold, and with
+  `zigsaw build --clean`, which also builds when nothing changed.
+- **The rest of the build is as fresh as ever**: `B:\prefix`, `B:\home` and
+  `B:\data` are new in each build, and a [vendor step's](#vendor-steps)
+  module, one without build commands, and a recipe's modules with only
+  pinned sources, as every published recipe's, never keep one.
+- **It's kept in the store**, under `cache\work\<key>\<module>`, keyed by
+  the recipe's path and the app's id, so two checkouts don't share one. It
+  moves into the build root for the build, and back afterwards, a failed
+  build's too, as make leaves what it made. `--keep-build-dir` leaves it in
+  the kept build root, and the next build starts afresh. `zigsaw prune
+  --downloads` deletes them.
+
+An incremental build should make the image a `--clean` build of the same
+files makes, as `${cache}` should; how far it does is up to the project's
+tools, whose incremental state it is. zig's is keyed by contents. For
+zigsaw's own, [`tests/self.sh`](../tests/self.sh) checks that a build after a
+change makes the bytes a `--clean` build and a plain `zig build -Dstrip`
+make.
+
 A project's own [vendor step](#vendor-steps) works as any other: `cargo
 vendor` in the module's directory, with the project's files. The installed
 app records where its recipe is, so `zigsaw update <app-id>` builds it again

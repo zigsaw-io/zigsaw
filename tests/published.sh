@@ -71,9 +71,12 @@ check() {
 }
 last_line() { grep -v '^\s*$' "$1" | tail -1 | cut -c1-110; }
 
-# Arguments for a quick run of each app that exits 0.
+# Arguments for a quick run of each app that exits 0, within two minutes (a
+# run still going then fails, rather than holding up the job).
 smoke_args() {
     case $1 in
+    # GTK's option parser: it has no --version.
+    com.github.flxzt.rnote) printf '%s\n' --help ;;
     net.frippery.busybox) printf '%s\n' true ;;
     org.nodejs.node) printf '%s\n' '-e 0' ;;
     org.python.python) printf '%s\n' '-c pass' ;;
@@ -107,6 +110,7 @@ serves() {
     wait $server 2>/dev/null
     grep -q 'name="csrf_token"' <<<"$page" || { echo "no login page on port $port: $(last_line "$out")"; return 1; }
 }
+smoke() { ZIGSAW_HOME="$pull_store" timeout 120 "$zigsaw" run "$@" </dev/null; }
 ref_digest() { grep -o 'sha256:[0-9a-f]*' "$1\\refs\\$2.json"; }
 # all_bound <store> <manifest digest>: tests/imports.zig on the executables
 # and DLLs of the image's own layer, the last, deployed by a run.
@@ -230,7 +234,7 @@ for name in $published_recipes; do
         check "$id: runs, and serves its login page" serves "$id"
     else
         # shellcheck disable=SC2046 # The arguments are meant to split.
-        check "$id: runs" zp run "$id" $(smoke_args "$id")
+        check "$id: runs" smoke "$id" $(smoke_args "$id")
     fi
     # What Rust's toolchain links, GNU ld, must leave no import unbound
     # (docs/iteration-12.md).

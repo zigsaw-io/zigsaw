@@ -18,6 +18,8 @@
 //!   <root>\cache\builds\<hex>     the manifest a build with these inputs made (see builder.zig)
 //!   <root>\cache\tools\<id>\      the caches of a build tool whose config uses ${cache},
 //!                                 kept between builds (see builder.zig)
+//!   <root>\cache\work\<key>\      a project's modules' work directories, kept between
+//!                                 its builds (see builder.zig)
 //!   <root>\tmp\                   staging area
 //!   <root>\lock                   see "Locks" below
 //!
@@ -41,7 +43,7 @@ root: []const u8,
 /// Report step timings, as `zigsaw -v` asks for.
 verbose: bool = false,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "overrides", "bin", "aliases", "open","cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "overrides", "bin", "aliases", "open","cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|

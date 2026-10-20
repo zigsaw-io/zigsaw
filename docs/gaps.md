@@ -291,9 +291,11 @@
   neither of; with MSVC's build too. redis's tests run against miniredis,
   as Redis has no Windows build: 46 of them fail there for both builds
   (commands and `INFO` sections miniredis hasn't).
-- A project built from its `zigsaw.json` builds from scratch each time it
-  changes: zig's `${cache}` keeps zig's compiles quick, but other tools'
-  incremental state, such as cargo's `target\`, isn't kept between builds.
+- A project's incremental builds are only as right as its tools'
+  incremental state: one that misses a change makes what a `--clean` build
+  wouldn't. The recipe changing starts afresh; a change to an SDK's image
+  does only through the recipe's pin. A project moved to another directory
+  starts afresh, its work directories being keyed by the recipe's path.
 - Each `zigsaw build` of a project reads all of its files to hash them,
   even when it then takes the image built before: quick for a source tree,
   slower for one with large assets that aren't ignored or skipped.
@@ -398,3 +400,8 @@
   aren't granted: synthesis and download from Logisim fail unless the run
   is given those folders (`--filesystem`); this wasn't tried. Designing and
   simulating work in every sandbox.
+- ZLS reaches files outside the working directory only with an override
+  (`zigsaw override --filesystem=<dir> org.zigtools.zls`). On Windows
+  Server 2025, in an AppContainer, it finds neither zig's library nor a
+  project's modules, as `zig env` fails there (no hover on the standard
+  library); on Windows 11 26300 it does.

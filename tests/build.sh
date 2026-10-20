@@ -544,6 +544,47 @@ linked_recipe ""
 check "a link in a project fails the build, naming it" sh -c "\"\$0\" build '$work\\linked' 2>&1 | grep -q 'to-src is a link, which an image can'" "$zigsaw"
 linked_recipe ', "skip": ["/to-src"]'
 check "skipped, the project builds" z build "$work\\linked"
+
+# Built again, a project's module starts in the work directory its last
+# build left, its sources brought up to date there: make remakes only what a
+# changed file makes. make.log, which make's rules add to, stays in the work
+# directory (cache\work\<key>\incmake in the store); the image holds what
+# they made, and note.txt, which a build command edits in place.
+INC=test.project.incremental
+inc="$work\\inc"
+mkdir -p "$inc" && (
+    cd "$(cygpath -u "$inc")" || exit 1
+    printf 'out/\n' >.gitignore
+    echo a >a.in && echo b >b.in && echo c >c.in && echo note >note.in
+    printf 'all: out/a.txt out/b.txt\nout/a.txt: a.in\n\tmkdir -p out && sed s/a/A/ a.in >out/a.txt && echo a >>make.log\nout/b.txt: b.in\n\tmkdir -p out && sed s/b/B/ b.in >out/b.txt && echo b >>make.log\n' >Makefile
+)
+inc_recipe() {
+    printf '{ "id": "%s", "version": "%s", "command": "a.txt", "exports": {}, "sdk": { "busybox": "%s@%s" },\n  "modules": [{ "name": "incmake", "sources": [{ "path": "." }],\n    "build": ["make", "sed -i s/$/!/ note.in", "cp out/a.txt out/b.txt note.in \\"$PREFIX/\\""] }] }\n' \
+        $INC "$1" $BB "$bb_digest" >"$inc\\zigsaw.json"
+}
+inc_recipe 1
+inc_before=$(cd "$(cygpath -u "$inc")" && find . | LC_ALL=C sort)
+inc_log() { cat "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/incmake/make.log 2>/dev/null | tr -d '\r' | tr '\n' ' '; }
+want_log() { [ "$(inc_log)" = "$1" ] || { echo "make.log: '$(inc_log)', want '$1'"; return 1; }; }
+inc_first() { z build "$inc" >/dev/null && want_log "a b "; }
+check "a project's first build makes everything" inc_first
+inc_again() {
+    echo a2 >"$inc\\a.in"
+    local d
+    d=$(built_manifest "$inc") && [ -n "$d" ] && echo "$d" >"$work\\inc-digest" && want_log "a b a " || return 1
+    [ "$(tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer $INC)\\note.in")" = 'note!' ] || { echo "note.in was edited twice"; return 1; }
+}
+check "built again after a change, make remakes only what it makes, and a file the build edits starts afresh" inc_again
+inc_clean() { [ "$(z build --clean "$inc" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2)" = "$(cat "$work\\inc-digest")" ] && want_log "a b "; }
+check "with --clean, it makes everything again, and the same image" inc_clean
+inc_removed() { rm "$inc\\c.in" && z build "$inc" >/dev/null && ! ls "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/incmake/c.in >/dev/null 2>&1; }
+check "a file the project no longer has is gone from the work directory" inc_removed
+inc_recipe_changed() { inc_recipe 2 && z build "$inc" >/dev/null && want_log "a b "; }
+check "the recipe changed, it starts afresh" inc_recipe_changed
+inc_untouched() { [ "$(cd "$(cygpath -u "$inc")" && find . | LC_ALL=C sort | grep -v -e '^\./c\.in$')" = "$(grep -v -e '^\./c\.in$' <<<"$inc_before")" ]; }
+check "the project's directory has no build output" inc_untouched
+inc_prune_note() { z prune --dry-run 2>&1 | grep -q 'kept the work directories of [0-9]* project(s)'; }
+check "prune keeps work directories, unless --downloads" inc_prune_note
 fi
 
 # --- prettier on node --------------------------------------------------------------

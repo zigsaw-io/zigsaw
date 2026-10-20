@@ -762,6 +762,14 @@ Composer, which doesn't, installs at low.
   being zig compiling zigsaw, whose own cache (`.zig-cache`) is fresh in
   each build. With nothing changed, `zigsaw build` takes the image built
   before, in under a second.
+- **Kept, `.zig-cache` saves zigsaw's build little** (iteration 35): after
+  a change to one of zigsaw's messages, 51 s in the work directory the last
+  build left, against 60 s for the same files in a new one (zig's
+  `${cache}` warm both times). zig compiles `zigsaw.exe` as one unit, so
+  any change to it is compiled whole; what's kept is the build runner and
+  the two shims. A project of many objects (C, with make, ninja or cargo)
+  keeps more. The incremental build's three programs are the bytes of a
+  `--clean` build and of a plain `zig build -Dstrip`.
 - **Taking the files is quick**: zigsaw's 52 files in 10 to 35 ms, read
   and hashed, which every `zigsaw build` does, even when it then takes the
   image built before.
@@ -800,6 +808,15 @@ Composer, which doesn't, installs at low.
   can hold a session with it.
 - **ZLS publishes diagnostics only to clients that say they take them**
   (`textDocument.publishDiagnostics` in `initialize`'s capabilities).
+- **On Windows Server 2025, ZLS in an AppContainer finds neither zig's
+  library nor a project's modules** (iteration 34's Reproduce run). There,
+  Windows still denies an AppContainer the Mount Manager, and so
+  `GetFinalPathNameByHandle` with drive letters (the probe's
+  `self-path-dos`), and `zig env` fails, as the matrix's zig gap does: ZLS
+  asks zig for its library, and runs `build.zig` with it. Hover answers
+  `null`; syntax errors are still reported, as ZLS parses files itself.
+  [`tests/zls.sh`](../tests/zls.sh) counts those two checks as a known gap
+  where the probe finds that cause, as the matrix does.
 
 ## GTK 3 and Gnumeric
 

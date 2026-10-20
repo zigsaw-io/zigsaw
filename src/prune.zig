@@ -1,7 +1,8 @@
 //! `zigsaw prune`: deletes what no installed app needs: the blobs and
 //! deployments of versions that were replaced or removed, and leftovers in
-//! tmp\. On request, also cached downloads, build tools' caches, and the data
-//! of apps that are no longer installed. Anything a running app uses is kept.
+//! tmp\. On request, also cached downloads, build tools' caches, projects'
+//! kept work directories, and the data of apps that are no longer installed.
+//! Anything a running app uses is kept.
 
 const std = @import("std");
 const Io = std.Io;
@@ -15,7 +16,8 @@ pub const Options = struct {
     /// Only report what would be deleted.
     dry_run: bool = false,
     /// Also delete cached build sources, which rebuilds would download again,
-    /// and the caches of build tools, which they would fill again.
+    /// the caches of build tools, which they would fill again, and the work
+    /// directories projects' builds keep, which they would start afresh.
     downloads: bool = false,
     /// Also delete the data directories of apps that aren't installed.
     data: bool = false,
@@ -119,6 +121,15 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         tool_caches.add(try treeSize(io, arena, p));
         if (opts.downloads and !opts.dry_run) try Store.deleteTree(io, arena, p);
     }
+    // Projects' work directories too (see builder.zig): a build without one
+    // starts afresh.
+    var work: Tally = .{};
+    const work_dir = try store.path(arena, &.{ "cache", "work" });
+    for (try listDir(io, arena, work_dir)) |entry| {
+        const p = try std.fs.path.join(arena, &.{ work_dir, entry.name });
+        work.add(try treeSize(io, arena, p));
+        if (opts.downloads and !opts.dry_run) try Store.deleteTree(io, arena, p);
+    }
     // Builds remembered by their inputs: those whose image is gone now, and
     // with --downloads, all of them. (Tiny files, so not reported.)
     const builds_dir = try store.path(arena, &.{ "cache", "builds" });
@@ -179,6 +190,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         .{ tmp, true, "temporary item", "temporary items" },
         .{ downloads, opts.downloads, "cached download", "cached downloads" },
         .{ tool_caches, opts.downloads, "build tool cache", "build tool caches" },
+        .{ work, opts.downloads, "project's work directories", "projects' work directories" },
         .{ data, opts.data, "data directory", "data directories" },
     };
     for (parts) |part| {
@@ -205,6 +217,8 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         note("kept {d} cached download(s) ({Bi:.1}) for rebuilds; --downloads deletes them", .{ downloads.count, downloads.bytes });
     if (!opts.downloads and tool_caches.count > 0)
         note("kept the caches of {d} build tool(s) ({Bi:.1}) for faster builds; --downloads deletes them", .{ tool_caches.count, tool_caches.bytes });
+    if (!opts.downloads and work.count > 0)
+        note("kept the work directories of {d} project(s) ({Bi:.1}) for incremental builds; --downloads deletes them", .{ work.count, work.bytes });
     if (!opts.downloads and build_only > 0)
         note("kept {d} image(s) that builds use as runtimes or SDKs; --downloads deletes them", .{build_only});
 }

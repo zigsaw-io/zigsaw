@@ -15,8 +15,9 @@
 # of MinGit's image, one of its runtimes. Last, the published apps in the
 # store, GTK 4's too, are all on the same build of each GTK runtime.
 #
-# Not in CI, like tests/gtk.sh: GTK's SDK takes a quarter of an hour to
-# build, and Gnumeric 25 minutes.
+# In CI, as tests/gtk.sh, in a store of the published images, which it
+# installs again rather than building (GTK's SDK takes a quarter of an hour
+# to build, and Gnumeric 25 minutes).
 #
 #   GTK_HOME=path\to\store bash tests/gtk3.sh [path\to\zigsaw.exe]
 #
@@ -67,13 +68,26 @@ check() {
 
 z() { "$zigsaw" "$@"; }
 manifest_of() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$1.json"; }
-# build_unless_installed <id> <recipe>: builds the recipe, which takes its
-# image from the build cache if the store built it before; says whether it
-# was installed before (for removing what this installed at the end).
+# install_again <id> <recipe>: installs an app the store has again, as the
+# store got it: from the build cache, if it built it, or the registry it was
+# pulled from (as the Reproduce workflow's store pulls the published
+# images), so its shortcuts and file associations go to this test's folder
+# and registry key. Builds the recipe if the store hasn't the app.
+install_again() {
+    local source=""
+    [ -f "$ZIGSAW_HOME\\refs\\$1.json" ] && source=$(grep -o '"source": *"[^"]*"' "$ZIGSAW_HOME\\refs\\$1.json" | cut -d'"' -f4)
+    case $source in
+    "" | *.json) z build "$root\\recipes\\$2" ;;
+    *) z pull "$source" ;;
+    esac
+}
+# build_image <id> <recipe>: builds the recipe, or installs the image again
+# if the store has it (see install_again); notes whether it was installed
+# before (for removing what this installed at the end).
 installed_here=""
 build_image() {
     [ -f "$ZIGSAW_HOME\\refs\\$1.json" ] || installed_here="$installed_here $1"
-    z build "$root\\recipes\\$2" >"$work\\$2.log" 2>&1 || echo "building $2 failed: $(tail -1 "$work\\$2.log")"
+    install_again "$1" "$2" >"$work\\$2.log" 2>&1 || echo "installing $2 failed: $(tail -1 "$work\\$2.log")"
 }
 build_image org.gtk.Gtk3.Sdk gtk3-sdk.json
 build_image org.gtk.Gtk3 gtk3.json

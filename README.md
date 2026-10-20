@@ -80,10 +80,11 @@ signed. [`scripts/package.sh`](scripts/package.sh) makes the release's files.
 ## Commands
 
 ```
-zigsaw build [--rebuild] [--keep-build-dir] [<recipe.json> | <dir>]
+zigsaw build [--rebuild] [--clean] [--keep-build-dir] [<recipe.json> | <dir>]
                                        build an app from a recipe, or from the zigsaw.json of a
                                        project's directory (the current one by default), install
-                                       it and its commands
+                                       it and its commands; --clean starts a project's modules
+                                       without the work directories its last build left
 zigsaw search [<words>...]             find apps in the default registry's catalog
 zigsaw info <image>                    show what an app in a registry is, needs and may reach
 zigsaw pull <image>                    install an app and its commands from a registry
@@ -333,8 +334,7 @@ group of its sections.
 - An image built with a [host toolchain](#msvc) isn't compared, since it
   isn't expected to match. (None of the published ones is.)
 - Every image a published recipe pins, as a runtime, an SDK or an image
-  source, must be on the registry, so a fresh store can build the recipe;
-  that covers the recipes the run doesn't build too, such as GTK's
+  source, must be on the registry, so a fresh store can build the recipe
   ([`scripts/check-pins.sh`](scripts/check-pins.sh), in a job of its own,
   and at the end of `publish.sh`). A runtime pinned at an older build than
   its tag is reported, but doesn't fail the run.
@@ -379,6 +379,12 @@ recipe's own:
   the build's inputs, so `zigsaw build` with nothing changed takes the image
   it built before, as does a change to a file git ignores. The image records
   the hash, and the same files make the same image anywhere.
+- **A changed one builds incrementally.** Its module keeps `B:\src\<module>`
+  between builds, with what the build left there (`.zig-cache`, `build`,
+  `target`), and only the files that changed are written again, so make,
+  ninja, cargo and zig redo only what those affect. It starts afresh when the
+  recipe changes, and with `zigsaw build --clean`. See
+  [incremental builds](docs/recipes.md#incremental-builds).
 - `zigsaw update <app-id>` builds it again from the directory as it is then.
 
 This repository has one: [`zigsaw.json`](zigsaw.json) builds zigsaw from
@@ -828,6 +834,7 @@ cache\downloads\<hex>  fetched sources, by sha256 (and decompressed tars)
 cache\images\<hex>     marks images that builds use as runtimes or SDKs, kept like downloads
 cache\builds\<hex>     the image of an earlier build, by a hash of its inputs
 cache\tools\<id>\      the cache of a build tool whose image uses ${cache}
+cache\work\<key>\       a project's modules' work directories, kept between its builds
 tmp\                   staging area, and the data of --ephemeral runs
 lock, *.lock           lock files that let zigsaw commands run side by side
 ```
@@ -927,14 +934,14 @@ bash tests/shims.sh     # command shims end to end, also for commands installed 
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
 GROUP=langs bash tests/build.sh # only one group of its sections (tests/build.sh --groups lists them), as a CI job does
-bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; dictionaries and an icon through the runtime's extension point; Gaphor's self-test in each sandbox; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows; local only)
-bash tests/gtk3.sh      # a GTK 3 app built against GTK 3's SDK and GTK's, on both runtimes, in each sandbox; GTK 3's demos; Gnumeric's ssconvert between CSV, Excel and OpenDocument in each sandbox, its file associations, and opening a file with --file; PyGObject loading GTK 3 and GTK 4, Meld comparing files and folders and showing a git repository's changes in each sandbox, and the published apps all on one build of each GTK runtime (needs GTK_HOME or BUILD_HOME; opens windows; local only)
+bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; dictionaries and an icon through the runtime's extension point; Gaphor's self-test in each sandbox; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows)
+bash tests/gtk3.sh      # a GTK 3 app built against GTK 3's SDK and GTK's, on both runtimes, in each sandbox; GTK 3's demos; Gnumeric's ssconvert between CSV, Excel and OpenDocument in each sandbox, its file associations, and opening a file with --file; PyGObject loading GTK 3 and GTK 4, Meld comparing files and folders and showing a git repository's changes in each sandbox, and the published apps all on one build of each GTK runtime (needs GTK_HOME or BUILD_HOME; opens windows)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
 bash tests/zls.sh       # ZLS's language server sessions over stdio in each sandbox: the standard library's documentation, a module a project's build.zig declares, a syntax error; its shim (needs ZLS_HOME or BUILD_HOME, or builds it)
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)
-bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package)
+bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package); an incremental build of a copy after a change makes what --clean does
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update, mounts, logins, sources next to images, the catalog, search and info, through local registries (see its header)
@@ -966,5 +973,8 @@ a fresh runner, in a store of the published images the matrix runs and zot
 ([`tests/seed-store.sh`](tests/seed-store.sh) pulls them, and builds a
 version that isn't published yet), as `SEED_DOWNLOADS` and the matrix's
 and ZLS's store. The jobs that run `published.sh` check that those images
-are what the recipes build. `tests/build.sh` runs in jobs of its own, one
-for each group of its sections, beside them.
+are what the recipes build. `tests/gtk.sh` and `tests/gtk3.sh` run the
+same way, in a job of their own, in a store of GTK's published images and
+the apps on them, which they install again rather than build; the runner has
+no GPU, so GTK's OpenGL check is a known gap there. `tests/build.sh` runs in
+jobs of its own, one for each group of its sections, beside them.

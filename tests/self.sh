@@ -11,7 +11,9 @@
 # which then build it too, as the Release workflow checks. Needs Git Bash,
 # Zig 0.16.0 (without PACKAGE_DIR) and network access, for zig's image
 # (88 MB from ghcr.io). Uses a temporary store, and deletes it afterwards.
-# About 3 minutes.
+# Then builds a copy of the checkout's files three times: once, after a
+# change in the work directory the first build left, and with --clean.
+# About 6 minutes.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -67,6 +69,43 @@ for program in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe; do
     check "its $program is the same bytes as $what" cmp "$built\\$program" "$expected\\$program"
 done
 check "it runs, as an app" sh -c "\"\$0\" run $APP version | tr -d '\r' | grep -qx 'zigsaw $version'" "$zigsaw"
+
+# Built again after a change, the module starts in the work directory the
+# last build left, with zig's .zig-cache in it. This is done on a copy of the
+# checkout's files (which a build of the checkout would have reused), where
+# one of zigsaw's messages then changes. The result should be what a --clean
+# build of the copy makes, and a `zig build -Dstrip` of it.
+copy="$work\\copy"
+mkdir -p "$copy" && (cd "$root" && git ls-files -co --exclude-standard -z | tar --null -T - -cf - | tar -xf - -C "$(cygpath -u "$copy")") ||
+    { echo "copying the checkout failed"; exit 1; }
+# --rebuild, as its files are the checkout's, whose image it would take.
+copy_builds() { (cd "$copy" && z build --rebuild); }
+start=$SECONDS
+check "a copy of it builds, with a work directory of its own" copy_builds
+printf '      (%d s)\n' $((SECONDS - start))
+sed -i 's/find apps in the default registry'"'"'s catalog/find apps in the catalog of the default registry/' "$copy\\src\\main.zig"
+start=$SECONDS
+incremental() { (cd "$copy" && z -v build 2>&1) | grep -q "module zigsaw: its work directory from the last build, 1 file(s) rewritten"; }
+check "changed, it builds again in the work directory the last build left" incremental
+printf '      (%d s)\n' $((SECONDS - start))
+own_bin() {
+    local m l
+    m=$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$APP.json" | cut -d: -f2)
+    l=$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$m" | tail -1 | cut -d: -f2)
+    echo "$ZIGSAW_HOME\\deploy\\$l\\bin"
+}
+mkdir -p "$work\\incremental" && cp "$(own_bin)"/*.exe "$work\\incremental\\"
+grep -q 'catalog of the default registry' "$work\\incremental\\zigsaw.exe" || { echo "the change isn't in what it built"; failures=$((failures + 1)); }
+start=$SECONDS
+check "with --clean, it builds the copy afresh" sh -c "cd '$copy' && \"\$0\" build --clean" "$zigsaw"
+printf '      (%d s)\n' $((SECONDS - start))
+for program in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe; do
+    check "the incremental build's $program is the same bytes as --clean's" cmp "$work\\incremental\\$program" "$(own_bin)\\$program"
+done
+if [ -z "${PACKAGE_DIR:-}" ]; then
+    (cd "$copy" && zig build -Dstrip -p "$work\\copy-strip") || { echo "zig build -Dstrip of the copy failed"; exit 1; }
+    check "and as zig build -Dstrip's of the copy" cmp "$work\\incremental\\zigsaw.exe" "$work\\copy-strip\\bin\\zigsaw.exe"
+fi
 
 z rm --delete-data $APP >/dev/null 2>&1
 z prune --downloads --data >/dev/null 2>&1
