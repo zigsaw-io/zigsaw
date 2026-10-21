@@ -25,7 +25,8 @@
       "name": "crt-noexport",
       "build": [
         "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
-        "cc -c noexport.s -o noexport.o"
+        "cc -c noexport.s -o noexport.o",
+        "printf '%s\\n' '# $(MAKE) for the modules below: BusyBox make runs one command at a time (no -j). In a' '# directory at all-am, once its BUILT_SOURCES (gnulib headers) are made, or at an all that' '# is all-am alone, the compiles make would run first run $(nproc) at a time, after the' '# .dirstamp files that objects in subdirectories depend on (made later, they are newer).' 'case ${MAKEFLAGS%% *} in -*n*) exec make \"$@\" ;; esac' 'case \" $* \" in' '*\" all-am \"*) ;;' '*\" all \"*) grep -qx \"all: all-am\" Makefile || exec make \"$@\" ;;' '*) exec make \"$@\" ;;' 'esac' 'n=$(make -n \"$@\")' 'printf \"%s\\n\" \"$n\" | grep -o \"[^ >]*/[.]dirstamp\" | sort -u | while read -r f; do mkdir -p \"${f%/*}\" && : >>\"$f\"; done' 'printf \"%s\\n\" \"$n\" | grep -e \" -c -o \" | tr \"\\n\" \"\\0\" | xargs -0 -r -P \"$(nproc)\" -n 1 sh -c || :' 'exec make \"$@\"' > pmake.sh"
       ]
     },
     {
@@ -49,7 +50,7 @@
         "sh zigsaw/mtimes.sh",
         "sh ./configure --disable-dependency-tracking --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-nls lt_cv_deplibs_check_method=pass_all gl_cv_cc_visibility=no > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
         "for f in libtool libcharset/libtool; do sed -i 's/ -shared -nostdlib / -shared /' $f; done",
-        "make -j\"$(nproc)\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",
+        "make MAKE=\"sh B:/src/crt-noexport/pmake.sh\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",
         "make install > install.log 2>&1 || { tail -60 install.log; exit 1; }",
         "sh zigsaw/implibs.sh \"$PREFIX/lib\""
       ]
@@ -74,8 +75,8 @@
         "sh ./configure -C --disable-dependency-tracking --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-java --disable-csharp --disable-openmp --disable-curses --disable-libasprintf --without-emacs --without-git --without-cvs --without-bzip2 --without-xz --enable-threads=windows --with-libiconv-prefix=B:/prefix lt_cv_deplibs_check_method=pass_all gl_cv_cc_visibility=no > configure.log 2>&1 || { tail -40 configure.log; for f in config.log */config.log; do echo \"== $f\"; tail -60 $f; done; exit 1; }",
         "for d in gettext-runtime libtextstyle gettext-tools; do sed -i -e 's/ -shared -nostdlib / -shared /' -e 's/^stdlibflag=-nostdlib$/stdlibflag=/' $d/libtool; done",
         "sh zigsaw/exports.sh",
-        "make -j\"$(nproc)\" MAKEINFO=true HELP2MAN=true LDFLAGS=\"$LDFLAGS -Wc,B:/src/crt-noexport/noexport.o\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",
-        "make install MAKEINFO=true HELP2MAN=true > install.log 2>&1 || { tail -60 install.log; exit 1; }",
+        "make MAKE=\"sh B:/src/crt-noexport/pmake.sh\" MAKEINFO=true HELP2MAN=true LDFLAGS=\"$LDFLAGS -Wc,B:/src/crt-noexport/noexport.o\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",
+        "make install INSTALL=\"install -c\" MAKEINFO=true HELP2MAN=true > install.log 2>&1 || { tail -60 install.log; exit 1; }",
         "sh zigsaw/implibs.sh \"$PREFIX/lib\""
       ]
     }

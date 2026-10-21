@@ -1273,6 +1273,28 @@ JDK's image, and compiled on the JRE's):
   39, Gnumeric 27 and Rnote 15; here,
   with sixteen, GTK's SDK is 15.
 
+## gettext's build time (iteration 38)
+
+- **BusyBox's make runs one command at a time.** Its help says
+  `-j NUM   Jobs to run in parallel (not implemented)`, so every
+  `make -j"$(nproc)"` in the recipes compiled one file at a time. Iteration
+  37 took gettext's build being slower here, with sixteen CPUs, than on a
+  runner's four for the cost of libtool's shell scripts; it was a serial
+  build, slower here per process. OpenSSL's recipe had worked around it
+  already.
+- **automake's objects in subdirectories depend on a `.dirstamp` file**
+  there, which make creates as it first needs the directory. Objects
+  compiled ahead of make were older than it, and make compiled them again:
+  380 of gettext's 1,400 compiles, until the recipe's wrapper made the
+  `.dirstamp` files first.
+- **configure under BusyBox finds no `install`**, as it finds no other
+  program by name, and installs with automake's `install-sh`, a shell
+  script that starts several programs for each file. gettext installs about
+  2,200 files one call at a time: 8½ minutes here, and about 4½ with
+  BusyBox's own `install`, given as `INSTALL`.
+- Compiling ahead and installing with another program leave gettext's
+  files as they were, byte for byte, so its image keeps its digest.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

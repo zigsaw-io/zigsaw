@@ -271,10 +271,13 @@ check "--noextension leaves one out" no_french
 mkdir -p "$work\\icons" && cp "$work\\t.svg" "$work\\icons\\t.svg"
 sed -e "s/@BUSYBOX@/$(manifest_of net.frippery.busybox)/" "$root\\tests\\gtk\\icons.json.in" >"$work\\icons\\icons.json"
 z build "$work\\icons\\icons.json" >"$work\\icons.log" 2>&1 || echo "building test.gtk.icons failed: $(tail -1 "$work\\icons.log")"
+# Once, under AppContainer on Server 2025, it printed nothing; a failure
+# shows the run's exit status too.
 icon() {
-    local out
-    out=$(timeout 60 "$zigsaw" run "$@" --command=bin/icon.exe $APP test-gtk-icon document-open-symbolic 2>&1 | tr -d '\r')
-    grep -q '^icon test-gtk-icon found$' <<<"$out" && grep -q '^icon document-open-symbolic found$' <<<"$out" || { echo "got: $(tr '\n' '|' <<<"$out")"; return 1; }
+    local out code
+    out=$(timeout 60 "$zigsaw" run "$@" --command=bin/icon.exe $APP test-gtk-icon document-open-symbolic 2>&1 | tr -d '\r'; exit "${PIPESTATUS[0]}")
+    code=$?
+    [ "$code" = 0 ] && grep -q '^icon test-gtk-icon found$' <<<"$out" && grep -q '^icon document-open-symbolic found$' <<<"$out" || { echo "got (exit $code): $(tr '\n' '|' <<<"$out")"; return 1; }
 }
 check "an icon an extension has is in GTK's icon theme, beside the runtime's" icon
 check "with --sandbox=low" icon --sandbox=low

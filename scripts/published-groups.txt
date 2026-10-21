@@ -31,7 +31,7 @@ apps: php-sdk.json php.json php-apcu.json php-xdebug.json php-igbinary.json php-
 java: java-sdk.json java.json maven.json gradle.json pdfbox.json plantuml.json logisim-evolution.json scenebuilder.json
 
 # What GTK's SDK builds with: Perl (prebuilt) and cargo-c (13); gettext
-# (39) alone
+# alone (39, before iteration 38 compiled it in parallel)
 gtk-tools: perl.json cargo-c.json
 gettext: gettext.json
 # GTK's SDK in two halves, each alone: its base, then the SDK on it, with

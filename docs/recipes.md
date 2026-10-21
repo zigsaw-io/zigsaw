@@ -919,6 +919,20 @@ spells out:
   compiler and leaves the `nm` lists out. gettext's libtool keeps
   `-nostdlib` in a variable of its own. Its manuals, man pages and
   translations come built in the release, and the build leaves them be.
+  BusyBox's `make` runs one command at a time, as for OpenSSL above, so the
+  recipe's first module writes a `$(MAKE)` for the other two, `pmake.sh`.
+  In each directory, when make gets to automake's `all-am`, the wrapper
+  runs the compile commands `make -n` lists, `$(nproc)` at a time, and make
+  then links what they made. By then the directory's `BUILT_SOURCES` exist,
+  gnulib's replacement headers among them: an object compiled earlier could
+  include another header of the same name. The wrapper first makes the
+  `.dirstamp` files that objects in subdirectories depend on, or make
+  would find them newer and compile those objects again. gettext installs
+  with BusyBox's `install` (`INSTALL="install -c"`), as configure finds
+  none and falls back to automake's `install-sh`, a script run for each of
+  its 2,200 files. A build command writes the wrapper, and isn't a file of
+  the recipe's, because an image records the files its recipe adds to a
+  build: gettext's image is the same as before (`f3f85ba5`).
 - Pango's Windows font map gets a one-line patch so that it finds a font
   for text that asks for color glyphs (see above).
 - `nm` is [a small program of the SDK's](recipes/gtk4-sdk/nm.c), as zig

@@ -333,7 +333,11 @@ for name in $published_recipes; do
         [ "$latest" = "$published" ] || { echo "latest is $latest, $version is $published"; return 1; }
     }
     check "$id: latest is $version" latest_is_version
-    up_to_date() { zp update "$id" 2>&1 | grep -q 'up to date'; }
+    up_to_date() {
+        local out
+        out=$(zp update "$id" 2>&1)
+        grep -q 'up to date' <<<"$out" || { echo "$out"; return 1; }
+    }
     check "$id: is up to date" up_to_date
 done
 if [ $pulled -gt 0 ]; then

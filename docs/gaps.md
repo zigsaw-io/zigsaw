@@ -125,6 +125,12 @@
 - Build steps are kept off the network by convention (proxy variables), not
   enforced: a tool that ignores them can still download.
 - Builds need `B:` free, and run one at a time.
+- The `make` builds have, BusyBox's, runs one command at a time: its `-j`
+  isn't implemented. OpenSSL's and gettext's recipes compile ahead of it in
+  parallel; Gnumeric's and goffice's builds, and hunspell's and enchant's in
+  GTK's SDK, still compile one file at a time. Under BusyBox, configure finds
+  no `install` either, and installs each file with a shell script, unless a
+  recipe gives it one (gettext's does).
 - Builds with MSVC depend on the machine's Visual Studio, so they don't
   reproduce elsewhere, and CI doesn't check them. Only x64 MSVC builds are
   set up.
