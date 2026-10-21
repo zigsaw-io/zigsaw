@@ -1295,6 +1295,67 @@ JDK's image, and compiled on the JRE's):
 - Compiling ahead and installing with another program leave gettext's
   files as they were, byte for byte, so its image keeps its digest.
 
+## Qt 6 with zig (iteration 39)
+
+- **zig's libc++ works across DLLs.** zig links libc++, libc++abi and
+  libunwind into each DLL and program, so each has its own copy. A probe of
+  two DLLs and a program, linked as recipes link, passed all 18 checks: an
+  exception thrown in one DLL caught by type in the other and in the
+  program (a header-only exception type too), unwinding through a frame of
+  the other DLL; `dynamic_cast` and `typeid` on a class whose vtable is in
+  one DLL, and on a header-only class, which every DLL has its own type
+  information for (libc++ compares type names on Windows; the DLLs export
+  only what's marked `dllexport`, no type information); `std::string` and
+  `std::vector` made in one and grown and freed in another (one CRT heap);
+  `std::function` both ways; `thread_local`; static initialisers. So Qt
+  builds as DLLs, with one runtime image for its apps.
+- **zig's MinGW has no `synchronization` or `runtimeobject` import
+  library**, which QtCore links by name (`-l`): it found neither. Each can
+  be the import library of a stub DLL that zig links, named after the
+  system DLL with the functions, as zig names an import library's DLL by
+  the output's name. zig names the import library after the first source
+  file unless `-Wl,--out-implib` says otherwise.
+- **zig's `cc` ignores `-mwindows`**, which CMake gives a
+  `WIN32_EXECUTABLE`: Qt's GUI programs linked as console programs (seen
+  before for Meson's GTK apps, which pass the linker's flag themselves).
+- **zig's `rc` reads an unquoted file name only up to a `-`**:
+  `1 24 lrelease-pro_internal_qt.manifest` named the file `lrelease`.
+- **Qt takes a program beside `Qt6Core.dll` for one deployed with
+  windeployqt**, with the program's directory as the prefix, unless
+  `lib\libQt6Core.a` is there too. A runtime without `lib` sent Designer
+  and qtdiag looking for plugins in `bin\plugins`; qtdiag then hung on
+  Qt's message box for a missing platform plugin, and Designer, behind the
+  same box, looked as if it ran. Apps, whose programs are elsewhere, find
+  the prefix from `Qt6Core.dll`'s directory.
+- **In an AppContainer, `CreateNamedPipe` is denied outside
+  `\\.\pipe\LOCAL\`**, the container's own namespace for pipes, as
+  Python's multiprocessing found ([above](#introspection-pygobject-and-meld)): QLocalServer
+  couldn't listen, and KDSingleApplication, which Flameshot checks for a
+  running copy with, gave up and quit the app. With the name under
+  `LOCAL\`, a first copy listens and a second one finds it.
+- **download.qt.io redirects to a mirror chosen by where you are**
+  (ftp.jaist.ac.jp here), and zigsaw's fetch failed with
+  `TlsInitializationFailed` on the way. GitHub's mirror of each module has
+  the release's tag, and its archives have the same files as the release's,
+  without git submodules (qttools' qlitehtml).
+- **Qt 6.12's Linguist needs Qt Quick** (its CMake skips it without
+  `Qt::Quick`); its command-line tools don't.
+- **Qt's build records its time and paths:** its SBOM's creation time,
+  `qt-cmake.bat` and the like naming CMake by its path in the store, and
+  `prefix=B:/prefix` in its pkg-config files. Without those, the SDK, the
+  runtime and Flameshot were the same, byte for byte, in two fresh stores.
+- **Flameshot's `flameshot-cli.exe`** runs `flameshot.exe` through
+  `_wpopen` with a command line it sizes as `32 + sizeof(std::wstring) +
+  sizeof(std::wstring)` characters: about 80, so a path longer than that
+  is cut off. It also links only with MinGW's `-municode` (it has
+  `wmain`), which its CMake gives MSVC's spelling of a console program
+  instead.
+- **Building:** qtbase's 1,900 build steps took 17½ minutes here, on 16
+  CPUs, and the SDK 26½ minutes from scratch. Twice early on, a build's
+  configure failed when CMake couldn't start Ninja
+  (`0xc0000142`, `STATUS_DLL_INIT_FAILED`) right after I had stopped
+  another build; it didn't happen again.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

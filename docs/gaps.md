@@ -423,3 +423,19 @@
   something they're built or tested from changed, and weekly otherwise: a
   change to zigsaw that a GTK image no longer reproduces with shows up to a
   week later.
+- Qt's family is Qt 6.12's Widgets set: no QML or Qt Quick (so no
+  Linguist, whose interface is in Qt Quick), Qt Multimedia, WebEngine or
+  the other modules, and no Assistant (its HTML viewer is a git submodule
+  the source archives leave out, and no documentation is built). Qt's
+  QSettings keeps settings in the registry by default, which an app keeps
+  apart only for the keys its image declares; the runtime declares
+  Designer's (`HKCU\Software\QtProject`).
+- Flameshot's "Launch at startup" writes your real `HKCU\...\Run` under
+  `soft`, naming the program in its deployment rather than its shim, so an
+  update leaves it pointing at the old version. Its `flameshot-cli.exe` isn't
+  in the image (it cuts commands off at about 80 characters); `zigsaw run`
+  passes `flameshot.exe`'s output on instead.
+- CI checks Qt's family, like GTK's, on a push only when something it's
+  built or tested from changed, and weekly otherwise. On a 4-CPU runner,
+  its SDK's build may take over an hour (26 minutes on 16 CPUs here); the
+  job's timeout is 120 minutes.

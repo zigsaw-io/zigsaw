@@ -105,7 +105,7 @@ smoke_args() {
 }
 # GUI apps with no option that exits: they must still be running after ten
 # seconds, when the run is stopped.
-stays_up_ids=" org.notepad_plus_plus.NotepadPlusPlus org.sumatrapdfreader.SumatraPDF org.gtk.Gtk3demo com.gluonhq.SceneBuilder "
+stays_up_ids=" org.notepad_plus_plus.NotepadPlusPlus org.sumatrapdfreader.SumatraPDF org.gtk.Gtk3demo com.gluonhq.SceneBuilder io.qt.Qt6 "
 stays_up() {
     ZIGSAW_HOME="$pull_store" timeout 10 "$zigsaw" run "$1" >/dev/null 2>&1
     [ $? -eq 124 ]

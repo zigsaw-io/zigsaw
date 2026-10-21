@@ -66,6 +66,9 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | PlantUML (built from source with Gradle, on Java's runtime) | `com.plantuml.PlantUML` | 1.2026.9 | `plantuml`, `plantuml-gui` |
 | Logisim-evolution (built from source with Gradle, on Java's runtime) | `com.github.reds.LogisimEvolution` | 5.0.0 | `logisim`, `logisim-gui` |
 | Scene Builder (built from source with Maven, with OpenJFX, on the JDK) | `com.gluonhq.SceneBuilder` | 26.0.0 | `scenebuilder` |
+| Qt 6 SDK, the Widgets set (built from source; with zig, CMake and BusyBox) | `io.qt.Qt6.Sdk` | 6.12.0 | `cc`, `c++`, `ar`, `rc`, `cmake`, `ninja`, `sh`, `make`, `qmake`, `qtpaths`, `lupdate`, `lrelease`, `designer` |
+| Qt 6, with Qt Widgets Designer (from its SDK) | `io.qt.Qt6` | 6.12.0 | `designer`, `pixeltool`, `qtdiag` |
+| Flameshot (built from source, on Qt) | `org.flameshot.Flameshot` | 14.0.0 | `flameshot` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -101,6 +104,13 @@ PyPI pinned by a [vendor step](recipes.md#packages-from-pypi).
 GTK's runtime has an [extension point](recipes.md#gtks-data-directories-and-extensions):
 installed, the Vietnamese and French dictionaries join every GTK app's
 spell checking.
+[Qt 6](recipes.md#qt)'s SDK builds Qt's Widgets set from source with CMake
+and zig (qtbase, qtsvg, qtimageformats, qttools, qttranslations), with
+CMake, zig and BusyBox as runtimes, so it builds Qt programs without a
+recipe too; its runtime, made from it, runs Qt Widgets Designer and gets
+its shortcut. Flameshot, a screenshot tool, runs on it, in its tray, and
+`flameshot full --path <dir>` saves a screenshot from the command line, in
+every sandbox.
 7-Zip, Notepad++, SumatraPDF and VLC are the programs their projects
 publish, packaged from upstream's archives, with shortcuts and the kinds of
 file they open ([prebuilt GUI apps](#prebuilt-gui-apps)). 7-Zip's image is

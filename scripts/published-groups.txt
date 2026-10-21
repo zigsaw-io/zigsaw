@@ -11,12 +11,13 @@
 #   <group>: <recipe>...      (a group may take several lines)
 #
 # A group named `skip` would be left out of CI; none is now. GTK's family
-# was, until iteration 35. Its groups get a longer timeout (the workflow's
-# gtk*, gettext, rnote and gnumeric jobs): on a runner, GTK's SDK took 57
-# minutes in one build, gettext 39, Rnote 24, Gnumeric 18 and cargo-c 13
-# (iteration 36's run). So a push checks them only when something they're
-# built or tested from changed (scripts/ci-groups.sh, whose changed_only
-# lists them), and the weekly run always.
+# was, until iteration 35. Its groups and Qt's get a longer timeout (the
+# workflow's gtk*, gettext, rnote, gnumeric and qt jobs): on a runner, GTK's
+# SDK took 57 minutes in one build, gettext 39, Rnote 24, Gnumeric 18 and
+# cargo-c 13 (iteration 36's run); Qt's SDK took 26 minutes here, most of
+# it compiling qtbase on all 16 CPUs. So a push checks them only when
+# something they're built or tested from changed (scripts/ci-groups.sh,
+# whose gtk_groups and qt_groups list them), and the weekly run always.
 
 # zig 0.7, SQLite 1.7, CMake 0.2, zstd 6.9, Meson 1.5, ZLS (about 2)
 c: busybox.json zig.json sqlite.json cmake.json zstd.json meson.json zls.json
@@ -45,3 +46,6 @@ gtk-apps: pygobject-sdk.json pygobject.json meld.json gaphor.json
 # Rnote (24) and Gnumeric (18), each alone
 rnote: rnote.json
 gnumeric: gnumeric.json
+
+# Qt's SDK (26 here), its runtime and Flameshot, in one job
+qt: qt6-sdk.json qt6.json flameshot.json

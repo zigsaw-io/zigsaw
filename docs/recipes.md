@@ -1143,6 +1143,140 @@ are where its scanner looks anyway. Every library's GIR and typelib build
 as part of its own build, which makes GTK's SDK take 31 minutes (26
 before).
 
+## Qt
+
+Qt 6 comes as two images too, built from source with CMake, Ninja and zig:
+
+- **[`io.qt.Qt6.Sdk`](recipes/qt6-sdk.json)** builds Qt 6.12.0's Widgets
+  set: qtbase (Core, Gui, Widgets, Network, Sql, PrintSupport, OpenGL,
+  Concurrent, Xml, Test), qtsvg, qtimageformats (TIFF, WebP, TGA, ICNS,
+  WBMP), qttools (Qt Widgets Designer, Pixeltool, qtdiag, and Linguist's
+  `lupdate` and `lrelease`) and qttranslations. qtbase uses its own copies
+  of zlib, libpng, libjpeg, HarfBuzz, FreeType, PCRE2, md4c and SQLite, so
+  the Qt family needs nothing from GTK's; TLS is Schannel's, Windows' own.
+  Its runtimes are zig, CMake and BusyBox, so builds that use it get CMake
+  and Ninja without naming them, and it exports their commands, Qt's
+  `qmake`, `qtpaths`, `lupdate`, `lrelease` and `designer`, and sets
+  `CMAKE_PREFIX_PATH` to itself, so it builds Qt programs
+  [without a recipe](#building-qt-programs-without-a-recipe). It takes
+  about 26 minutes here from scratch, 18 of them compiling qtbase's 1,200
+  C++ files.
+- **[`io.qt.Qt6`](recipes/qt6.json)** is the runtime: the SDK's files as an
+  [image source](#images-as-sources), without the headers, libraries, CMake
+  files and build tools, in seconds: 75 MB (29 MB compressed). Apps list it
+  in their `runtimes`. As an app, it runs Designer, exports `designer`, `pixeltool` and `qtdiag`, adds
+  "Qt Widgets Designer" to the Start menu, and keeps Designer's settings
+  (`HKCU\Software\QtProject`) with its data.
+
+An app built against Qt, as [`tests/qt`](tests/qt) is:
+
+```json
+"command": "bin/hello-qt.exe",
+"path": ["bin"],
+"runtimes": { "qt": "io.qt.Qt6:6.12.0@sha256:..." },
+"sdk": { "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:..." },
+"modules": [
+  {
+    "name": "hello",
+    "env": { "LDFLAGS": "-s -Wl,-Brepro" },
+    "sources": [{ "path": "CMakeLists.txt" }, { "path": "hello.cpp" }],
+    "build": [
+      "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\"",
+      "cmake --build out",
+      "cmake --install out"
+    ]
+  }
+]
+```
+
+`find_package(Qt6 ...)` finds the SDK through `CMAKE_PREFIX_PATH`. When the
+app runs, Windows finds Qt's DLLs on PATH, in the runtime's `bin`, and Qt
+finds its plugins and translations from where `Qt6Core.dll` is: a Qt built
+for `B:\prefix` is relocatable. Qt's own programs in the runtime's `bin`
+would take `bin` for the prefix (Qt thinks a program beside `Qt6Core.dll`
+was deployed with windeployqt, unless `lib\libQt6Core.a` is there, which
+the runtime leaves out), so the runtime has a `bin\qt.conf` with
+`Prefix = ..`. QStandardPaths finds AppData through the profile, so an app's
+files are in its data directory; QSettings' default, though, is the
+registry, which apps keep apart only for the keys their image declares
+([registry](#registry-settings-kept-with-the-app)). Qt apps run in all
+three sandboxes.
+
+Building Qt with zig needed these, in
+[`qt6-sdk/qtbase.sh`](recipes/qt6-sdk/qtbase.sh) and the recipe:
+
+- **Two import libraries zig's MinGW lacks**, `synchronization`
+  (`WaitOnAddress`, for QtCore's futex) and `runtimeobject` (WinRT's
+  activation and HSTRING functions), made by
+  [`qt6-sdk/winlibs.sh`](recipes/qt6-sdk/winlibs.sh) as the import
+  libraries of stub DLLs named after the system DLLs that have the
+  functions (`api-ms-win-core-synch-l1-2-0.dll`, `combase.dll`), and found
+  with `-L`. QtCore no longer passes `runtimeobject` on to apps, which only
+  QtCore calls.
+- **A GUI program's subsystem.** CMake makes a `WIN32_EXECUTABLE` a GUI
+  program with `-mwindows`, which zig's `cc` ignores: Designer, and every
+  app's window, came with a console. QtCore now asks executables with
+  `WIN32_EXECUTABLE` that link it for `-Wl,--subsystem,windows`, so apps get
+  it too, through Qt's CMake files.
+- **The manifest's `.rc`.** Qt embeds an executable's manifest with a
+  one-line resource script that names the file unquoted; zig's `rc` read
+  `lrelease-pro_internal_qt.manifest` as `lrelease` and an expression.
+  Quoted, names with a `-` work (Flameshot's `flameshot-cli` has one).
+- **An include** `qthread_win.cpp` relied on MSVC's headers for (`qspan.h`).
+- **Named pipes in an AppContainer.** A process in one may create named
+  pipes only in its own namespace, `\\.\pipe\LOCAL\`, so QLocalServer
+  couldn't listen, and an app's single-instance check (Flameshot's
+  KDSingleApplication) failed and quit it. In an AppContainer, QLocalServer
+  and QLocalSocket now use that namespace for names that aren't pipe paths
+  ([a patch](recipes/qt6-sdk/qlocalserver-appcontainer.patch)).
+- **Reproducibility:** no SBOM (it has its creation time), no `qt-cmake.bat`
+  and the like (they name the build's CMake by its path in the store), and
+  pkg-config files with `prefix=${pcfiledir}/../..`, not `B:/prefix`.
+- **Sources from GitHub's mirror** of each module's tag, not download.qt.io,
+  which sends each machine to a mirror near it (zigsaw's fetch failed to
+  set up TLS on the way here). The archives are git's files, so a module's
+  git submodules are empty: Assistant's HTML viewer (qlitehtml) is one, and
+  Assistant, with no documentation built to read, is left out.
+
+Qt 6.12's Linguist has a Qt Quick interface, so it needs QML, which isn't
+built; `lupdate` and `lrelease` are. zig links its libc++ into each DLL and
+program, so Qt's 14 DLLs in the runtime each have their own copy: exceptions,
+`dynamic_cast` and `typeid` work across them (libc++ compares type names on
+Windows), and so do `std::string`, `std::function` and `thread_local`, as a
+probe found before Qt was built ([findings](findings.md#qt-6-with-zig-iteration-39)).
+
+### Building Qt programs without a recipe
+
+With the store's `bin` on PATH, the SDK's `cmake` builds a Qt project, with
+its Ninja, zig's `c++` and `rc`, and finds Qt:
+
+```
+zigsaw pull io.qt.Qt6.Sdk
+cd C:\work\hello
+cmake -S . -B out -DCMAKE_BUILD_TYPE=Release
+cmake --build out
+zigsaw run --command=C:\work\hello\out\hello-qt.exe io.qt.Qt6
+```
+
+### Flameshot
+
+[Flameshot](recipes/flameshot.json) 14.0.0, a screenshot tool, builds
+against the SDK with CMake and runs on the runtime, from its tray icon or
+the command line: `zigsaw run org.flameshot.Flameshot full --path <dir>`
+saves a screenshot of the whole screen and exits. It may use your Pictures
+folder, where it saves by default. Its libraries come pinned, in place of
+what its CMake would fetch with git: Qt-Color-Widgets (a commit, put where
+its CMake looks first), KDSingleApplication 1.2.0 (the same), and QHotkey,
+which it fetched from `master` (pinned at that branch's commit when 14.0.0
+came out, given with `FETCHCONTENT_SOURCE_DIR_QHOTKEY`). Its update check
+and Imgur upload are off. Its `flameshot-cli.exe`, a console program that
+runs `flameshot.exe` through cmd.exe, sizes its command line by
+`sizeof(std::wstring)`, about 80 characters, which a path in the store
+exceeds, so the image leaves it out; `zigsaw run` gives `flameshot.exe`
+the console's output already. Its settings are in an INI file in AppData,
+so in its data directory. Its "Launch at startup" writes your real
+`HKCU\...\Run` under `soft`, naming its deployment, not its shim.
+
 ## Python apps
 
 PyGObject, Python's binding of GLib and GTK through their typelibs, comes

@@ -1,0 +1,78 @@
+{
+  "id": "io.qt.Qt6",
+  "version": "6.12.0",
+  "name": "Qt",
+  "summary": "Qt 6's Widgets set (Core, Gui, Widgets, Network, Svg, Sql, image formats, translations) for apps built with Qt's SDK, with Qt Widgets Designer",
+  "homepage": "https://www.qt.io/",
+  "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+  "command": "bin/designer.exe",
+  "path": ["bin"],
+  "permissions": { "filesystem": ["cwd", "documents"] },
+  "registry": ["Software\\QtProject"],
+  "exports": {
+    "designer": { "command": "bin/designer.exe" },
+    "pixeltool": { "command": "bin/pixeltool.exe" },
+    "qtdiag": { "command": "bin/qtdiag.exe" }
+  },
+  "shortcuts": {
+    "Qt Widgets Designer": { "command": "designer", "description": "Design Qt Widgets forms" }
+  },
+  "sdk": {
+    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:c45017035ca9587914ce2caf3ae518c32ef41a31dbd2aae690529778df385188"
+  },
+  "cleanup": [
+    "/include",
+    "/lib",
+    "/mkspecs",
+    "/metatypes",
+    "/modules",
+    "/doc",
+    "/share",
+    "*.a",
+    "*.bat",
+    "*.py",
+    "*.cmake",
+    "/bin/androiddeployqt.exe",
+    "/bin/androiddeployqt6.exe",
+    "/bin/androidtestrunner.exe",
+    "/bin/harmonydeployqt.exe",
+    "/bin/harmonydeployqt6.exe",
+    "/bin/harmonyostestrunner.exe",
+    "/bin/cmake_automoc_parser.exe",
+    "/bin/moc.exe",
+    "/bin/rcc.exe",
+    "/bin/uic.exe",
+    "/bin/qlalr.exe",
+    "/bin/qmake.exe",
+    "/bin/qmake6.exe",
+    "/bin/qvkgen.exe",
+    "/bin/syncqt.exe",
+    "/bin/tracegen.exe",
+    "/bin/tracepointgen.exe",
+    "/bin/lupdate.exe",
+    "/bin/lrelease.exe",
+    "/bin/lcheck.exe",
+    "/bin/ltext2id.exe",
+    "/bin/wasmdeployqt.exe",
+    "/bin/wasmdeployqt6.exe",
+    "/bin/lprodump.exe",
+    "/bin/lrelease-pro.exe",
+    "/bin/lupdate-pro.exe",
+    "/bin/lconvert.exe",
+    "/bin/qtplugininfo.exe",
+    "/bin/windeployqt.exe",
+    "/bin/windeployqt6.exe",
+    "/bin/Qt6Test.dll",
+    "/bin/Qt6UiTools.dll"
+  ],
+  "modules": [
+    {
+      "name": "qt",
+      "sources": [{ "image": "io.qt.Qt6.Sdk:6.12.0@sha256:c45017035ca9587914ce2caf3ae518c32ef41a31dbd2aae690529778df385188" }]
+    },
+    {
+      "name": "qt-conf",
+      "build": ["printf '%s\\n' '[Paths]' 'Prefix = ..' > \"$PREFIX/bin/qt.conf\""]
+    }
+  ]
+}
