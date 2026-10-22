@@ -89,6 +89,12 @@ fn applyOne(
     try link(io, arena, app_path, host, folder);
 }
 
+/// Where the user's folder is, as runs grant it; null if they don't have
+/// it.
+pub fn hostPathOf(ctx: *Context, folder: oci.UserFolder) !?[]const u8 {
+    return hostPath(ctx.io, ctx.arena, folder, testFolders(ctx));
+}
+
 /// Where the user's folder is, or null if they don't have it. With
 /// ZIGSAW_USER_FOLDERS (for tests), the folder of that name in that
 /// directory.

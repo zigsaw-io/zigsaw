@@ -194,7 +194,73 @@ pub const Child = struct {
         endJob(child.job);
         return code;
     }
+
+    /// As `wait`, for at most `ms`: then ends the process tree, and
+    /// returns null.
+    pub fn waitFor(child: Child, ms: win32.DWORD) !?u32 {
+        switch (win32.WaitForSingleObject(child.process, ms)) {
+            win32.WAIT_OBJECT_0 => return try child.wait(),
+            win32.WAIT_TIMEOUT => {
+                endJob(child.job);
+                _ = win32.CloseHandle(child.job);
+                _ = win32.CloseHandle(child.process);
+                return null;
+            },
+            else => return win32.lastErrorFail("WaitForSingleObject"),
+        }
+    }
 };
+
+pub const Output = struct {
+    code: u32,
+    stdout: []const u8,
+};
+
+/// Runs a process with `input` on its stdin, for what it writes on its
+/// stdout, as a credential helper answers; its stderr is ours. For short
+/// exchanges: one that writes more than 64 KiB, or takes longer than `ms`,
+/// is ended, and the result is null.
+pub fn output(arena: Allocator, spec: SpawnSpec, input: []const u8, ms: win32.DWORD) !?Output {
+    const pipe_size = 64 * 1024;
+    var in_read: win32.HANDLE = undefined;
+    var in_write: win32.HANDLE = undefined;
+    if (win32.CreatePipe(&in_read, &in_write, null, pipe_size) == 0) return win32.lastErrorFail("CreatePipe");
+    var out_read: win32.HANDLE = undefined;
+    var out_write: win32.HANDLE = undefined;
+    if (win32.CreatePipe(&out_read, &out_write, null, pipe_size) == 0) {
+        _ = win32.CloseHandle(in_read);
+        _ = win32.CloseHandle(in_write);
+        return win32.lastErrorFail("CreatePipe");
+    }
+    defer _ = win32.CloseHandle(out_read);
+    var with_pipes = spec;
+    // `start` makes the child's ends inheritable; ours stay ours.
+    with_pipes.stdio = .{ in_read, out_write, win32.GetStdHandle(win32.STD_ERROR_HANDLE) };
+    const started = start(arena, with_pipes);
+    // `start` ignores Ctrl+C, for an app that shares the console; zigsaw
+    // itself should still stop for it once this is done.
+    defer _ = win32.SetConsoleCtrlHandler(&ignoreCtrlC, win32.FALSE);
+    _ = win32.CloseHandle(in_read);
+    _ = win32.CloseHandle(out_write);
+    const child = started catch |err| {
+        _ = win32.CloseHandle(in_write);
+        return err;
+    };
+    // The input fits in the pipe, so the write doesn't wait for the child.
+    const wrote = win32.WriteFile(in_write, input.ptr, @intCast(input.len), null, null);
+    _ = win32.CloseHandle(in_write);
+    const code = try child.waitFor(ms) orelse return null;
+    if (wrote == 0) return null;
+    // The child is gone, so the pipe has all it wrote, then its end.
+    var out: std.ArrayList(u8) = .empty;
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        var n: win32.DWORD = 0;
+        if (win32.ReadFile(out_read, &buf, buf.len, &n, null) == 0 or n == 0) break;
+        try out.appendSlice(arena, buf[0..n]);
+    }
+    return .{ .code = code, .stdout = out.items };
+}
 
 /// Starts a process as `spawn` does, without waiting for it.
 pub fn start(arena: Allocator, spec: SpawnSpec) !Child {

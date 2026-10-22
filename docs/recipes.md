@@ -1254,8 +1254,15 @@ Building Qt with zig needed these, in
   and QLocalSocket now use that namespace for names that aren't pipe paths
   ([a patch](recipes/qt6-sdk/qlocalserver-appcontainer.patch)).
 - **Reproducibility:** no SBOM (it has its creation time), no `qt-cmake.bat`
-  and the like (they name the build's CMake by its path in the store), and
-  pkg-config files with `prefix=${pcfiledir}/../..`, not `B:/prefix`.
+  and the like (they name the build's CMake by its path in the store),
+  pkg-config files with `prefix=${pcfiledir}/../..`, not `B:/prefix`, and
+  `-DCMAKE_SYSTEM_VERSION=10.0.26300` on every module. CMake takes the
+  version of the Windows it runs on, and Qt writes it into each of its
+  `modules/*.json`, so a runner on Windows Server 2025 (10.0.26100) built
+  other files than here (iteration 41). The value is the one the halves
+  were published with, not the build machine's: it changes nothing else
+  when not cross-compiling. Apps' recipes don't need it, as nothing they
+  install records it.
 - **Sources from GitHub's mirror** of each module's tag, not download.qt.io,
   which sends each machine to a mirror near it (zigsaw's fetch failed to
   set up TLS on the way here). The archives are git's files, so a module's

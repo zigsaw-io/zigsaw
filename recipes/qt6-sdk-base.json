@@ -46,7 +46,7 @@
       ],
       "build": [
         "sh zigsaw/qtbase.sh",
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DQT_BUILD_BENCHMARKS=OFF -DBUILD_WITH_PCH=OFF -DFEATURE_dbus=OFF -DFEATURE_openssl=OFF -DFEATURE_icu=OFF -DFEATURE_system_zlib=OFF -DFEATURE_system_png=OFF -DFEATURE_system_jpeg=OFF -DFEATURE_system_harfbuzz=OFF -DFEATURE_system_pcre2=OFF -DFEATURE_system_freetype=OFF -DFEATURE_system_doubleconversion=OFF -DFEATURE_system_md4c=OFF -DFEATURE_system_sqlite=OFF -DFEATURE_sql_psql=OFF -DFEATURE_sql_mysql=OFF -DFEATURE_sql_oci=OFF -DFEATURE_sql_db2=OFF -DFEATURE_sql_ibase=OFF -DFEATURE_sql_mimer=OFF -DQT_GENERATE_SBOM=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DQT_BUILD_BENCHMARKS=OFF -DBUILD_WITH_PCH=OFF -DFEATURE_dbus=OFF -DFEATURE_openssl=OFF -DFEATURE_icu=OFF -DFEATURE_system_zlib=OFF -DFEATURE_system_png=OFF -DFEATURE_system_jpeg=OFF -DFEATURE_system_harfbuzz=OFF -DFEATURE_system_pcre2=OFF -DFEATURE_system_freetype=OFF -DFEATURE_system_doubleconversion=OFF -DFEATURE_system_md4c=OFF -DFEATURE_system_sqlite=OFF -DFEATURE_sql_psql=OFF -DFEATURE_sql_mysql=OFF -DFEATURE_sql_oci=OFF -DFEATURE_sql_db2=OFF -DFEATURE_sql_ibase=OFF -DFEATURE_sql_mimer=OFF -DQT_GENERATE_SBOM=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
@@ -62,7 +62,7 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
@@ -78,7 +78,7 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF -DFEATURE_system_tiff=OFF -DFEATURE_system_webp=OFF -DFEATURE_jasper=OFF -DFEATURE_mng=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF -DFEATURE_system_tiff=OFF -DFEATURE_system_webp=OFF -DFEATURE_jasper=OFF -DFEATURE_mng=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
@@ -94,7 +94,7 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF",
         "cmake --build out",
         "cmake --install out"
       ]

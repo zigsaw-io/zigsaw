@@ -11,6 +11,7 @@ const http = std.http;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const credentials = @import("credentials.zig");
+const win32 = @import("win32.zig");
 const oci = @import("oci.zig");
 const fail = Context.fail;
 
@@ -30,6 +31,10 @@ authorization: ?[]const u8 = null,
 /// The credentials for this registry, once it has asked for them.
 credential: ?credentials.Credential = null,
 looked_up: bool = false,
+/// Whether a token was asked for again, after the registry refused one.
+refreshed: bool = false,
+/// What broke off the last request that `Request.resumable` let go on.
+broken: ?anyerror = null,
 
 pub fn init(r: *Registry, ctx: *Context, ref: Reference, actions: []const u8) !void {
     r.* = .{
@@ -144,10 +149,17 @@ const accept_manifests = oci.media_type.manifest ++ ", " ++
     "application/vnd.docker.distribution.manifest.v2+json, " ++
     "application/vnd.docker.distribution.manifest.list.v2+json";
 
+/// Fetches the manifest the reference names.
 pub fn fetchManifest(r: *Registry) !Manifest {
+    return r.fetchManifestRef(r.ref.manifestRef());
+}
+
+/// Fetches the manifest `reference`, a tag or a digest, names in the
+/// repository: an image's, or an index's.
+pub fn fetchManifestRef(r: *Registry, reference: []const u8) !Manifest {
     const res = try r.send(.{
         .method = .GET,
-        .url = try r.url("/v2/{s}/manifests/{s}", .{ r.ref.repository, r.ref.manifestRef() }),
+        .url = try r.url("/v2/{s}/manifests/{s}", .{ r.ref.repository, reference }),
         .accept = accept_manifests,
     });
     if (res.status != .ok) return r.failStatus(res, "fetching the manifest");
@@ -213,7 +225,14 @@ pub const Upload = union(enum) {
     /// The registry took the blob from the other repository.
     mounted,
     /// Where to send the blob (see `finishUpload`).
-    location: []const u8,
+    started: Started,
+
+    pub const Started = struct {
+        location: []const u8,
+        /// The smallest chunk the registry takes, if it says
+        /// (OCI-Chunk-Min-Length).
+        chunk_min: ?u64 = null,
+    };
 };
 
 /// Starts uploading a blob. With `mount_from`, another repository on the
@@ -225,7 +244,7 @@ pub fn startUpload(r: *Registry, digest: []const u8, mount_from: ?[]const u8) !U
         const res = try r.send(.{ .method = .POST, .url = try r.url("{s}", .{try uploadsPath(arena, r.ref.repository, .{ .digest = digest, .from = from })}) });
         switch (res.status) {
             .created => return .mounted,
-            .accepted => return .{ .location = try r.uploadLocation(res) },
+            .accepted => return .{ .started = .{ .location = try r.uploadLocation(res), .chunk_min = res.chunk_min } },
             // Not as the specification says, but then an ordinary upload
             // may still work.
             else => if (r.ctx.verbose) Context.note("  mounting {s} from {s}: HTTP {d}", .{ oci.shortDigest(digest), from, @intFromEnum(res.status) }),
@@ -233,7 +252,7 @@ pub fn startUpload(r: *Registry, digest: []const u8, mount_from: ?[]const u8) !U
     };
     const res = try r.send(.{ .method = .POST, .url = try r.url("{s}", .{try uploadsPath(arena, r.ref.repository, null)}) });
     if (res.status != .accepted) return r.failStatus(res, "starting an upload");
-    return .{ .location = try r.uploadLocation(res) };
+    return .{ .started = .{ .location = try r.uploadLocation(res), .chunk_min = res.chunk_min } };
 }
 
 fn uploadLocation(r: *Registry, res: Response) ![]const u8 {
@@ -254,27 +273,161 @@ fn uploadsPath(arena: Allocator, repository: []const u8, mount: ?struct { digest
     return out.items;
 }
 
-/// Sends the file at `path` as the blob, in one request, to where
-/// `startUpload` said.
-pub fn finishUpload(r: *Registry, location: []const u8, desc: oci.Descriptor, path: []const u8) !void {
-    const arena = r.ctx.arena;
-    var put_url: std.ArrayList(u8) = .empty;
-    // The location may be a full URL or a path on the registry.
-    if (std.mem.startsWith(u8, location, "http://") or std.mem.startsWith(u8, location, "https://")) {
-        try put_url.appendSlice(arena, location);
-    } else {
-        try put_url.appendSlice(arena, try r.url("{s}", .{location}));
-    }
-    try put_url.appendSlice(arena, if (std.mem.indexOfScalar(u8, location, '?') == null) "?digest=" else "&digest=");
-    try percentEncode(arena, &put_url, desc.digest);
+/// Blobs bigger than this go up in chunks of this size, and one that
+/// breaks off goes on from where it broke; smaller ones in one request.
+/// ZIGSAW_UPLOAD_CHUNK_SIZE changes it (in bytes; 0 sends every blob in one
+/// request).
+pub const default_chunk_size: u64 = 64 << 20;
+pub const chunk_size_var = "ZIGSAW_UPLOAD_CHUNK_SIZE";
 
+/// Sends the file at `path` as the blob, to where `startUpload` said: in one
+/// request, or in chunks if it's bigger than one. A registry that refuses
+/// the first chunk gets it in one request after all.
+pub fn finishUpload(r: *Registry, started: Upload.Started, desc: oci.Descriptor, path: []const u8) !void {
+    const chunk = try r.chunkSize(started.chunk_min);
+    if (chunk == 0 or desc.size <= chunk) return r.putWhole(started.location, desc, path);
+    const chunks = r.putChunks(started.location, desc, path, chunk) catch |err| switch (err) {
+        error.ChunksRefused => {
+            if (r.ctx.verbose) Context.note("  {s} doesn't take blobs in chunks; uploading {s} in one request", .{ r.ref.host, oci.shortDigest(desc.digest) });
+            return switch (try r.startUpload(desc.digest, null)) {
+                .started => |again| r.putWhole(again.location, desc, path),
+                .mounted => {},
+            };
+        },
+        else => |e| return e,
+    };
+    if (r.ctx.verbose) Context.note("  sent {s} in {d} chunks", .{ oci.shortDigest(desc.digest), chunks });
+}
+
+/// The chunk size: ZIGSAW_UPLOAD_CHUNK_SIZE's, or the default, but no less
+/// than the registry takes.
+fn chunkSize(r: *Registry, chunk_min: ?u64) !u64 {
+    const size = if (r.ctx.env.get(chunk_size_var)) |text|
+        std.fmt.parseInt(u64, text, 10) catch return fail("{s} must be a number of bytes; it's \"{s}\"", .{ chunk_size_var, text })
+    else
+        default_chunk_size;
+    if (size == 0) return 0;
+    return @max(size, chunk_min orelse 0);
+}
+
+/// The blob in one request.
+fn putWhole(r: *Registry, location: []const u8, desc: oci.Descriptor, path: []const u8) !void {
     const res = try r.send(.{
         .method = .PUT,
-        .url = put_url.items,
+        .url = try r.withDigest(location, desc.digest),
         .body = .{ .file = .{ .path = path, .size = desc.size } },
         .content_type = "application/octet-stream",
     });
     if (res.status != .created) return r.failStatus(res, "uploading a blob");
+}
+
+/// The blob in chunks: each a PATCH to where the registry said last, then a
+/// PUT that names the blob. A chunk that breaks off, or that the registry
+/// fails to take, goes again from where the registry says it got to, at
+/// most three times. Returns how many chunks went; error.ChunksRefused if
+/// the registry refused the first.
+fn putChunks(r: *Registry, location: []const u8, desc: oci.Descriptor, path: []const u8, chunk: u64) !u32 {
+    const arena = r.ctx.arena;
+    // For tests: the chunk, counting from 1, that breaks off halfway.
+    const break_at: ?u32 = if (r.ctx.env.get("ZIGSAW_TEST_UPLOAD_BREAK")) |n| std.fmt.parseInt(u32, n, 10) catch null else null;
+    var at = location;
+    var offset: u64 = 0;
+    var chunks: u32 = 0;
+    var resumes: u32 = 0;
+    while (offset < desc.size) {
+        const length = @min(chunk, desc.size - offset);
+        chunks += 1;
+        const res = r.send(.{
+            .method = .PATCH,
+            .url = try r.absoluteUrl(at),
+            .body = .{ .file = .{ .path = path, .offset = offset, .size = length, .break_halfway = break_at == chunks } },
+            .content_type = "application/octet-stream",
+            .content_range = try std.fmt.allocPrint(arena, "{d}-{d}", .{ offset, offset + length - 1 }),
+            .resumable = true,
+        }) catch |err| switch (err) {
+            error.Broken => {
+                at = try r.resumeUpload(at, desc, &offset, &resumes);
+                continue;
+            },
+            else => |e| return e,
+        };
+        switch (res.status) {
+            .accepted => {
+                at = res.location orelse at;
+                offset = if (res.range) |range| nextOffset(range) orelse offset + length else offset + length;
+            },
+            .unauthorized, .forbidden => return r.failStatus(res, "uploading a blob"),
+            .payload_too_large => return fail("{s} refused a chunk of {d} bytes as too large; set {s} to fewer bytes", .{ r.ref.host, length, chunk_size_var }),
+            .range_not_satisfiable => at = try r.resumeUpload(at, desc, &offset, &resumes),
+            else => {
+                if (offset == 0) return error.ChunksRefused;
+                if (res.status.class() != .server_error) return r.failStatus(res, "uploading a blob");
+                at = try r.resumeUpload(at, desc, &offset, &resumes);
+            },
+        }
+    }
+    const res = try r.send(.{ .method = .PUT, .url = try r.withDigest(at, desc.digest) });
+    if (res.status != .created) return r.failStatus(res, "uploading a blob");
+    return chunks;
+}
+
+/// After a chunk broke off: asks the registry how much of the blob it has,
+/// for the upload to go on from there. Gives up the fourth time.
+fn resumeUpload(r: *Registry, at: []const u8, desc: oci.Descriptor, offset: *u64, resumes: *u32) ![]const u8 {
+    resumes.* += 1;
+    const why = if (r.broken) |err| @errorName(err) else "the registry failed";
+    if (resumes.* > 3) return fail("uploading {s} to {f} broke off {d} times ({s}); giving up", .{ desc.digest, r.ref, resumes.* - 1, why });
+    // The registry may still be busy with the request that broke off (zot
+    // fails the question until it has dropped the upload, then doesn't
+    // know it).
+    var waited: u32 = 0;
+    const res = while (true) : (waited += 500) {
+        const res = try r.send(.{ .method = .GET, .url = try r.absoluteUrl(at) });
+        if (res.status.class() != .server_error or waited >= 2000) break res;
+        if (r.ctx.verbose) Context.note("  asking {s} how much of {s} it has: HTTP {d}", .{ r.ref.host, oci.shortDigest(desc.digest), @intFromEnum(res.status) });
+        win32.Sleep(500);
+    };
+    if (res.status != .no_content) {
+        // It can't say how much it has: the blob goes again, from the start.
+        Context.note("upload of {s} broke off ({s}), and {s} can't say how much of it it has (HTTP {d}); starting it again", .{
+            oci.shortDigest(desc.digest), why, r.ref.host, @intFromEnum(res.status),
+        });
+        offset.* = 0;
+        return switch (try r.startUpload(desc.digest, null)) {
+            .started => |s| s.location,
+            .mounted => unreachable, // Only when asked to mount.
+        };
+    }
+    offset.* = if (res.range) |range| nextOffset(range) orelse 0 else 0;
+    Context.note("upload of {s} broke off ({s}) at {d} of {d} bytes; resuming", .{ oci.shortDigest(desc.digest), why, offset.*, desc.size });
+    return res.location orelse at;
+}
+
+/// Where an upload goes on from, by the Range header the registry answers
+/// with: "0-<last byte it has>". "0-0" is taken as nothing yet, as
+/// registries answer before the first byte too.
+fn nextOffset(range: []const u8) ?u64 {
+    const text = if (std.ascii.startsWithIgnoreCase(range, "bytes=")) range["bytes=".len..] else range;
+    const dash = std.mem.indexOfScalar(u8, text, '-') orelse return null;
+    const last = std.fmt.parseInt(u64, std.mem.trim(u8, text[dash + 1 ..], " "), 10) catch return null;
+    return if (last == 0) 0 else last + 1;
+}
+
+/// An upload's location, which may be a full URL or a path on the registry,
+/// as a full URL.
+fn absoluteUrl(r: *Registry, location: []const u8) ![]const u8 {
+    if (std.mem.startsWith(u8, location, "http://") or std.mem.startsWith(u8, location, "https://")) return location;
+    return r.url("{s}", .{location});
+}
+
+/// The URL that ends an upload: its location with the blob's digest.
+fn withDigest(r: *Registry, location: []const u8, digest: []const u8) ![]const u8 {
+    const arena = r.ctx.arena;
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(arena, try r.absoluteUrl(location));
+    try out.appendSlice(arena, if (std.mem.indexOfScalar(u8, location, '?') == null) "?digest=" else "&digest=");
+    try percentEncode(arena, &out, digest);
+    return out.items;
 }
 
 pub fn pushManifest(r: *Registry, tag: []const u8, bytes: []const u8) !void {
@@ -296,10 +449,21 @@ const Request = struct {
     body: union(enum) {
         none,
         bytes: []const u8,
-        file: struct { path: []const u8, size: u64 },
+        /// `size` bytes of the file from `offset`.
+        file: struct {
+            path: []const u8,
+            offset: u64 = 0,
+            size: u64,
+            /// For tests: sends half, then breaks the connection off.
+            break_halfway: bool = false,
+        },
     } = .none,
     content_type: ?[]const u8 = null,
+    content_range: ?[]const u8 = null,
     accept: ?[]const u8 = null,
+    /// Whether a request that breaks off fails with error.Broken, for the
+    /// caller to go on (see `putChunks`), rather than with a message.
+    resumable: bool = false,
     /// Where a successful response's body goes; otherwise it is collected
     /// into `Response.body`.
     sink: ?*Io.Writer = null,
@@ -310,6 +474,10 @@ const Response = struct {
     body: []const u8 = "",
     location: ?[]const u8 = null,
     www_authenticate: ?[]const u8 = null,
+    /// How much of an upload the registry has.
+    range: ?[]const u8 = null,
+    /// OCI-Chunk-Min-Length.
+    chunk_min: ?u64 = null,
 };
 
 fn url(r: *Registry, comptime path_fmt: []const u8, args: anytype) ![]const u8 {
@@ -318,11 +486,16 @@ fn url(r: *Registry, comptime path_fmt: []const u8, args: anytype) ![]const u8 {
 }
 
 /// Sends a request. If the registry asks for authentication, gets a token
-/// (or uses basic credentials) and sends it once more.
+/// (or uses basic credentials) and sends it once more. A token it refuses
+/// later, having run out during a long push, is asked for again, once.
 fn send(r: *Registry, req: Request) !Response {
     const res = try r.follow(req, r.authorization);
-    if (res.status != .unauthorized or r.authorization != null) return res;
+    if (res.status != .unauthorized) return res;
     const challenge = res.www_authenticate orelse return res;
+    if (r.authorization) |sent| {
+        if (r.refreshed or !std.ascii.startsWithIgnoreCase(sent, "Bearer ")) return res;
+        r.refreshed = true;
+    }
     try r.authenticate(challenge);
     return r.follow(req, r.authorization);
 }
@@ -373,7 +546,10 @@ fn authority(u: []const u8) []const u8 {
 fn exchange(r: *Registry, req: Request, authorization: ?[]const u8) !Response {
     return r.exchangeUnchecked(req, authorization) catch |err| switch (err) {
         error.OutOfMemory => |e| e,
-        else => fail("{t} {s}: {t}", .{ req.method, req.url, err }),
+        else => if (req.resumable) broken: {
+            r.broken = err;
+            break :broken error.Broken;
+        } else fail("{t} {s}: {t}", .{ req.method, req.url, err }),
     };
 }
 
@@ -382,6 +558,7 @@ fn exchangeUnchecked(r: *Registry, req: Request, authorization: ?[]const u8) !Re
     const arena = r.ctx.arena;
     var extra: std.ArrayList(http.Header) = .empty;
     if (req.accept) |a| try extra.append(arena, .{ .name = "accept", .value = a });
+    if (req.content_range) |range| try extra.append(arena, .{ .name = "content-range", .value = range });
 
     var hreq = try r.client.request(req.method, try std.Uri.parse(req.url), .{
         // `follow` handles redirects, so it can decide where the token goes.
@@ -397,6 +574,11 @@ fn exchangeUnchecked(r: *Registry, req: Request, authorization: ?[]const u8) !Re
         },
     });
     defer hreq.deinit();
+    // Zig 0.16's client would give the connection to the next request even
+    // with a body half sent, which the server then takes for its start.
+    errdefer if (hreq.connection) |c| {
+        c.closing = true;
+    };
 
     switch (req.body) {
         .none => if (req.method.requestHasBody()) {
@@ -411,9 +593,16 @@ fn exchangeUnchecked(r: *Registry, req: Request, authorization: ?[]const u8) !Re
             defer file.close(io);
             var file_buf: [64 * 1024]u8 = undefined;
             var reader = file.reader(io, &file_buf);
+            if (f.offset > 0) try reader.seekTo(f.offset);
             hreq.transfer_encoding = .{ .content_length = f.size };
             var body_buf: [64 * 1024]u8 = undefined;
             var body = try hreq.sendBodyUnflushed(&body_buf);
+            if (f.break_halfway) {
+                try reader.interface.streamExact64(&body.writer, f.size / 2);
+                try body.writer.flush();
+                try hreq.connection.?.flush();
+                return error.ConnectionResetByPeer;
+            }
             try reader.interface.streamExact64(&body.writer, f.size);
             try body.end();
             try hreq.connection.?.flush();
@@ -429,6 +618,8 @@ fn exchangeUnchecked(r: *Registry, req: Request, authorization: ?[]const u8) !Re
         if (std.ascii.eqlIgnoreCase(h.name, "location")) res.location = try arena.dupe(u8, h.value);
         if (std.ascii.eqlIgnoreCase(h.name, "www-authenticate") and res.www_authenticate == null)
             res.www_authenticate = try arena.dupe(u8, h.value);
+        if (std.ascii.eqlIgnoreCase(h.name, "range")) res.range = try arena.dupe(u8, h.value);
+        if (std.ascii.eqlIgnoreCase(h.name, "oci-chunk-min-length")) res.chunk_min = std.fmt.parseInt(u64, h.value, 10) catch null;
     }
 
     var transfer_buf: [64 * 1024]u8 = undefined;
@@ -468,6 +659,13 @@ fn authenticate(r: *Registry, challenge_text: []const u8) !void {
                 if (r.ctx.verbose) Context.note("  {s} refused a token that also reads {s}; asking without", .{ r.ref.host, try std.mem.join(arena, ", ", r.pull_from) });
                 r.pull_from = &.{};
                 break :without try r.fetchToken(challenge, basic, scopes.items[0..1]);
+            } orelse anonymous: {
+                // Docker's login for a registry may be one zigsaw was never
+                // given, and public images need none.
+                const c = credential orelse break :anonymous null;
+                if (!c.isDocker() or !std.mem.eql(u8, r.actions, "pull")) break :anonymous null;
+                Context.note("  {s} refused the credentials {s}; pulling without them", .{ r.ref.host, c.origin() });
+                break :anonymous try r.fetchToken(challenge, null, scopes.items[0..1]);
             } orelse return if (credential) |c| r.failRefused(c) else r.failNeedsLogin();
         },
     }
@@ -603,6 +801,7 @@ fn failRefused(r: *Registry, c: credentials.Credential) error{Failed} {
     return switch (c.source) {
         .environment => fail("{s} refused the credentials {s}", .{ r.ref.host, c.origin() }),
         .credential_manager => fail("{s} refused the credentials {s}; run `zigsaw login {s}` again", .{ r.ref.host, c.origin(), r.host }),
+        .docker_config, .docker_helper => fail("{s} refused the credentials {s}; run `docker login {s}` again, or `zigsaw login {s}`", .{ r.ref.host, c.origin(), r.host, r.host }),
     };
 }
 
@@ -744,6 +943,14 @@ test resolveUrl {
     try std.testing.expectEqualStrings("https://ghcr.io/v2/a/b/blobs/next", try resolveUrl(arena, base, "next"));
     try std.testing.expectEqualStrings("ghcr.io", authority(base));
     try std.testing.expectEqualStrings("localhost:5000", authority("http://localhost:5000"));
+}
+
+test nextOffset {
+    try std.testing.expectEqual(1048576, nextOffset("0-1048575").?);
+    try std.testing.expectEqual(65536, nextOffset("bytes=0-65535").?);
+    // Before the first byte, registries answer 0-0.
+    try std.testing.expectEqual(0, nextOffset("0-0").?);
+    try std.testing.expectEqual(null, nextOffset("garbage"));
 }
 
 test percentEncode {

@@ -4,6 +4,7 @@
 const std = @import("std");
 const Context = @import("Context.zig");
 const exports = @import("exports.zig");
+const grants = @import("grants.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
 const note = Context.note;
@@ -60,4 +61,10 @@ pub fn install(ctx: *Context, image: Image) !void {
     const saved = try override.load(ctx.store, arena, cfg.id);
     if (!saved.isEmpty()) note("  override {f}", .{saved});
     try exports.sync(ctx, image.manifest, cfg);
+    // What its earlier version's runs were granted and this one doesn't
+    // permit goes now, unless a run is going, whose end takes it back.
+    _ = grants.settleUnlessRunning(ctx, cfg.id) catch |err| switch (err) {
+        error.Failed => note("warning: what {s}'s earlier runs were granted stays until its next run ends, `zigsaw repair` or `zigsaw rm`", .{cfg.id}),
+        else => |e| return e,
+    };
 }

@@ -155,6 +155,17 @@ pub fn build(b: *std.Build) void {
     const imports_step = b.step("imports", "Build the import checker used by tests/build.sh and tests/published.sh");
     imports_step.dependOn(&b.addInstallArtifact(imports, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // A Docker credential helper that answers from environment variables;
+    // see tests/registry.sh. Installed under zig-out\test by the name Docker
+    // looks for, docker-credential-<name>.
+    const cred_helper = b.addExecutable(.{ .name = "docker-credential-zigsaw-test", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/credhelper.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const cred_helper_step = b.step("cred-helper", "Build the Docker credential helper used by tests/registry.sh");
+    cred_helper_step.dependOn(&b.addInstallArtifact(cred_helper, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize, null) })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shimModule(b, target, optimize, true) })).step);

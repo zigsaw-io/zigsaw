@@ -55,6 +55,11 @@ pub fn resolve(ctx: *Context, recipe: []const u8, kind: Kind, alias: []const u8,
 
     const image = try ctx.store.readCompleteImage(arena, digest) orelse pulled: {
         const fetched = (try remote.fetch(ctx, reference, .{})).?;
+        // A pin names an image, not an index of images for several platforms.
+        if (!std.mem.eql(u8, fetched.manifest_digest, digest))
+            return fail("{s}: {t} {s}: {s} is a multi-platform index; pin its image for windows/amd64:\n  \"{s}@{s}\"", .{
+                recipe, kind, alias, digest, reference[0..std.mem.indexOfScalar(u8, reference, '@').?], fetched.manifest_digest,
+            });
         break :pulled Store.Loaded{ .manifest = fetched.manifest, .config = fetched.config };
     };
     if (target.app_id) |id| if (!std.ascii.eqlIgnoreCase(id, image.config.id))

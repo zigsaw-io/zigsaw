@@ -7,6 +7,8 @@
 //!   <root>\data\<id>\             per-app writable state, kept across runs
 //!   <root>\grants\<id>.txt        host paths whose ACLs zigsaw changed for the app:
 //!                                 grants to its AppContainer, low integrity labels
+//!   <root>\grants\<id>.cwd        those of them granted as a run's working directory
+//!                                 (see grants.zig)
 //!   <root>\overrides\<id>.json    run options saved for the app (see override.zig)
 //!   <root>\bin\                   command shims for exported commands (see exports.zig)
 //!   <root>\aliases\<id>\          shims for the aliases an app's runs have on PATH:
@@ -130,6 +132,12 @@ fn discard(s: Store, arena: Allocator, p: []const u8) !void {
 //   it too.
 // - aliases\<id>.lock is held exclusively while a run brings the app's alias
 //   shims up to date, and while `rm` or `prune` deletes them.
+// - grants\<id>.txt.lock is held shared by each run of the app, for as long
+//   as it runs; the run that can lock it exclusively at its end is the last
+//   (see grants.zig).
+// - grants.lock is held exclusively while a host path's ACL, or a grants
+//   file, changes: as a run grants paths, as grants are taken back, and by
+//   `rm`.
 //
 // Locks end when zigsaw exits, however it exits.
 
@@ -548,10 +556,12 @@ pub fn listBuildImages(s: Store, arena: Allocator) ![]const []const u8 {
 }
 
 // ---------------------------------------------------------------------------
-// Changes to host paths' ACLs, so `zigsaw rm` can undo them: one line per
-// path, "<path>" for access granted to the app's AppContainer, "low <path>"
-// for a low integrity label zigsaw gave it. Paths are absolute, so a line
-// starting "low " is always a label.
+// Changes to host paths' ACLs, so that they can be undone (see grants.zig):
+// one line per path, "<path>" for access granted to the app's AppContainer,
+// "low <path>" for a low integrity label zigsaw gave it. Paths are absolute,
+// so a line starting "low " is always a label. grants\<id>.cwd lists the
+// paths among them that were a run's working directory, one per line. Both
+// change under grants.lock.
 
 /// A change zigsaw made to a host path for an app.
 pub const Grant = struct {
@@ -598,10 +608,77 @@ fn parseGrants(arena: Allocator, bytes: []const u8) ![]const Grant {
 pub fn recordGrant(s: Store, arena: Allocator, id: []const u8, grant: Grant) !void {
     const existing = try s.readGrants(arena, id);
     for (existing) |g| if (g.eql(grant)) return;
+    var all: std.ArrayList(Grant) = .empty;
+    try all.appendSlice(arena, existing);
+    try all.append(arena, grant);
+    try s.writeGrants(arena, id, all.items);
+}
+
+/// Replaces the app's grants; none deletes the file.
+pub fn writeGrants(s: Store, arena: Allocator, id: []const u8, grants: []const Grant) !void {
     var out: std.ArrayList(u8) = .empty;
-    for (existing) |g| try out.print(arena, "{f}\n", .{g});
-    try out.print(arena, "{f}\n", .{grant});
-    try Io.Dir.cwd().writeFile(s.io, .{ .sub_path = try s.grantsPath(arena, id), .data = out.items });
+    for (grants) |g| try out.print(arena, "{f}\n", .{g});
+    try s.replaceFile(arena, try s.grantsPath(arena, id), out.items);
+}
+
+fn cwdGrantsPath(s: Store, arena: Allocator, id: []const u8) ![]u8 {
+    return s.path(arena, &.{ "grants", try std.fmt.allocPrint(arena, "{s}.cwd", .{id}) });
+}
+
+/// The paths among the app's grants that were a run's working directory.
+pub fn readCwdGrants(s: Store, arena: Allocator, id: []const u8) ![]const []const u8 {
+    const bytes = Io.Dir.cwd().readFileAlloc(s.io, try s.cwdGrantsPath(arena, id), arena, .limited(1 << 20)) catch |err| switch (err) {
+        error.FileNotFound => return &.{},
+        else => |e| return e,
+    };
+    var list: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.tokenizeAny(u8, bytes, "\r\n");
+    while (it.next()) |line| try list.append(arena, line);
+    return list.items;
+}
+
+pub fn recordCwdGrant(s: Store, arena: Allocator, id: []const u8, p: []const u8) !void {
+    const existing = try s.readCwdGrants(arena, id);
+    for (existing) |e| if (std.os.windows.eqlIgnoreCaseWtf8(e, p)) return;
+    var all: std.ArrayList([]const u8) = .empty;
+    try all.appendSlice(arena, existing);
+    try all.append(arena, p);
+    try s.writeCwdGrants(arena, id, all.items);
+}
+
+/// Replaces the list; an empty one deletes the file.
+pub fn writeCwdGrants(s: Store, arena: Allocator, id: []const u8, paths: []const []const u8) !void {
+    var out: std.ArrayList(u8) = .empty;
+    for (paths) |p| try out.print(arena, "{s}\n", .{p});
+    try s.replaceFile(arena, try s.cwdGrantsPath(arena, id), out.items);
+}
+
+/// Writes `data` to `dest` through tmp\, so a reader sees all of it or none
+/// of it; empty data deletes `dest` instead.
+fn replaceFile(s: Store, arena: Allocator, dest: []const u8, data: []const u8) !void {
+    if (data.len == 0) {
+        Io.Dir.cwd().deleteFile(s.io, dest) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => |e| return e,
+        };
+        return;
+    }
+    const tmp = try s.tmpPath(arena, "grants");
+    try Io.Dir.cwd().writeFile(s.io, .{ .sub_path = tmp, .data = data });
+    try Io.Dir.rename(.cwd(), tmp, .cwd(), dest, s.io);
+}
+
+/// The lock each run of the app holds shared (see grants.zig).
+pub fn runsLockPath(s: Store, arena: Allocator, id: []const u8) ![]u8 {
+    return lockPathFor(arena, try s.grantsPath(arena, id));
+}
+
+/// Takes grants.lock, saying so if it has to wait for another zigsaw.
+pub fn lockGrantChanges(s: Store, arena: Allocator) !Lock {
+    const p = try s.path(arena, &.{"grants.lock"});
+    if (try tryLock(s.io, p, .exclusive)) |l| return l;
+    note("waiting for another zigsaw to finish changing what apps may reach...", .{});
+    return openLock(s.io, p, .exclusive, .wait);
 }
 
 /// Whether an app other than `id` has `grant` recorded: a label another
@@ -621,10 +698,27 @@ pub fn grantedToOthers(s: Store, arena: Allocator, id: []const u8, grant: Grant)
 }
 
 pub fn deleteGrants(s: Store, arena: Allocator, id: []const u8) !void {
-    Io.Dir.cwd().deleteFile(s.io, try s.grantsPath(arena, id)) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => |e| return e,
-    };
+    try s.writeGrants(arena, id, &.{});
+    try s.writeCwdGrants(arena, id, &.{});
+}
+
+/// The ids of the apps with grants recorded, installed or not.
+pub fn listGrantIds(s: Store, arena: Allocator) ![]const []const u8 {
+    var dir = try Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{"grants"}), .{ .iterate = true });
+    defer dir.close(s.io);
+    var ids: std.ArrayList([]const u8) = .empty;
+    var it = dir.iterate();
+    while (try it.next(s.io)) |entry| {
+        if (entry.kind != .file) continue;
+        for ([_][]const u8{ ".txt", ".cwd" }) |ext| if (std.mem.endsWith(u8, entry.name, ext)) {
+            const id = entry.name[0 .. entry.name.len - ext.len];
+            const seen = for (ids.items) |x| {
+                if (std.mem.eql(u8, x, id)) break true;
+            } else false;
+            if (!seen and oci.isValidId(id)) try ids.append(arena, try arena.dupe(u8, id));
+        };
+    }
+    return ids.items;
 }
 
 // ---------------------------------------------------------------------------
@@ -745,6 +839,7 @@ test "grants: both kinds round-trip, once each; others' found by kind and path" 
     defer tmp.cleanup();
     const s: Store = .{ .io = io, .root = try tmp.dir.realPathFileAlloc(io, ".", arena) };
     try tmp.dir.createDirPath(io, "grants");
+    try tmp.dir.createDirPath(io, "tmp");
 
     try s.recordGrant(arena, "a.app", .{ .kind = .low, .path = "D:\\proj" });
     try s.recordGrant(arena, "a.app", .{ .kind = .appcontainer, .path = "D:\\proj" });
@@ -764,6 +859,23 @@ test "grants: both kinds round-trip, once each; others' found by kind and path" 
     try std.testing.expect(!try s.grantedToOthers(arena, "a.app", .{ .kind = .appcontainer, .path = "D:\\proj" }));
     try std.testing.expect(!try s.grantedToOthers(arena, "b.app", .{ .kind = .low, .path = "D:\\other" }));
     try std.testing.expect(try s.grantedToOthers(arena, "b.app", .{ .kind = .low, .path = "D:\\proj" }));
+
+    // The working directories among them, in a file of their own that
+    // grantedToOthers doesn't read.
+    try s.recordCwdGrant(arena, "a.app", "D:\\proj");
+    try s.recordCwdGrant(arena, "a.app", "d:\\PROJ");
+    try s.recordCwdGrant(arena, "a.app", "D:\\cwd");
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "D:\\proj", "D:\\cwd" }), try s.readCwdGrants(arena, "a.app"));
+    try std.testing.expect(!try s.grantedToOthers(arena, "b.app", .{ .kind = .appcontainer, .path = "D:\\cwd" }));
+    try std.testing.expectEqual(2, (try s.listGrantIds(arena)).len);
+
+    // Writing none deletes the files.
+    try s.writeGrants(arena, "a.app", a[2..]);
+    try std.testing.expectEqual(1, (try s.readGrants(arena, "a.app")).len);
+    try s.deleteGrants(arena, "a.app");
+    try std.testing.expectEqual(0, (try s.readGrants(arena, "a.app")).len);
+    try std.testing.expectEqual(0, (try s.readCwdGrants(arena, "a.app")).len);
+    try std.testing.expectEqual(1, (try s.listGrantIds(arena)).len);
 }
 
 pub const FileHash = struct {

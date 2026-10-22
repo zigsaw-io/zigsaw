@@ -218,6 +218,12 @@ each one against its digest, and refuses images that aren't zigsaw apps
 (such as Docker container images). It says what the app is and may reach
 before it downloads it, as `build` does once it has built it.
 
+A reference may name a multi-platform index, as tools built for several
+platforms publish: then `pull`, `update` and `info` take the index's image
+for Windows on x64 (`windows/amd64`), and the app records that image's
+digest. An index without one is refused, with the platforms it has. A
+recipe pins the image, not the index.
+
 `push` uploads only blobs the repository doesn't have. A blob the registry
 already holds in another repository is mounted from there, which uploads
 nothing:
@@ -230,6 +236,14 @@ nothing:
   that one.
 
 Registries that can't mount, or won't, get the blob uploaded instead.
+
+A blob bigger than 64 MiB goes up in chunks of that size, so that a
+registry that limits a request's size takes it, and an upload that breaks
+off goes on from where the registry got to; a registry that has lost track
+of the upload (zot drops one that broke off) gets the blob again, from the
+start. A registry that refuses the first chunk gets the blob in one request
+after all. `ZIGSAW_UPLOAD_CHUNK_SIZE` sets the chunk size in bytes (0 sends
+every blob in one request), and `-v` says how many chunks went.
 
 Registries on `localhost` are reached over plain HTTP; all others over HTTPS.
 
@@ -279,6 +293,16 @@ work without a login, but only for the default registry: ghcr.io, or the host
 in `ZIGSAW_REGISTRY`. There they take the place of a saved login. `-v` shows
 which credentials a command uses. zigsaw doesn't send credentials to a token
 service over plain HTTP, unless the registry is on `localhost`.
+
+Without either, zigsaw uses the login `docker login` saved for the registry,
+as Docker would: from the credential helper Docker's `config.json` names
+for it (`credHelpers`) or for every registry (`credsStore`), such as Docker
+Desktop's `docker-credential-desktop.exe` on PATH, or else from the file
+itself (`auths`). The file is `%DOCKER_CONFIG%\config.json`, or
+`%USERPROFILE%\.docker\config.json`. A Docker login the registry refuses
+doesn't stop a pull of a public image: zigsaw pulls without it, and says so.
+Identity tokens, which Docker gets from some registries' web logins, aren't
+used.
 
 ## Updating and cleaning up
 
@@ -332,8 +356,9 @@ zigsaw run --sandbox=low --file=D:\docs\todo.txt org.gnome.TextEditor
   its other arguments, as its own working directory may be elsewhere.
 - Under `soft` nothing more happens. Under `low`, that file alone is
   labelled low integrity, so the app can save it; under `appcontainer`, the
-  app is granted that file alone. Either lasts until `zigsaw rm`, like other
-  grants.
+  app is granted that file alone, until the app's last run ends: a second
+  run that hands the file to a first one, as Text Editor's does, leaves the
+  first able to save it ([how long grants last](#how-long-grants-last)).
 - The file has to exist, and be a file: `--filesystem` grants a directory.
 - With only the file, an app can't make other files next to it. One that
   saves by writing a temporary file there and renaming it has to fall back
@@ -369,7 +394,9 @@ zigsaw override --nofilesystem=documents org.gnome.TextEditor
 - Under `soft` that's all. Under `low`, a folder the app may write is
   labelled low integrity, and under `appcontainer` it's granted, as any
   host path would be ([how it works](#how-it-works)): for everything in
-  it, until `zigsaw rm`, and the first time takes a while for a big folder.
+  it, while the app's permissions or overrides give it the folder under
+  that sandbox ([how long grants last](#how-long-grants-last)), and the
+  first time takes a while for a big folder.
   A low label lets every low-integrity program write there, not only the
   app; if you'd rather not, give the app the folder `:ro`, or take it away
   with `--nofilesystem`.
@@ -623,6 +650,7 @@ refs\<id>.json         installed app -> manifest digest
 deploy\<hex>\          an unpacked layer, by layer digest, shared by all runs and apps
 data\<id>\             per-app writable state, kept across runs
 grants\<id>.txt        host paths granted to the app's AppContainer, or labelled low for its runs
+grants\<id>.cwd        those of them that were a run's working directory
 overrides\<id>.json    run options saved with `zigsaw override`
 bin\<name>.exe         command shims, with a <name>.shim file saying what each runs
 aliases\<id>\          shims for the aliases an app's runs have: its own and its runtimes'
@@ -683,10 +711,10 @@ host paths it may write (`cwd`, your folders and `--filesystem` paths without
 can still read whatever you can, and use the network. Every tool the matrix
 runs works this way, including git, npm and zig builds.
 
-- A label lasts until `zigsaw rm` removes the app, and is inherited by
-  everything below the path. Meanwhile any low-integrity program can write
-  there, not only the app. Removing an app keeps the labels other apps' runs
-  need, and labels zigsaw didn't make.
+- A label lasts as long as [grants do](#how-long-grants-last), and is
+  inherited by everything below the path. Meanwhile any low-integrity
+  program can write there, not only the app. Taking a label back keeps the
+  labels other apps' runs need, and labels zigsaw didn't make.
 - zigsaw won't label a drive's root, your user profile, or a directory your
   profile is in; grant a directory inside it, or read-only access.
 - The first label of a large tree takes a while, as Windows labels every
@@ -697,7 +725,7 @@ identity (`zigsaw.<id>`). It can then read and write only its data directory,
 read its own files and its runtimes', and use the host paths and network it
 was granted.
 Grants are ACL entries for a capability of the app's own, which only its runs
-hold; `zigsaw rm` removes those on host paths again. (An entry for the
+hold; those on host paths go as [grants do](#how-long-grants-last). (An entry for the
 AppContainer's own SID, as zigsaw made before, would keep low-integrity
 programs out of the files: see [findings](docs/findings.md).)
 Windows gives an AppContainer a temporary directory of its own, under
@@ -720,12 +748,37 @@ AppContainers may do:
 See [findings](docs/findings.md). `tests/matrix.sh` checks what the Windows
 it runs on allows, and prints it.
 
+### How long grants last
+
+What a run is granted on host paths, low labels and ACL entries, stays only
+while a run of the app with nothing on its command line would be granted it
+again:
+
+- under the sandbox its overrides choose (`soft` grants nothing);
+- for the paths and folders its permissions and overrides name;
+- for each working directory such runs had, while it keeps `cwd`, so that a
+  big project isn't granted again on every run.
+
+What a command line adds, with `--file`, `--filesystem` or `--sandbox`, is
+taken back when the app's last run ends: one run that hands a file to
+another, as Text Editor's does, leaves it to that one. What the app's
+permissions or overrides no longer give goes as soon as `zigsaw override` or
+an update takes it away, unless a run of the app is going, and then when the
+last one ends. `zigsaw rm` takes back everything, and `zigsaw repair` what
+an earlier zigsaw kept until `rm`. A run that didn't end (zigsaw was killed)
+leaves its grants until the app's next run ends.
+
+So to keep a folder granted, save the sandbox too: `zigsaw override
+--sandbox=low <app>`. A sandbox given only on the command line grants the
+app's folders afresh on each run, and takes them back after, which takes a
+while for a big folder.
+
 ## Testing
 
 ```bash
 zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash, network)
-bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, and rm undoes; --file; your folders (fake ones); registry keys kept with an app
+bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, how long it lasts, and rm undoes; --file; your folders (fake ones); registry keys kept with an app
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
@@ -741,7 +794,7 @@ bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 in
 bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package); an incremental build of a copy after a change makes what --clean does
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
-bash tests/registry.sh  # push, pull, update, mounts, logins, sources next to images, the catalog, search and info, through local registries (see its header)
+bash tests/registry.sh  # push, pull, update, mounts, chunked uploads that break off, multi-platform indexes, logins (zigsaw's and Docker's), sources next to images, the catalog, search and info, through local registries (see its header)
 bash tests/published.sh # fresh builds have the published digests; anonymous pulls, latest, redirects, the catalog
 GROUP=java bash tests/published.sh # only one group of scripts/published-groups.txt, as a CI job does
 ```

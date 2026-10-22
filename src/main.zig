@@ -2,12 +2,12 @@ const std = @import("std");
 const Io = std.Io;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
-const acl = @import("acl.zig");
 const appcontainer = @import("appcontainer.zig");
 const builder = @import("builder.zig");
 const catalog = @import("catalog.zig");
 const credentials = @import("credentials.zig");
 const exports = @import("exports.zig");
+const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
 const info = @import("info.zig");
 const install = @import("install.zig");
@@ -57,7 +57,8 @@ const usage =
     \\                                  downloads and tool caches, and the data of
     \\                                  uninstalled apps
     \\  repair                          write every app's commands, shortcuts and file
-    \\                                  associations again, as after installing a new zigsaw
+    \\                                  associations again, as after installing a new zigsaw,
+    \\                                  and take back what apps may no longer reach
     \\  version                         print zigsaw's version
     \\
     \\An image is <registry>/<repository>[:tag][@digest], e.g. ghcr.io/owner/node:24.21.0,
@@ -69,13 +70,16 @@ const usage =
     \\Pushing, and pulling private images, needs a login. login saves one per registry in
     \\Windows Credential Manager; --password-stdin reads the password from stdin. For CI
     \\and scripts, ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD are used instead,
-    \\but only for the default registry.
+    \\but only for the default registry. Without either, the login `docker login` saved is
+    \\used. From a multi-platform index, pull takes the image for windows/amd64. Blobs over
+    \\64 MiB are pushed in chunks of ZIGSAW_UPLOAD_CHUNK_SIZE bytes (0: in one request).
     \\
     \\run options (override takes them too, except --command and --file):
     \\  --command=<name>                run one of the app's exported commands, or another
     \\                                  executable or batch file from the app or System32
     \\  --file=<path>                   have the app open a file of yours: grants it that
-    \\                                  file, and adds its path to the app's arguments
+    \\                                  file for the run, and adds its path to the app's
+    \\                                  arguments
     \\  --sandbox=soft|low|appcontainer soft (default) shapes the environment; low also keeps
     \\                                  the app from writing anywhere but its data directory
     \\                                  and the paths granted; appcontainer enforces all of
@@ -91,6 +95,10 @@ const usage =
     \\                                  joins the runs of what it extends
     \\  --extension=<id>                have an extension an override leaves out join again
     \\  --ephemeral                     use a fresh data directory, deleted afterwards
+    \\
+    \\What the low and appcontainer sandboxes grant on host paths stays while the app's
+    \\permissions and overrides give it; what a command line adds goes when the app's
+    \\last run ends.
     \\
     \\Data lives in %ZIGSAW_HOME%, or %LOCALAPPDATA%\zigsaw when that isn't set.
     \\
@@ -260,9 +268,12 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         if (rest.len != 0) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
         // What runs that didn't end left in HKCU first, as repair runs after
-        // installing a zigsaw, maybe over one that was killed.
+        // installing a zigsaw, maybe over one that was killed; and what they
+        // were granted and no longer stands, by older zigsaws too.
         try hkcu.settleLeftovers(ctx, null);
-        return exports.repair(ctx);
+        const unsettled = try grants.settleAll(ctx);
+        const code = try exports.repair(ctx);
+        return if (unsettled > 0) 1 else code;
     }
     return usageError();
 }
@@ -443,7 +454,7 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
         if (!new.isEmpty()) return fail("--reset removes all of {s}'s overrides; add new ones separately", .{app});
         try override.delete(ctx.store, arena, app);
         note("{s} has no overrides now", .{app});
-        return;
+        return settleGrants(ctx, app);
     }
     const saved = try override.load(ctx.store, arena, app);
     if (new.isEmpty()) {
@@ -463,6 +474,14 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
     if (merged.isEmpty()) {
         note("{s} has no overrides now", .{app});
     } else note("{s} now runs with {f}", .{ app, merged });
+    try settleGrants(ctx, app);
+}
+
+/// Takes back what the app's runs were granted that its overrides no longer
+/// give it (see grants.zig), now unless a run of it is going.
+fn settleGrants(ctx: *Context, id: []const u8) !void {
+    if (!try grants.settleUnlessRunning(ctx, id))
+        note("{s} is running: what the change takes back goes when its last run ends", .{id});
 }
 
 fn list(ctx: *Context) !void {
@@ -512,36 +531,7 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
 
     // Undo what the app's runs changed on host paths: access granted to its
     // AppContainer, and low integrity labels no other app's runs need.
-    const host_grants = try store.readGrants(arena, id);
-    if (host_grants.len > 0) {
-        const profile = try appcontainer.Profile.ensure(arena, id);
-        for (host_grants) |g| {
-            // A deleted path took its ACL with it.
-            if (!try Store.exists(io, g.path)) continue;
-            switch (g.kind) {
-                .appcontainer => {
-                    // The package SID is what zigsaw granted before capabilities.
-                    _ = acl.revoke(arena, g.path, .{ .sids = &.{ profile.capability, profile.sid } }) catch |err| switch (err) {
-                        error.Failed => continue, // Logged; keep undoing the rest.
-                        else => |e| return e,
-                    };
-                    note("revoked {s} access to {s}", .{ profile.name, g.path });
-                },
-                .low => {
-                    if (try store.grantedToOthers(arena, id, g)) {
-                        note("kept the low integrity label of {s}, which other apps' runs need", .{g.path});
-                        continue;
-                    }
-                    acl.unlabel(arena, g.path) catch |err| switch (err) {
-                        error.Failed => continue,
-                        else => |e| return e,
-                    };
-                    note("removed the low integrity label of {s}", .{g.path});
-                },
-            }
-        }
-        try store.deleteGrants(arena, id);
-    }
+    try grants.undoAll(ctx, id);
     try appcontainer.deleteProfile(arena, id);
     // The keys the app keeps, if a run that didn't end left them in HKCU:
     // back into its data, before that goes too.
@@ -577,6 +567,7 @@ test {
     _ = @import("extensions.zig");
     _ = @import("folders.zig");
     _ = @import("gitignore.zig");
+    _ = @import("grants.zig");
     _ = @import("hkcu.zig");
     _ = @import("info.zig");
     _ = @import("msvc.zig");

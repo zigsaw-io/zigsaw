@@ -104,6 +104,8 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         if (!opts.dry_run) try Store.deleteTree(io, arena, p);
     }
     if (!opts.dry_run) try deleteStaleLocks(io, arena, tmp_dir);
+    // The locks of apps whose grants are all taken back (see grants.zig).
+    if (!opts.dry_run) try deleteStaleLocks(io, arena, try store.path(arena, &.{"grants"}));
 
     var downloads: Tally = .{};
     const downloads_dir = try store.path(arena, &.{ "cache", "downloads" });

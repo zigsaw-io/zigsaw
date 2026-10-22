@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# End-to-end checks for what the enforcing sandboxes change on the host, and
-# what `zigsaw rm` undoes: low integrity labels on the paths a --sandbox=low
-# run may write, access granted to an app's AppContainer, and what each lets
-# a run write. Two busybox apps; tests/matrix.sh runs real tools.
+# End-to-end checks for what the enforcing sandboxes change on the host, how
+# long it lasts, and what `zigsaw rm` undoes: low integrity labels on the
+# paths a --sandbox=low run may write, access granted to an app's
+# AppContainer, and what each lets a run write. What a run's command line
+# asks for lasts until the app's last run ends; what its permissions and
+# saved overrides give stays (src/grants.zig). Busybox apps; tests/matrix.sh
+# runs real tools.
 #
 #   tests/sandbox.sh [path\to\zigsaw.exe]
 #
 # Needs Git Bash and network access (for the busybox download, unless
-# SEED_DOWNLOADS has it). Always uses a temporary store, and removes it, and
-# the AppContainer profiles it made, afterwards.
+# SEED_DOWNLOADS has it). Always uses a temporary store (on TMPDIR's drive),
+# and removes it, and the AppContainer profiles it made, afterwards.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -57,26 +60,57 @@ low_label() { label_of "$1" | grep -q 'Low Mandatory Level:(OI)(CI)(NW)'; }
 no_label() { ! label_of "$1"; }
 has_ace() { icacls "$1" | grep -q "$2"; }
 granted() { grep -qxF "$2" "$ZIGSAW_HOME\\grants\\$1.txt" 2>/dev/null; }
+# icacls_in <app> <sandbox> <path> [run options...]: icacls's view of the
+# path from inside a run of the app, while what the run was granted is there.
+icacls_in() {
+    local app=$1 sb=$2 p=$3
+    shift 3
+    z run --sandbox="$sb" "$@" --command=icacls "$app" "$p"
+}
+# hold <dir> <app> [run options...]: starts a run of the app that goes on,
+# writing to <dir>, until `release`; returns once it's going. Its PID is in
+# $held.
+hold() {
+    local dir=$1 app=$2
+    shift 2
+    rm -f "$dir\\started" "$dir\\stop"
+    "$zigsaw" run "$@" "$app" sh -c "touch '$dir\\started'; while [ ! -f '$dir\\stop' ]; do sleep 0.2; done" </dev/null >/dev/null 2>&1 &
+    held=$!
+    held_dir=$dir
+    local i
+    for i in $(seq 100); do [ -f "$dir\\started" ] && return 0; sleep 0.1; done
+    return 1
+}
+release() {
+    touch "$held_dir\\stop"
+    wait $held
+}
 
 "$zigsaw" build "$root/recipes/busybox.json" >/dev/null 2>&1 || { echo "building busybox failed"; exit 1; }
 sed "s/\"net.frippery.busybox\"/\"$OTHER\"/" "$root/recipes/busybox.json" >"$work\\other.json"
 "$zigsaw" build "$work\\other.json" >/dev/null 2>&1 || { echo "building the second app failed"; exit 1; }
 
-mkdir -p "$work\\rw" "$work\\ro" "$work\\outside" "$work\\cwd" "$work\\ac" "$work\\mine"
+mkdir -p "$work\\rw" "$work\\ro" "$work\\outside" "$work\\cwd" "$work\\ac" "$work\\mine" "$work\\own"
 echo secret >"$work\\outside\\secret.txt"
 
 # --- What a low run can write ------------------------------------------------
+#
+# Grants from a run's command line last for the run: what it has meanwhile
+# shows from inside it.
 
+labelled_in_run() { icacls_in $BB low "$1" --filesystem="$2" | grep -qF "$3"; }
+label_gone() { no_label "$1" && fails granted $BB "low $1"; }
 check "low: writes its data directory" z run --sandbox=low $BB sh -c 'echo x > "$APPDATA/f"'
 check "low: writes a path it may write" writes $BB low "$work\\rw\\f" --filesystem="$work\\rw"
-check "  which is labelled low, for everything in it" low_label "$work\\rw"
-check "  and recorded for rm" granted $BB "low $work\\rw"
-check "  what it wrote inherits the label" sh -c "icacls '$work\\rw\\f' | grep -q 'Low Mandatory Level:(I)(NW)'"
+check "  which is labelled low while it runs, for everything in it" labelled_in_run "$work\\rw" "$work\\rw" 'Low Mandatory Level:(OI)(CI)(NW)'
+check "  what it wrote inherits the label" labelled_in_run "$work\\rw\\f" "$work\\rw" 'Low Mandatory Level:(I)(NW)'
+check "  and the label, and its record, go when the run ends" sh -c "$(declare -f label_of no_label fails granted label_gone); BB=$BB; ZIGSAW_HOME='$ZIGSAW_HOME'; label_gone '$work\\rw' && no_label '$work\\rw\\f'"
 check "low: can't write a read-only grant" fails writes $BB low "$work\\ro\\f" --filesystem="$work\\ro:ro"
 check "  which isn't labelled" no_label "$work\\ro"
 check "low: can't write elsewhere" fails writes $BB low "$work\\outside\\f"
 check "low: reads elsewhere (not enforced)" z run --sandbox=low $BB cat "$work\\outside\\secret.txt"
 check "low: writes cwd with the cwd permission" sh -c "cd '$work\\cwd' && \"\$0\" run --sandbox=low --filesystem=cwd $BB sh -c 'echo x > \"\$1\"' sh '$work\\cwd\\f' </dev/null" "$zigsaw"
+check "  which, given on the command line, isn't labelled after it" label_gone "$work\\cwd"
 check "  and the run's data directory is labelled" low_label "$ZIGSAW_HOME\\data\\$BB"
 refuses_profile() {
     local out
@@ -103,32 +137,42 @@ acl_before=$(icacls "$work\\modify\\rw" | grep -v '^Successfully')
 if icacls "$work\\modify\\rw" /setintegritylevel '(OI)(CI)low' >/dev/null 2>&1; then
     # An administrator's token can take ownership; CI runs as one.
     echo "skip  low: a path that withholds WRITE_OWNER (this user can label it anyway)"
-    modify_fixture=false
 else
-    modify_fixture=true
     check "low: writes a path that withholds WRITE_OWNER" writes $BB low "$work\\modify\\rw\\f" --filesystem="$work\\modify\\rw"
-    check "  which is labelled low" low_label "$work\\modify\\rw"
-    check "  with its ACL as it was" sh -c "[ \"\$(icacls '$work\\modify\\rw' | grep -v -e '^Successfully' -e 'Mandatory Label')\" = \"\$0\" ]" "$acl_before"
+    check "  which is labelled low while it runs" labelled_in_run "$work\\modify\\rw" "$work\\modify\\rw" 'Low Mandatory Level:(OI)(CI)(NW)'
+    check "  and unlabelled after it, with its ACL as it was" sh -c "[ \"\$(icacls '$work\\modify\\rw' | grep -v '^Successfully')\" = \"\$0\" ]" "$acl_before"
 fi
 
 # --- AppContainer grants, and a low run after one ------------------------------
 
+capability_in_run() {
+    local out
+    out=$(icacls_in $BB appcontainer "$1" --filesystem="$1") || { echo "$out"; return 1; }
+    grep -q 'S-1-15-3-1024-' <<<"$out" && ! grep -q 'S-1-15-2-' <<<"$out"
+}
+ace_gone() { fails has_ace "$1" 'S-1-15-' && fails granted $BB "$1"; }
 check "appcontainer: writes a granted path" writes $BB appcontainer "$work\\ac\\f" --filesystem="$work\\ac"
-check "  granted to the app's capability, not its package SID" sh -c "icacls '$work\\ac' | grep -q 'S-1-15-3-1024-' && ! icacls '$work\\ac' | grep -q 'S-1-15-2-'"
-check "  and recorded for rm" granted $BB "$work\\ac"
+check "  granted to the app's capability while it runs, not its package SID" capability_in_run "$work\\ac"
+check "  and revoked when the run ends" ace_gone "$work\\ac"
 check "low after appcontainer: runs, and reads what that run wrote" z run --sandbox=low --filesystem="$work\\ac" $BB cat "$work\\ac\\f"
 check "appcontainer: can't write elsewhere" fails writes $BB appcontainer "$work\\outside\\f"
 
 # --- A file a run is to open (--file) ---------------------------------------------
 
 mkdir -p "$work\\docs"
-for f in soft low ac sibling; do echo old >"$work\\docs\\$f.txt"; done
+for f in soft low ac sibling held; do echo old >"$work\\docs\\$f.txt"; done
 # rewrites <sandbox> <file>: the app gets the file as its last argument, and
 # reads and writes it.
 rewrites() {
     z run --sandbox="$1" --file="$2" $BB sh -c 'grep -q old "$1" && echo new > "$1"' sh && grep -q new "$2"
 }
 file_low() { label_of "$1" | grep -q 'Low Mandatory Level:(NW)'; }
+# Inside the run, which gets the file as $3: it alone is labelled.
+alone_labelled_in_run() {
+    z run --sandbox=low --file="$work\\docs\\low.txt" $BB sh -c '
+        icacls "$3" | grep -q "Low Mandatory Level:(NW)" && ! icacls "$1" | grep -q "Mandatory Label" && ! icacls "$2" | grep -q "Mandatory Label"' \
+        sh "$work\\docs" "$work\\docs\\sibling.txt"
+}
 check "soft: --file gives the app the file's path, to read and write" rewrites soft "$work\\docs\\soft.txt"
 relative_file() {
     local got
@@ -137,20 +181,125 @@ relative_file() {
 }
 check "  a relative one is the caller's, whatever the app's working directory" relative_file
 check "low: --file lets the app write that file" rewrites low "$work\\docs\\low.txt"
-check "  which alone is labelled low" sh -c "$(declare -f label_of file_low no_label); file_low '$work\\docs\\low.txt' && no_label '$work\\docs' && no_label '$work\\docs\\sibling.txt'"
-check "  and recorded for rm" granted $BB "low $work\\docs\\low.txt"
+check "  which alone is labelled low while it runs" alone_labelled_in_run
+check "  and isn't after it, nor recorded" label_gone "$work\\docs\\low.txt"
 check "  the file next to it stays out of reach" fails writes $BB low "$work\\docs\\sibling.txt" --file="$work\\docs\\low.txt"
 check "appcontainer: --file lets the app read and write that file" rewrites appcontainer "$work\\docs\\ac.txt"
-check "  recorded for rm" granted $BB "$work\\docs\\ac.txt"
+check "  and revoked when the run ends" ace_gone "$work\\docs\\ac.txt"
 check "  the file next to it stays out of reach" fails z run --sandbox=appcontainer --file="$work\\docs\\ac.txt" $BB cat "$work\\docs\\sibling.txt"
 check "--file needs a file that exists" sh -c "\"\$0\" run --file='$work\\docs\\none.txt' $BB true 2>&1 | grep -q 'no such file'" "$zigsaw"
 check "  and not a directory" sh -c "\"\$0\" run --file='$work\\docs' $BB true 2>&1 | grep -q 'is a directory; --filesystem='" "$zigsaw"
 check "override doesn't take --file" sh -c "\"\$0\" override --file=x $BB 2>&1 | grep -q \"can't be saved as an override\"" "$zigsaw"
 
+# --- While another run of the app goes on --------------------------------------
+#
+# The last run of an app to end takes back what its runs' command lines
+# asked for: a second run that hands a file to the first, as Text Editor's
+# does, leaves the first able to open it.
+
+held_keeps_file() {
+    hold "$work" $BB || return 1
+    rewrites low "$work\\docs\\held.txt" && file_low "$work\\docs\\held.txt"
+    local status=$?
+    release
+    return $status
+}
+killed_leaves() {
+    hold "$work\\rw" $BB --sandbox=low --filesystem="$work\\rw" || return 1
+    kill -9 $held
+    touch "$work\\rw\\stop"
+    wait $held 2>/dev/null
+    low_label "$work\\rw" && granted $BB "low $work\\rw"
+}
+check "a --file grant stays after its run while another run of the app goes on" held_keeps_file
+check "  and goes when that one ends" label_gone "$work\\docs\\held.txt"
+check "a killed run leaves what it was granted" killed_leaves
+check "  which the app's next run takes back when it ends" sh -c "\"\$0\" run $BB true </dev/null && $(declare -f label_of no_label fails granted label_gone); BB=$BB; ZIGSAW_HOME='$ZIGSAW_HOME'; label_gone '$work\\rw'" "$zigsaw"
+
+# --- What stands --------------------------------------------------------------
+#
+# A third app, with overrides saved: what a run with nothing on its command
+# line would be granted stays, until the overrides no longer give it.
+
+STAND=test.sandbox.standing
+sed "s/\"net.frippery.busybox\"/\"$STAND\"/" "$root/recipes/busybox.json" >"$work\\standing.json"
+"$zigsaw" build "$work\\standing.json" >/dev/null 2>&1 || { echo "building the third app failed"; exit 1; }
+mkdir -p "$work\\keep" "$work\\c1" "$work\\c2"
+"$zigsaw" override --sandbox=low --filesystem="$work\\keep" $STAND >/dev/null 2>&1
+
+second_run_quiet() {
+    local out
+    out=$("$zigsaw" run $STAND true 2>&1 </dev/null) || { echo "$out"; return 1; }
+    ! grep -q labelled <<<"$out" || { echo "$out"; return 1; }
+}
+nofilesystem_now() {
+    local out
+    out=$("$zigsaw" override --nofilesystem="$work\\keep" $STAND 2>&1 </dev/null)
+    grep -q 'removed the low integrity label' <<<"$out" || { echo "$out"; return 1; }
+    no_label "$work\\keep" && fails granted $STAND "low $work\\keep"
+}
+reset_while_running() {
+    "$zigsaw" override --sandbox=low --filesystem="$work\\keep" $STAND >/dev/null 2>&1 && z run $STAND true && low_label "$work\\keep" || return 1
+    hold "$work\\keep" $STAND || return 1
+    local out
+    out=$("$zigsaw" override --reset $STAND 2>&1 </dev/null)
+    if ! grep -q "is running" <<<"$out" || ! low_label "$work\\keep"; then
+        release
+        echo "$out"
+        return 1
+    fi
+    release
+    no_label "$work\\keep" && fails granted $STAND "low $work\\keep"
+}
+to_appcontainer() {
+    "$zigsaw" override --sandbox=low --filesystem="$work\\keep" $STAND >/dev/null 2>&1 && z run $STAND true && low_label "$work\\keep" || return 1
+    "$zigsaw" override --sandbox=appcontainer $STAND >/dev/null 2>&1 && no_label "$work\\keep" || return 1
+    z run $STAND true && has_ace "$work\\keep" 'S-1-15-3-1024-.*(F)' && granted $STAND "$work\\keep"
+}
+read_only_now() {
+    local out
+    out=$("$zigsaw" override --filesystem="$work\\keep:ro" $STAND 2>&1 </dev/null)
+    grep -q "write access to" <<<"$out" || { echo "$out"; return 1; }
+    fails writes $STAND appcontainer "$work\\keep\\g" && z run $STAND ls "$work\\keep" >/dev/null &&
+        has_ace "$work\\keep" 'S-1-15-3-1024-.*(RX)' && fails has_ace "$work\\keep" 'S-1-15-3-1024-.*(F)'
+}
+check "an override's path is written by a low run" writes $STAND low "$work\\keep\\f"
+check "  and stays labelled after it, recorded" sh -c "$(declare -f label_of low_label granted); ZIGSAW_HOME='$ZIGSAW_HOME'; low_label '$work\\keep' && granted $STAND 'low $work\\keep'"
+check "  so the next run doesn't label it again" second_run_quiet
+check "override --nofilesystem takes it back at once" nofilesystem_now
+check "override --reset while a run goes on takes it back when that run ends" reset_while_running
+check "an override's other sandbox takes the label back, and its runs grant access instead" to_appcontainer
+check "  and making the path read-only takes back write access" read_only_now
+
+in_dir() {
+    local d=$1
+    shift
+    (cd "$d" && "$zigsaw" "$@" </dev/null)
+}
+listed_cwd() { grep -qxF "$1" "$ZIGSAW_HOME\\grants\\$STAND.cwd"; }
+two_cwds() {
+    "$zigsaw" override --reset $STAND >/dev/null 2>&1 && "$zigsaw" override --sandbox=low --filesystem=cwd $STAND >/dev/null 2>&1 || return 1
+    in_dir "$work\\c1" run $STAND sh -c 'echo x > f' && in_dir "$work\\c2" run $STAND sh -c 'echo x > f' || return 1
+    low_label "$work\\c1" && low_label "$work\\c2" || { echo "not labelled: $(icacls "$work\\c1" "$work\\c2" | tr -d '\r' | tr '\n' ' ')"; return 1; }
+    listed_cwd "$work\\c1" && listed_cwd "$work\\c2" || { echo "listed: $(tr '\n' '|' <"$ZIGSAW_HOME\\grants\\$STAND.cwd")"; return 1; }
+}
+nocwd() {
+    "$zigsaw" override --nofilesystem=cwd $STAND >/dev/null 2>&1 && no_label "$work\\c1" && no_label "$work\\c2" &&
+        [ ! -e "$ZIGSAW_HOME\\grants\\$STAND.cwd" ]
+}
+cmdline_cwd() {
+    "$zigsaw" override --reset $STAND >/dev/null 2>&1 && in_dir "$work\\c1" run --sandbox=low --filesystem=cwd $STAND sh -c 'echo y > f' &&
+        no_label "$work\\c1" && [ ! -e "$ZIGSAW_HOME\\grants\\$STAND.cwd" ]
+}
+check "cwd: each working directory of a low override's runs stays labelled" two_cwds
+check "  until override --nofilesystem=cwd takes them all back" nocwd
+check "cwd: one a command-line --filesystem=cwd grants goes after its run" cmdline_cwd
+"$zigsaw" rm $STAND >/dev/null 2>&1 </dev/null
+
 # --- The user's folders (--filesystem=documents) -------------------------------
 #
 # Fake folders: ZIGSAW_USER_FOLDERS has zigsaw take <dir>\Documents and so on
-# for the user's. A third app declares documents, and a permission of a later
+# for the user's. A fourth app declares documents, and a permission of a later
 # zigsaw's.
 
 FOLD=test.sandbox.folders
@@ -184,6 +333,17 @@ keeps_own_documents() {
 }
 reads_unlabelled() { z run --sandbox=low --filesystem=downloads:ro $FOLD ls "$folders\\Downloads" && no_label "$folders\\Downloads"; }
 ephemeral_keeps_folder() { z run --ephemeral $FOLD sh -c 'grep -q mine "$USERPROFILE/Documents/mine.txt"' && folder_files_kept; }
+folder_label_back() {
+    "$zigsaw" override --nofilesystem=documents $FOLD >/dev/null 2>&1 &&
+        no_label "$folders\\Documents" && fails granted $FOLD "low $folders\\Documents"
+}
+sed -e "s/\"net.frippery.busybox\"/\"$FOLD\"/" "$root/recipes/busybox.json" >"$work\\folders-none.json"
+update_takes_back() {
+    local out
+    out=$("$zigsaw" build "$work\\folders-none.json" 2>&1 </dev/null)
+    grep -q "revoked .* access to" <<<"$out" || { echo "$out"; return 1; }
+    fails has_ace "$folders\\Documents" 'S-1-15-' && fails granted $FOLD "$folders\\Documents"
+}
 
 check "soft: an app's declared folder is linked into its home" z run $FOLD sh -c 'grep -q mine "$USERPROFILE/Documents/mine.txt"'
 check "  as a junction" is_junction "$home\\Documents"
@@ -195,15 +355,21 @@ check "  and its link, not what it pointed to" link_gone
 check "override --nofilesystem too, until the command line grants it again" override_nofilesystem
 check "a home Documents with the app's own files is kept" keeps_own_documents
 is_junction "$home\\Documents" || rm -rf "$home\\Documents"
-check "low: writes the folder through the link" z run --sandbox=low $FOLD sh -c 'echo x > "$USERPROFILE/Documents/low.txt"'
-check "  which is labelled low" low_label "$folders\\Documents"
-check "  and recorded for rm" granted $FOLD "low $folders\\Documents"
+"$zigsaw" override --sandbox=low $FOLD >/dev/null 2>&1
+check "low: writes the folder through the link" z run $FOLD sh -c 'echo x > "$USERPROFILE/Documents/low.txt"'
+check "  which stays labelled low, as the app's overrides choose low" low_label "$folders\\Documents"
+check "  recorded" granted $FOLD "low $folders\\Documents"
 check "  a link in it labelled, not what that points to" no_label "$folders\\Music"
-check "low: a read-only folder can't be written" fails z run --sandbox=low --filesystem=downloads:ro $FOLD sh -c 'echo x > "$USERPROFILE/Downloads/ro.txt"'
+check "low: a read-only folder can't be written" fails z run --filesystem=downloads:ro $FOLD sh -c 'echo x > "$USERPROFILE/Downloads/ro.txt"'
 check "  but is read, and isn't labelled" reads_unlabelled
-check "appcontainer: reads and writes the folder through the link" z run --sandbox=appcontainer $FOLD sh -c 'grep -q mine "$USERPROFILE/Documents/mine.txt" && echo x > "$USERPROFILE/Documents/ac.txt"'
-check "  granted to the app's capability" has_ace "$folders\\Documents" 'S-1-15-3-1024-'
-check "appcontainer: a folder it may not use stays out" fails z run --sandbox=appcontainer $FOLD ls "$folders\\Downloads"
+check "override --nofilesystem=documents takes the label back" folder_label_back
+"$zigsaw" override --reset $FOLD >/dev/null 2>&1
+"$zigsaw" override --sandbox=appcontainer $FOLD >/dev/null 2>&1
+check "appcontainer: reads and writes the folder through the link" z run $FOLD sh -c 'grep -q mine "$USERPROFILE/Documents/mine.txt" && echo x > "$USERPROFILE/Documents/ac.txt"'
+check "  granted to the app's capability, which stays" has_ace "$folders\\Documents" 'S-1-15-3-1024-'
+check "appcontainer: a folder it may not use stays out" fails z run $FOLD ls "$folders\\Downloads"
+check "an update that no longer permits the folder takes the grant back" update_takes_back
+"$zigsaw" build "$work\\folders.json" >/dev/null 2>&1 || { echo "building the folders app again failed"; exit 1; }
 check "--ephemeral: linked too, and its data deleted without what the link pointed to" ephemeral_keeps_folder
 rm_delete_data_keeps_folder() {
     "$zigsaw" rm --delete-data $FOLD >/dev/null 2>&1 </dev/null || return 1
@@ -211,7 +377,7 @@ rm_delete_data_keeps_folder() {
         [ -f "$folders\\Documents\\low.txt" ] && [ -f "$folders\\Documents\\ac.txt" ]
 }
 check "rm --delete-data leaves the folder's files" rm_delete_data_keeps_folder
-check "  and takes back its label and grant" sh -c "! icacls '$folders\\Documents' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
+check "  and takes back its grant" sh -c "! icacls '$folders\\Documents' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 prune_data_keeps_folder() {
     "$zigsaw" build "$work\\folders.json" >/dev/null 2>&1 &&
         z run $FOLD true 2>/dev/null && is_junction "$home\\Documents" &&
@@ -224,7 +390,7 @@ unset ZIGSAW_USER_FOLDERS
 
 # --- Registry keys an app keeps (its config's "registry") --------------------------
 #
-# A fourth app keeps a test key, and a fifth the same one. Their runs set and
+# A fifth app keeps a test key, and a sixth the same one. Their runs set and
 # read values with System32's reg.exe (--command=reg).
 
 REG=test.sandbox.registry
@@ -309,7 +475,7 @@ check "rm --delete-data settles what a run left, and leaves nothing in HKCU" rm_
 "$zigsaw" rm --delete-data $REG2 >/dev/null 2>&1 </dev/null
 reg delete "HKCU\\$key" /f >/dev/null 2>&1
 
-# A sixth app keeps a key two levels below one that's there and empty, as
+# A seventh app keeps a key two levels below one that's there and empty, as
 # Java apps keep theirs below an empty HKCU\Software\JavaSoft\Prefs: taking
 # it back deletes the key its run made above it, not the one that was there.
 REG3=test.sandbox.registry3
@@ -331,13 +497,22 @@ check "taking a key back deletes the keys above it its run made, not an empty on
 "$zigsaw" rm --delete-data $REG3 >/dev/null 2>&1 </dev/null
 reg delete "HKCU\\$deep" /f >/dev/null 2>&1
 
-# --- Labels two apps share, labels zigsaw didn't make, and rm ---------------------
 
-check "a second app's low run writes the same path" writes $OTHER low "$work\\rw\\g" --filesystem="$work\\rw"
-check "  and shares the label, recorded for both" granted $OTHER "low $work\\rw"
+# --- Labels two apps share, labels zigsaw didn't make, and rm ---------------------
+#
+# Both apps' overrides choose low and name the same path, so its label
+# stands for both.
+
+for app in $BB $OTHER; do "$zigsaw" override --sandbox=low --filesystem="$work\\rw" $app >/dev/null 2>&1; done
+"$zigsaw" override --filesystem="$work\\own" $BB >/dev/null 2>&1
+both_write() { writes $BB low "$work\\rw\\g" && writes $OTHER low "$work\\rw\\h"; }
+check "two apps whose overrides name the same path write it" both_write
+check "  and share the label, recorded for both" sh -c "$(declare -f granted); ZIGSAW_HOME='$ZIGSAW_HOME'; granted $BB 'low $work\\rw' && granted $OTHER 'low $work\\rw'"
+check "  the first writes a path only its overrides name" writes $BB low "$work\\own\\f"
 icacls "$work\\mine" /setintegritylevel '(OI)(CI)low' >/dev/null
 check "a path labelled low by hand is written" writes $BB low "$work\\mine\\f" --filesystem="$work\\mine"
 check "  but not recorded" fails granted $BB "low $work\\mine"
+check "  and keeps its label after the run" low_label "$work\\mine"
 
 rm_keeps_shared() {
     local out
@@ -346,15 +521,9 @@ rm_keeps_shared() {
     low_label "$work\\rw"
 }
 check "rm keeps a label another app still needs" rm_keeps_shared
-check "  removes its own labels" no_label "$work\\cwd"
-check "  and what was below them inherited" sh -c "! icacls '$work\\cwd\\f' | grep -q 'Mandatory Label'"
-check "  revokes its AppContainer grants" sh -c "! icacls '$work\\ac' | grep -q 'S-1-15-'"
-check "  and those of the files it opened" sh -c "! icacls '$work\\docs\\low.txt' '$work\\docs\\ac.txt' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
+check "  removes its own labels" no_label "$work\\own"
+check "  and what was below them inherited" sh -c "! icacls '$work\\own\\f' | grep -q 'Mandatory Label'"
 check "  leaves a label it didn't make" low_label "$work\\mine"
-if $modify_fixture; then
-    check "  removes the label of a path that withholds WRITE_OWNER" no_label "$work\\modify\\rw"
-    check "  with its ACL as it was" sh -c "[ \"\$(icacls '$work\\modify\\rw' | grep -v '^Successfully')\" = \"\$0\" ]" "$acl_before"
-fi
 check "the second app's rm removes the shared label" sh -c "\"\$0\" rm $OTHER >/dev/null 2>&1 && ! icacls '$work\\rw' | grep -q 'Mandatory Label'" "$zigsaw"
 
 rm -rf "$ZIGSAW_HOME" "$work"

@@ -33,6 +33,10 @@ fi
 
 work=$(cygpath -w "$(mktemp -d)")
 repo="$registry/zigsaw-test-$RANDOM"
+# Docker's logins are the test's own (none, until the checks write some),
+# not those of whoever runs it.
+export DOCKER_CONFIG="$work\\docker"
+mkdir -p "$DOCKER_CONFIG"
 
 # Two stores: apps are built in one, pushed, and pulled into the other.
 store_a="$work\\a"
@@ -70,7 +74,7 @@ pulled_runs() { [ "$(zb run net.frippery.busybox echo pulled | tr -d '\r')" = pu
 same_digest() { [ "$(zb list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]; }
 missing_tag() { zb pull "$repo/busybox:nope" 2>&1 | grep -q 'not found'; }
 # Container images, as found on real registries, are refused, not installed.
-refused() { zb pull "$1" 2>&1 | grep -qE 'not a zigsaw app|multi-platform index'; }
+refused() { zb pull "$1" 2>&1 | grep -qE 'not a zigsaw app|none for windows/amd64'; }
 
 check "push" za push net.frippery.busybox "$repo/busybox"
 check "the tag defaults to the app's version" tags_list
@@ -83,6 +87,29 @@ check "pull by digest" zb pull "$repo/busybox@$full_digest"
 check "a digest that doesn't match is refused" fails zb pull "$repo/busybox@sha256:$(printf '0%.0s' {1..64})"
 check "a missing tag is reported" missing_tag
 check "the pulled app's commands are installed" test -f "$store_b\\bin\\busybox.exe"
+
+# Blobs bigger than a chunk go up in chunks (64 KiB here, 64 MiB unless
+# ZIGSAW_UPLOAD_CHUNK_SIZE says), and one that breaks off goes on from where
+# the registry got to.
+pulls_back() { # <repository>: into a fresh store, the pushed digest
+    ZIGSAW_HOME="$work\\chunks" "$zigsaw" pull "$1:FRP-6075-g169694ebd" >/dev/null 2>&1 &&
+        [ "$(ZIGSAW_HOME="$work\\chunks" "$zigsaw" list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]
+}
+in_chunks() {
+    local out
+    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 za -v push net.frippery.busybox "$repo/busybox-chunks" 2>&1) || { echo "$out"; return 1; }
+    grep -q "sent .* in [0-9]* chunks" <<<"$out" || { echo "$out"; return 1; }
+    pulls_back "$repo/busybox-chunks"
+}
+broken_chunk() {
+    local out
+    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 ZIGSAW_TEST_UPLOAD_BREAK=3 za push net.frippery.busybox "$repo/busybox-broken" 2>&1) || { echo "$out"; return 1; }
+    grep -qE "broke off .*(at [0-9]* of [0-9]* bytes; resuming|starting it again)" <<<"$out" || { echo "$out"; return 1; }
+    ZIGSAW_HOME="$work\\chunks" "$zigsaw" rm net.frippery.busybox >/dev/null 2>&1
+    pulls_back "$repo/busybox-broken"
+}
+check "push in chunks, which pull back as pushed" in_chunks
+check "  a chunk that breaks off goes again from where the registry got to" broken_chunk
 
 # Images built before iteration 7 have plain tar layers. One made here from
 # busybox's (its layer decompressed and uploaded, its manifest rewritten)
@@ -131,6 +158,44 @@ check "update: a moved tag is pulled again" update_moved_tag
 check "update: an app pulled by digest is pinned" update_pinned
 # Back to the recipe's version, which the checks below push and pull.
 za build "$root/recipes/busybox.json" >/dev/null 2>&1
+
+# Multi-platform indexes, made here from the two busybox images in the
+# repository: the recipe's as windows/amd64, and reg-2 as linux/arm64.
+index_api="http://${registry/localhost/127.0.0.1}/v2/${repo#*/}/busybox"
+reg2=$(curl -sf -I -H 'Accept: application/vnd.oci.image.manifest.v1+json' "$index_api/manifests/latest" | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')
+entry() { # <digest> <os> <architecture>
+    local size
+    size=$(curl -sf -H 'Accept: application/vnd.oci.image.manifest.v1+json' "$index_api/manifests/$1" | wc -c)
+    printf '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"%s","size":%d,"platform":{"architecture":"%s","os":"%s"}}' "$1" "$size" "$3" "$2"
+}
+put_index() { # <tag> <entries...>: prints the index's digest
+    local tag=$1 file="$work\\index-$1.json"
+    shift
+    local IFS=,
+    printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[%s]}' "$*" >"$file"
+    curl -sf -X PUT -H 'Content-Type: application/vnd.oci.image.index.v1+json' --data-binary @"$file" "$index_api/manifests/$tag" >/dev/null || return 1
+    echo "sha256:$(sha256sum <"$file" | cut -d' ' -f1)"
+}
+index_digest=$(put_index multi "$(entry "$reg2" linux arm64)" "$(entry "$full_digest" windows amd64)")
+put_index linux-only "$(entry "$reg2" linux arm64)" >/dev/null
+zi() { ZIGSAW_HOME="$work\\idx" "$zigsaw" "$@"; }
+index_pull() {
+    local out
+    out=$(zi pull "$repo/busybox:multi" 2>&1) || { echo "$out"; return 1; }
+    grep -q "is a multi-platform index" <<<"$out" || { echo "$out"; return 1; }
+    [ "$(zi list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]
+}
+index_pinned() {
+    zi pull "$repo/busybox@$index_digest" >/dev/null 2>&1 &&
+        [ "$(zi list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]
+}
+index_info() { zi info "$repo/busybox:multi" | grep -q "index .*$index_digest"; }
+linux_only() { zi pull "$repo/busybox:linux-only" 2>&1 | grep -q 'with images for linux/arm64; none for windows/amd64'; }
+check "pull from a multi-platform index takes its image for windows/amd64" index_pull
+check "  update: an unchanged index is up to date" sh -c "ZIGSAW_HOME='$work\\idx' \"\$0\" update net.frippery.busybox 2>&1 | grep -q 'up to date'" "$zigsaw"
+check "  pull by the index's digest" index_pinned
+check "  info shows the index" index_info
+check "an index without an image for windows/amd64 is refused, naming its platforms" linux_only
 
 # App ids name images in the default registry, here the test registry.
 sza() { ZIGSAW_REGISTRY="$repo" ZIGSAW_HOME="$store_a" "$zigsaw" "$@"; }
@@ -261,7 +326,8 @@ check "a vendor step whose commands fail takes what they make from next to the i
 
 # A large app: its 100 MB layer streams both ways.
 za build "$root\\recipes\\node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
-check "push node (100 MB layer)" za push org.nodejs.node "$repo/node"
+node_chunks() { ZIGSAW_UPLOAD_CHUNK_SIZE=16777216 za -v push org.nodejs.node "$repo/node" 2>&1 | grep -q "sent .* in 3 chunks"; }
+check "push node (100 MB, 38 MB compressed), in 16 MiB chunks" node_chunks
 check "pull node" zb pull "$repo/node:24.21.0"
 check "the pulled node runs" zb run org.nodejs.node -e 'process.exit(0)'
 
@@ -340,12 +406,63 @@ if [ -n "${AUTH_REGISTRY:-}" ]; then
     check "login: a pulled app pushed to another repository there is mounted" login_mounts
     check "logout" logged_out
     check "logout: pull asks for a login again" asks_for_login no_env zc pull "$auth_tag"
+
+    # Docker's logins: a config.json of the test's own, and a credential
+    # helper that answers from the environment (tests/credhelper.zig).
+    (cd "$root" && zig build cred-helper >/dev/null 2>&1) || echo "building the credential helper failed"
+    helper_dir=$(cygpath -u "$root\\zig-out\\test")
+    docker_config() { printf '%s' "$1" >"$DOCKER_CONFIG\\config.json"; }
+    with_helper() {
+        PATH="$helper_dir:$PATH" ZIGSAW_TEST_HELPER_SERVER="$1" ZIGSAW_TEST_HELPER_USER="$AUTH_USER" ZIGSAW_TEST_HELPER_SECRET="$AUTH_PASSWORD" \
+            "${@:2}"
+    }
+    pulls_with() { # <origin> <command...>: pulls, with the credentials from there
+        local origin=$1 out
+        shift
+        out=$("$@" -v pull "$auth_tag" 2>&1) || { echo "$out"; return 1; }
+        grep -qF "credentials for $AUTH_REGISTRY: $AUTH_USER, $origin" <<<"$out" || { echo "$out"; return 1; }
+    }
+    auth=$(printf '%s:%s' "$AUTH_USER" "$AUTH_PASSWORD" | base64 -w0)
+    docker_auths() { docker_config "{\"auths\": {\"$AUTH_REGISTRY\": {\"auth\": \"$auth\"}}}" && pulls_with "in Docker's config.json" no_env zc; }
+    docker_url_key() { docker_config "{\"auths\": {\"http://$AUTH_REGISTRY/v2/\": {\"auth\": \"$auth\"}}}" && pulls_with "in Docker's config.json" no_env zc; }
+    docker_cred_helpers() {
+        docker_config "{\"credHelpers\": {\"$AUTH_REGISTRY\": \"zigsaw-test\"}}" &&
+            with_helper "$AUTH_REGISTRY" pulls_with "from docker-credential-zigsaw-test" no_env zc
+    }
+    docker_creds_store() {
+        docker_config "{\"credsStore\": \"zigsaw-test\", \"auths\": {\"$AUTH_REGISTRY\": {}}}" &&
+            with_helper "$AUTH_REGISTRY" pulls_with "from docker-credential-zigsaw-test" no_env zc
+    }
+    docker_helper_none() { docker_config '{"credsStore": "zigsaw-test"}' && with_helper other.example asks_for_login no_env zc pull "$auth_tag"; }
+    zigsaw_login_wins() {
+        local wrong
+        wrong=$(printf '%s:wrong' "$AUTH_USER" | base64 -w0)
+        docker_config "{\"auths\": {\"$AUTH_REGISTRY\": {\"auth\": \"$wrong\"}}}" && login_saved >/dev/null 2>&1 || return 1
+        pulls_with "saved by \`zigsaw login\`" no_env zc
+        local status=$?
+        za logout "$AUTH_REGISTRY" >/dev/null 2>&1
+        return $status
+    }
+    docker_refused() {
+        local wrong
+        wrong=$(printf '%s:wrong' "$AUTH_USER" | base64 -w0)
+        docker_config "{\"auths\": {\"$AUTH_REGISTRY\": {\"auth\": \"$wrong\"}}}" &&
+            no_env zc pull "$auth_tag" 2>&1 | grep -q "refused the credentials in Docker's config.json"
+    }
+    check "docker: a login in config.json's auths" docker_auths
+    check "  under a URL there" docker_url_key
+    check "docker: a login a credential helper keeps for the registry (credHelpers)" docker_cred_helpers
+    check "  or for every registry (credsStore)" docker_creds_store
+    check "  a helper without one asks for a login" docker_helper_none
+    check "docker: a login zigsaw saved comes first" zigsaw_login_wins
+    check "docker: a wrong password in config.json is refused, saying where it came from" docker_refused
+    docker_config '{}'
     za logout "$AUTH_REGISTRY" >/dev/null 2>&1
 fi
 
 # Installed apps are protected against deletion, so remove them through
 # zigsaw, and the images builds use with prune --downloads.
-for store in "$work\a" "$work\b" "$work\c" "$work\d" "$work\plain" "$work\fresh1" "$work\fresh2" "$work\fresh-none" "$work\fresh-vendor"; do
+for store in "$work\a" "$work\b" "$work\c" "$work\d" "$work\idx" "$work\chunks" "$work\plain" "$work\fresh1" "$work\fresh2" "$work\fresh-none" "$work\fresh-vendor"; do
     for id in net.frippery.busybox org.nodejs.node io.prettier.prettier test.registry.vendored test.registry.catalog; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
     ZIGSAW_HOME="$store" "$zigsaw" prune --downloads >/dev/null 2>&1
 done

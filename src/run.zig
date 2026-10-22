@@ -16,7 +16,8 @@
 //! sandbox runs it at low integrity, with its data directory and the paths it
 //! may write labelled low, which keeps it from writing anywhere else; reading
 //! and the network stay open. The `soft` sandbox only shapes what the app
-//! sees; it enforces nothing.
+//! sees; it enforces nothing. What the enforcing sandboxes change on host
+//! paths lasts as grants.zig says.
 
 const std = @import("std");
 const Io = std.Io;
@@ -32,6 +33,7 @@ const environment = @import("environment.zig");
 const exports = @import("exports.zig");
 const extensions = @import("extensions.zig");
 const folders = @import("folders.zig");
+const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
@@ -69,7 +71,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const settings = try override.Settings.merge(arena, saved, opts.settings);
     const sandbox = settings.sandbox orelse .soft;
     const network = settings.network orelse cfg.permissions.network;
-    var grants: std.ArrayList(HostGrant) = .empty;
+    var host_grants: std.ArrayList(HostGrant) = .empty;
     var folder_grants: std.ArrayList(folders.Grant) = .empty;
     var cwd_granted = false;
     for (try settings.filesystemFor(arena, cfg.permissions.filesystem)) |spec| {
@@ -77,16 +79,16 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         switch (g.where) {
             .cwd => {
                 cwd_granted = true;
-                try grants.append(arena, .{ .path = null, .read_only = g.read_only });
+                try host_grants.append(arena, .{ .path = null, .read_only = g.read_only });
             },
-            .path => |p| try grants.append(arena, .{ .path = p, .read_only = g.read_only }),
+            .path => |p| try host_grants.append(arena, .{ .path = p, .read_only = g.read_only }),
             .folder => |f| try folder_grants.append(arena, .{ .folder = f, .read_only = g.read_only }),
             .unknown => note("warning: {s} asks for the filesystem permission \"{s}\", which this zigsaw doesn't know, and leaves out; a newer zigsaw may", .{ cfg.id, spec }),
         }
     }
     const host_cwd = try std.process.currentPathAlloc(io, arena);
     const files = try openedFiles(io, arena, host_cwd, opts.files);
-    for (files) |f| try grants.append(arena, .{ .path = f, .read_only = false });
+    for (files) |f| try host_grants.append(arena, .{ .path = f, .read_only = false });
 
     // Per-app writable state, laid out like a Windows user profile.
     const run_dir: ?Store.RunDir = if (settings.ephemeral orelse false) try ctx.store.makeRunDir(arena) else null;
@@ -96,6 +98,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // (see extensions.zig).
     const found = try extensions.find(ctx.store, arena, cfg, settings.noextension);
     for (found.skipped) |s| if (s.warn or ctx.verbose) note("note: {s} doesn't join this run: {s}", .{ s.id, s.reason });
+    // One of the app's runs from here on: the last to end takes back what
+    // its command line asked for, and what no longer stands.
+    const runs = try grants.begin(ctx, cfg.id);
+    defer grants.end(ctx, runs);
     store_lock.release(io);
     const data_dir = if (run_dir) |d| d.path else try ctx.store.path(arena, &.{ "data", cfg.id });
     const profile: environment.Profile = try .init(arena, data_dir);
@@ -153,7 +159,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     });
     // The user's folders, where the app's environment says it looks for them.
     for (try folders.apply(ctx, data_dir, env.items, folder_grants.items)) |f|
-        try grants.append(arena, .{ .path = f.path, .read_only = f.read_only });
+        try host_grants.append(arena, .{ .path = f.path, .read_only = f.read_only });
 
     if (ctx.verbose) {
         note("app      {s} {s} ({s})", .{ cfg.id, cfg.version, image.ref.manifest });
@@ -174,13 +180,13 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     var token: ?win32.HANDLE = null;
     switch (sandbox) {
         .soft => if (ctx.verbose) {
-            for (grants.items) |g| if (g.path) |p|
+            for (host_grants.items) |g| if (g.path) |p|
                 note("note: soft sandbox doesn't enforce filesystem permissions; {s} is as reachable as any other path", .{p});
         },
         .low => token = try setUpLow(ctx, cfg.id, .{
             .data_dir = data_dir,
             .host_cwd = host_cwd,
-            .grants = grants.items,
+            .grants = host_grants.items,
             .network = network,
         }),
         .appcontainer => security = try setUpAppContainer(ctx, cfg.id, .{
@@ -190,7 +196,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             .data_dir = data_dir,
             .local_app_data = profile.local,
             .host_cwd = host_cwd,
-            .grants = grants.items,
+            .grants = host_grants.items,
             .network = network,
         }),
     }
@@ -346,7 +352,7 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     // Rust's standard libraries do, need it to exist.
     try Io.Dir.cwd().createDirPath(ctx.io, try std.fs.path.join(arena, &.{ setup.local_app_data, "Packages", profile.name, "AC", "Temp" }));
 
-    const Grant = struct { path: []const u8, access: acl.Access, host: bool };
+    const Grant = struct { path: []const u8, access: acl.Access, host: bool, cwd: bool = false };
     var wanted: std.ArrayList(Grant) = .empty;
     try wanted.append(arena, .{ .path = setup.deploy_dir, .access = .read_execute, .host = false });
     for (setup.runtime_dirs) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
@@ -356,12 +362,20 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
         .path = g.path orelse setup.host_cwd,
         .access = if (g.read_only) .read_execute else .full,
         .host = true,
+        .cwd = g.path == null,
     });
 
+    // Host paths last, under grants.lock (see grants.zig).
+    var changes: ?Store.Lock = null;
+    defer if (changes) |l| l.release(ctx.io);
     for (wanted.items) |w| {
-        // Record host grants before changing anything, so `zigsaw rm` can undo
-        // them even if a later step fails.
-        if (w.host) try ctx.store.recordGrant(arena, id, .{ .kind = .appcontainer, .path = w.path });
+        // Record host grants before changing anything, so that they're
+        // undone even if a later step fails.
+        if (w.host) {
+            if (changes == null) changes = try ctx.store.lockGrantChanges(arena);
+            try ctx.store.recordGrant(arena, id, .{ .kind = .appcontainer, .path = w.path });
+            if (w.cwd) try ctx.store.recordCwdGrant(arena, id, w.path);
+        }
         // Access goes to the app's capability. What zigsaw granted the
         // profile's package SID before goes in the same change: on the host,
         // the app's own; in the store, any app's.
@@ -410,6 +424,9 @@ fn setUpLow(ctx: *Context, id: []const u8, setup: LowSetup) !win32.HANDLE {
     _ = try acl.revoke(arena, setup.data_dir, .package_sids);
     _ = try acl.labelLow(arena, setup.data_dir);
 
+    // Host paths change under grants.lock (see grants.zig).
+    const changes: ?Store.Lock = if (setup.grants.len > 0) try ctx.store.lockGrantChanges(arena) else null;
+    defer if (changes) |l| l.release(ctx.io);
     for (setup.grants) |g| {
         const p = g.path orelse setup.host_cwd;
         _ = try acl.revoke(arena, p, .{ .sids = &.{package} });
@@ -425,11 +442,11 @@ fn setUpLow(ctx: *Context, id: []const u8, setup: LowSetup) !win32.HANDLE {
             // Labelled for another app's runs: this app's need it too, so
             // removing that app keeps it. A label that zigsaw didn't give
             // stays when the app goes.
-            if (try ctx.store.grantedToOthers(arena, id, label)) try ctx.store.recordGrant(arena, id, label);
+            if (try ctx.store.grantedToOthers(arena, id, label)) try recordLabel(ctx, id, label, g.path == null);
             continue;
         };
-        // Recorded first, so `zigsaw rm` can undo it even if a later step fails.
-        try ctx.store.recordGrant(arena, id, label);
+        // Recorded first, so that it's undone even if a later step fails.
+        try recordLabel(ctx, id, label, g.path == null);
         const start = Io.Timestamp.now(ctx.io, .awake);
         if (try acl.labelLow(arena, p))
             note("labelled {s} low integrity ({d} ms)", .{ p, start.untilNow(ctx.io, .awake).toMilliseconds() });
@@ -440,6 +457,11 @@ fn setUpLow(ctx: *Context, id: []const u8, setup: LowSetup) !win32.HANDLE {
     }
     try acl.letChildrenQueryUs(arena);
     return process.lowIntegrityToken(arena);
+}
+
+fn recordLabel(ctx: *Context, id: []const u8, label: Store.Grant, cwd: bool) !void {
+    try ctx.store.recordGrant(ctx.arena, id, label);
+    if (cwd) try ctx.store.recordCwdGrant(ctx.arena, id, label.path);
 }
 
 /// Why zigsaw won't label `path` low for a run, if it won't: it's a drive's

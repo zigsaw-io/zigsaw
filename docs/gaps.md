@@ -11,11 +11,19 @@
   package linked in with a symlink (`npm link`, workspaces, pnpm) then finds
   its dependencies from where the link is, not where the package is, in every
   sandbox.
-- Under `--sandbox=appcontainer`, access granted to a host path lasts until
-  the app is removed, even after the permission or override that granted it
-  is gone (`--nofilesystem` included), and so does a low integrity label
-  under `--sandbox=low`. For one of the user's folders, the link in the
-  app's home goes with the permission; the grant stays.
+- What an app's runs are granted on host paths stays while its
+  permissions and saved overrides give it
+  ([how long grants last](../README.md#how-long-grants-last)): every working
+  directory its runs had stays granted while it keeps `cwd`, as granting a
+  big one again on each run would take a while. A sandbox given only on the
+  command line grants the app's folders afresh on each run and takes them
+  back after, which takes a while for a big folder. `--nofilesystem` on a
+  run's command line doesn't take back a grant that stands for that run:
+  an AppContainer run can still reach the path by its name. A run that
+  didn't end (zigsaw was killed, or its console closed) leaves its grants
+  until the app's next run ends, `zigsaw repair` or `zigsaw rm`. Two stores
+  don't know each other's labels: taking one back for an app in one store
+  takes it from an app of the other that needs it too.
 - `--sandbox=low` labels only paths whose permissions you may change, which
   you may for what you own. Labelling needs the right to change a path's
   owner, which a second drive whose root gives users only Modify (a fresh
@@ -28,10 +36,10 @@
   few directories Windows labels low itself, such as `AppData\LocalLow`, can
   be written.
 - A host path an earlier zigsaw granted an app's AppContainer, to the
-  container's own SID, keeps other apps' low runs out until that app runs
-  under `--sandbox=appcontainer` again, or is removed; that app's own low
-  runs clear it too. In the store, runs clear such grants from what they
-  use.
+  container's own SID, keeps other apps' low runs out until that app's last
+  run ends, `zigsaw repair` or `zigsaw rm`, which take that SID's access
+  away from every path the app's runs were granted. In the store, runs
+  clear such grants from what they use.
 - Apps that locate folders with `SHGetKnownFolderPath` instead of environment
   variables would bypass the data-directory redirect. None of the tested tools
   do.
@@ -71,10 +79,11 @@
   real ones, in every sandbox. Saved Games, Contacts, Favorites, Links and
   Searches, and the Public folders, can't be granted by name.
 - A folder is granted whole: there's no `documents/Notes` for one folder in
-  it. Under `--sandbox=low` a writable folder is labelled low integrity
-  until `zigsaw rm`, so any low-integrity program can write in all of your
-  Documents meanwhile. The first low or AppContainer run with a folder
-  changes the ACL of every file in it, which takes a while for a big one.
+  it. Under `--sandbox=low` a writable folder stays labelled low integrity
+  while the app's overrides choose low and it may write the folder, so any
+  low-integrity program can write in all of your Documents meanwhile.
+  Granting a folder changes the ACL of every file in it, which takes a
+  while for a big one, and so does taking it back.
 - A folder whose location Windows keeps as a path with a variable other
   than `USERPROFILE` in it, which a run's environment doesn't have, isn't
   linked: the app looks for it at that path, unexpanded, and zigsaw says so.
@@ -96,9 +105,14 @@
   release's `SHA256SUMS`, which comes from the same release; anyone can
   check the programs against a build of the tag (see
   [Installing zigsaw](#installing-zigsaw)). Releases are for x64 only.
-- zigsaw keeps its own registry logins; it doesn't read Docker's
-  `config.json` or credential helpers.
-- Multi-platform image indexes aren't supported.
+- Docker's logins are used only as user names and passwords (or tokens
+  used as passwords): an identity token, which Docker keeps for a registry
+  after a web login, isn't, as using one takes OAuth2's refresh flow.
+  Credential helpers are run only as `.exe` files on PATH, not batch files.
+- From a multi-platform index, zigsaw takes the first image for
+  `windows/amd64`, whatever its Windows version (`os.version`); an index
+  whose entry for it is another index is refused. zigsaw doesn't push
+  indexes: it builds for x64 only.
 - Runtimes can't have runtimes of their own (SDKs and image sources can).
 - Under `--sandbox=appcontainer`, BusyBox's sh doesn't wait for the last
   command of `sh -c`, which then ends with the run, having printed nothing,
@@ -116,9 +130,12 @@
 - Pushing mounts a runtime's layer only from the runtime's repository in the
   default layout, and an app's blobs only from where it was pulled. A blob
   the registry holds elsewhere is uploaded again.
-- Each blob goes up in one request, so an upload that breaks off starts
-  again from the beginning, and registries that limit a request's size can't
-  take big layers.
+- Of a blob that breaks off while going up in chunks, zot keeps nothing:
+  the blob goes again from the start. Going on from where the registry got
+  to, as the OCI specification lets registries do, hasn't been seen against
+  one that does. Blobs up to 64 MiB still go in one request, as do all of
+  them to a registry that refuses chunks; a registry that also limits a
+  request's size refuses those.
 - A layer's compressed bytes, and so every image's digest, are what the
   deflate of the Zig that zigsaw is built with makes. A Zig whose deflate
   changed would make other digests from the same files; CI pins Zig 0.16.0.
@@ -166,6 +183,12 @@
   machine with a library they look for could build them differently. Find
   modules that read the registry for their own tools can still see the
   machine.
+- CMake takes the version of the Windows it runs on as the system's, and a
+  project may write it into what it installs, as Qt does in its
+  `modules/*.json`: such a build differs from one Windows version to
+  another. Qt's SDK halves pass the version they were published with
+  (`-DCMAKE_SYSTEM_VERSION=10.0.26300`); other recipes would need the same
+  if what they install records it.
 - Executables built with zig's `LDFLAGS` or `CGO_LDFLAGS` have no debug
   information, as a PDB would differ from build to build.
 - .NET's images can't be published: Microsoft's licence for its Windows
@@ -234,9 +257,9 @@
 - `--file` gives an app the file and nothing next to it. An app that
   writes a backup or a temporary file beside the document, or reads files
   the document names, needs `--filesystem` for the directory, or a
-  fallback of its own. Like other grants it lasts until `zigsaw rm`: under
-  `--sandbox=low`, a file opened once stays writable to every
-  low-integrity process until then.
+  fallback of its own. Its grant lasts until the app's last run ends:
+  meanwhile, under `--sandbox=low`, every low-integrity process may write
+  the file.
 - Selecting several files in Explorer and opening them starts the app once
   for each. Text Editor and Rnote hand a file to the instance that's
   running already.
@@ -456,5 +479,5 @@
 - CI checks Qt's family, like GTK's, on a push only when something it's
   built or tested from changed, and weekly otherwise. Its SDK is built in
   two halves at once, the base (25 minutes here) and the SDK on the
-  published base (48 here); qtbase took 22 minutes on a runner, against
-  17½ here. The jobs' timeout is 90 minutes.
+  published base (48 here). On a runner they took 49 and 70 minutes, in
+  jobs of 51 and 77; the jobs' timeout is 120 minutes.

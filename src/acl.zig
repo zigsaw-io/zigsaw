@@ -63,6 +63,14 @@ pub fn revoke(arena: Allocator, path: []const u8, which: Revoke) !bool {
     return true;
 }
 
+/// Whether an explicit allow ACE of `path`'s own grants `sid` at least
+/// `access`. Inherited ACEs don't count: they come from a grant above.
+pub fn grants(arena: Allocator, path: []const u8, sid: win32.PSID, access: Access) !bool {
+    var dacl = try Dacl.read(arena, path);
+    defer dacl.deinit();
+    return dacl.find(win32.ACCESS_ALLOWED_ACE_TYPE, sid, access.mask(), .explicit) != null;
+}
+
 /// Whether `sid` is an AppContainer's package SID: S-1-15-2- and seven more
 /// numbers. Not ALL APPLICATION PACKAGES (S-1-15-2-1), nor a capability
 /// (S-1-15-3-...).

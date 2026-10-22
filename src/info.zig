@@ -27,6 +27,7 @@ pub fn info(ctx: *Context, image_text: []const u8) !void {
     try line(w, "license", cfg.license orelse "");
     try line(w, "image", app.target.text);
     try line(w, "manifest", app.manifest_digest);
+    if (app.index) |index| try line(w, "index", try std.fmt.allocPrint(arena, "{s}, as its image for windows/amd64", .{index}));
 
     // What pulling it downloads, and how much of that the store has already
     // (a runtime another app has, say).

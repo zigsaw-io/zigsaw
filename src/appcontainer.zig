@@ -58,7 +58,8 @@ pub fn appCapability(arena: Allocator, id: []const u8) !win32.PSID {
     return capabilitySid(arena, try profileName(arena, id));
 }
 
-fn profileName(arena: Allocator, id: []const u8) ![]u8 {
+/// The name of the app's profile and capability: "zigsaw.<id>".
+pub fn profileName(arena: Allocator, id: []const u8) ![]u8 {
     return std.fmt.allocPrint(arena, "zigsaw.{s}", .{id});
 }
 

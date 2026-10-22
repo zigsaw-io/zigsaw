@@ -5,6 +5,8 @@
 //! An image can be named in full, `<registry>/<repository>[:tag][@digest]`,
 //! or by app id alone, `<app-id>[:tag][@digest]`, for the image of that app in
 //! the default registry: `org.nodejs.node` is ghcr.io/zigsaw-io/org.nodejs.node.
+//! A name may stand for a multi-platform index: then it's the index's image
+//! for Windows on x64 (see `resolveImage`).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -78,12 +80,10 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
     defer registry.deinit();
 
     const start = ctx.now();
-    const fetched = try registry.fetchManifest();
+    const fetched = try resolveImage(&registry, ref, opts.unless) orelse return null;
     ctx.timed(start, "fetch manifest", .{});
-    if (ref.digest) |want| if (!std.mem.eql(u8, want, fetched.digest))
-        return fail("{f} returned a manifest with digest {s}", .{ ref, fetched.digest });
-    if (opts.unless) |installed| if (std.mem.eql(u8, installed, fetched.digest)) return null;
-    const manifest = try parseManifest(arena, ref, fetched.bytes);
+    if (fetched.index) |index| note("{f} is a multi-platform index ({s}): its image for windows/amd64 is {s}", .{ ref, oci.shortDigest(index), fetched.digest });
+    const manifest = fetched.manifest;
 
     // The config first: the image has to be a zigsaw app, and the one asked
     // for, before any layer is worth downloading.
@@ -113,6 +113,8 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
 pub const Info = struct {
     target: Target,
     manifest_digest: []const u8,
+    /// The multi-platform index the image is in, if the target names one.
+    index: ?[]const u8 = null,
     manifest: oci.Manifest,
     config: oci.AppConfig,
 };
@@ -126,10 +128,8 @@ pub fn fetchInfo(ctx: *Context, image_text: []const u8) !Info {
     var registry: Registry = undefined;
     try registry.init(ctx, target.ref, "pull");
     defer registry.deinit();
-    const fetched = try registry.fetchManifest();
-    if (target.ref.digest) |want| if (!std.mem.eql(u8, want, fetched.digest))
-        return fail("{f} returned a manifest with digest {s}", .{ target.ref, fetched.digest });
-    const manifest = try parseManifest(arena, target.ref, fetched.bytes);
+    const fetched = (try resolveImage(&registry, target.ref, null)).?;
+    const manifest = fetched.manifest;
     if (!oci.isConfigType(manifest.config.mediaType))
         return fail("{f} is not a zigsaw app (its config type is {s}; it may be a container image)", .{ target.ref, manifest.config.mediaType });
     try downloadBlob(ctx, &registry, manifest.config);
@@ -137,7 +137,7 @@ pub fn fetchInfo(ctx: *Context, image_text: []const u8) !Info {
     try oci.validateLayers(target.text, manifest, config);
     if (target.app_id) |id| if (!std.ascii.eqlIgnoreCase(id, config.id))
         return fail("{f} holds {s}, not {s}", .{ target.ref, config.id, id });
-    return .{ .target = target, .manifest_digest = fetched.digest, .manifest = manifest, .config = config };
+    return .{ .target = target, .manifest_digest = fetched.digest, .index = fetched.index, .manifest = manifest, .config = config };
 }
 
 /// Tells what an app about to be installed is, and what it may reach; for an
@@ -264,10 +264,10 @@ pub fn uploadIfMissing(ctx: *Context, registry: *Registry, desc: oci.Descriptor,
             if (desc.size > 1 << 20) note("mounted {s} ({d} bytes) from {s}", .{ desc.digest, desc.size, mount_from.? });
             ctx.timed(start, "mount {s}", .{desc.digest});
         },
-        .location => |location| {
+        .started => |started| {
             if (mount_from) |from| if (ctx.verbose) note("  couldn't mount {s} from {s}", .{ oci.shortDigest(desc.digest), from });
             if (desc.size > 1 << 20) note("uploading {s} ({d} bytes)", .{ desc.digest, desc.size });
-            try registry.finishUpload(location, desc, path);
+            try registry.finishUpload(started, desc, path);
             ctx.timed(start, "upload {s}", .{desc.digest});
         },
     }
@@ -342,24 +342,147 @@ test expandShort {
 /// Parses a fetched manifest, and checks it is a single image rather than an
 /// index. Whether it's a zigsaw app is up to its config.
 pub fn parseManifest(arena: std.mem.Allocator, ref: Registry.Reference, bytes: []const u8) !oci.Manifest {
-    const Probe = struct { mediaType: ?[]const u8 = null, manifests: ?[]const std.json.Value = null };
-    const probe = std.json.parseFromSliceLeaky(Probe, arena, bytes, .{ .ignore_unknown_fields = true }) catch
-        return fail("{f} returned a manifest that isn't JSON", .{ref});
-    if (probe.manifests != null)
-        return fail("{f} is a multi-platform index, not a zigsaw image", .{ref});
-
-    return std.json.parseFromSliceLeaky(oci.Manifest, arena, bytes, .{ .ignore_unknown_fields = true }) catch
-        fail("{f} returned a manifest zigsaw can't read", .{ref});
+    return switch (try classify(arena, ref, bytes)) {
+        .image => |m| m,
+        .index => fail("{f} is a multi-platform index, not a single image", .{ref}),
+    };
 }
 
-/// The digest of the manifest `image_text` names in its registry, without
-/// downloading anything else.
+/// The digest of the image `image_text` names in its registry (in an index,
+/// its image for windows/amd64), without downloading anything else.
 pub fn manifestDigest(ctx: *Context, image_text: []const u8) ![]const u8 {
     const target = try resolve(ctx, image_text);
     var registry: Registry = undefined;
     try registry.init(ctx, target.ref, "pull");
     defer registry.deinit();
-    return (try registry.fetchManifest()).digest;
+    return (try resolveImage(&registry, target.ref, null)).?.digest;
+}
+
+/// An image's manifest as its registry has it: the one a reference names, or
+/// when that's a multi-platform index, the index's image for Windows on x64,
+/// the platform zigsaw runs.
+const Resolved = struct {
+    bytes: []const u8,
+    digest: []const u8,
+    manifest: oci.Manifest,
+    /// The index's digest, if the reference named one.
+    index: ?[]const u8 = null,
+};
+
+/// Fetches the manifest of the image `ref` names; null if its digest is
+/// `unless`, without fetching more. A digest in `ref` names exactly what it
+/// fetches first, the index or the image.
+fn resolveImage(registry: *Registry, ref: Registry.Reference, unless: ?[]const u8) !?Resolved {
+    const arena = registry.ctx.arena;
+    const top = try registry.fetchManifest();
+    if (ref.digest) |want| if (!std.mem.eql(u8, want, top.digest))
+        return fail("{f} returned a manifest with digest {s}", .{ ref, top.digest });
+    const entries = switch (try classify(arena, ref, top.bytes)) {
+        .image => |m| {
+            if (unless) |d| if (std.mem.eql(u8, d, top.digest)) return null;
+            return .{ .bytes = top.bytes, .digest = top.digest, .manifest = m };
+        },
+        .index => |entries| entries,
+    };
+    const entry = pickPlatform(entries) orelse
+        return fail("{f} is a multi-platform index {s}; none for windows/amd64, which zigsaw runs", .{ ref, try describePlatforms(arena, entries) });
+    if (unless) |d| if (std.mem.eql(u8, d, entry.digest)) return null;
+    const child = try registry.fetchManifestRef(entry.digest);
+    if (!std.mem.eql(u8, child.digest, entry.digest))
+        return fail("{f} returned a manifest with digest {s} for {s}", .{ ref, child.digest, entry.digest });
+    return switch (try classify(arena, ref, child.bytes)) {
+        .image => |m| .{ .bytes = child.bytes, .digest = child.digest, .manifest = m, .index = top.digest },
+        .index => fail("{f}: its entry for windows/amd64 is an index too, which zigsaw doesn't follow", .{ref}),
+    };
+}
+
+/// An entry of a multi-platform index (OCI's, or Docker's manifest list).
+const IndexEntry = struct {
+    mediaType: ?[]const u8 = null,
+    digest: []const u8,
+    platform: ?struct {
+        os: []const u8 = "",
+        architecture: []const u8 = "",
+        variant: ?[]const u8 = null,
+    } = null,
+};
+
+const Parsed = union(enum) {
+    image: oci.Manifest,
+    index: []const IndexEntry,
+};
+
+/// Parses a fetched manifest: an image's, or an index's.
+fn classify(arena: std.mem.Allocator, ref: Registry.Reference, bytes: []const u8) !Parsed {
+    const Probe = struct { mediaType: ?[]const u8 = null, manifests: ?[]const std.json.Value = null };
+    const probe = std.json.parseFromSliceLeaky(Probe, arena, bytes, .{ .ignore_unknown_fields = true }) catch
+        return fail("{f} returned a manifest that isn't JSON", .{ref});
+    if (probe.manifests != null) {
+        const Index = struct { manifests: []const IndexEntry };
+        const index = std.json.parseFromSliceLeaky(Index, arena, bytes, .{ .ignore_unknown_fields = true }) catch
+            return fail("{f} returned an index zigsaw can't read", .{ref});
+        return .{ .index = index.manifests };
+    }
+    return .{ .image = std.json.parseFromSliceLeaky(oci.Manifest, arena, bytes, .{ .ignore_unknown_fields = true }) catch
+        return fail("{f} returned a manifest zigsaw can't read", .{ref}) };
+}
+
+/// The index's first entry for Windows on x64.
+fn pickPlatform(entries: []const IndexEntry) ?IndexEntry {
+    for (entries) |e| {
+        const p = e.platform orelse continue;
+        if (std.ascii.eqlIgnoreCase(p.os, "windows") and std.ascii.eqlIgnoreCase(p.architecture, "amd64")) return e;
+    }
+    return null;
+}
+
+/// "with images for linux/amd64, linux/arm64/v8": each platform once,
+/// without the "unknown/unknown" of attestations.
+fn describePlatforms(arena: std.mem.Allocator, entries: []const IndexEntry) ![]const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    for (entries) |e| {
+        const p = e.platform orelse continue;
+        if (std.mem.eql(u8, p.os, "unknown")) continue;
+        const name = if (p.variant) |v|
+            try std.fmt.allocPrint(arena, "{s}/{s}/{s}", .{ p.os, p.architecture, v })
+        else
+            try std.fmt.allocPrint(arena, "{s}/{s}", .{ p.os, p.architecture });
+        if (!contains(names.items, name)) try names.append(arena, name);
+    }
+    if (names.items.len == 0) return "without platforms";
+    return std.fmt.allocPrint(arena, "with images for {s}", .{try std.mem.join(arena, ", ", names.items)});
+}
+
+test "indexes: the image for windows/amd64, or the platforms there are" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const ref = try Registry.Reference.parse("ghcr.io/a/b:1");
+    const d = "sha256:" ++ "a" ** 64;
+    const w = "sha256:" ++ "b" ** 64;
+
+    // Docker's manifest list, with an attestation, as buildx makes them.
+    const list = "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.docker.distribution.manifest.list.v2+json\",\"manifests\":[" ++
+        "{\"mediaType\":\"application/vnd.docker.distribution.manifest.v2+json\",\"digest\":\"" ++ d ++ "\",\"size\":1,\"platform\":{\"architecture\":\"arm64\",\"os\":\"linux\",\"variant\":\"v8\"}}," ++
+        "{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"" ++ d ++ "\",\"size\":1,\"platform\":{\"architecture\":\"unknown\",\"os\":\"unknown\"}}," ++
+        "{\"mediaType\":\"application/vnd.docker.distribution.manifest.v2+json\",\"digest\":\"" ++ w ++ "\",\"size\":1,\"platform\":{\"architecture\":\"amd64\",\"os\":\"windows\",\"os.version\":\"10.0.26100.1\"}}]}";
+    const parsed = try classify(arena, ref, list);
+    try std.testing.expectEqualStrings(w, pickPlatform(parsed.index).?.digest);
+
+    // An OCI index without one.
+    const linux = "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"manifests\":[" ++
+        "{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"" ++ d ++ "\",\"size\":1,\"platform\":{\"architecture\":\"amd64\",\"os\":\"linux\"}}," ++
+        "{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"" ++ d ++ "\",\"size\":1,\"platform\":{\"architecture\":\"amd64\",\"os\":\"linux\"}}," ++
+        "{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"" ++ d ++ "\",\"size\":1}]}";
+    const entries = (try classify(arena, ref, linux)).index;
+    try std.testing.expectEqual(null, pickPlatform(entries));
+    try std.testing.expectEqualStrings("with images for linux/amd64", try describePlatforms(arena, entries));
+    try std.testing.expectEqualStrings("with images for linux/arm64/v8", try describePlatforms(arena, (try classify(arena, ref, list)).index[0..2]));
+    try std.testing.expectEqualStrings("without platforms", try describePlatforms(arena, entries[2..]));
+
+    // An image's manifest is one.
+    const image = "{\"schemaVersion\":2,\"config\":{\"mediaType\":\"x\",\"digest\":\"" ++ d ++ "\",\"size\":1},\"layers\":[]}";
+    try std.testing.expectEqualStrings(d, (try classify(arena, ref, image)).image.config.digest);
 }
 
 test mountSources {

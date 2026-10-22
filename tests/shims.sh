@@ -343,7 +343,7 @@ opens_file() {
 check "opening a file runs the app with the file" opens_file
 "$zigsaw" override --sandbox=low "$GUI" >/dev/null 2>&1
 check "  under --sandbox=low it may write that file" opens_file
-check "  which is labelled low, and its directory isn't" sh -c "icacls '$note' | grep -q 'Low Mandatory Level:(NW)' && ! icacls '$work\\my notes' | grep -q 'Mandatory Label'"
+check "  for the run: neither it nor its directory is labelled after it" sh -c "! icacls '$note' | grep -q 'Mandatory Label' && ! icacls '$work\\my notes' | grep -q 'Mandatory Label'"
 "$zigsaw" override --reset "$GUI" >/dev/null 2>&1
 variant other 's/"\.zigsawtest"/".zigsawother"/'
 extension_changed() {
