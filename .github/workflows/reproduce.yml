@@ -8,7 +8,7 @@
 #   recipes build;
 # - gtk-suites: tests/gtk.sh and tests/gtk3.sh, the same way, in a store of
 #   GTK's published images and the apps on them;
-# - qt-suites: tests/qt.sh, the same way, with Qt's images and Flameshot;
+# - qt-suites: tests/qt.sh, the same way, with Qt's images, Flameshot and Notes;
 # - build, one job for each group of tests/build.sh's sections: the group's
 #   checks, in stores of their own, downloading what they build from; the
 #   base group's job runs the unit tests first.
@@ -110,9 +110,9 @@ jobs:
     # All the groups in one job took 37 minutes after iteration 32; the
     # groups are balanced to some 10 to 13 minutes each. GTK's family takes
     # longer: each half of its SDK, gettext, Rnote and Gnumeric are 18 to
-    # 40 minutes each. Qt's SDK compiles qtbase, 1,200 C++ files: 26 minutes
-    # on 16 CPUs here, so maybe 80 on a runner's 4.
-    timeout-minutes: ${{ matrix.group == 'qt' && 120 || (startsWith(matrix.group, 'gtk') || matrix.group == 'gettext' || matrix.group == 'rnote' || matrix.group == 'gnumeric') && 75 || 30 }}
+    # 40 minutes each. Qt's SDK is in two halves too: qtbase took 22 minutes
+    # on a runner in iteration 39 (17 here), and qtdeclarative 34 here.
+    timeout-minutes: ${{ startsWith(matrix.group, 'qt') && 90 || (startsWith(matrix.group, 'gtk') || matrix.group == 'gettext' || matrix.group == 'rnote' || matrix.group == 'gnumeric') && 75 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -325,15 +325,17 @@ jobs:
       - name: Build zigsaw
         run: zig build
 
-      # Qt's images and Flameshot, as published; the suite installs them
-      # again rather than building them.
+      # Qt's images, Flameshot and Notes, as published; the suite installs them
+      # again rather than building them. Only these: the SDK brings its
+      # runtimes (zig, CMake, BusyBox) along, and CMake's own image installed
+      # first would keep the `cmake` command the suite runs as the SDK's.
       - name: The Qt suite's images, as published (built, if not published yet)
         shell: bash
         env:
           ZIGSAW_HOME: ${{ runner.temp }}\store
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
-          bash tests/seed-store.sh --pull busybox zig cmake qt6-sdk qt6 flameshot 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
+          bash tests/seed-store.sh --pull qt6-sdk qt6 flameshot notes 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
 
       - name: tests/qt.sh
         if: ${{ !cancelled() }}

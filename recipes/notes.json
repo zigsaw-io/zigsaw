@@ -1,0 +1,62 @@
+{
+  "id": "io.github.nuttyartist.notes",
+  "version": "2.3.1",
+  "name": "Notes",
+  "summary": "Takes notes in Markdown, in folders and with tags, and shows a note's to-do lists as a kanban board",
+  "homepage": "https://www.notes-foss.com/",
+  "license": "MPL-2.0",
+  "command": "bin/Notes.exe",
+  "path": ["bin"],
+  "permissions": { "filesystem": ["documents"] },
+  "exports": {
+    "notes": { "command": "bin/Notes.exe" }
+  },
+  "shortcuts": {
+    "Notes": { "command": "notes", "description": "Take notes" }
+  },
+  "runtimes": {
+    "qt": "io.qt.Qt6:6.12.0@sha256:c09a8cfe5811b873943207e0b732cd94916bccb03b0cbd8a0eec779aee4bd7ce"
+  },
+  "sdk": {
+    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:7361e49167a765222bcc4090f38d52f9c3fb972a6b13201ff758a53b0bea1f26"
+  },
+  "modules": [
+    {
+      "name": "crt-noexport",
+      "build": [
+        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
+        "cc -c noexport.s -o noexport.o"
+      ]
+    },
+    {
+      "name": "notes",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "CFLAGS": "-s", "CXXFLAGS": "-s" },
+      "sources": [
+        {
+          "url": "https://github.com/nuttyartist/notes/archive/refs/tags/v2.3.1.tar.gz",
+          "sha256": "de1dc90cc1b8af665a5f0aac3f2bcbf36620607b6a28d9be889fb3045f5518bd",
+          "strip": 1
+        },
+        {
+          "url": "https://github.com/b00f/qautostart/archive/efdb2e5a25e5646390f8658e3321f6e9a4c3561a.tar.gz",
+          "sha256": "5eb501b31916fdb516979c6a19dc17a64711186090a29f92be4a6f0704e819cd",
+          "strip": 1,
+          "dest": "3rdParty/qautostart"
+        },
+        {
+          "url": "https://github.com/pbek/qmarkdowntextedit/archive/c6420c537e219a7b7685f2bbe5e0862af631d91c.tar.gz",
+          "sha256": "7c8b1e752c793fed257334352ca6967f17258df744e7ef61b094e2261a5d12f1",
+          "strip": 1,
+          "dest": "3rdParty/qmarkdowntextedit"
+        }
+      ],
+      "build": [
+        "sed -i 's/^    Quick)$/    Quick CorePrivate GuiPrivate WidgetsPrivate)/' CMakeLists.txt",
+        "grep -q '^    Quick CorePrivate GuiPrivate WidgetsPrivate)$' CMakeLists.txt",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DUPDATE_CHECKER=OFF -DGIT_REVISION=OFF",
+        "cmake --build out",
+        "cmake --install out"
+      ]
+    }
+  ]
+}

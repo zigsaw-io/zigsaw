@@ -867,6 +867,22 @@ start=$SECONDS
 cmake_again() { [ "$(rebuilt_manifest "$work\\cmake\\hello.json")" = "$cmake_app_digest" ]; }
 check "built again, it's the same image" cmake_again
 printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$cmake_time"
+# CMake's image finds nothing the machine has installed: no Program Files
+# among the prefixes it searches (its WindowsPaths.cmake, which found a
+# runner's PostgreSQL for Qt), so no Git from there, as this machine and
+# runners have, no package registries, and no Python from the registry.
+mkdir -p "$work\\cmake-hermetic" && cp "$root\\tests\\build\\cmake\\hermetic\\CMakeLists.txt" "$work\\cmake-hermetic\\" &&
+    sed -e "s/@CMAKE@/$(manifest_of org.cmake.cmake)/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\cmake\\hermetic\\hermetic.json.in" >"$work\\cmake-hermetic\\hermetic.json"
+cmake_hermetic() {
+    z build "$work\\cmake-hermetic\\hermetic.json" >"$work\\cmake-hermetic.log" 2>&1 || { tail -3 "$work\\cmake-hermetic.log"; return 1; }
+    local found
+    found=$(tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer test.build.cmake-hermetic)\\found.txt")
+    ! grep -qi 'program files' <<<"$found" || { echo "$found"; return 1; }
+    grep -qx 'git=GIT-NOTFOUND' <<<"$found" && grep -qx 'registry=OFF' <<<"$found" && grep -qx 'system registry=OFF' <<<"$found" &&
+        grep -qx 'python=FALSE' <<<"$found" || { echo "$found"; return 1; }
+}
+check "CMake searches no Program Files, package registries or registry Pythons" cmake_hermetic
 fi
 
 # --- Meson --------------------------------------------------------------------------

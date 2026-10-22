@@ -156,6 +156,16 @@
   be started while other commands are running, Ninja 1.13.2 stops with
   `ninja: fatal: ReadFile: The handle is invalid.` (once, it crashed with
   `0xC0000409`) instead of reporting the command.
+- Only recipes on CMake's image from iteration 40 on (`fa7efc2e`, now Qt's
+  SDK and the apps built with it) build without looking in Program Files,
+  CMake's package registries and the registry's Pythons. The others keep
+  the image they were published with (`fdc6a6bb`): zstd, PHP's yaml and
+  zstd extensions, Gaphor (its Graphviz), GTK's SDK and its base half,
+  GNOME Text Editor and Gnumeric. They reproduced on runners, which have
+  plenty installed there, so nothing they build found anything, but a
+  machine with a library they look for could build them differently. Find
+  modules that read the registry for their own tools can still see the
+  machine.
 - Executables built with zig's `LDFLAGS` or `CGO_LDFLAGS` have no debug
   information, as a PDB would differ from build to build.
 - .NET's images can't be published: Microsoft's licence for its Windows
@@ -423,19 +433,28 @@
   something they're built or tested from changed, and weekly otherwise: a
   change to zigsaw that a GTK image no longer reproduces with shows up to a
   week later.
-- Qt's family is Qt 6.12's Widgets set: no QML or Qt Quick (so no
-  Linguist, whose interface is in Qt Quick), Qt Multimedia, WebEngine or
-  the other modules, and no Assistant (its HTML viewer is a git submodule
+- Qt's family is Qt 6.12's Widgets set with QML and Qt Quick: no Qt
+  Multimedia, WebEngine, Charts or the other modules, no qmlls (it needs
+  qtlanguageserver), and no Assistant (its HTML viewer is a git submodule
   the source archives leave out, and no documentation is built). Qt's
   QSettings keeps settings in the registry by default, which an app keeps
   apart only for the keys its image declares; the runtime declares
   Designer's (`HKCU\Software\QtProject`).
+- An app with several QML modules of its own could build differently from
+  run to run, as qtdeclarative did: Qt's CMake doesn't make qmlcachegen
+  wait for the other modules' type information. Qt's SDK builds
+  qtdeclarative a second time to fix its own; Notes and the test app have
+  one module each.
+- Qt's runtime is one image: an app that only uses Widgets, as Flameshot,
+  gets QML and Qt Quick with it, 163 MB deployed (59 MB compressed) where
+  the Widgets set alone was 75 (29).
 - Flameshot's "Launch at startup" writes your real `HKCU\...\Run` under
   `soft`, naming the program in its deployment rather than its shim, so an
   update leaves it pointing at the old version. Its `flameshot-cli.exe` isn't
   in the image (it cuts commands off at about 80 characters); `zigsaw run`
   passes `flameshot.exe`'s output on instead.
 - CI checks Qt's family, like GTK's, on a push only when something it's
-  built or tested from changed, and weekly otherwise. On a 4-CPU runner,
-  its SDK's build may take over an hour (26 minutes on 16 CPUs here); the
-  job's timeout is 120 minutes.
+  built or tested from changed, and weekly otherwise. Its SDK is built in
+  two halves at once, the base (25 minutes here) and the SDK on the
+  published base (48 here); qtbase took 22 minutes on a runner, against
+  17½ here. The jobs' timeout is 90 minutes.

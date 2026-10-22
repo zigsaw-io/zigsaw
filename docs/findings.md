@@ -1356,6 +1356,73 @@ JDK's image, and compiled on the JRE's):
   (`0xc0000142`, `STATUS_DLL_INIT_FAILED`) right after I had stopped
   another build; it didn't happen again.
 
+## CMake's search paths, and Qt Quick (iteration 40)
+
+- **CMake searched Program Files in every build.** Kitware's
+  `Modules/Platform/WindowsPaths.cmake` adds `ProgramW6432`, `ProgramFiles`
+  and `ProgramFiles(x86)` to `CMAKE_SYSTEM_PREFIX_PATH`, and then
+  `%SystemDrive%\Program Files` and `Program Files (x86)` if they exist.
+  zigsaw's builds have no `ProgramFiles` but do have `SystemDrive`, so
+  every `find_*` looked there. Iteration 39's run built Qt's SDK on a runner
+  that has PostgreSQL 17 there: FindPostgreSQL (which adds
+  `PostgreSQL/<version>/lib` to each prefix) found its `libpq.a`, Qt built
+  a `qsqlpsql` plugin, and its link failed on the MSVC libraries `libpq.a`
+  asks for. Here, Flameshot's configure found and ran
+  `C:\Program Files\Git\cmd\git.exe` (FindGit tries `Git/cmd` under each
+  prefix). Flameshot came out the same, since its sources aren't a git
+  checkout, but a store inside a git checkout would have put that commit's
+  hash in its version.
+- **FindPython took the machine's Python from the registry**
+  (`HKCU\Software\Python\PythonCore` here) before any on PATH: its
+  `Python_FIND_REGISTRY` is `FIRST` on Windows.
+- **The published Qt SDK didn't depend on this machine.** Configuring
+  qtbase, qttools and Flameshot with the old and the new CMake image: the
+  old found nothing under Program Files but Flameshot's Git, and qtbase's
+  configuration summary was the same with both.
+- **qtdeclarative needs Python to build**: its `RegExpJitTables.h` comes
+  from a Python script (yarr's `create_regex_tables`, which imports only
+  `os` and `sys`), and its configure stops without one. The SDK's module
+  unpacks Python's embeddable zip for it and names it with
+  `-DPython_EXECUTABLE`.
+- **qtshadertools and qtdeclarative build with zig unchanged**: no patch,
+  no flag beyond Qt's other modules'. qtdeclarative's 4,410 build steps
+  took 34 minutes here, qtshadertools' 3. Every one of its 2,052 warnings
+  is `_LIBCPP_HARDENING_MODE` redefined: Qt's CMake asks libc++ for its
+  "fast" checks, after zig's "none", and Qt's wins.
+- **qtdeclarative's build races its own type information.** qmlcachegen
+  compiles a module's QML bindings to C++ where it knows the types, from the
+  other modules' `plugins.qmltypes`; its Ninja rule waits for their autogen
+  and copy steps but not for the type registration that writes those
+  files. So which bindings became C++ depended on Ninja's order: two fresh
+  builds of the SDK differed in one DLL, the FluentWinUI3 style's
+  (455,168 and 462,336 bytes; a third build, 457,216), whose QML had 67 of
+  its 130 functions compiled in one and 71 in another (CheckIndicator's
+  bindings to Qt Quick Shapes). Generated again with every type known, it
+  came out the same each time. Building `all_qmltyperegistrations` first
+  didn't help: it runs qmlcachegen for some modules itself. The SDK's
+  module deletes the 1,190 generated qmlcache sources after its build and
+  builds again (7½ minutes here), so every one is generated with all the
+  type information.
+- **The base half changed nothing in Qt's other modules**: its 4,306 files
+  that iteration 39's SDK has too are the same, byte for byte, with the new
+  CMake image and the SQL drivers turned off by name.
+- **Qt Quick draws with Direct3D 11 in all three sandboxes**, in an
+  AppContainer too: a window of Quick Controls read back after its first
+  frame has its own colour. Its shaders are HLSL that the system's
+  `d3dcompiler_47.dll` compiles when the app runs. The Controls style on
+  Windows 11 is "Windows".
+- **Linguist links `Qt6UiTools.dll` and `Qt6QuickWidgets.dll`**: the
+  runtime, which dropped UiTools as a library for builds, keeps it.
+- **Notes 2.3.1 links Qt's private modules without asking for them**, which
+  Qt 6.10 stopped allowing (`Qt6::CorePrivate` not found); its master adds
+  them to `find_package`. Its `#pragma comment(lib, "Dwmapi.lib")` works
+  with zig's linker. Under every sandbox it logs DirectWrite failing on
+  "MS Sans Serif", a bitmap font its style sheets name, which DirectWrite
+  can't load.
+- **Built in two halves, like GTK's, the SDK takes 73 minutes here**: the
+  base 25, the SDK on it 48 (41½ before the second qmlcache pass). In one
+  build it would be as long, and one job on a runner over 90 minutes.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

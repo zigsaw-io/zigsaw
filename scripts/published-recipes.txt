@@ -59,6 +59,8 @@ pdfbox.json
 plantuml.json
 logisim-evolution.json
 scenebuilder.json
+qt6-sdk-base.json
 qt6-sdk.json
 qt6.json
 flameshot.json
+notes.json

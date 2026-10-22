@@ -25,7 +25,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 gtk_groups="gtk-tools gettext gtk-base gtk gtk-apps rnote gnumeric"
-qt_groups="qt"
+qt_groups="qt-base qt"
 
 groups_file=scripts/published-groups.txt
 all=$(grep -v -e '^#' -e '^\s*$' "$groups_file" | cut -d: -f1 | grep -vx skip | awk '!seen[$0]++')
@@ -47,8 +47,6 @@ gtk_paths=(
 )
 qt_paths=(
     tests/qt.sh tests/qt/
-    # What qt-suites seeds its store with besides Qt's family.
-    recipes/busybox.json recipes/zig.json recipes/cmake.json
     "${common_paths[@]}"
 )
 for group in $gtk_groups; do

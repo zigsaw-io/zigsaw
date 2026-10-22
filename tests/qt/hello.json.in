@@ -4,6 +4,9 @@
   "command": "bin/hello-qt.exe",
   "path": ["bin"],
   "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "hello-quick": { "command": "bin/hello-quick.exe" }
+  },
   "runtimes": { "qt": "io.qt.Qt6@@QT@" },
   "sdk": { "qtsdk": "io.qt.Qt6.Sdk@@QTSDK@" },
   "modules": [
@@ -11,6 +14,20 @@
       "name": "hello",
       "env": { "LDFLAGS": "-s -Wl,-Brepro" },
       "sources": [{ "path": "CMakeLists.txt" }, { "path": "hello.cpp" }],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\"",
+        "cmake --build out",
+        "cmake --install out"
+      ]
+    },
+    {
+      "name": "quick",
+      "env": { "LDFLAGS": "-s -Wl,-Brepro" },
+      "sources": [
+        { "path": "quick/CMakeLists.txt", "dest": "CMakeLists.txt" },
+        { "path": "quick/main.cpp", "dest": "main.cpp" },
+        { "path": "quick/Main.qml", "dest": "Main.qml" }
+      ],
       "build": [
         "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\"",
         "cmake --build out",

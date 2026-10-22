@@ -2,7 +2,7 @@
   "id": "io.qt.Qt6",
   "version": "6.12.0",
   "name": "Qt",
-  "summary": "Qt 6's Widgets set (Core, Gui, Widgets, Network, Svg, Sql, image formats, translations) for apps built with Qt's SDK, with Qt Widgets Designer",
+  "summary": "Qt 6 (Core, Gui, Widgets, Network, Svg, Sql, image formats, translations, QML, Qt Quick) for apps built with Qt's SDK, with Designer, Linguist and qml",
   "homepage": "https://www.qt.io/",
   "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
   "command": "bin/designer.exe",
@@ -11,14 +11,17 @@
   "registry": ["Software\\QtProject"],
   "exports": {
     "designer": { "command": "bin/designer.exe" },
+    "linguist": { "command": "bin/linguist.exe" },
     "pixeltool": { "command": "bin/pixeltool.exe" },
+    "qml": { "command": "bin/qml.exe" },
     "qtdiag": { "command": "bin/qtdiag.exe" }
   },
   "shortcuts": {
-    "Qt Widgets Designer": { "command": "designer", "description": "Design Qt Widgets forms" }
+    "Qt Widgets Designer": { "command": "designer", "description": "Design Qt Widgets forms" },
+    "Qt Linguist": { "command": "linguist", "description": "Translate Qt apps" }
   },
   "sdk": {
-    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:c45017035ca9587914ce2caf3ae518c32ef41a31dbd2aae690529778df385188"
+    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:7361e49167a765222bcc4090f38d52f9c3fb972a6b13201ff758a53b0bea1f26"
   },
   "cleanup": [
     "/include",
@@ -62,13 +65,37 @@
     "/bin/qtplugininfo.exe",
     "/bin/windeployqt.exe",
     "/bin/windeployqt6.exe",
+    "/bin/qmlaotstats.exe",
+    "/bin/qmlcachegen.exe",
+    "/bin/qmlcontextpropertydump.exe",
+    "/bin/qmldom.exe",
+    "/bin/qmleasing.exe",
+    "/bin/qmlformat.exe",
+    "/bin/qmlimportscanner.exe",
+    "/bin/qmljsrootgen.exe",
+    "/bin/qmllint.exe",
+    "/bin/qmlplugindump.exe",
+    "/bin/qmlpreview.exe",
+    "/bin/qmlprofiler.exe",
+    "/bin/qmlscene.exe",
+    "/bin/qmltc.exe",
+    "/bin/qmltestrunner.exe",
+    "/bin/qmltime.exe",
+    "/bin/qmltyperegistrar.exe",
+    "/bin/qsb.exe",
+    "/bin/svgtoqml.exe",
+    "/bin/Qt6QmlCompiler.dll",
+    "/bin/Qt6QuickTest.dll",
     "/bin/Qt6Test.dll",
-    "/bin/Qt6UiTools.dll"
+    "/plugins/qmllint",
+    "/qml/QmlTime",
+    "/qml/QtTest",
+    "/qml/Qt/test"
   ],
   "modules": [
     {
       "name": "qt",
-      "sources": [{ "image": "io.qt.Qt6.Sdk:6.12.0@sha256:c45017035ca9587914ce2caf3ae518c32ef41a31dbd2aae690529778df385188" }]
+      "sources": [{ "image": "io.qt.Qt6.Sdk:6.12.0@sha256:7361e49167a765222bcc4090f38d52f9c3fb972a6b13201ff758a53b0bea1f26" }]
     },
     {
       "name": "qt-conf",

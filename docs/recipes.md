@@ -617,6 +617,20 @@ the options of Microsoft's `rc.exe`. Builds reproduce without anything
 more: CMake writes the paths of the sources on `B:` into what it builds,
 which are the same everywhere.
 
+CMake finds nothing the machine has installed. Kitware's
+`Modules/Platform/WindowsPaths.cmake` adds `%SystemDrive%\Program Files`
+and `Program Files (x86)` to the prefixes every `find_*` searches (from
+`SystemDrive`, which builds have, when `ProgramFiles` is missing): a
+runner's PostgreSQL there went into Qt's SQL plugins, and this machine's Git
+into Flameshot's configure. The image replaces that file with
+[`cmake/WindowsPaths.cmake`](recipes/cmake/WindowsPaths.cmake), which
+leaves them out, turns CMake's package registries (`HKCU` and `HKLM`
+`Software\Kitware\CMake\Packages`) off, and keeps FindPython from taking a
+Python from the registry, unless a project sets those variables itself.
+Prefixes given with `CMAKE_PREFIX_PATH` or `<Package>_ROOT`, and programs on
+PATH, are found as before. Recipes pinned to the image from before iteration
+40 (`fdc6a6bb`) still have Kitware's file.
+
 ## Meson
 
 The Meson image, [`com.mesonbuild.meson`](recipes/meson.json), is Python's
@@ -1148,24 +1162,34 @@ before).
 Qt 6 comes as two images too, built from source with CMake, Ninja and zig:
 
 - **[`io.qt.Qt6.Sdk`](recipes/qt6-sdk.json)** builds Qt 6.12.0's Widgets
-  set: qtbase (Core, Gui, Widgets, Network, Sql, PrintSupport, OpenGL,
-  Concurrent, Xml, Test), qtsvg, qtimageformats (TIFF, WebP, TGA, ICNS,
-  WBMP), qttools (Qt Widgets Designer, Pixeltool, qtdiag, and Linguist's
-  `lupdate` and `lrelease`) and qttranslations. qtbase uses its own copies
+  set and QML: qtbase (Core, Gui, Widgets, Network, Sql, PrintSupport,
+  OpenGL, Concurrent, Xml, Test), qtsvg, qtimageformats (TIFF, WebP, TGA,
+  ICNS, WBMP), qtshadertools, qtdeclarative (QML and Qt Quick), qttools
+  (Qt Widgets Designer, Qt Linguist, Pixeltool, qtdiag, `lupdate` and
+  `lrelease`) and qttranslations. qtbase uses its own copies
   of zlib, libpng, libjpeg, HarfBuzz, FreeType, PCRE2, md4c and SQLite, so
   the Qt family needs nothing from GTK's; TLS is Schannel's, Windows' own.
   Its runtimes are zig, CMake and BusyBox, so builds that use it get CMake
   and Ninja without naming them, and it exports their commands, Qt's
-  `qmake`, `qtpaths`, `lupdate`, `lrelease` and `designer`, and sets
+  `qmake`, `qtpaths`, `lupdate` and `lrelease` (Designer and Linguist come
+  from the runtime: the first app installed keeps a command's name, and the
+  runtime's Start menu shortcuts run its own), and sets
   `CMAKE_PREFIX_PATH` to itself, so it builds Qt programs
-  [without a recipe](#building-qt-programs-without-a-recipe). It takes
-  about 26 minutes here from scratch, 18 of them compiling qtbase's 1,200
-  C++ files.
+  [without a recipe](#building-qt-programs-without-a-recipe). Since
+  iteration 40 it's built in two halves, as GTK's is, so that CI builds them
+  at once: [`io.qt.Qt6.Sdk.Base`](recipes/qt6-sdk-base.json) builds
+  qtbase, qtsvg, qtimageformats and qtshadertools, and the SDK takes the
+  base's files as an [image source](#images-as-sources) and builds
+  qtdeclarative, qttools and qttranslations on them. From scratch here the
+  base takes 25 minutes (most of it qtbase's 1,900 build steps), and the SDK
+  on it 48 (qtdeclarative's 4,400 steps take 34, and its second pass 7).
 - **[`io.qt.Qt6`](recipes/qt6.json)** is the runtime: the SDK's files as an
   [image source](#images-as-sources), without the headers, libraries, CMake
-  files and build tools, in seconds: 75 MB (29 MB compressed). Apps list it
-  in their `runtimes`. As an app, it runs Designer, exports `designer`, `pixeltool` and `qtdiag`, adds
-  "Qt Widgets Designer" to the Start menu, and keeps Designer's settings
+  files and build tools (QML's too), in seconds: 163 MB (59 MB compressed;
+  75 and 29 before QML and Qt Quick). Apps list it in
+  their `runtimes`. As an app, it runs Designer, exports `designer`,
+  `linguist`, `pixeltool`, `qml` and `qtdiag`, adds "Qt Widgets Designer"
+  and "Qt Linguist" to the Start menu, and keeps their settings
   (`HKCU\Software\QtProject`) with its data.
 
 An app built against Qt, as [`tests/qt`](tests/qt) is:
@@ -1238,8 +1262,25 @@ Building Qt with zig needed these, in
   git submodules are empty: Assistant's HTML viewer (qlitehtml) is one, and
   Assistant, with no documentation built to read, is left out.
 
-Qt 6.12's Linguist has a Qt Quick interface, so it needs QML, which isn't
-built; `lupdate` and `lrelease` are. zig links its libc++ into each DLL and
+Since iteration 40 the SDK has QML and Qt Quick too: qtshadertools (`qsb`,
+with its own glslang and SPIRV-Cross) and qtdeclarative (QML with its JIT,
+Qt Quick, Quick Controls with all their styles, Quick Dialogs, Layouts,
+Shapes, Effects and QQuickWidget). qtdeclarative's build runs a Python
+script, so its module unpacks Python's embeddable zip, which stays in the
+build. Its module builds twice: qmlcachegen compiles a module's QML to C++
+as far as it knows the types, and Qt's build doesn't wait for the other
+modules' type information, so what it compiled depended on the order Ninja
+ran things in; the second build generates all the compiled QML again, with
+every type known ([findings](findings.md#cmakes-search-paths-and-qt-quick-iteration-40)). Qt Quick draws with Direct3D 11, compiling its shaders when it runs
+with Windows' own `d3dcompiler_47.dll`. Linguist, whose interface is Qt
+Quick, is built again; the runtime exports it and the `qml` tool, which runs
+a `.qml` file, and adds "Qt Linguist" to the Start menu. qmlls isn't built
+(it needs qtlanguageserver). An app's QML modules, as
+[`tests/qt/quick`](tests/qt/quick)'s, are compiled into it with
+`qt_add_qml_module`; Qt's own come from the runtime's `qml` folder, which Qt
+finds from `Qt6Core.dll` as it finds its plugins.
+
+zig links its libc++ into each DLL and
 program, so Qt's 14 DLLs in the runtime each have their own copy: exceptions,
 `dynamic_cast` and `typeid` work across them (libc++ compares type names on
 Windows), and so do `std::string`, `std::function` and `thread_local`, as a
@@ -1276,6 +1317,22 @@ exceeds, so the image leaves it out; `zigsaw run` gives `flameshot.exe`
 the console's output already. Its settings are in an INI file in AppData,
 so in its data directory. Its "Launch at startup" writes your real
 `HKCU\...\Run` under `soft`, naming its deployment, not its shim.
+
+### Notes
+
+[Notes](recipes/notes.json) 2.3.1 (`io.github.nuttyartist.notes`, Flathub's
+id), a note-taking app for Markdown with folders, tags and a kanban board of
+a note's to-do lists, builds against the SDK with CMake and runs on the
+runtime. Its kanban board and settings are QML (compiled into it with
+`qt_add_qml_module`), drawn by Qt Quick next to its Widgets. Its two git
+submodules (qautostart and qmarkdowntextedit) come pinned at the commits the
+tag names, and its update checker is off. Its default `PRO_VERSION=ON` is
+the free build with every feature and no licence check; off, it's the paid
+store build, which asks lemonsqueezy.com about a licence. 2.3.1 predates Qt
+6.10, which wants `CorePrivate`, `GuiPrivate` and `WidgetsPrivate` asked for
+by name: the recipe adds them to its components. Its notes database and
+settings are in AppData (`Awesomeness\notes.db`), so in its data directory,
+and it may use your Documents folder, where it exports notes.
 
 ## Python apps
 

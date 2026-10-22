@@ -16,10 +16,10 @@
   },
   "cleanup": ["/bin/flameshot-cli.exe"],
   "runtimes": {
-    "qt": "io.qt.Qt6:6.12.0@sha256:9eae290f689d7033db1d56d8117649c6523594a597013f03e2a8c3be68c0465d"
+    "qt": "io.qt.Qt6:6.12.0@sha256:c09a8cfe5811b873943207e0b732cd94916bccb03b0cbd8a0eec779aee4bd7ce"
   },
   "sdk": {
-    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:c45017035ca9587914ce2caf3ae518c32ef41a31dbd2aae690529778df385188"
+    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:7361e49167a765222bcc4090f38d52f9c3fb972a6b13201ff758a53b0bea1f26"
   },
   "modules": [
     {

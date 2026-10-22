@@ -4,14 +4,18 @@
 # paints it, in each sandbox; Qt finds its plugins and translations in the
 # runtime's deployment (it's relocatable), has the SVG, WebP and TIFF image
 # plugins and Schannel for TLS, and keeps an app's files in its data
-# directory. The SDK's exports build a Qt program without a recipe (CMake,
-# finding Qt through the SDK's CMAKE_PREFIX_PATH). The runtime's Designer
-# opens its window in each sandbox (its qt.conf points Qt at the runtime's
-# plugins), and gets the windowless shim and a Start menu shortcut (in a
-# temporary folder). Flameshot (recipes/flameshot.json) runs in its tray in
-# each sandbox (in an AppContainer, Qt's patched QLocalServer lets its
-# single-instance check listen), and its `full` command saves a screenshot
-# in the Pictures folder.
+# directory. A Qt Quick program of the same app draws a window of Controls
+# with Direct3D 11 in each sandbox, with Qt's QML modules from the runtime.
+# The SDK's exports build a Qt program without a recipe (CMake, finding Qt
+# through the SDK's CMAKE_PREFIX_PATH). The runtime's qml tool runs a QML
+# file; its Designer and Linguist open their windows in each sandbox (its
+# qt.conf points Qt at the runtime's plugins), and get the windowless shim
+# and Start menu shortcuts (in a temporary folder). Flameshot
+# (recipes/flameshot.json) runs in its tray in each sandbox (in an
+# AppContainer, Qt's patched QLocalServer lets its single-instance check
+# listen), and its `full` command saves a screenshot in the Pictures folder.
+# Notes (recipes/notes.json) opens its window in each sandbox, loads its
+# QML without errors, and keeps its database in its data directory.
 #
 # In CI (the Reproduce workflow's qt-suites job), it runs in a store of the
 # published images (tests/seed-store.sh), which it installs again rather
@@ -19,12 +23,12 @@
 #
 #   QT_HOME=path\to\store bash tests/qt.sh [path\to\zigsaw.exe]
 #
-# Building Qt's SDK takes about 26 minutes, so this uses a store that has
-# both Qt images (QT_HOME, or BUILD_HOME as tests/published.sh leaves it),
-# and says so and stops if neither has them. It installs its app there, and
-# removes it afterwards; it builds Flameshot there too unless the store has
-# it (a few minutes), and then removes it. The apps open windows on the
-# desktop for a moment.
+# Building Qt's SDK takes over an hour, so this uses a store that has both
+# Qt images (QT_HOME, or BUILD_HOME as tests/published.sh leaves it), and
+# says so and stops if neither has them. It installs its app there, and
+# removes it afterwards; it builds Flameshot and Notes there too unless the
+# store has them (a few minutes), and then removes them. The apps open
+# windows on the desktop for a moment.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -41,6 +45,7 @@ export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
 APP=test.qt.hello
 FLAMESHOT=org.flameshot.Flameshot
+NOTES=io.github.nuttyartist.notes
 # Start menu shortcuts go here rather than the user's Start menu.
 links="$work\\links"
 export ZIGSAW_SHORTCUTS_DIR="$links"
@@ -78,6 +83,7 @@ install_again() {
 }
 
 for f in hello.cpp CMakeLists.txt; do cp "$root\\tests\\qt\\$f" "$work\\"; done
+cp -r "$root\\tests\\qt\\quick" "$work\\"
 sed -e "s/@QT@/$(manifest_of io.qt.Qt6)/" -e "s/@QTSDK@/$(manifest_of io.qt.Qt6.Sdk)/" \
     "$root\\tests\\qt\\hello.json.in" >"$work\\hello.json"
 
@@ -120,13 +126,48 @@ app_data() {
 }
 check "it keeps its files in the app's data directory" app_data
 
+# Qt Quick: a window of Controls from the app's own QML module (compiled
+# with qmlcachegen), drawn by the scene graph and read back, in each
+# sandbox. Qt finds the Controls' QML modules in the runtime's deployment.
+quick() {
+    local out
+    out=$(timeout 120 "$zigsaw" run "$@" --command=hello-quick $APP 2>&1 | tr -d '\r')
+    grep -q '^drew a frame with Direct3D11, corner #3a7bd5$' <<<"$out" || { echo "got: $out"; return 1; }
+}
+check "a Qt Quick app draws its window of Controls with Direct3D 11" quick
+check "with --sandbox=low" quick --sandbox=low
+check "with --sandbox=appcontainer" quick --sandbox=appcontainer
+quick_imports() {
+    local qml
+    qml=$(timeout 60 "$zigsaw" run --command=hello-quick $APP 2>&1 | tr -d '\r' | sed -n 's/^qml //p')
+    case $qml in */deploy/*/qml) ;; *) echo "qml in $qml"; return 1 ;; esac
+    test -f "$qml/QtQuick/Controls/qmldir" || { echo "no QtQuick/Controls in $qml"; return 1; }
+}
+check "Qt finds QML modules in the runtime's deployment" quick_imports
+# The runtime's qml tool runs a QML file. Its console.log goes to stderr
+# only when Qt is told to (it isn't a console program).
+printf '%s\n' 'import QtQuick' 'Window {' '    visible: true' \
+    '    Timer { interval: 200; running: true; onTriggered: { console.log("ran on " + Qt.platform.os); Qt.quit() } }' \
+    '}' >"$work\\ran.qml"
+check "the runtime's qml tool runs a QML file" sh -c "timeout 60 \"\$0\" run --env=QT_FORCE_STDERR_LOGGING=1 --command=qml io.qt.Qt6 ran.qml 2>&1 | tr -d '\r' | grep -q 'ran on windows'" "$zigsaw"
+
 # Building without a recipe: the SDK's exports, from the store's bin, as
 # cmake (with its ninja, zig's c++ and rc); the program then runs on the
-# runtime.
+# runtime. The first app installed keeps a command's name: in a store that
+# had CMake's own image first, the `cmake` shim runs that one, which has
+# neither zig nor Qt (CI's qt-suites job seeded it so once), so then this
+# runs the SDK's as its shim would. On failure, CMake's output is kept in
+# LOG_DIR.
 mkdir -p "$work\\loose" && cp "$work\\hello.cpp" "$work\\CMakeLists.txt" "$work\\loose\\"
 bin="$ZIGSAW_HOME\\bin"
 loose_cmake() {
-    (cd "$work\\loose" && "$bin\\cmake.exe" -S . -B out -DCMAKE_BUILD_TYPE=Release && "$bin\\cmake.exe" --build out) >"$work\\loose.log" 2>&1 || { tail -5 "$work\\loose.log"; return 1; }
+    local cmake=("$bin\\cmake.exe")
+    [ "$(sed -n 's/^app = //p' "$bin\\cmake.shim" | tr -d '\r')" = io.qt.Qt6.Sdk ] || cmake=("$zigsaw" run --command=cmake io.qt.Qt6.Sdk)
+    (cd "$work\\loose" && "${cmake[@]}" -S . -B out -DCMAKE_BUILD_TYPE=Release && "${cmake[@]}" --build out) >"$work\\loose.log" 2>&1 || {
+        [ -z "${LOG_DIR:-}" ] || cp "$work\\loose.log" "$LOG_DIR\\qt-loose-cmake.log"
+        tail -5 "$work\\loose.log"
+        return 1
+    }
     local out
     out=$(cd "$work\\loose" && timeout 120 "$zigsaw" run --command="$work\\loose\\out\\hello-qt.exe" io.qt.Qt6 2>&1 | tr -d '\r')
     grep -q '^painted a window with windows$' <<<"$out" || { echo "got: $out"; return 1; }
@@ -138,9 +179,9 @@ check "the SDK's cmake builds a Qt program, which runs on the runtime" loose_cma
 install_again io.qt.Qt6 qt6.json >/dev/null 2>&1
 shim_dir=$(dirname "$zigsaw")
 shim_is() { cmp -s "$ZIGSAW_HOME\\bin\\$1.exe" "$shim_dir\\$2"; }
-gui_shims() { shim_is designer zigsaw-shimw.exe && shim_is pixeltool zigsaw-shimw.exe && shim_is qtdiag zigsaw-shim.exe; }
-check "Designer and Pixeltool get the windowless shim, qtdiag the console one" gui_shims
-check "Designer gets a shortcut" test -f "$links\\Qt Widgets Designer.lnk"
+gui_shims() { shim_is designer zigsaw-shimw.exe && shim_is linguist zigsaw-shimw.exe && shim_is pixeltool zigsaw-shimw.exe && shim_is qtdiag zigsaw-shim.exe; }
+check "Designer, Linguist and Pixeltool get the windowless shim, qtdiag the console one" gui_shims
+check "Designer and Linguist get shortcuts" test -f "$links\\Qt Widgets Designer.lnk" -a -f "$links\\Qt Linguist.lnk"
 # stays_up <seconds> <zigsaw run arguments...>: the app is still running
 # when the time is up, rather than having crashed.
 stays_up() {
@@ -149,24 +190,30 @@ stays_up() {
     timeout "$seconds" "$zigsaw" run "$@" >/dev/null 2>&1
     [ $? -eq 124 ]
 }
-# designer_window <zigsaw run arguments...>: Designer's main window comes
-# up, rather than Qt's error box for a missing plugin, which would keep it
-# running too.
-designer_window() {
-    local title=""
-    ("$zigsaw" run "$@" io.qt.Qt6 >/dev/null 2>&1 &)
+# app_window <process> <title> <zigsaw run arguments...>: the program's
+# main window comes up, rather than Qt's error box for a missing plugin,
+# which would keep it running too.
+app_window() {
+    local process=$1 want=$2 title=""
+    shift 2
+    ("$zigsaw" run "$@" >/dev/null 2>&1 &)
     for _ in $(seq 30); do
-        title=$(powershell -NoProfile -Command "(Get-Process designer -ErrorAction SilentlyContinue | Where-Object MainWindowTitle | Select-Object -First 1).MainWindowTitle" | tr -d '\r')
+        title=$(powershell -NoProfile -Command "(Get-Process $process -ErrorAction SilentlyContinue | Where-Object MainWindowTitle | Select-Object -First 1).MainWindowTitle" | tr -d '\r')
         [ -n "$title" ] && break
         sleep 1
     done
-    powershell -NoProfile -Command "Get-Process designer -ErrorAction SilentlyContinue | Stop-Process -Force"
+    powershell -NoProfile -Command "Get-Process $process -ErrorAction SilentlyContinue | Stop-Process -Force"
     sleep 1
-    [ "$title" = "Qt Widgets Designer" ] || { echo "window: $title"; return 1; }
+    [ "$title" = "$want" ] || { echo "window: $title"; return 1; }
 }
+designer_window() { app_window designer "Qt Widgets Designer" "$@" io.qt.Qt6; }
+linguist_window() { app_window linguist "Qt Linguist" "$@" --command=linguist io.qt.Qt6; }
 check "Designer opens its window" designer_window
 check "with --sandbox=low" designer_window --sandbox=low
 check "with --sandbox=appcontainer" designer_window --sandbox=appcontainer
+check "Linguist, on Qt Quick, opens its window" linguist_window
+check "with --sandbox=low" linguist_window --sandbox=low
+check "with --sandbox=appcontainer" linguist_window --sandbox=appcontainer
 # Programs in the runtime's bin, beside Qt6Core.dll, would take bin for Qt's
 # prefix without its qt.conf (Qt looks for lib\libQt6Core.a to tell), and
 # find no platform plugin.
@@ -201,7 +248,35 @@ check "its full command saves a screenshot in Pictures" screenshot
 check "with --sandbox=low" screenshot --sandbox=low
 check "with --sandbox=appcontainer" screenshot --sandbox=appcontainer
 
+# Notes (recipes/notes.json), on the runtime's Qt Quick: its window in each
+# sandbox, its QML (the kanban board, its settings) loading without errors,
+# and its notes database in its data directory. Built here unless the store
+# has it, which takes a minute or two.
+installed_notes=false
+if [ ! -f "$ZIGSAW_HOME\\refs\\$NOTES.json" ]; then
+    z build "$root\\recipes\\notes.json" >"$work\\notes.log" 2>&1 || echo "building $NOTES failed: $(tail -1 "$work\\notes.log")"
+    installed_notes=true
+else
+    install_again $NOTES notes.json >/dev/null 2>&1
+fi
+check "Notes gets the windowless shim and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\notes.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\Notes.lnk'"
+notes_window() { app_window Notes Notes "$@" $NOTES; }
+check "Notes opens its window" notes_window
+check "with --sandbox=low" notes_window --sandbox=low
+check "with --sandbox=appcontainer" notes_window --sandbox=appcontainer
+# Qt's messages go to stderr when it's told so; a QML error names its qrc:/
+# file.
+notes_qml() {
+    local out
+    out=$(timeout 15 "$zigsaw" run --env=QT_FORCE_STDERR_LOGGING=1 $NOTES 2>&1 | tr -d '\r')
+    powershell -NoProfile -Command "Get-Process Notes -ErrorAction SilentlyContinue | Stop-Process -Force"
+    grep -q '^Database: connection ok$' <<<"$out" && ! grep -q 'qrc:/' <<<"$out" || { echo "got: $(grep -m3 'qrc:/\|Database' <<<"$out")"; return 1; }
+}
+check "its QML loads without errors, and it opens its database" notes_qml
+check "it keeps its notes in its data directory" test -f "$ZIGSAW_HOME\\data\\$NOTES\\home\\AppData\\Roaming\\Awesomeness\\notes.db"
+
 cd "$root" || exit 1
+$installed_notes && z rm --delete-data $NOTES >/dev/null 2>&1
 $installed_flameshot && z rm --delete-data $FLAMESHOT >/dev/null 2>&1
 z rm --delete-data $APP >/dev/null 2>&1
 rm -rf "$work"
