@@ -108,8 +108,45 @@ broken_chunk() {
     ZIGSAW_HOME="$work\\chunks" "$zigsaw" rm net.frippery.busybox >/dev/null 2>&1
     pulls_back "$repo/busybox-broken"
 }
+# A chunk that doesn't start where the registry got to
+# (ZIGSAW_TEST_UPLOAD_SKIP) gets an error (HTTP 416); asked, zot says how
+# much it has, and the upload goes on from there. A registry that can't say,
+# as ghcr.io couldn't (ZIGSAW_TEST_UPLOAD_LOST asks after an upload zot
+# doesn't know), gets the blob in one request. An upload the registry has
+# lost (ZIGSAW_TEST_UPLOAD_LOSE sends a chunk to one zot doesn't know) goes
+# again from the start, in chunks if it broke off before (zot drops one
+# that broke off a moment after it may still have answered for it), and
+# otherwise in one request.
+failed_chunk() {
+    local out
+    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 ZIGSAW_TEST_UPLOAD_SKIP=2 za push net.frippery.busybox "$repo/busybox-skip" 2>&1) || { echo "$out"; return 1; }
+    grep -qE "failed \(HTTP 416\) at [0-9]* of [0-9]* bytes; resuming" <<<"$out" || { echo "$out"; return 1; }
+    ZIGSAW_HOME="$work\\chunks" "$zigsaw" rm net.frippery.busybox >/dev/null 2>&1
+    pulls_back "$repo/busybox-skip"
+}
+lost_chunk() {
+    local out
+    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 ZIGSAW_TEST_UPLOAD_SKIP=2 ZIGSAW_TEST_UPLOAD_LOST=1 za push net.frippery.busybox "$repo/busybox-lost" 2>&1) || { echo "$out"; return 1; }
+    grep -q "failed a chunk of .* (HTTP 416) and can't say how much of it it has (HTTP 404); uploading it in one request" <<<"$out" || { echo "$out"; return 1; }
+    ZIGSAW_HOME="$work\\chunks" "$zigsaw" rm net.frippery.busybox >/dev/null 2>&1
+    pulls_back "$repo/busybox-lost"
+}
+lost_upload() { # <repository> <expected note> <test hooks...>
+    local repository=$1 note=$2 out
+    shift 2
+    out=$(env ZIGSAW_UPLOAD_CHUNK_SIZE=65536 "$@" ZIGSAW_HOME="$store_a" "$zigsaw" push net.frippery.busybox "$repository" 2>&1) || { echo "$out"; return 1; }
+    grep -q "$note" <<<"$out" || { echo "$out"; return 1; }
+    ZIGSAW_HOME="$work\\chunks" "$zigsaw" rm net.frippery.busybox >/dev/null 2>&1
+    pulls_back "$repository"
+}
 check "push in chunks, which pull back as pushed" in_chunks
 check "  a chunk that breaks off goes again from where the registry got to" broken_chunk
+check "  so does one the registry fails" failed_chunk
+check "  and if it can't say how much it has, the blob goes in one request" lost_chunk
+check "  an upload the registry lost after a break goes again in chunks" lost_upload "$repo/busybox-lose" \
+    "lost the upload of .*, which broke off, at [0-9]* of [0-9]* bytes (HTTP 404); starting it again" ZIGSAW_TEST_UPLOAD_BREAK=3 ZIGSAW_TEST_UPLOAD_LOSE=4
+check "  and one it lost otherwise, in one request" lost_upload "$repo/busybox-lose2" \
+    "lost the upload of .* at [0-9]* of [0-9]* bytes (HTTP 404); uploading it in one request" ZIGSAW_TEST_UPLOAD_LOSE=3
 
 # Images built before iteration 7 have plain tar layers. One made here from
 # busybox's (its layer decompressed and uploaded, its manifest rewritten)

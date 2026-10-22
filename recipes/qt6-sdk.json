@@ -60,7 +60,7 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF -DPython_EXECUTABLE=B:/src/qtdeclarative/zigsaw/python/python.exe",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF -DQT_UNITY_BUILD=ON -DFEATURE_quickcontrols2_imagine=OFF -DFEATURE_quickcontrols2_stylekit=OFF -DPython_EXECUTABLE=B:/src/qtdeclarative/zigsaw/python/python.exe",
         "cmake --build out",
         "find out -path '*/.rcc/qmlcache/*' -type f \\( -name '*.cpp' -o -name '*.aotstats' \\) -delete",
         "cmake --build out",

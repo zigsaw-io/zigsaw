@@ -266,9 +266,9 @@ printf '%s\n' 'import gi, cairo' 'gi.require_version("Gtk", "4.0")' 'gi.require_
     'print("libadwaita", Adw.get_major_version(), Adw.get_minor_version())' \
     'print("pycairo", cairo.version)' >"$work\\gi4.py"
 # python_says <script> <expected, lines joined by |> <run options...>:
-# what the script prints, without zigsaw's notes of what it granted and
-# GLib's warnings (in an AppContainer, Pango's that DirectWrite can't open
-# per-user fonts).
+# what the script prints, without zigsaw's notes of what it granted and took
+# back, and GLib's warnings (in an AppContainer, Pango's that DirectWrite
+# can't open per-user fonts).
 python_says() {
     local script=$1 want=$2 out getpath='^$'
     shift 2
@@ -276,7 +276,7 @@ python_says() {
         [ "$(ac_if self-path-dos)" = gap ] && getpath='^Failed to find real location of ' ;;
     esac
     out=$(timeout 60 "$zigsaw" run "$@" --command="$pygobject_dir\\python.exe" $MELD "$script" 2>&1 | tr -d '\r' |
-        grep -v -e '^granted ' -e '^labelled ' -e '^\*\* (' -e '^$' -e "$getpath" | tr '\n' '|')
+        grep -v -e '^granted ' -e '^labelled ' -e '^revoked ' -e '^removed the low integrity label ' -e '^\*\* (' -e '^$' -e "$getpath" | tr '\n' '|')
     [ "$out" = "$want|" ] || { echo "got: $out"; return 1; }
 }
 check "PyGObject loads GTK 3 and GtkSourceView 4 through their typelibs" python_says gi3.py 'GTK 3 24 52|GtkSourceView Python|Pango 1.58.2'

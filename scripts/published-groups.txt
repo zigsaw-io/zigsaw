@@ -14,8 +14,9 @@
 # was, until iteration 35. Its groups and Qt's get a longer timeout (the
 # workflow's gtk*, gettext, rnote, gnumeric and qt jobs): on a runner, GTK's
 # SDK took 57 minutes in one build, gettext 39, Rnote 24, Gnumeric 18 and
-# cargo-c 13 (iteration 36's run); Qt's SDK took 26 minutes here, most of
-# it compiling qtbase on all 16 CPUs. So a push checks them only when
+# cargo-c 13 (iteration 36's run), and Qt's SDK halves 34 and 109 minutes
+# (iteration 41's run; 25 and 26 here, the second since qtdeclarative's
+# unity build in iteration 42). So a push checks them only when
 # something they're built or tested from changed (scripts/ci-groups.sh,
 # whose gtk_groups and qt_groups list them), and the weekly run always.
 

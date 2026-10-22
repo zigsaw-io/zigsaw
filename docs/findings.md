@@ -1423,6 +1423,38 @@ JDK's image, and compiled on the JRE's):
   base 25, the SDK on it 48 (41½ before the second qmlcache pass). In one
   build it would be as long, and one job on a runner over 90 minutes.
 
+## zig hanging on a console (2026-10-23)
+
+- **OpenSSL's module, in GTK's SDK, hung at its third command when the
+  build's output went to a terminal**, and built when it went to a file.
+  That command compiles about 700 files with `xargs -P "$(nproc)"`; one
+  `zig cc` had written its object and never exited, so xargs and the build
+  waited for it.
+- **It's zig 0.16's stderr lock.** With stderr on a console, each zig
+  process draws a progress line from a worker thread, the first time 200 ms
+  in. That draw takes the stderr lock, then finds out what the terminal
+  supports, which can fail as canceled; `tryLockStderr` returns the error
+  without giving the lock back. A `zig cc` that finishes then (OpenSSL's
+  small files take about that long) cancels the thread just as it does
+  that, and its exit, `std.process.cleanExit`, waits for the lock forever.
+  The hung process's memory showed it: the lock taken once, by a worker
+  thread back in the pool, and the main thread waiting for it. With stderr
+  in a file or a pipe, zig draws nothing, so compilers that ninja or cargo
+  run, taking their output, can't hit it; those that make or xargs run
+  straight on the console can.
+- **A program with nothing but std.Progress hangs the same way**: started,
+  ended 198 to 214 ms in, and exited, it hung in 26 of 3,201 runs on a
+  console. With `NO_COLOR` set it never did, since zig then skips the
+  terminal check that the cancel interrupts; the PowerShell it was first
+  tried from had it set, and hid the hang. A task canceled before it first
+  locks stderr hangs the next lock every time.
+- zig's master branch has the same code, and the zig image is upstream's
+  build, so the image can't patch it. Build commands now get
+  `ZIG_PROGRESS=off`: a value zig can't parse as a handle, so no zig in a
+  build starts the progress line. OpenSSL's module then built in a console
+  in 3 minutes, and zstd rebuilt with it kept its digest. A report for zig's
+  issue tracker is drafted, not yet filed.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

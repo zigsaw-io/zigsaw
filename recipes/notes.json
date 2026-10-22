@@ -15,10 +15,10 @@
     "Notes": { "command": "notes", "description": "Take notes" }
   },
   "runtimes": {
-    "qt": "io.qt.Qt6:6.12.0@sha256:c09a8cfe5811b873943207e0b732cd94916bccb03b0cbd8a0eec779aee4bd7ce"
+    "qt": "io.qt.Qt6:6.12.0@sha256:1b2c095af5ed8eb7659f57f1ac94114aef76bbc6163781cbb8b26f2b351d52b5"
   },
   "sdk": {
-    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:7361e49167a765222bcc4090f38d52f9c3fb972a6b13201ff758a53b0bea1f26"
+    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:e71f873331c783b866fc6af726e5bdcb0798ed9aa63189c6b7b846d0ad52cafa"
   },
   "modules": [
     {

@@ -112,8 +112,10 @@ jobs:
     # longer: each half of its SDK, gettext, Rnote and Gnumeric are 18 to
     # 40 minutes each. Qt's SDK is in two halves too: in iteration 40's run
     # the base half took 49 minutes on a runner (25 here), and the SDK half
-    # 70 (48 here), in a qt job of 77 minutes.
-    timeout-minutes: ${{ startsWith(matrix.group, 'qt') && 120 || (startsWith(matrix.group, 'gtk') || matrix.group == 'gettext' || matrix.group == 'rnote' || matrix.group == 'gnumeric') && 75 || 30 }}
+    # 70 (48 here), in a qt job of 77 minutes; in iteration 41's, on slower
+    # runners, every command of the SDK half took half as long again: 109
+    # minutes, in a qt job of 120.
+    timeout-minutes: ${{ startsWith(matrix.group, 'qt') && 180 || (startsWith(matrix.group, 'gtk') || matrix.group == 'gettext' || matrix.group == 'rnote' || matrix.group == 'gnumeric') && 75 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

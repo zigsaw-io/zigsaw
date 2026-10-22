@@ -132,10 +132,14 @@
   the registry holds elsewhere is uploaded again.
 - Of a blob that breaks off while going up in chunks, zot keeps nothing:
   the blob goes again from the start. Going on from where the registry got
-  to, as the OCI specification lets registries do, hasn't been seen against
-  one that does. Blobs up to 64 MiB still go in one request, as do all of
-  them to a registry that refuses chunks; a registry that also limits a
-  request's size refuses those.
+  to has been seen only after a chunk zot refused (HTTP 416). ghcr.io, the
+  default registry, failed the chunks of an 87 MB blob and couldn't say how
+  much it had (iteration 42): zigsaw then sends the blob in one request,
+  and the push's later blobs too, so a push there of a blob over 64 MiB
+  sends up to a chunk more than the blob. Blobs up to 64 MiB go in one
+  request, as do all of them with `ZIGSAW_UPLOAD_CHUNK_SIZE=0`; a registry
+  that limits a request's size and also takes chunks badly can't take a
+  bigger blob.
 - A layer's compressed bytes, and so every image's digest, are what the
   deflate of the Zig that zigsaw is built with makes. A Zig whose deflate
   changed would make other digests from the same files; CI pins Zig 0.16.0.
@@ -457,7 +461,9 @@
   change to zigsaw that a GTK image no longer reproduces with shows up to a
   week later.
 - Qt's family is Qt 6.12's Widgets set with QML and Qt Quick: no Qt
-  Multimedia, WebEngine, Charts or the other modules, no qmlls (it needs
+  Multimedia, WebEngine, Charts or the other modules, no Imagine style or
+  Qt Labs StyleKit for Quick Controls (an app that asks for Imagine gets an
+  error that it isn't installed), no qmlls (it needs
   qtlanguageserver), and no Assistant (its HTML viewer is a git submodule
   the source archives leave out, and no documentation is built). Qt's
   QSettings keeps settings in the registry by default, which an app keeps
@@ -469,7 +475,7 @@
   qtdeclarative a second time to fix its own; Notes and the test app have
   one module each.
 - Qt's runtime is one image: an app that only uses Widgets, as Flameshot,
-  gets QML and Qt Quick with it, 163 MB deployed (59 MB compressed) where
+  gets QML and Qt Quick with it, 153 MB deployed (56 MB compressed) where
   the Widgets set alone was 75 (29).
 - Flameshot's "Launch at startup" writes your real `HKCU\...\Run` under
   `soft`, naming the program in its deployment rather than its shim, so an
@@ -479,5 +485,7 @@
 - CI checks Qt's family, like GTK's, on a push only when something it's
   built or tested from changed, and weekly otherwise. Its SDK is built in
   two halves at once, the base (25 minutes here) and the SDK on the
-  published base (48 here). On a runner they took 49 and 70 minutes, in
-  jobs of 51 and 77; the jobs' timeout is 120 minutes.
+  published base (26 here; 48 before qtdeclarative's unity build). Runners
+  differ in speed by half again: the base took 34 and 49 minutes on two of
+  them, and the SDK before its unity build 70 and 109, so the jobs'
+  timeout is 180 minutes.

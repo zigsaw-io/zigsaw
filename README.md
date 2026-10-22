@@ -239,11 +239,13 @@ Registries that can't mount, or won't, get the blob uploaded instead.
 
 A blob bigger than 64 MiB goes up in chunks of that size, so that a
 registry that limits a request's size takes it, and an upload that breaks
-off goes on from where the registry got to; a registry that has lost track
-of the upload (zot drops one that broke off) gets the blob again, from the
-start. A registry that refuses the first chunk gets the blob in one request
-after all. `ZIGSAW_UPLOAD_CHUNK_SIZE` sets the chunk size in bytes (0 sends
-every blob in one request), and `-v` says how many chunks went.
+off, or that the registry fails, goes on from where the registry got to; a
+registry that has lost track of an upload that broke off (zot drops it)
+gets the blob again, from the start. A registry that refuses the first
+chunk, or fails one and can't say how much it has, as ghcr.io does, gets
+the blob in one request after all, and so do the push's later blobs.
+`ZIGSAW_UPLOAD_CHUNK_SIZE` sets the chunk size in bytes (0 sends every blob
+in one request), and `-v` says how each chunk went.
 
 Registries on `localhost` are reached over plain HTTP; all others over HTTPS.
 

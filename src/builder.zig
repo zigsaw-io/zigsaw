@@ -693,6 +693,13 @@ const BuildRoot = struct {
         // default: fresh for each build, unless the module keeps its work
         // directory. ${cache} keeps zig's libc and compiler-rt.
         try environment.set(arena, &vars, "ZIG_LOCAL_CACHE_DIR", try std.fmt.allocPrint(arena, "{s}\\src\\{s}\\.zig-cache", .{ letter, m.name }));
+        // With its stderr on a console, zig 0.16 draws a progress line from
+        // another thread; if zig cancels that thread just as it first takes
+        // the stderr lock (200 ms in), the lock is never released, and
+        // zig's exit waits for it forever: one of OpenSSL's hundreds of
+        // parallel `zig cc` hung a build run from a terminal. A
+        // ZIG_PROGRESS zig can't parse as a handle makes it skip the line.
+        try environment.set(arena, &vars, "ZIG_PROGRESS", "off");
         if (step == .build and !m.network) {
             // Discouraged, not prevented: tools that honor proxy variables
             // fail to connect, and nothing else is stopped.

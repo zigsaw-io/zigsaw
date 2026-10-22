@@ -265,7 +265,9 @@ zig's C compiler:
   (then `%PREFIX%`). `env` adds variables for a module's commands.
 - **The build sandbox** is like a run's: an environment built from scratch,
   with fresh profile folders, and a job object that ends whatever the commands
-  leave running. `SOURCE_DATE_EPOCH` is fixed at 1980-01-01.
+  leave running. `SOURCE_DATE_EPOCH` is fixed at 1980-01-01, and
+  `ZIG_PROGRESS` is `off`: zig 0.16 can hang drawing its progress line on a
+  console (docs/findings.md).
 - **Builds happen on `B:`.** The build's directory is mapped to `B:` while it
   runs, as `subst` does, so the paths compilers write into what they build
   (`__FILE__` in asserts, debug info) are `B:\src\<module>\...` on every
@@ -1182,11 +1184,13 @@ Qt 6 comes as two images too, built from source with CMake, Ninja and zig:
   base's files as an [image source](#images-as-sources) and builds
   qtdeclarative, qttools and qttranslations on them. From scratch here the
   base takes 25 minutes (most of it qtbase's 1,900 build steps), and the SDK
-  on it 48 (qtdeclarative's 4,400 steps take 34, and its second pass 7).
+  on it 26 (qtdeclarative takes 14, and its second pass 2.5; they took 48,
+  32 and 7.5 before its unity build, in iteration 42).
 - **[`io.qt.Qt6`](recipes/qt6.json)** is the runtime: the SDK's files as an
   [image source](#images-as-sources), without the headers, libraries, CMake
-  files and build tools (QML's too), in seconds: 163 MB (59 MB compressed;
-  75 and 29 before QML and Qt Quick). Apps list it in
+  files and build tools (QML's too), in seconds: 153 MB (56 MB compressed;
+  75 and 29 before QML and Qt Quick, 163 and 59 with the Quick Controls
+  styles left out since iteration 42). Apps list it in
   their `runtimes`. As an app, it runs Designer, exports `designer`,
   `linguist`, `pixeltool`, `qml` and `qtdiag`, adds "Qt Widgets Designer"
   and "Qt Linguist" to the Start menu, and keeps their settings
@@ -1271,10 +1275,22 @@ Building Qt with zig needed these, in
 
 Since iteration 40 the SDK has QML and Qt Quick too: qtshadertools (`qsb`,
 with its own glslang and SPIRV-Cross) and qtdeclarative (QML with its JIT,
-Qt Quick, Quick Controls with all their styles, Quick Dialogs, Layouts,
-Shapes, Effects and QQuickWidget). qtdeclarative's build runs a Python
-script, so its module unpacks Python's embeddable zip, which stays in the
-build. Its module builds twice: qmlcachegen compiles a module's QML to C++
+Qt Quick, Quick Controls, Quick Dialogs, Layouts, Shapes, Effects and
+QQuickWidget). Quick Controls has the styles Windows uses (Basic, and
+Fusion, Windows and FluentWinUI3 on it) and Material and Universal, which
+apps choose (Notes does); since iteration 42 the Imagine style and Qt Labs
+StyleKit, a styling framework still in Qt Labs, are left out
+(`-DFEATURE_quickcontrols2_imagine=OFF`, `..._stylekit=OFF`): they took a
+twelfth of qtdeclarative's build, and 9 MB of the runtime.
+
+qtdeclarative is built as a unity build (`-DQT_UNITY_BUILD=ON`, which
+Qt's CI builds too): CMake compiles its C++ files 32 to a file, so each
+batch parses Qt's headers once. With that and the two styles out, its build
+went from 32 minutes here to 14, and from 712 minutes of CPU time to 258;
+the files it makes differ, but build the same from store to store.
+
+qtdeclarative's build runs a Python script, so its module unpacks Python's
+embeddable zip, which stays in the build. Its module builds twice: qmlcachegen compiles a module's QML to C++
 as far as it knows the types, and Qt's build doesn't wait for the other
 modules' type information, so what it compiled depended on the order Ninja
 ran things in; the second build generates all the compiled QML again, with

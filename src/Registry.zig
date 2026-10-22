@@ -35,6 +35,9 @@ looked_up: bool = false,
 refreshed: bool = false,
 /// What broke off the last request that `Request.resumable` let go on.
 broken: ?anyerror = null,
+/// Whether the registry failed a blob's chunks, so later blobs go in one
+/// request (see `finishUpload`).
+no_chunks: bool = false,
 
 pub fn init(r: *Registry, ctx: *Context, ref: Reference, actions: []const u8) !void {
     r.* = .{
@@ -282,12 +285,14 @@ pub const chunk_size_var = "ZIGSAW_UPLOAD_CHUNK_SIZE";
 
 /// Sends the file at `path` as the blob, to where `startUpload` said: in one
 /// request, or in chunks if it's bigger than one. A registry that refuses
-/// the first chunk gets it in one request after all.
+/// the first chunk, or fails a later one and can't say how much it has,
+/// gets the blob in one request after all, and the push's later blobs too.
 pub fn finishUpload(r: *Registry, started: Upload.Started, desc: oci.Descriptor, path: []const u8) !void {
     const chunk = try r.chunkSize(started.chunk_min);
-    if (chunk == 0 or desc.size <= chunk) return r.putWhole(started.location, desc, path);
+    if (chunk == 0 or desc.size <= chunk or r.no_chunks) return r.putWhole(started.location, desc, path);
     const chunks = r.putChunks(started.location, desc, path, chunk) catch |err| switch (err) {
         error.ChunksRefused => {
+            r.no_chunks = true;
             if (r.ctx.verbose) Context.note("  {s} doesn't take blobs in chunks; uploading {s} in one request", .{ r.ref.host, oci.shortDigest(desc.digest) });
             return switch (try r.startUpload(desc.digest, null)) {
                 .started => |again| r.putWhole(again.location, desc, path),
@@ -321,86 +326,167 @@ fn putWhole(r: *Registry, location: []const u8, desc: oci.Descriptor, path: []co
     if (res.status != .created) return r.failStatus(res, "uploading a blob");
 }
 
+/// Why a chunk didn't go: it broke off, or the registry answered it with an
+/// error.
+const ChunkFailure = union(enum) {
+    broke: anyerror,
+    answered: http.Status,
+};
+
 /// The blob in chunks: each a PATCH to where the registry said last, then a
 /// PUT that names the blob. A chunk that breaks off, or that the registry
-/// fails to take, goes again from where the registry says it got to, at
-/// most three times. Returns how many chunks went; error.ChunksRefused if
-/// the registry refused the first.
+/// fails to take, goes again from where the registry says it got to, and an
+/// upload the registry has lost goes again from the start, at most three
+/// times in all. Returns how many chunks went; error.ChunksRefused if the
+/// registry refused the first, or failed one and can't say how much it has,
+/// as ghcr.io does.
 fn putChunks(r: *Registry, location: []const u8, desc: oci.Descriptor, path: []const u8, chunk: u64) !u32 {
     const arena = r.ctx.arena;
-    // For tests: the chunk, counting from 1, that breaks off halfway.
-    const break_at: ?u32 = if (r.ctx.env.get("ZIGSAW_TEST_UPLOAD_BREAK")) |n| std.fmt.parseInt(u32, n, 10) catch null else null;
+    // For tests: the chunk, counting from 1, that breaks off halfway, the
+    // one that claims to start a byte later than it does, and the one sent
+    // to an upload the registry doesn't know.
+    const break_at = r.testChunk("ZIGSAW_TEST_UPLOAD_BREAK");
+    const skip_at = r.testChunk("ZIGSAW_TEST_UPLOAD_SKIP");
+    const lose_at = r.testChunk("ZIGSAW_TEST_UPLOAD_LOSE");
     var at = location;
     var offset: u64 = 0;
     var chunks: u32 = 0;
     var resumes: u32 = 0;
-    while (offset < desc.size) {
-        const length = @min(chunk, desc.size - offset);
-        chunks += 1;
-        const res = r.send(.{
-            .method = .PATCH,
-            .url = try r.absoluteUrl(at),
-            .body = .{ .file = .{ .path = path, .offset = offset, .size = length, .break_halfway = break_at == chunks } },
-            .content_type = "application/octet-stream",
-            .content_range = try std.fmt.allocPrint(arena, "{d}-{d}", .{ offset, offset + length - 1 }),
-            .resumable = true,
-        }) catch |err| switch (err) {
-            error.Broken => {
-                at = try r.resumeUpload(at, desc, &offset, &resumes);
-                continue;
-            },
-            else => |e| return e,
-        };
-        switch (res.status) {
-            .accepted => {
-                at = res.location orelse at;
-                offset = if (res.range) |range| nextOffset(range) orelse offset + length else offset + length;
-            },
-            .unauthorized, .forbidden => return r.failStatus(res, "uploading a blob"),
-            .payload_too_large => return fail("{s} refused a chunk of {d} bytes as too large; set {s} to fewer bytes", .{ r.ref.host, length, chunk_size_var }),
-            .range_not_satisfiable => at = try r.resumeUpload(at, desc, &offset, &resumes),
-            else => {
-                if (offset == 0) return error.ChunksRefused;
-                if (res.status.class() != .server_error) return r.failStatus(res, "uploading a blob");
-                at = try r.resumeUpload(at, desc, &offset, &resumes);
-            },
+    // Whether an upload of the blob broke off: one the registry then loses
+    // goes again in chunks.
+    var broke = false;
+    while (true) {
+        while (offset < desc.size) {
+            const length = @min(chunk, desc.size - offset);
+            chunks += 1;
+            const claimed = if (skip_at == chunks) offset + 1 else offset;
+            const res = r.send(.{
+                .method = .PATCH,
+                .url = try r.absoluteUrl(if (lose_at == chunks) try lostUrl(arena, at) else at),
+                .body = .{ .file = .{ .path = path, .offset = offset, .size = length, .break_halfway = break_at == chunks } },
+                .content_type = "application/octet-stream",
+                .content_range = try std.fmt.allocPrint(arena, "{d}-{d}", .{ claimed, claimed + length - 1 }),
+                .resumable = true,
+            }) catch |err| switch (err) {
+                error.Broken => {
+                    broke = true;
+                    at = try r.resumeUpload(at, desc, &offset, &resumes, .{ .broke = r.broken.? });
+                    continue;
+                },
+                else => |e| return e,
+            };
+            if (r.ctx.verbose) Context.note("  chunk {d} of {s} ({d} bytes from {d}): HTTP {d}, Range {s}", .{
+                chunks, oci.shortDigest(desc.digest), length, offset, @intFromEnum(res.status), res.range orelse "none",
+            });
+            switch (res.status) {
+                .accepted => {
+                    at = res.location orelse at;
+                    offset = if (res.range) |range| nextOffset(range) orelse offset + length else offset + length;
+                },
+                .unauthorized, .forbidden => return r.failStatus(res, "uploading a blob"),
+                .payload_too_large => return fail("{s} refused a chunk of {d} bytes as too large; set {s} to fewer bytes", .{ r.ref.host, length, chunk_size_var }),
+                .not_found => at = try r.lostUpload(desc, &offset, &resumes, broke),
+                else => {
+                    if (offset == 0) return error.ChunksRefused;
+                    if (res.status != .range_not_satisfiable and res.status.class() != .server_error) return r.failStatus(res, "uploading a blob");
+                    at = try r.resumeUpload(at, desc, &offset, &resumes, .{ .answered = res.status });
+                },
+            }
         }
+        const res = try r.send(.{ .method = .PUT, .url = try r.withDigest(at, desc.digest) });
+        if (res.status == .created) return chunks;
+        if (res.status != .not_found) return r.failStatus(res, "uploading a blob");
+        at = try r.lostUpload(desc, &offset, &resumes, broke);
     }
-    const res = try r.send(.{ .method = .PUT, .url = try r.withDigest(at, desc.digest) });
-    if (res.status != .created) return r.failStatus(res, "uploading a blob");
-    return chunks;
 }
 
-/// After a chunk broke off: asks the registry how much of the blob it has,
-/// for the upload to go on from there. Gives up the fourth time.
-fn resumeUpload(r: *Registry, at: []const u8, desc: oci.Descriptor, offset: *u64, resumes: *u32) ![]const u8 {
+/// After the registry lost the upload (HTTP 404 for it). Zot drops one that
+/// broke off a moment after it may still have said how much it had: then
+/// the blob goes again, from the start, in a fresh one (a resume). A
+/// registry that loses one that didn't break off doesn't keep uploads in
+/// chunks: error.ChunksRefused, for one request.
+fn lostUpload(r: *Registry, desc: oci.Descriptor, offset: *u64, resumes: *u32, broke: bool) ![]const u8 {
+    const short = oci.shortDigest(desc.digest);
+    if (!broke) {
+        Context.note("{s} lost the upload of {s} at {d} of {d} bytes (HTTP 404); uploading it in one request", .{ r.ref.host, short, offset.*, desc.size });
+        return error.ChunksRefused;
+    }
     resumes.* += 1;
-    const why = if (r.broken) |err| @errorName(err) else "the registry failed";
-    if (resumes.* > 3) return fail("uploading {s} to {f} broke off {d} times ({s}); giving up", .{ desc.digest, r.ref, resumes.* - 1, why });
+    if (resumes.* > 3) return fail("uploading {s} to {f} failed {d} times (the registry lost the upload); giving up", .{ desc.digest, r.ref, resumes.* - 1 });
+    Context.note("{s} lost the upload of {s}, which broke off, at {d} of {d} bytes (HTTP 404); starting it again", .{ r.ref.host, short, offset.*, desc.size });
+    offset.* = 0;
+    return r.freshUpload(desc);
+}
+
+fn freshUpload(r: *Registry, desc: oci.Descriptor) ![]const u8 {
+    return switch (try r.startUpload(desc.digest, null)) {
+        .started => |s| s.location,
+        .mounted => unreachable, // Only when asked to mount.
+    };
+}
+
+/// The chunk, counting from 1, that a test hook names.
+fn testChunk(r: *Registry, name: []const u8) ?u32 {
+    return std.fmt.parseInt(u32, r.ctx.env.get(name) orelse return null, 10) catch null;
+}
+
+/// After a chunk broke off or failed: asks the registry how much of the blob
+/// it has, for the upload to go on from there. Gives up the fourth time.
+fn resumeUpload(r: *Registry, at: []const u8, desc: oci.Descriptor, offset: *u64, resumes: *u32, failure: ChunkFailure) ![]const u8 {
+    const arena = r.ctx.arena;
+    const short = oci.shortDigest(desc.digest);
+    resumes.* += 1;
+    const why = switch (failure) {
+        .broke => |err| @errorName(err),
+        .answered => |status| try std.fmt.allocPrint(arena, "HTTP {d}", .{@intFromEnum(status)}),
+    };
+    if (resumes.* > 3) return fail("uploading {s} to {f} failed {d} times ({s}); giving up", .{ desc.digest, r.ref, resumes.* - 1, why });
     // The registry may still be busy with the request that broke off (zot
     // fails the question until it has dropped the upload, then doesn't
     // know it).
     var waited: u32 = 0;
     const res = while (true) : (waited += 500) {
-        const res = try r.send(.{ .method = .GET, .url = try r.absoluteUrl(at) });
+        // For tests: ZIGSAW_TEST_UPLOAD_LOST asks as a registry that has lost
+        // track of the upload is asked.
+        const asked = if (r.ctx.env.get("ZIGSAW_TEST_UPLOAD_LOST") != null) try lostUrl(arena, at) else at;
+        const res = try r.send(.{ .method = .GET, .url = try r.absoluteUrl(asked) });
         if (res.status.class() != .server_error or waited >= 2000) break res;
-        if (r.ctx.verbose) Context.note("  asking {s} how much of {s} it has: HTTP {d}", .{ r.ref.host, oci.shortDigest(desc.digest), @intFromEnum(res.status) });
+        if (r.ctx.verbose) Context.note("  asking {s} how much of {s} it has: HTTP {d}", .{ r.ref.host, short, @intFromEnum(res.status) });
         win32.Sleep(500);
     };
-    if (res.status != .no_content) {
-        // It can't say how much it has: the blob goes again, from the start.
-        Context.note("upload of {s} broke off ({s}), and {s} can't say how much of it it has (HTTP {d}); starting it again", .{
-            oci.shortDigest(desc.digest), why, r.ref.host, @intFromEnum(res.status),
-        });
-        offset.* = 0;
-        return switch (try r.startUpload(desc.digest, null)) {
-            .started => |s| s.location,
-            .mounted => unreachable, // Only when asked to mount.
-        };
-    }
+    if (res.status != .no_content) switch (failure) {
+        // It took a chunk badly and doesn't know the upload: it doesn't take
+        // blobs in chunks after all.
+        .answered => {
+            Context.note("{s} failed a chunk of {s} ({s}) and can't say how much of it it has (HTTP {d}); uploading it in one request", .{
+                r.ref.host, short, why, @intFromEnum(res.status),
+            });
+            return error.ChunksRefused;
+        },
+        // It lost the upload that broke off: the blob goes again, from the
+        // start.
+        .broke => {
+            Context.note("upload of {s} broke off ({s}), and {s} can't say how much of it it has (HTTP {d}); starting it again", .{
+                short, why, r.ref.host, @intFromEnum(res.status),
+            });
+            offset.* = 0;
+            return r.freshUpload(desc);
+        },
+    };
     offset.* = if (res.range) |range| nextOffset(range) orelse 0 else 0;
-    Context.note("upload of {s} broke off ({s}) at {d} of {d} bytes; resuming", .{ oci.shortDigest(desc.digest), why, offset.*, desc.size });
+    const what = switch (failure) {
+        .broke => "broke off",
+        .answered => "failed",
+    };
+    Context.note("upload of {s} {s} ({s}) at {d} of {d} bytes; resuming", .{ short, what, why, offset.*, desc.size });
     return res.location orelse at;
+}
+
+/// For tests: an upload's location changed into one the registry doesn't
+/// know, which it answers as one it has lost track of.
+fn lostUrl(arena: Allocator, at: []const u8) ![]const u8 {
+    const end = std.mem.indexOfScalar(u8, at, '?') orelse at.len;
+    return std.mem.concat(arena, u8, &.{ at[0..end], "-lost", at[end..] });
 }
 
 /// Where an upload goes on from, by the Range header the registry answers

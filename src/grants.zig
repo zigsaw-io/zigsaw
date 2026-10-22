@@ -109,7 +109,7 @@ pub fn settle(ctx: *Context, id: []const u8) !void {
                 error.Failed => {}, // Reported; what the app needs is there.
                 else => |e| return e,
             };
-        } else if (!try undo(ctx, id, g, sids)) try kept.append(arena, g);
+        } else if (!try undo(ctx, id, g, sids, ctx.verbose)) try kept.append(arena, g);
     }
     var kept_cwds: std.ArrayList([]const u8) = .empty;
     for (cwds) |p| for (kept.items) |g| {
@@ -132,7 +132,7 @@ pub fn undoAll(ctx: *Context, id: []const u8) !void {
         const sids: Sids = try .of(arena, id);
         for (recorded) |g| {
             if (!try Store.exists(ctx.io, g.path)) continue;
-            _ = try undo(ctx, id, g, sids);
+            _ = try undo(ctx, id, g, sids, true);
         }
     }
     try ctx.store.deleteGrants(arena, id);
@@ -155,8 +155,9 @@ const Sids = struct {
 };
 
 /// Takes back one change. False if that failed (and was reported), so it
-/// stays recorded, to be tried again.
-fn undo(ctx: *Context, id: []const u8, g: Store.Grant, sids: Sids) !bool {
+/// stays recorded, to be tried again. A label other apps need stays, which
+/// is told only when `tell_kept`: `rm` asked for it to go, a run's end didn't.
+fn undo(ctx: *Context, id: []const u8, g: Store.Grant, sids: Sids, tell_kept: bool) !bool {
     const arena = ctx.arena;
     const start = Io.Timestamp.now(ctx.io, .awake);
     switch (g.kind) {
@@ -170,7 +171,7 @@ fn undo(ctx: *Context, id: []const u8, g: Store.Grant, sids: Sids) !bool {
         },
         .low => {
             if (try ctx.store.grantedToOthers(arena, id, g)) {
-                note("kept the low integrity label of {s}, which other apps' runs need", .{g.path});
+                if (tell_kept) note("kept the low integrity label of {s}, which other apps' runs need", .{g.path});
                 return true;
             }
             const label = acl.ownLabel(arena, g.path) catch |err| switch (err) {

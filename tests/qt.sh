@@ -5,7 +5,8 @@
 # runtime's deployment (it's relocatable), has the SVG, WebP and TIFF image
 # plugins and Schannel for TLS, and keeps an app's files in its data
 # directory. A Qt Quick program of the same app draws a window of Controls
-# with Direct3D 11 in each sandbox, with Qt's QML modules from the runtime.
+# with Direct3D 11 in each sandbox, with Qt's QML modules from the runtime,
+# which has the Controls styles it should.
 # The SDK's exports build a Qt program without a recipe (CMake, finding Qt
 # through the SDK's CMAKE_PREFIX_PATH). The runtime's qml tool runs a QML
 # file; its Designer and Linguist open their windows in each sandbox (its
@@ -144,6 +145,20 @@ quick_imports() {
     test -f "$qml/QtQuick/Controls/qmldir" || { echo "no QtQuick/Controls in $qml"; return 1; }
 }
 check "Qt finds QML modules in the runtime's deployment" quick_imports
+# The Controls styles Windows uses (Basic, and Fusion, FluentWinUI3 and
+# Windows on it) are there, and those apps choose that Notes does (Material,
+# Universal); the SDK leaves out Imagine and Qt Labs StyleKit.
+styles() {
+    local qml s
+    qml=$(timeout 60 "$zigsaw" run --command=hello-quick $APP 2>&1 | tr -d '\r' | sed -n 's/^qml //p')
+    for s in Basic Fusion FluentWinUI3 Windows Material Universal; do
+        test -f "$qml/QtQuick/Controls/$s/qmldir" || { echo "no $s style in $qml"; return 1; }
+    done
+    for s in QtQuick/Controls/Imagine Qt/labs/StyleKit; do
+        test ! -e "$qml/$s" || { echo "$qml/$s is there"; return 1; }
+    done
+}
+check "it has the Controls styles for Windows, and Material and Universal, but not Imagine or StyleKit" styles
 # The runtime's qml tool runs a QML file. Its console.log goes to stderr
 # only when Qt is told to (it isn't a console program).
 printf '%s\n' 'import QtQuick' 'Window {' '    visible: true' \
