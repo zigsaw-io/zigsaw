@@ -87,7 +87,9 @@ zigsaw build [--rebuild] [--clean] [--keep-build-dir] [<recipe.json> | <dir>]
                                        without the work directories its last build left
 zigsaw search [<words>...]             find apps in the default registry's catalog
 zigsaw info <image>                    show what an app in a registry is, needs and may reach
-zigsaw pull <image>                    install an app and its commands from a registry
+zigsaw pull [--yes] <image>            install an app and its commands from a registry, once
+                                       you agree to what it may reach; --yes agrees without
+                                       asking
 zigsaw push [--sources] <app-id> [<image>]
                                        publish an installed app to a registry; --sources
                                        also pushes the files it was built from
@@ -98,7 +100,9 @@ zigsaw logout <registry>               delete a registry's saved login
 zigsaw run [options] <app-id> [args]   run an installed app
 zigsaw list                            list installed apps, their commands and shortcuts,
                                        and the kinds of file they open
-zigsaw update [<app-id>...]            rebuild or re-pull apps from where they came from
+zigsaw update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
+                                       one pulled again that may reach more asks first,
+                                       unless given --yes
 zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
 zigsaw prune [--dry-run] [--downloads] [--data]
                                        delete what no installed app needs
@@ -215,8 +219,29 @@ so `zigsaw update` keeps using it.
 The manifest travels byte for byte, so an image has the same digest in every
 store and registry. `pull` downloads only blobs the store doesn't have, checks
 each one against its digest, and refuses images that aren't zigsaw apps
-(such as Docker container images). It says what the app is and may reach
-before it downloads it, as `build` does once it has built it.
+(such as Docker container images). An image's layers, its runtimes' among
+them, download several at a time.
+
+Before it downloads an app's layers, `pull` says what the app is, what it
+brings and what it may reach, as `info` does, and asks:
+
+```
+test.example.notes 1.2: Notes
+  A notebook
+  download   12.4MiB
+  commands   notes
+  opens      .note
+  permits    the network; your Documents
+Install it? [Y/n]
+```
+
+Without a console to ask on, the answer is the next line on stdin
+(`echo y | zigsaw pull ...`), and nothing there means no: scripts and CI add
+`--yes`, which agrees without asking. A pull over an installed version of the
+app, and `zigsaw update`, ask only when the new version may reach more: the
+network where it couldn't, a location it couldn't use, or could only read, or
+a registry key it didn't keep; and then say only what's new. `build` doesn't
+ask: the recipe is yours, and so are the images it pins.
 
 A reference may name a multi-platform index, as tools built for several
 platforms publish: then `pull`, `update` and `info` take the index's image
@@ -312,8 +337,10 @@ used.
 with where it came from. An app built from a recipe is rebuilt from that
 recipe file, so editing the recipe and running `update` installs the new
 version. An app pulled by tag is pulled again if the tag now points at a
-different image; only the manifest is fetched when it doesn't. An app pulled
-by digest is pinned and left alone.
+different image; only the manifest is fetched when it doesn't. If the new
+image may reach more than the installed one, `update` asks first, as `pull`
+does, unless given `--yes`; an app you don't agree to stays as it is, and
+`update` exits with 1. An app pulled by digest is pinned and left alone.
 
 Installing a new version deletes the files of the one it replaces, unless
 that version is still running. `zigsaw prune` deletes everything else no

@@ -30,7 +30,9 @@ Modules go into the app's files in order, so a later one can overlay an
 earlier one. Sources are either a `url` (a `sha256` is required; leave it out
 once and the build error prints the hash to pin), a local `path` (a file,
 or a directory, such as a project's own: see [projects](#projects)), or
-another `image` (see [images as sources](#images-as-sources)). A source
+another `image` (see [images as sources](#images-as-sources)). Every URL the
+store's download cache doesn't have is downloaded before anything else, eight
+at a time; after a download fails, no further one starts. A source
 is a single `file`, or an archive (`zip`, `tar`, `tar.gz`/`tgz` or `tar.xz`)
 extracted into `dest` with optional `strip`. The type is inferred from the
 file name, or given as `type` for a URL that doesn't end in one. A link in a

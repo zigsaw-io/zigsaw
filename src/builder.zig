@@ -184,12 +184,14 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
     var tree: Tree = undefined;
     var root: ?BuildRoot = null;
     defer if (root) |*b| b.finish(ctx, opts.keep_build_dir);
+    // Every download first, several at a time, so a missing or wrong hash
+    // fails the build before anything is built.
+    var downloads: std.ArrayList(recipe.Source) = .empty;
+    for (r.modules) |m| for (m.sources, 0..) |src, i| {
+        if (src.image == null and projects.get(m.name, i) == null) try downloads.append(arena, src);
+    };
+    try sources.fetcher.fetchAll(downloads.items);
     if (building) {
-        // Every download first, so a missing or wrong hash fails the build
-        // before anything is built.
-        for (r.modules) |m| for (m.sources, 0..) |src, i| {
-            if (src.image == null and projects.get(m.name, i) == null) _ = try sources.fetcher.fetch(src);
-        };
         root = try .init(ctx, r, tools.list.items);
         root.?.work = work;
         if (root.?.msvc) |tc| {

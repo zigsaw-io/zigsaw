@@ -9,12 +9,15 @@
 //! for Windows on x64 (see `resolveImage`).
 
 const std = @import("std");
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Registry = @import("Registry.zig");
 const Store = @import("Store.zig");
+const info = @import("info.zig");
 const install = @import("install.zig");
 const oci = @import("oci.zig");
+const prompt = @import("prompt.zig");
 const fail = Context.fail;
 const note = Context.note;
 
@@ -64,9 +67,22 @@ pub const FetchOptions = struct {
     /// The manifest digest already installed: if the image still has it,
     /// `fetch` returns null without downloading any blob.
     unless: ?[]const u8 = null,
-    /// What the installed version may reach, for `update`: then only a
-    /// change to that is told.
-    installed: ?oci.Permissions = null,
+    /// The version installed, for `update` and a `pull` over it: then only
+    /// what the image may reach beyond it is told, and asked about.
+    installed: ?Installed = null,
+    /// Whether to ask before downloading the layers.
+    consent: Consent = .not_asked,
+
+    pub const Installed = struct { version: []const u8, access: oci.Access };
+};
+
+pub const Consent = enum {
+    /// What a build pulls: the images its recipe pins.
+    not_asked,
+    /// `pull` and `update`.
+    ask,
+    /// `--yes`: told, not asked.
+    given,
 };
 
 /// Downloads an image into the store, ready to install. `zigsaw pull` is this
@@ -95,10 +111,16 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
     if (target.app_id) |id| if (!std.ascii.eqlIgnoreCase(id, config.id))
         return fail("{f} holds {s}, not {s}", .{ ref, config.id, id });
     // What it is and may reach, before any layer is downloaded, so that
-    // nobody installs an app without seeing it.
-    try describe(ctx, config, opts.installed);
+    // nobody installs an app without seeing it, or agreeing to it. A pull
+    // over an installed version asks only about what's new, as `update`.
+    var told = opts;
+    if (told.installed == null and told.consent != .not_asked) if (try ctx.store.readRef(arena, config.id)) |r| {
+        const installed = try ctx.store.readImage(arena, r.id, r.manifest);
+        told.installed = .{ .version = r.version, .access = .of(installed.config) };
+    };
+    try agree(ctx, manifest, config, told);
 
-    for (manifest.layers) |desc| try downloadBlob(ctx, &registry, desc);
+    try downloadBlobs(ctx, &registry, manifest.layers);
     const manifest_desc = try ctx.store.putBlob(arena, fetched.bytes, oci.media_type.manifest);
     return .{
         .manifest_digest = manifest_desc.digest,
@@ -140,21 +162,98 @@ pub fn fetchInfo(ctx: *Context, image_text: []const u8) !Info {
     return .{ .target = target, .manifest_digest = fetched.digest, .index = fetched.index, .manifest = manifest, .config = config };
 }
 
-/// Tells what an app about to be installed is, and what it may reach; for an
-/// update, only whether what it may reach changed.
-fn describe(ctx: *Context, cfg: oci.AppConfig, installed: ?oci.Permissions) !void {
+/// Tells what an app about to be installed is and may reach, and asks
+/// whether to go on; for an update, only what it may reach beyond the
+/// installed version, if anything, and asks only then.
+fn agree(ctx: *Context, manifest: oci.Manifest, cfg: oci.AppConfig, opts: FetchOptions) !void {
     const arena = ctx.arena;
-    const permits = try oci.describePermissions(arena, cfg.permissions);
-    if (installed) |before| {
-        const was = try oci.describePermissions(arena, before);
-        if (!std.mem.eql(u8, permits, was)) note("{s} {s} now permits {s}; it permitted {s}", .{ cfg.id, cfg.version, permits, was });
+    var out: Io.Writer.Allocating = .init(arena);
+    const w = &out.writer;
+    if (opts.installed) |before| {
+        const added = try oci.addedAccess(arena, before.access, .of(cfg));
+        if (added.isEmpty()) {
+            const permits = try oci.describePermissions(arena, cfg.permissions);
+            const was = try oci.describePermissions(arena, before.access.permissions);
+            if (!std.mem.eql(u8, permits, was)) note("{s} {s} now permits {s}; it permitted {s}", .{ cfg.id, cfg.version, permits, was });
+            return;
+        }
+        try w.print("{s} {s} may reach more than {s}:\n", .{ cfg.id, cfg.version, before.version });
+        if (added.permissions.network or added.permissions.filesystem.len > 0)
+            try info.writeLine(w, "permits", try oci.describePermissions(arena, added.permissions));
+        if (added.registry.len > 0)
+            try info.writeLine(w, "keeps", try std.fmt.allocPrint(arena, "{s} with its data", .{try oci.describeRegistry(arena, added.registry)}));
+    } else {
+        try info.writeName(w, cfg);
+        try info.writeContents(ctx, w, manifest, cfg);
+    }
+    Context.printStderr("{s}", .{out.written()});
+    if (opts.consent != .ask) return;
+
+    const what = if (opts.installed != null) "updated" else "installed";
+    switch (try prompt.askYesNo(ctx, if (opts.installed != null) "Update it?" else "Install it?")) {
+        .yes => {},
+        .no => return fail("{s} {s} wasn't {s}", .{ cfg.id, cfg.version, what }),
+        .none => return fail("{s} {s} wasn't {s}: nothing answered whether to go on. Run it at a console, or add --yes", .{ cfg.id, cfg.version, what }),
+    }
+}
+
+/// Downloads the blobs the store doesn't have, several at a time: an app's
+/// runtimes are layers of its image. Each worker speaks to the registry with
+/// its own connection and the token `registry` has already.
+fn downloadBlobs(ctx: *Context, registry: *Registry, descs: []const oci.Descriptor) !void {
+    const arena = ctx.arena;
+    var missing: std.ArrayList(oci.Descriptor) = .empty;
+    for (descs) |desc| {
+        const hex = oci.digestHex(desc.digest) orelse return fail("{f}: malformed digest {s}", .{ registry.ref, desc.digest });
+        if (!try Store.exists(ctx.io, try ctx.store.blobPath(arena, hex))) try missing.append(arena, desc);
+    }
+    if (missing.items.len <= 1) {
+        for (missing.items) |desc| try downloadBlob(ctx, registry, desc);
         return;
     }
-    if (cfg.name) |name| note("{s} {s}: {s}", .{ cfg.id, cfg.version, name }) else note("{s} {s}", .{ cfg.id, cfg.version });
-    if (cfg.summary) |s| note("  {s}", .{s});
-    note("  permits  {s}", .{permits});
-    if (cfg.registry) |keys| note("  keeps    {s} with its data", .{try oci.describeRegistry(arena, keys)});
+
+    var next: std.atomic.Value(usize) = .init(0);
+    const workers = try arena.alloc(BlobWorker, @min(missing.items.len, max_blob_workers));
+    var ready: usize = 0;
+    defer for (workers[0..ready]) |*w| w.registry.deinit();
+    for (workers) |*w| {
+        w.* = .{ .ctx = ctx, .registry = undefined, .descs = missing.items, .next = &next };
+        try w.registry.init(ctx, registry.ref, registry.actions);
+        ready += 1;
+        w.registry.pull_from = registry.pull_from;
+        w.registry.authorization = registry.authorization;
+        w.registry.credential = registry.credential;
+        w.registry.looked_up = registry.looked_up;
+    }
+    var group: Io.Group = .init;
+    for (workers) |*w| group.concurrent(ctx.io, BlobWorker.run, .{w}) catch w.run();
+    group.await(ctx.io) catch |err| return err;
+    for (workers) |w| if (w.err) |err| if (err == error.Failed) return error.Failed;
+    for (workers) |w| if (w.err) |err| return err;
 }
+
+const max_blob_workers = 4;
+
+const BlobWorker = struct {
+    ctx: *Context,
+    registry: Registry,
+    descs: []const oci.Descriptor,
+    /// Index of the next blob to take, shared by all workers.
+    next: *std.atomic.Value(usize),
+    err: ?anyerror = null,
+
+    fn run(w: *BlobWorker) void {
+        while (true) {
+            const i = w.next.fetchAdd(1, .monotonic);
+            if (i >= w.descs.len) return;
+            downloadBlob(w.ctx, &w.registry, w.descs[i]) catch |err| {
+                w.err = err;
+                _ = w.next.swap(w.descs.len, .monotonic);
+                return;
+            };
+        }
+    }
+};
 
 /// Downloads a blob into the store, unless it's there already.
 fn downloadBlob(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !void {

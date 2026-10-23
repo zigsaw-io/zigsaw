@@ -44,7 +44,7 @@ for recipe in "$@"; do
     elif [ $mode = build ]; then
         build "$recipe"
         echo "built   $id $version"
-    elif "$zigsaw" pull "$id:$version" >"$log" 2>&1; then
+    elif "$zigsaw" pull --yes "$id:$version" >"$log" 2>&1; then
         echo "pulled  $id $version"
     elif grep -qE "not found|doesn't exist, or needs credentials" "$log"; then
         # As tests/published.sh tells a version that isn't published yet.

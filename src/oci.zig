@@ -649,6 +649,94 @@ pub fn joinAnd(arena: std.mem.Allocator, items: []const []const u8) ![]const u8 
     return std.fmt.allocPrint(arena, "{s} and {s}", .{ try std.mem.join(arena, ", ", items[0 .. items.len - 1]), items[items.len - 1] });
 }
 
+/// What an app reaches outside its own files: its permissions, and the HKCU
+/// keys it keeps, which its runs write into the user's registry.
+pub const Access = struct {
+    permissions: Permissions = .{},
+    registry: []const []const u8 = &.{},
+
+    pub fn of(cfg: AppConfig) Access {
+        return .{ .permissions = cfg.permissions, .registry = cfg.registry orelse &.{} };
+    }
+
+    pub fn isEmpty(a: Access) bool {
+        return !a.permissions.network and a.permissions.filesystem.len == 0 and a.registry.len == 0;
+    }
+};
+
+/// What `after` lets an app reach that `before` didn't, which an update asks
+/// about: the network, a location it couldn't use, or could only read, and a
+/// key it didn't keep. A location or key inside one it had counts as had.
+pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Access {
+    var filesystem: std.ArrayList([]const u8) = .empty;
+    for (after.permissions.filesystem) |spec| {
+        const want = parseFsGrant(spec) orelse continue;
+        const had = for (before.permissions.filesystem) |b| {
+            const g = parseFsGrant(b) orelse continue;
+            if ((want.read_only or !g.read_only) and covers(g.where, want.where)) break true;
+        } else false;
+        if (!had) try filesystem.append(arena, spec);
+    }
+    var keys: std.ArrayList([]const u8) = .empty;
+    for (after.registry) |key| {
+        const had = for (before.registry) |b| {
+            if (isWithin(key, b)) break true;
+        } else false;
+        if (!had) try keys.append(arena, key);
+    }
+    return .{
+        .permissions = .{ .network = after.permissions.network and !before.permissions.network, .filesystem = filesystem.items },
+        .registry = keys.items,
+    };
+}
+
+fn covers(had: FsGrant.Where, want: FsGrant.Where) bool {
+    return switch (want) {
+        .cwd => had == .cwd,
+        .folder => |f| had == .folder and had.folder == f,
+        .path => |p| had == .path and isWithin(p, had.path),
+        .unknown => |name| had == .unknown and std.mem.eql(u8, had.unknown, name),
+    };
+}
+
+/// Whether `path` is `dir` or inside it, ignoring case and a trailing
+/// separator. For paths and registry keys.
+fn isWithin(path: []const u8, dir: []const u8) bool {
+    const p = std.mem.trimEnd(u8, path, "\\/");
+    const d = std.mem.trimEnd(u8, dir, "\\/");
+    if (p.len < d.len or !std.ascii.eqlIgnoreCase(p[0..d.len], d)) return false;
+    return p.len == d.len or p[d.len] == '\\' or p[d.len] == '/';
+}
+
+test addedAccess {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before: Access = .{
+        .permissions = .{ .filesystem = &.{ "cwd", "documents:ro", "C:\\Data\\", "C:\\Logs:ro" } },
+        .registry = &.{"Software\\7-Zip"},
+    };
+    // The same, in another order and spelling, and less: nothing added.
+    try std.testing.expect((try addedAccess(arena, before, .{
+        .permissions = .{ .filesystem = &.{ "c:\\data\\sub", "documents:ro", "cwd:rw" } },
+        .registry = &.{"software\\7-zip\\FM"},
+    })).isEmpty());
+    try std.testing.expect((try addedAccess(arena, before, .{})).isEmpty());
+
+    const added = try addedAccess(arena, before, .{
+        .permissions = .{ .network = true, .filesystem = &.{ "cwd", "documents", "downloads:ro", "C:\\Logs", "C:\\Database" } },
+        .registry = &.{ "Software\\7-Zip", "Software\\Other" },
+    });
+    try std.testing.expect(added.permissions.network);
+    try std.testing.expectEqual(4, added.permissions.filesystem.len);
+    try std.testing.expectEqualStrings("documents", added.permissions.filesystem[0]);
+    try std.testing.expectEqualStrings("downloads:ro", added.permissions.filesystem[1]);
+    try std.testing.expectEqualStrings("C:\\Logs", added.permissions.filesystem[2]);
+    try std.testing.expectEqualStrings("C:\\Database", added.permissions.filesystem[3]);
+    try std.testing.expectEqual(1, added.registry.len);
+    try std.testing.expectEqualStrings("Software\\Other", added.registry[0]);
+}
+
 test describePermissions {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();

@@ -16,28 +16,45 @@ pub fn info(ctx: *Context, image_text: []const u8) !void {
     var buf: [4096]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;
+    try writeName(w, cfg);
+    try writeLine(w, "homepage", cfg.homepage orelse "");
+    try writeLine(w, "license", cfg.license orelse "");
+    try writeLine(w, "image", app.target.text);
+    try writeLine(w, "manifest", app.manifest_digest);
+    if (app.index) |index| try writeLine(w, "index", try std.fmt.allocPrint(arena, "{s}, as its image for windows/amd64", .{index}));
+    try writeContents(ctx, w, app.manifest, cfg);
+    if (cfg.build) |b| try writeLine(w, "built", try describeBuild(arena, b));
+    const installed = try ctx.store.readRef(arena, cfg.id);
+    try writeLine(w, "installed", if (installed) |ref|
+        if (std.mem.eql(u8, ref.manifest, app.manifest_digest))
+            try std.fmt.allocPrint(arena, "{s}, this image", .{ref.version})
+        else
+            try std.fmt.allocPrint(arena, "{s} ({s})", .{ ref.version, oci.shortDigest(ref.manifest) })
+    else
+        "no");
+    try w.flush();
+}
+
+/// What the app is: the first lines of `info`, and of what `pull` shows
+/// before it asks.
+pub fn writeName(w: *Io.Writer, cfg: oci.AppConfig) !void {
     if (cfg.name) |n| try w.print("{s} {s}: {s}\n", .{ cfg.id, cfg.version, n }) else try w.print("{s} {s}\n", .{ cfg.id, cfg.version });
     if (cfg.summary) |s| try w.print("  {s}\n", .{s});
-    const line = struct {
-        fn f(out: *Io.Writer, label: []const u8, value: []const u8) !void {
-            if (value.len > 0) try out.print("  {s:<10} {s}\n", .{ label, value });
-        }
-    }.f;
-    try line(w, "homepage", cfg.homepage orelse "");
-    try line(w, "license", cfg.license orelse "");
-    try line(w, "image", app.target.text);
-    try line(w, "manifest", app.manifest_digest);
-    if (app.index) |index| try line(w, "index", try std.fmt.allocPrint(arena, "{s}, as its image for windows/amd64", .{index}));
+}
 
+/// What pulling the image downloads, and what the app brings and may reach,
+/// as `info` and `pull` show it.
+pub fn writeContents(ctx: *Context, w: *Io.Writer, manifest: oci.Manifest, cfg: oci.AppConfig) !void {
+    const arena = ctx.arena;
     // What pulling it downloads, and how much of that the store has already
     // (a runtime another app has, say).
-    var total: u64 = app.manifest.config.size;
+    var total: u64 = manifest.config.size;
     var missing: u64 = 0;
-    for (app.manifest.layers) |l| {
+    for (manifest.layers) |l| {
         total += l.size;
         if (!try Store.exists(ctx.io, try ctx.store.blobPath(arena, oci.digestHex(l.digest).?))) missing += l.size;
     }
-    try line(w, "download", if (missing == total - app.manifest.config.size)
+    try writeLine(w, "download", if (missing == total - manifest.config.size)
         try std.fmt.allocPrint(arena, "{Bi:.1}", .{total})
     else if (missing == 0)
         try std.fmt.allocPrint(arena, "{Bi:.1}, all in the store already", .{total})
@@ -46,37 +63,37 @@ pub fn info(ctx: *Context, image_text: []const u8) !void {
 
     var runtimes: std.ArrayList([]const u8) = .empty;
     for (cfg.runtimes.map.values()) |r| try runtimes.append(arena, try std.fmt.allocPrint(arena, "{s} {s}", .{ r.id, r.version }));
-    try line(w, "runtimes", try std.mem.join(arena, ", ", runtimes.items));
+    try writeLine(w, "runtimes", try std.mem.join(arena, ", ", runtimes.items));
     if (cfg.extensions) |e| {
         var pts: std.ArrayList([]const u8) = .empty;
         for (e.map.keys(), e.map.values()) |name, p| try pts.append(arena, try std.fmt.allocPrint(arena, "{s} {s}", .{ name, p.version }));
-        try line(w, "points", try std.fmt.allocPrint(arena, "{s} (installed extensions of it join its runs)", .{try std.mem.join(arena, ", ", pts.items)}));
+        try writeLine(w, "points", try std.fmt.allocPrint(arena, "{s} (installed extensions of it join its runs)", .{try std.mem.join(arena, ", ", pts.items)}));
     }
-    if (cfg.extends) |x| try line(w, "extends", try std.fmt.allocPrint(arena, "{s} {s}{s}{s}", .{
+    if (cfg.extends) |x| try writeLine(w, "extends", try std.fmt.allocPrint(arena, "{s} {s}{s}{s}", .{
         x.point,
         x.version,
         if (x.needs != null) ", after " else "",
         if (x.needs) |n| try oci.joinAnd(arena, n) else "",
     }));
-    try line(w, "commands", try std.mem.join(arena, ", ", cfg.exports.map.keys()));
+    try writeLine(w, "commands", try std.mem.join(arena, ", ", cfg.exports.map.keys()));
     if (cfg.shortcuts) |s| {
         var names: std.ArrayList([]const u8) = .empty;
         for (s.map.keys()) |n| try names.append(arena, try std.fmt.allocPrint(arena, "\"{s}\"", .{n}));
-        try line(w, "shortcuts", try std.mem.join(arena, ", ", names.items));
+        try writeLine(w, "shortcuts", try std.mem.join(arena, ", ", names.items));
     }
-    if (cfg.associations) |a| try line(w, "opens", try std.mem.join(arena, ", ", a.map.keys()));
-    try line(w, "permits", try oci.describePermissions(arena, cfg.permissions));
-    if (cfg.registry) |keys| try line(w, "keeps", try std.fmt.allocPrint(arena, "{s} with its data", .{try oci.describeRegistry(arena, keys)}));
-    if (cfg.build) |b| try line(w, "built", try describeBuild(arena, b));
-    const installed = try ctx.store.readRef(arena, cfg.id);
-    try line(w, "installed", if (installed) |ref|
-        if (std.mem.eql(u8, ref.manifest, app.manifest_digest))
-            try std.fmt.allocPrint(arena, "{s}, this image", .{ref.version})
-        else
-            try std.fmt.allocPrint(arena, "{s} ({s})", .{ ref.version, oci.shortDigest(ref.manifest) })
-    else
-        "no");
-    try w.flush();
+    if (cfg.associations) |a| try writeLine(w, "opens", try std.mem.join(arena, ", ", a.map.keys()));
+    try writeAccess(arena, w, .of(cfg));
+}
+
+/// The lines saying what an app may reach: all of it, or what an update adds.
+pub fn writeAccess(arena: std.mem.Allocator, w: *Io.Writer, access: oci.Access) !void {
+    try writeLine(w, "permits", try oci.describePermissions(arena, access.permissions));
+    if (access.registry.len > 0) try writeLine(w, "keeps", try std.fmt.allocPrint(arena, "{s} with its data", .{try oci.describeRegistry(arena, access.registry)}));
+}
+
+/// A labelled line, unless there's nothing to say.
+pub fn writeLine(w: *Io.Writer, label: []const u8, value: []const u8) !void {
+    if (value.len > 0) try w.print("  {s:<10} {s}\n", .{ label, value });
 }
 
 /// How the image was built, as far as its config says: with which SDKs, and

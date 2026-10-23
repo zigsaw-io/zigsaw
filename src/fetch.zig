@@ -67,6 +67,82 @@ pub fn fetch(f: *Fetcher, src: recipe.Source) ![]const u8 {
     return f.fromSources(want, src.fileName(), try std.fmt.allocPrint(arena, "it's no longer the pinned file (its sha256 is {s})", .{&got.hex}));
 }
 
+/// Fetches every source the download cache doesn't have yet, several at a
+/// time, so that a recipe with many downloads (TeX Live's hundreds) doesn't
+/// wait on each in turn. Local files are only checked. Every failure is
+/// reported; after the first, no further download starts.
+pub fn fetchAll(f: *Fetcher, srcs: []const recipe.Source) !void {
+    const ctx = f.ctx;
+    const io = ctx.io;
+    const arena = ctx.arena;
+    var todo: std.ArrayList(recipe.Source) = .empty;
+    var pinned: std.StringHashMapUnmanaged(void) = .empty;
+    for (srcs) |src| {
+        if (src.path != null) {
+            _ = try f.fetch(src);
+            continue;
+        }
+        if (src.sha256) |want| {
+            if (try Store.exists(io, try ctx.store.path(arena, &.{ "cache", "downloads", want }))) continue;
+            if ((try pinned.getOrPut(arena, want)).found_existing) continue;
+        }
+        try todo.append(arena, src);
+    }
+    if (todo.items.len <= 1) {
+        for (todo.items) |src| _ = try f.fetch(src);
+        return;
+    }
+
+    const start = ctx.now();
+    var next: std.atomic.Value(usize) = .init(0);
+    var bytes: std.atomic.Value(u64) = .init(0);
+    const workers = try arena.alloc(DownloadWorker, @min(todo.items.len, max_download_workers));
+    // The context's arena is thread-safe; each worker has its own HTTP client.
+    for (workers) |*w| w.* = .{
+        .fetcher = .{ .ctx = ctx, .base_dir = f.base_dir, .app = f.app },
+        .todo = todo.items,
+        .next = &next,
+        .bytes = &bytes,
+    };
+    var group: Io.Group = .init;
+    for (workers) |*w| group.concurrent(io, DownloadWorker.run, .{w}) catch w.run();
+    group.await(io) catch |err| return err;
+    for (workers) |w| if (w.err) |err| if (err == error.Failed) return error.Failed;
+    for (workers) |w| if (w.err) |err| return err;
+    ctx.timed(start, "fetch {d} files ({Bi:.1}), {d} at a time", .{ todo.items.len, bytes.load(.monotonic), workers.len });
+}
+
+/// Measured on TeX Live's 432 files (233 MiB) from MIT's CTAN mirror: one at
+/// a time 8 to 10 minutes, 4 workers 127 s, 8 workers 72 s. More would still
+/// be faster, but this is one mirror's server.
+const max_download_workers = 8;
+
+const DownloadWorker = struct {
+    fetcher: Fetcher,
+    todo: []const recipe.Source,
+    /// Index of the next source to take, shared by all workers.
+    next: *std.atomic.Value(usize),
+    bytes: *std.atomic.Value(u64),
+    err: ?anyerror = null,
+
+    fn run(w: *DownloadWorker) void {
+        defer w.fetcher.deinit();
+        const io = w.fetcher.ctx.io;
+        while (true) {
+            const i = w.next.fetchAdd(1, .monotonic);
+            if (i >= w.todo.len) return;
+            const file = w.fetcher.fetch(w.todo[i]) catch |err| {
+                w.err = err;
+                // The others finish what they're downloading, and stop.
+                _ = w.next.swap(w.todo.len, .monotonic);
+                return;
+            };
+            const stat = Io.Dir.cwd().statFile(io, file, .{}) catch continue;
+            _ = w.bytes.fetchAdd(stat.size, .monotonic);
+        }
+    }
+};
+
 /// Fetches the pinned file with this sha256 from the sources next to the
 /// app's image, into the download cache, after its own location failed:
 /// `what` couldn't be had because of `why`.

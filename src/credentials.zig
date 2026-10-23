@@ -14,6 +14,7 @@ const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Registry = @import("Registry.zig");
 const process = @import("process.zig");
+const prompts = @import("prompt.zig");
 const remote = @import("remote.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
@@ -388,53 +389,13 @@ fn readStdin(ctx: *Context) ![]const u8 {
     return std.mem.trimEnd(u8, text, "\r\n");
 }
 
-// The console mode to restore if Ctrl+C ends zigsaw during a password prompt.
-var prompt_console: ?win32.HANDLE = null;
-var prompt_mode: win32.DWORD = 0;
-
-fn restoreEcho(event: win32.DWORD) callconv(.winapi) win32.BOOL {
-    _ = event;
-    if (prompt_console) |h| _ = win32.SetConsoleMode(h, prompt_mode);
-    // Let the default handler end zigsaw.
-    return win32.FALSE;
-}
-
 /// Asks for a line on the console, with or without echoing what's typed.
-fn prompt(arena: Allocator, label: []const u8, echo: enum { echo, no_echo }) ![]const u8 {
-    const console = win32.GetStdHandle(win32.STD_INPUT_HANDLE);
-    var mode: win32.DWORD = 0;
-    if (console == null or console == win32.INVALID_HANDLE_VALUE or win32.GetConsoleMode(console.?, &mode) == win32.FALSE)
-        return fail("zigsaw login asks for the user name and password on a console; without one, use --username=<user> --password-stdin and pipe the password in", .{});
-    const h = console.?;
-
-    Context.printStderr("{s}", .{label});
-    if (echo == .no_echo) {
-        prompt_console = h;
-        prompt_mode = mode;
-        _ = win32.SetConsoleCtrlHandler(&restoreEcho, win32.TRUE);
-        if (win32.SetConsoleMode(h, (mode | win32.ENABLE_LINE_INPUT | win32.ENABLE_PROCESSED_INPUT) & ~win32.ENABLE_ECHO_INPUT) == win32.FALSE)
-            return win32.lastErrorFail("turning off the console's echo (SetConsoleMode)");
-    }
-    defer if (echo == .no_echo) {
-        _ = win32.SetConsoleMode(h, mode);
-        _ = win32.SetConsoleCtrlHandler(&restoreEcho, win32.FALSE);
-        prompt_console = null;
+fn prompt(arena: Allocator, label: []const u8, echo: prompts.Echo) ![]const u8 {
+    const line = prompts.consoleLine(arena, label, echo) catch |err| switch (err) {
+        error.EndOfInput => return fail("login cancelled", .{}),
+        else => |e| return e,
     };
-
-    var line: std.ArrayList(u16) = .empty;
-    const complete = while (std.mem.indexOfScalar(u16, line.items, '\n') == null) {
-        var buf: [256]u16 = undefined;
-        var n: win32.DWORD = 0;
-        // Nothing read means Ctrl+C, or the end of input.
-        if (win32.ReadConsoleW(h, &buf, buf.len, &n, null) == win32.FALSE or n == 0) break false;
-        try line.appendSlice(arena, buf[0..n]);
-    } else true;
-    // The Enter that ended the line wasn't echoed either.
-    if (echo == .no_echo) Context.printStderr("\n", .{});
-    if (!complete) return fail("login cancelled", .{});
-    const end = std.mem.indexOfScalar(u16, line.items, '\n').?;
-    const text = std.mem.trimEnd(u16, line.items[0..end], &.{'\r'});
-    return std.unicode.wtf16LeToWtf8Alloc(arena, text);
+    return line orelse fail("zigsaw login asks for the user name and password on a console; without one, use --username=<user> --password-stdin and pipe the password in", .{});
 }
 
 test normalizeHost {

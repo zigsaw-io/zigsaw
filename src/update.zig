@@ -14,8 +14,10 @@ const fail = Context.fail;
 const note = Context.note;
 
 /// Updates the given apps, or every installed app, and returns the exit code:
-/// 1 if any couldn't be updated. One failure doesn't stop the others.
-pub fn update(ctx: *Context, ids: []const []const u8) !u32 {
+/// 1 if any couldn't be updated. One failure doesn't stop the others. An app
+/// whose new version may reach more is updated only if you agree, unless
+/// `consent` is `.given` (--yes).
+pub fn update(ctx: *Context, ids: []const []const u8, consent: remote.Consent) !u32 {
     const arena = ctx.arena;
     var refs: std.ArrayList(Store.Ref) = .empty;
     if (ids.len == 0) {
@@ -27,7 +29,7 @@ pub fn update(ctx: *Context, ids: []const []const u8) !u32 {
 
     var failed: usize = 0;
     for (refs.items) |ref| {
-        updateApp(ctx, ref) catch |err| switch (err) {
+        updateApp(ctx, ref, consent) catch |err| switch (err) {
             error.Failed => failed += 1, // Already reported.
             else => |e| return e,
         };
@@ -37,7 +39,7 @@ pub fn update(ctx: *Context, ids: []const []const u8) !u32 {
     return 1;
 }
 
-fn updateApp(ctx: *Context, ref: Store.Ref) !void {
+fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent) !void {
     const source = ref.source orelse {
         note("{s}: doesn't record where it came from; build or pull it again to update it", .{ref.id});
         return;
@@ -54,7 +56,11 @@ fn updateApp(ctx: *Context, ref: Store.Ref) !void {
             return;
         }
         const installed = try ctx.store.readImage(ctx.arena, ref.id, ref.manifest);
-        break :newer try remote.fetch(ctx, source, .{ .unless = ref.manifest, .installed = installed.config.permissions });
+        break :newer try remote.fetch(ctx, source, .{
+            .unless = ref.manifest,
+            .installed = .{ .version = ref.version, .access = .of(installed.config) },
+            .consent = consent,
+        });
     };
 
     const image = newer orelse {

@@ -234,10 +234,8 @@
 - TeX Live's engines make their formats on first use, in the app's data
   directory (a few seconds each, once), since formats dumped in the build
   differ between builds; an `--ephemeral` run makes them every time.
-- A fresh TeX Live build downloads its 432 pinned files one after another,
-  which took 10 of its 15 minutes here; and a published TeX Live can't be
-  updated with `tlmgr`, only rebuilt with new pins
-  (`scripts/texlive-pins.sh`).
+- A published TeX Live can't be updated with `tlmgr`, only rebuilt with new
+  pins (`scripts/texlive-pins.sh`).
 - Microsoft Defender quarantined a development build of zigsaw 0.19.0 as
   `Trojan:Win32/Bearfoos.A!ml`, which ends a build or run in progress
   ([findings](findings.md#other-findings)). The released programs scan

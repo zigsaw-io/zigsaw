@@ -36,7 +36,9 @@ const usage =
     \\                                  a project's modules without their kept work directories
     \\  search [<words>...]             find apps in the default registry's catalog
     \\  info <image>                    show what an app in a registry is, needs and may reach
-    \\  pull <image>                    install an app and its commands from a registry
+    \\  pull [--yes] <image>            install an app and its commands from a registry, once
+    \\                                  you agree to what it may reach; --yes agrees without
+    \\                                  asking
     \\  push [--sources] <app-id> [<image>]
     \\                                  publish an installed app to a registry; --sources also
     \\                                  keeps the files it was built from next to it
@@ -50,7 +52,9 @@ const usage =
     \\                                  and the kinds of file they open
     \\  override [options] <app-id>     save run options that every run of the app gets;
     \\                                  --show shows them, --reset removes them
-    \\  update [<app-id>...]            rebuild or re-pull apps from where they came from
+    \\  update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
+    \\                                  one pulled again that may reach more asks first,
+    \\                                  unless given --yes
     \\  rm [--delete-data] <app-id>     uninstall an app and its commands
     \\  prune [--dry-run] [--downloads] [--data]
     \\                                  delete what no installed app needs; also cached
@@ -179,9 +183,17 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         return 0;
     }
     if (std.mem.eql(u8, command, "pull")) {
-        if (rest.len != 1) return usageError();
+        var consent: remote.Consent = .ask;
+        var image: ?[]const u8 = null;
+        for (rest) |arg| {
+            if (isFlag(arg, "yes")) {
+                consent = .given;
+            } else if (image == null and !std.mem.startsWith(u8, arg, "-")) {
+                image = arg;
+            } else return usageError();
+        }
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try install.install(ctx, (try remote.fetch(ctx, rest[0], .{})).?);
+        try install.install(ctx, (try remote.fetch(ctx, image orelse return usageError(), .{ .consent = consent })).?);
         return 0;
     }
     if (std.mem.eql(u8, command, "push")) {
@@ -231,9 +243,17 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         return 0;
     }
     if (std.mem.eql(u8, command, "update")) {
-        for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
+        var consent: remote.Consent = .ask;
+        var ids: std.ArrayList([]const u8) = .empty;
+        for (rest) |arg| {
+            if (isFlag(arg, "yes")) {
+                consent = .given;
+            } else if (!std.mem.startsWith(u8, arg, "-")) {
+                try ids.append(ctx.arena, arg);
+            } else return usageError();
+        }
         _ = try ctx.store.lock(ctx.arena, .shared);
-        return update.update(ctx, @ptrCast(rest));
+        return update.update(ctx, ids.items, consent);
     }
     if (std.mem.eql(u8, command, "rm")) {
         var delete_data = false;
@@ -576,6 +596,7 @@ test {
     _ = @import("pe.zig");
     _ = @import("process.zig");
     _ = @import("project.zig");
+    _ = @import("prompt.zig");
     _ = @import("prune.zig");
     _ = @import("recipe.zig");
     _ = @import("regkey.zig");

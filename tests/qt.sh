@@ -79,7 +79,7 @@ install_again() {
     [ -f "$ZIGSAW_HOME\\refs\\$1.json" ] && source=$(grep -o '"source": *"[^"]*"' "$ZIGSAW_HOME\\refs\\$1.json" | cut -d'"' -f4)
     case $source in
     "" | *.json) z build "$root\\recipes\\$2" ;;
-    *) z pull "$source" ;;
+    *) z pull --yes "$source" ;;
     esac
 }
 

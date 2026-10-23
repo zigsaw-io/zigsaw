@@ -272,7 +272,7 @@ for name in $published_recipes; do
 
     # Verbose, so the log shows where blob downloads were redirected.
     pull_log="$logs\\$id.pull.log"
-    if ! zp -v pull "$id:$version" >"$pull_log" 2>&1; then
+    if ! zp -v pull --yes "$id:$version" >"$pull_log" 2>&1; then
         # Registries answer "not found" for a missing tag, and refuse an
         # anonymous token for a package that doesn't exist (or is private).
         if grep -qE "not found|doesn't exist, or needs credentials" "$pull_log"; then
@@ -327,7 +327,7 @@ for name in $published_recipes; do
         check "$id: the loader binds all its programs' imports" all_bound "$pull_store" "$published"
     fi
     latest_is_version() {
-        zp -v pull "$id" >>"$pull_log" 2>&1 || { last_line "$pull_log"; return 1; }
+        zp -v pull --yes "$id" >>"$pull_log" 2>&1 || { last_line "$pull_log"; return 1; }
         local latest
         latest=$(ref_digest "$pull_store" "$id")
         [ "$latest" = "$published" ] || { echo "latest is $latest, $version is $published"; return 1; }
@@ -335,7 +335,7 @@ for name in $published_recipes; do
     check "$id: latest is $version" latest_is_version
     up_to_date() {
         local out
-        out=$(zp update "$id" 2>&1)
+        out=$(zp update --yes "$id" 2>&1)
         grep -q 'up to date' <<<"$out" || { echo "$out"; return 1; }
     }
     check "$id: is up to date" up_to_date
