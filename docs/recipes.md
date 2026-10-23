@@ -2503,6 +2503,114 @@ The sizes and offsets of PHP's structs, as zig and MSVC 14.44 lay them out,
 are the same, except `long double` (16 bytes and 8), which PHP's API doesn't
 pass. Thread-safe PHP isn't packaged.
 
+## TeX Live
+
+[`org.tug.texlive`](recipes/texlive.json) is TeX Live 2026's small scheme
+(LaTeX, pdfTeX, XeTeX, LuaTeX, MetaPost, BibTeX, Biber and latexmk, 430
+packages): TeX Live's own Windows programs and its macros and fonts,
+installed at build time by TeX Live's installer from pinned packages. What
+TeX Live would bring its own copies of are images of their own, as its
+runtimes: Perl's ([`org.perl.perl`](recipes/perl.json), Strawberry Perl),
+for its Perl scripts such as latexmk, and Ghostscript's
+([`com.artifex.Ghostscript`](recipes/ghostscript.json), built from source),
+for epstopdf and ps2pdf. Its layer is 236 MB.
+
+**Its packages are pinned against a repository that moves.** tlnet, TeX
+Live's repository, has one archive per package, and replaces it in place
+whenever the package changes, which some do every day. So the recipe isn't
+written by hand: [`scripts/texlive-pins.sh`](scripts/texlive-pins.sh)
+downloads tlnet's package database, takes the scheme's packages for
+Windows, downloads each one, checks it against the database, and writes
+[`recipes/texlive.json`](recipes/texlive.json) from
+[`recipes/texlive/texlive.json.in`](recipes/texlive/texlive.json.in): each
+archive's URL and sha256, the database's, the installer's, the version
+(`2026.<the repository's revision>`) and the exports. Once tlnet has
+replaced an archive, its URL serves other bytes, and builds take the pinned
+one from the sources pushed next to the image (`zigsaw push --sources`,
+which `scripts/publish.sh` does) instead. So, to update TeX Live: run the script, build, and publish from
+the store that built it, which has every pinned file (publishing pushes
+them), even after tlnet has moved on.
+
+**The build** runs `install-tl` offline, with its own Perl, from the pinned
+archives laid out as a repository (`repo/tlpkg/texlive.tlpdb`,
+`repo/archive/*.tar.xz`), with a profile (written by the same script,
+[`recipes/texlive/texlive.profile`](recipes/texlive/texlive.profile)):
+portable (nothing in the registry, PATH or Start menu), without
+documentation, sources, Windows tools or formats. The installer always
+installs TeX Live's Perl and Ghostscript on Windows, and runs its scripts
+with them; `cleanup` leaves both out of the image. Then the build commands
+make what the installer wrote the same on every machine and right wherever
+the app is deployed:
+
+- fontconfig's `fonts.conf`, for XeTeX, names the font directories relative
+  to itself (`<dir prefix="relative">../../../texmf-dist/fonts/opentype`)
+  and Windows' fonts as `WINDOWSFONTDIR`, instead of the build's paths; the
+  font cache the installer made goes, as XeTeX makes its own in the data
+  directory.
+- The dates in the headers of the files the installer generates
+  (`fmtutil.cnf`, `updmap.cfg`, `language.dat`...) go, and the package
+  database names tlnet as where packages come from.
+- Two lines of TeX Live's Perl modules change, so its scripts run on
+  Strawberry Perl: `Win32::Shortcut`, which Strawberry Perl lacks and which
+  is only used for Start menu shortcuts, becomes optional, and the check of
+  whether the system tree is writable writes a file (Perl's `-w` reads only
+  the read-only attribute, not permissions).
+- `mktexfmt` becomes fmtutil in its mktexfmt mode (TeX Live's Windows
+  `mktexfmt.exe` makes the format but doesn't say where, so the run that
+  wanted it stops), and the `ls-R` file lists are made again.
+
+**Formats are made on first use**, in the data directory: the image has
+none, because engines dump the time they were made into them (pdfTeX its
+random seed, TeX `\time`, LuaTeX more), with or without
+`SOURCE_DATE_EPOCH`. The first run of `pdflatex` takes a few seconds more;
+LuaLaTeX's also builds luaotfload's font list, in the data directory too.
+Runs have:
+
+```json
+"TEXMFVAR": "${data}\\texmf-var",
+"TEXMFCONFIG": "${data}\\texmf-config",
+"TEXMFHOME": "${data}\\texmf",
+"XE_FC_CACHEDIR": "${data}\\texmf-var\\fonts\\cache",
+"TEXLIVE_WINDOWS_TRY_EXTERNAL_PERL": "1",
+"TEXLIVE_WINDOWS_EXTERNAL_GS": "${gs}\\bin\\gswin64c.exe"
+```
+
+The last two are how TeX Live's script runner (`runscript.tlu`) is told to
+use a Perl on PATH (Perl's image's, a runtime's PATH entry) and another
+Ghostscript. The tree is read-only, so there's no `tlmgr`: another set of
+packages is another scheme in the script (`SCHEME=scheme-medium`), and
+packages of your own go in `TEXMFHOME`. The command is `latexmk`
+(`zigsaw run org.tug.texlive -pdf paper.tex`); the exports are every program
+of the packages, but for tlmgr's, the scripts that write the system trees,
+and documentation browsers (no documentation is installed). In an
+AppContainer, kpathsea can't find its own long path where Windows doesn't let
+AppContainers list the drive root (as here, on Windows 11 26300), and every
+program stops at once: a known gap ([gaps](gaps.md)).
+[`tests/texlive.sh`](tests/texlive.sh) runs all of it, in about 90 s.
+
+### Ghostscript
+
+[`com.artifex.Ghostscript`](recipes/ghostscript.json) is Ghostscript 10.08
+built from its release tarball, with the libraries it bundles, with zig and
+BusyBox: one program, `gswin64c.exe` (the name TeX Live's scripts look for;
+`gs` is exported too), with its PostScript resources and fonts compiled in,
+so it needs no `GS_LIB`. Its configure script supports MinGW; what it needs
+besides:
+
+- `ac_cv_prog_MAKE_EXISTS=yes`: it looks for `make` on PATH, which BusyBox's
+  applet isn't, and `LD` set to the [autotools `ld`](#gtk) for libtiff's
+  configure.
+- Its makefile marks the directories it makes as GNU make's order-only
+  prerequisites (`| directories`), which BusyBox's make doesn't know: the
+  build empties `MAKEDIRS` and runs `make directories` first.
+- `-Wp,-w`, for FreeType, becomes `-w`, which zig takes; and a stand-in for
+  a Windows function in `mkromfs.c` is for MSVC only, as MinGW builds have
+  the Unix one.
+
+It builds in about 16 minutes here, as BusyBox's make compiles one file at
+a time. Its licence is the AGPL 3, which the sources pushed next to its
+image answer.
+
 ## MSVC
 
 Projects that need Microsoft's compiler can use the Visual Studio installed

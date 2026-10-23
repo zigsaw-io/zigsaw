@@ -64,3 +64,5 @@ qt6-sdk.json
 qt6.json
 flameshot.json
 notes.json
+ghostscript.json
+texlive.json

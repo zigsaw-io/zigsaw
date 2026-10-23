@@ -1455,6 +1455,54 @@ JDK's image, and compiled on the JRE's):
   in 3 minutes, and zstd rebuilt with it kept its digest. A report for zig's
   issue tracker is drafted, not yet filed.
 
+## TeX Live and Ghostscript (iteration 43)
+
+- **install-tl works offline and hermetically** from a local repository
+  (`-repository B:/.../repo` with `tlpkg/texlive.tlpdb` and `archive/`),
+  run with the Perl in `install-tl.zip`, in 1m48s for the small scheme, with
+  `instopt_portable 1`: nothing in the registry. Its disk check calls
+  `powershell` (not on a build's PATH; `TEXLIVE_INSTALL_NO_DISKCHECK=1`). On
+  Windows it always adds tlperl, tlgs and `collection-wintools`, unless the
+  profile names the collections itself (`collection-wintools 0`).
+- **Formats aren't reproducible**, with `SOURCE_DATE_EPOCH` and
+  `FORCE_SOURCE_DATE=1` (which do fix the log's date): in two builds ten
+  minutes apart, pdfTeX's formats differ in a byte or two (`\pdfrandomseed`
+  comes from the clock: 533745103 and 701745105 in two runs a second
+  apart), Knuth's TeX's in `\time` (0x39D and 0x3A7, 15:25 and 15:35), and
+  LuaTeX's by megabytes; LuaTeX's `\time` with `FORCE_SOURCE_DATE` is local
+  time. The rest of what the installer writes differs only in dated
+  header lines and in `ls-R` (a temporary directory of fmtutil's was listed).
+- **TeX Live's Windows `mktexfmt.exe` makes a format but doesn't print its
+  path** (it's W32TeX's: it runs `fmtutil-user --byfmt` with stdout sent to
+  stderr), so kpathsea reports `I can't find the format file` and the run
+  that wanted it stops; the next one finds it. fmtutil.pl run as `mktexfmt`
+  (by its file name) prints the path, as on Unix. In that mode it puts
+  formats in `TEXMFSYSVAR` if `-w` says it's writable, and Perl's `-w` on
+  Windows reads only the read-only attribute, so it chose the read-only
+  deployment; TeX Live's own `dir_writable` writes a file.
+- **Strawberry Perl 5.42 has no `Win32::Shortcut`**, which TeX Live's
+  `TLWinGoo.pm` requires on load (for Start menu shortcuts only), so
+  fmtutil, updmap and tlmgr fail on it; latexmk doesn't load TLWinGoo.
+- **XeTeX's fontconfig configuration names absolute paths**: the
+  installer's post-install code writes `TEXDIR` and `%SystemRoot%` into
+  `fonts.conf` (`B:/prefix/...`, wrong once deployed: XeTeX found no font by
+  name); `<dir prefix="relative">` and `WINDOWSFONTDIR` work with TeX Live's
+  fontconfig. `XE_FC_CACHEDIR` moves its cache.
+- **In an AppContainer, `GetLongPathNameW` of a program's own path is
+  denied** on this Windows (26300.9711), from a D: store and from one under
+  `%LOCALAPPDATA%`: it lists each directory from the drive root, which
+  AppContainers can't. `GetFinalPathNameByHandleW` of the same path works.
+  kpathsea calls it at startup, so no TeX Live program starts in one.
+- **Ghostscript 10.08 builds with zig cc and BusyBox's make** from its
+  release tarball, with its configure script's MinGW support and three
+  changes (see [recipes](recipes.md#ghostscript)): it decides BusyBox's make
+  isn't GNU make, yet writes GNU's order-only `|` into its makefile; zig
+  rejects `-Wp,-w`; and `mkromfs.c`'s stand-in for the Windows `gp_stat_impl`
+  clashes with the Unix one MinGW builds use. It reproduces (two stores).
+- **Builds take turns on `B:`**: a build in another store waits ("waiting
+  for another zigsaw build to finish with B:"), so builds in parallel stores
+  run one after another.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

@@ -1,4 +1,3 @@
-
 # Known gaps
 
 - A command an app's run installs that names the app's files by their
@@ -226,6 +225,19 @@
 - Files' vendor step keeps 3.3 GB of NuGet packages, for x64 alone, among
   them the Windows App SDK's AI and ML packages, which its project excludes
   from the build but NuGet still downloads.
+- TeX Live doesn't run in an AppContainer where Windows doesn't let one list
+  the drive root (Windows 11 26300 here; `self-long-name` in
+  `tests/acprobe.zig`): kpathsea asks for its own long path
+  (`GetLongPathNameW`), which lists each directory from the root, and every
+  program stops with `Can't get long name for D:\zs.`. Its programs are
+  TeX Live's own builds. The soft and low sandboxes work.
+- TeX Live's engines make their formats on first use, in the app's data
+  directory (a few seconds each, once), since formats dumped in the build
+  differ between builds; an `--ephemeral` run makes them every time.
+- A fresh TeX Live build downloads its 432 pinned files one after another,
+  which took 10 of its 15 minutes here; and a published TeX Live can't be
+  updated with `tlmgr`, only rebuilt with new pins
+  (`scripts/texlive-pins.sh`).
 - Microsoft Defender quarantined a development build of zigsaw 0.19.0 as
   `Trojan:Win32/Bearfoos.A!ml`, which ends a build or run in progress
   ([findings](findings.md#other-findings)). The released programs scan

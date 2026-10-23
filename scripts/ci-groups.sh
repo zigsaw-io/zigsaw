@@ -11,13 +11,15 @@
 #   gtk=<true or false>
 #   qt=<true or false>
 #
-# and, on stderr, why. GTK's family and Qt's (the groups in `gtk_groups` and
-# `qt_groups` below) are each checked only if a file it's built or tested
+# and, on stderr, why. GTK's family, Qt's and TeX Live's (the groups in
+# `gtk_groups`, `qt_groups` and `texlive_groups` below) are each checked
+# only if a file it's built or tested
 # from changed since <commit>, the last commit a Reproduce run passed on: its
 # recipes and their directories, its suites and what they build, and what
 # checks any group (tests/published.sh, this script, the workflow). Their
 # builds take most of a run (GTK's SDK took 57 minutes on a runner in one
-# build), and they change rarely.
+# build), and they change rarely; TeX Live's downloads 432 files from a
+# mirror that replaces them as packages change.
 # Without a commit, or one git can't compare with, every group is checked:
 # as in the workflow's weekly run, which also catches a change to zigsaw
 # that a GTK or Qt image no longer reproduces with.
@@ -26,6 +28,7 @@ cd "$(dirname "$0")/.."
 
 gtk_groups="gtk-tools gettext gtk-base gtk gtk-apps rnote gnumeric"
 qt_groups="qt-base qt"
+texlive_groups="texlive"
 
 groups_file=scripts/published-groups.txt
 all=$(grep -v -e '^#' -e '^\s*$' "$groups_file" | cut -d: -f1 | grep -vx skip | awk '!seen[$0]++')
@@ -49,6 +52,10 @@ qt_paths=(
     tests/qt.sh tests/qt/
     "${common_paths[@]}"
 )
+texlive_paths=(
+    scripts/texlive-pins.sh recipes/gtk4-sdk/autotools-ld.sh
+    "${common_paths[@]}"
+)
 for group in $gtk_groups; do
     for recipe in $(grep "^$group:" "$groups_file" | cut -d: -f2-); do
         gtk_paths+=("recipes/$recipe" "recipes/${recipe%.json}/")
@@ -57,6 +64,11 @@ done
 for group in $qt_groups; do
     for recipe in $(grep "^$group:" "$groups_file" | cut -d: -f2-); do
         qt_paths+=("recipes/$recipe" "recipes/${recipe%.json}/")
+    done
+done
+for group in $texlive_groups; do
+    for recipe in $(grep "^$group:" "$groups_file" | cut -d: -f2-); do
+        texlive_paths+=("recipes/$recipe" "recipes/${recipe%.json}/")
     done
 done
 
@@ -77,7 +89,7 @@ changed_in() {
     return 1
 }
 
-gtk=true qt=true
+gtk=true qt=true texlive=true
 why="every group: no commit to compare with"
 if [ -n "${1:-}" ]; then
     if changed=$(git diff --name-only "$1" HEAD 2>/dev/null); then
@@ -93,6 +105,12 @@ if [ -n "${1:-}" ]; then
             qt=false
             why="$why; Qt's family left out: nothing it's built or tested from changed"
         fi
+        if file=$(changed_in "${texlive_paths[@]}"); then
+            why="$why; TeX Live's: $file changed"
+        else
+            texlive=false
+            why="$why; TeX Live's left out: nothing it's built from changed"
+        fi
     else
         why="every group: git can't compare with $1"
     fi
@@ -101,6 +119,7 @@ fi
 left_out=""
 [ "$gtk" = true ] || left_out="$left_out $gtk_groups"
 [ "$qt" = true ] || left_out="$left_out $qt_groups"
+[ "$texlive" = true ] || left_out="$left_out $texlive_groups"
 selected=$all
 if [ -n "$left_out" ]; then
     selected=$(grep -vxF -f <(tr ' ' '

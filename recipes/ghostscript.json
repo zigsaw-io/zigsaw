@@ -1,0 +1,41 @@
+{
+  "id": "com.artifex.Ghostscript",
+  "version": "10.08.0",
+  "name": "Ghostscript",
+  "summary": "An interpreter for PostScript and PDF, and converter between them and images",
+  "homepage": "https://www.ghostscript.com/",
+  "license": "AGPL-3.0-or-later",
+  "command": "bin/gswin64c.exe",
+  "path": ["bin"],
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {
+    "gs": { "command": "bin/gswin64c.exe" },
+    "gswin64c": { "command": "bin/gswin64c.exe" }
+  },
+  "sdk": {
+    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "ghostscript",
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "PATH_SEPARATOR": ";", "LD": "sh B:/src/ghostscript/zigsaw/ld.sh" },
+      "sources": [
+        {
+          "url": "https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs10080/ghostscript-10.08.0.tar.xz",
+          "sha256": "c20492bc8ebb96c87fa2e52a0926e1cda8cde95d66145e018ac713fed5da38cf",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/autotools-ld.sh", "dest": "zigsaw/ld.sh" }
+      ],
+      "build": [
+        "sed -i '/just define a dummy here for Windows/{n;n;s/^#ifdef _WIN32$/#if defined(_WIN32) \\&\\& !defined(__MINGW32__)/}' base/mkromfs.c",
+        "grep -q '^#if defined(_WIN32) && !defined(__MINGW32__)$' base/mkromfs.c",
+        "sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --without-tesseract --disable-cups --without-ijs --disable-contrib --without-x --disable-fontconfig --disable-dbus --without-libpaper --without-libidn --disable-gtk ac_executable_extensions=.exe ac_cv_prog_MAKE_EXISTS=yes > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
+        "sed -i 's/^MAKEDIRS=.*/MAKEDIRS=/; s/^MAKEDIRSTOP=.*/MAKEDIRSTOP=/; s/ -Wp,-w / -w /' Makefile",
+        "make directories > make.log 2>&1 && make >> make.log 2>&1 || { tail -80 make.log; exit 1; }",
+        "mkdir -p \"$PREFIX/bin\" && cp bin/gs.exe \"$PREFIX/bin/gswin64c.exe\""
+      ]
+    }
+  ]
+}

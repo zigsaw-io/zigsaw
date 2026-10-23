@@ -114,8 +114,9 @@ jobs:
     # the base half took 49 minutes on a runner (25 here), and the SDK half
     # 70 (48 here), in a qt job of 77 minutes; in iteration 41's, on slower
     # runners, every command of the SDK half took half as long again: 109
-    # minutes, in a qt job of 120.
-    timeout-minutes: ${{ startsWith(matrix.group, 'qt') && 180 || (startsWith(matrix.group, 'gtk') || matrix.group == 'gettext' || matrix.group == 'rnote' || matrix.group == 'gnumeric') && 75 || 30 }}
+    # minutes, in a qt job of 120. Ghostscript and TeX Live took 16 and 15
+    # minutes here (iteration 43).
+    timeout-minutes: ${{ startsWith(matrix.group, 'qt') && 180 || (startsWith(matrix.group, 'gtk') || matrix.group == 'gettext' || matrix.group == 'rnote' || matrix.group == 'gnumeric' || matrix.group == 'texlive') && 75 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -185,7 +186,7 @@ jobs:
           ZIGSAW_HOME: ${{ runner.temp }}\store
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
-          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
+          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls texlive 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
 
       # The suites run whether or not the steps before them passed.
       - name: tests/store.sh
@@ -233,6 +234,15 @@ jobs:
         env:
           ZLS_HOME: ${{ runner.temp }}\store
         run: bash tests/zls.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/zls.txt"
+
+      # TeX Live as published, with Perl's and Ghostscript's images as its
+      # runtimes, in the seeded store.
+      - name: tests/texlive.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          TEXLIVE_HOME: ${{ runner.temp }}\store
+        run: bash tests/texlive.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/texlive.txt"
 
       # Last, in the seeded store, whose apps it runs: it changes their data.
       - name: tests/matrix.sh
@@ -380,6 +390,16 @@ jobs:
         run: |
           t=$RUNNER_TEMP
           printf '%s\n' "TMP=$t" "TEMP=$t" "LOG_DIR=$t\\logs" >>"$GITHUB_ENV"
+
+      - name: zigsaw.json has build.zig.zon's version
+        if: matrix.group == 'base'
+        shell: bash
+        run: |
+          version=$(sed -n 's/^ *\.version = "\(.*\)",$/\1/p' build.zig.zon)
+          if ! grep -q "^  \"version\": \"$version\",\$" zigsaw.json; then
+              echo "::error::zigsaw.json's version isn't build.zig.zon's, $version"
+              exit 1
+          fi
 
       - name: Unit tests
         if: matrix.group == 'base'

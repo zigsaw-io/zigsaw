@@ -1,0 +1,64 @@
+{
+  "id": "org.tug.texlive",
+  "version": "@VERSION@",
+  "name": "TeX Live",
+  "summary": "TeX, LaTeX, pdfTeX, XeTeX, LuaTeX and MetaPost: TeX Live's small scheme",
+  "homepage": "https://tug.org/texlive/",
+  "license": "LicenseRef-TeX-Live",
+  "command": "bin/windows/latexmk.exe",
+  "path": ["bin/windows"],
+  "env": {
+    "TEXMFVAR": "${data}\\texmf-var",
+    "TEXMFCONFIG": "${data}\\texmf-config",
+    "TEXMFHOME": "${data}\\texmf",
+    "XE_FC_CACHEDIR": "${data}\\texmf-var\\fonts\\cache",
+    "TEXLIVE_WINDOWS_TRY_EXTERNAL_PERL": "1",
+    "TEXLIVE_WINDOWS_EXTERNAL_GS": "${gs}\\bin\\gswin64c.exe"
+  },
+  "permissions": { "filesystem": ["cwd"] },
+  "runtimes": {
+    "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85",
+    "gs": "com.artifex.Ghostscript:10.08.0@sha256:bc9081d9e3f9785a27f590a7f06317ed74b5f9327334c264c128b790be0164b8"
+  },
+  "exports": {
+@EXPORTS@
+  },
+  "sdk": {
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "cleanup": [
+    "/tlpkg/tlperl", "/tlpkg/tlgs", "/tlpkg/installer", "/tlpkg/tltcl", "/tlpkg/translations", "/tlpkg/backups",
+    "/install-tl", "/install-tl-windows.bat", "/tl-tray-menu.exe", "*.log"
+  ],
+  "modules": [
+    {
+      "name": "texlive",
+      "env": {
+        "SOURCE_DATE_EPOCH": "@EPOCH@",
+        "FORCE_SOURCE_DATE": "1",
+        "PERL5LIB": "B:/src/texlive/install-tl/tlpkg/tlperl/lib",
+        "TEXLIVE_INSTALL_NO_DISKCHECK": "1",
+        "TEXLIVE_INSTALL_ENV_NOCHECK": "1"
+      },
+      "sources": [
+        { "path": "texlive/texlive.profile" },
+@SOURCES@
+      ],
+      "build": [
+        "install-tl/tlpkg/tlperl/bin/perl.exe install-tl/install-tl -profile texlive.profile -repository B:/src/texlive/repo",
+        "sed -i -e 's|<dir>B:/prefix/texmf-dist/fonts/|<dir prefix=\"relative\">../../../texmf-dist/fonts/|' -e 's|<dir>[A-Za-z]:/[Ww][Ii][Nn][Dd][Oo][Ww][Ss]/[Ff]onts</dir>|<dir>WINDOWSFONTDIR</dir>|' \"$PREFIX/texmf-var/fonts/conf/fonts.conf\"",
+        "! grep -i -e 'B:/prefix' -e ':/windows/fonts<' \"$PREFIX/texmf-var/fonts/conf/fonts.conf\"",
+        "rm -f \"$PREFIX\"/texmf-var/fonts/cache/*.cache-*",
+        "sed -i 's|^depend opt_location:.*|depend opt_location:https://mirror.ctan.org/systems/texlive/tlnet|' \"$PREFIX/tlpkg/texlive.tlpdb\"",
+        "cd \"$PREFIX\" && sed -i -E '1s/ (on|written on) [A-Z][a-z]{2} [A-Z][a-z]{2} +[0-9]+ [0-9:]+ [0-9]{4}( UTC)?$//' texmf-dist/web2c/fmtutil.cnf texmf-dist/web2c/updmap.cfg texmf-var/tex/generic/config/language.dat texmf-var/tex/generic/config/language.def texmf-var/tex/generic/config/language.dat.lua tlpkg/texlive.profile",
+        "cd \"$PREFIX\" && ! grep -l -E ' [0-9]{2}:[0-9]{2}:[0-9]{2} [0-9]{4}' texmf-dist/web2c/fmtutil.cnf texmf-dist/web2c/updmap.cfg texmf-var/tex/generic/config/language.dat texmf-var/tex/generic/config/language.def texmf-var/tex/generic/config/language.dat.lua tlpkg/texlive.profile",
+        "sed -i -e 's/^    require Win32::Shortcut;$/    eval { require Win32::Shortcut;/' -e 's/^    Win32::Shortcut->import( qw( SW_SHOWNORMAL SW_SHOWMINNOACTIVE ) );$/    Win32::Shortcut->import( qw( SW_SHOWNORMAL SW_SHOWMINNOACTIVE ) ) };/' \"$PREFIX/tlpkg/TeXLive/TLWinGoo.pm\"",
+        "grep -q '^    eval { require Win32::Shortcut;$' \"$PREFIX/tlpkg/TeXLive/TLWinGoo.pm\"",
+        "sed -i -e 's/\\$switchit = 1 if (-w \"\\$TEXMFSYSVAR\\/web2c\");/$switchit = 1 if (dir_writable(\"$TEXMFSYSVAR\\/web2c\"));/' -e 's/} elsif (-d \\$TEXMFSYSVAR && -w \\$TEXMFSYSVAR) {/} elsif (-d $TEXMFSYSVAR \\&\\& dir_writable($TEXMFSYSVAR)) {/' \"$PREFIX/tlpkg/TeXLive/TLUtils.pm\"",
+        "test \"$(grep -c -e 'dir_writable(\"$TEXMFSYSVAR/web2c\")' -e 'dir_writable($TEXMFSYSVAR)) {' \"$PREFIX/tlpkg/TeXLive/TLUtils.pm\")\" = 2",
+        "cp \"$PREFIX/texmf-dist/scripts/texlive/fmtutil.pl\" \"$PREFIX/texmf-dist/scripts/texlive/mktexfmt.pl\" && cp \"$PREFIX/bin/windows/runscript.exe\" \"$PREFIX/bin/windows/mktexfmt.exe\"",
+        "rm -f \"$PREFIX\"/texmf-var/web2c/*.log && \"$PREFIX/bin/windows/mktexlsr.exe\" \"$PREFIX/texmf-var\" \"$PREFIX/texmf-dist\""
+      ]
+    }
+  ]
+}

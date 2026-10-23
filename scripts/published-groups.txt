@@ -52,3 +52,8 @@ gnumeric: gnumeric.json
 # qtdeclarative), then the SDK on it with Qt's runtime, Flameshot and Notes
 qt-base: qt6-sdk-base.json
 qt: qt6-sdk.json qt6.json flameshot.json notes.json
+
+# Ghostscript (16 here, most of it one compile at a time) and TeX Live (15
+# here from a cold cache, most of it downloading its 432 pinned files one
+# after another; under 6 with them cached)
+texlive: ghostscript.json texlive.json

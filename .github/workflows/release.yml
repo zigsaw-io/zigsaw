@@ -28,12 +28,16 @@ jobs:
         with:
           version: 0.16.0
 
-      - name: The tag is build.zig.zon's version
+      - name: The tag is build.zig.zon's version, and zigsaw.json's
         shell: bash
         run: |
           version=$(sed -n 's/^ *\.version = "\(.*\)",$/\1/p' build.zig.zon)
           if [ "$GITHUB_REF_NAME" != "v$version" ]; then
               echo "::error::The tag is $GITHUB_REF_NAME, but build.zig.zon's version is $version"
+              exit 1
+          fi
+          if ! grep -q "^  \"version\": \"$version\",\$" zigsaw.json; then
+              echo "::error::zigsaw.json's version isn't build.zig.zon's, $version"
               exit 1
           fi
 

@@ -71,6 +71,8 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Qt 6, with Qt Widgets Designer and Qt Linguist (from its SDK) | `io.qt.Qt6` | 6.12.0 | `designer`, `linguist`, `pixeltool`, `qml`, `qtdiag` |
 | Flameshot (built from source, on Qt) | `org.flameshot.Flameshot` | 14.0.0 | `flameshot` |
 | Notes (built from source, on Qt Quick) | `io.github.nuttyartist.notes` | 2.3.1 | `notes` |
+| Ghostscript (built from source) | `com.artifex.Ghostscript` | 10.08.0 | `gs`, `gswin64c` |
+| TeX Live, its small scheme (on Perl and Ghostscript; packages from tlnet) | `org.tug.texlive` | 2026.80721 | `latexmk`, `pdflatex`, `xelatex`, `lualatex`, `latex`, `tex`, `bibtex`, `biber`, `makeindex`, `mpost`, `kpsewhich`, `dvips`, `dvipdfmx`, `epstopdf`, `ps2pdf` and 116 more |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,

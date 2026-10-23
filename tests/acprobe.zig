@@ -15,6 +15,9 @@
 //!                   git, Node and Python resolve real paths
 //!   self-path-dos   the same for the probe's own executable, as zig finds
 //!                   its own
+//!   self-long-name  the probe's own path's long form (GetLongPathNameW),
+//!                   which lists each directory above it: how TeX Live's
+//!                   kpathsea finds its own
 //!   final-path-nt   the working directory's NT path (VOLUME_NAME_NT), which
 //!                   needs no drive letter
 //!   mount-manager   opening the Mount Manager, which maps volumes to drive
@@ -38,6 +41,7 @@ const VOLUME_NAME_NT: DWORD = 0x2;
 
 extern "kernel32" fn GetFinalPathNameByHandleW(file: HANDLE, path: [*]u16, len: DWORD, flags: DWORD) callconv(.winapi) DWORD;
 extern "kernel32" fn GetCurrentDirectoryW(len: DWORD, buf: [*]u16) callconv(.winapi) DWORD;
+extern "kernel32" fn GetLongPathNameW(short: [*:0]const u16, long: [*]u16, len: DWORD) callconv(.winapi) DWORD;
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -63,6 +67,7 @@ pub fn main(init: std.process.Init) !void {
 
     try report(out, "final-path-dos", finalPath(cwd, VOLUME_NAME_DOS));
     try report(out, "self-path-dos", finalPath(exe, VOLUME_NAME_DOS));
+    try report(out, "self-long-name", longName(exe));
     try report(out, "final-path-nt", finalPath(cwd, VOLUME_NAME_NT));
     try report(out, "mount-manager", open(std.unicode.utf8ToUtf16LeStringLiteral("\\\\.\\MountPointManager"), 0, 0));
     if (cwd.len >= 2 and cwd[1] == ':') {
@@ -99,6 +104,13 @@ fn finalPath(path: [*:0]const u16, volume: DWORD) Result {
     defer _ = win32.CloseHandle(h);
     var buf: [32 * 1024]u16 = undefined;
     const len = GetFinalPathNameByHandleW(h, &buf, buf.len, volume);
+    if (len == 0 or len >= buf.len) return win32.GetLastError();
+    return null;
+}
+
+fn longName(path: [*:0]const u16) Result {
+    var buf: [32 * 1024]u16 = undefined;
+    const len = GetLongPathNameW(path, &buf, buf.len);
     if (len == 0 or len >= buf.len) return win32.GetLastError();
     return null;
 }
