@@ -1,0 +1,24 @@
+{
+  "id": "test.build.make",
+  "version": "1",
+  "command": "bin/hello.exe",
+  "exports": {},
+  "sdk": {
+    "make": "org.gnu.make@@MAKE@",
+    "zig": "org.ziglang.zig@@ZIG@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "modules": [
+    {
+      "name": "hello",
+      "sources": [
+        { "path": "Makefile" },
+        { "path": "sub.mk" },
+        { "path": "main.c", "dest": "src/main.c" },
+        { "path": "one.c", "dest": "src/one.c" },
+        { "path": "two.c", "dest": "src/two.c" }
+      ],
+      "build": ["make -j4 install PREFIX=\"$PREFIX\""]
+    }
+  ]
+}

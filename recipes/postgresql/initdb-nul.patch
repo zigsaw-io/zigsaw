@@ -1,0 +1,33 @@
+--- a/src/bin/initdb/initdb.c
++++ b/src/bin/initdb/initdb.c
+@@ -3108,9 +3108,14 @@
+ 	fputs(_("performing post-bootstrap initialization ... "), stdout);
+ 	fflush(stdout);
+ 
++	/*
++	 * Not >nul: an AppContainer can't open nul on some Windows (Server
++	 * 2025). Its errors are on stderr; its output goes into a file in the
++	 * data directory, removed once the backend is done.
++	 */
+ 	initPQExpBuffer(&cmd);
+-	printfPQExpBuffer(&cmd, "\"%s\" %s %s template1 >%s",
+-					  backend_exec, backend_options, extra_options, DEVNULL);
++	printfPQExpBuffer(&cmd, "\"%s\" %s %s template1 >\"%s/initdb-post.out\"",
++					  backend_exec, backend_options, extra_options, pg_data);
+ 
+ 	PG_CMD_OPEN(cmd.data);
+ 
+@@ -3149,6 +3154,13 @@
+ 
+ 	PG_CMD_CLOSE();
+ 	termPQExpBuffer(&cmd);
++	{
++		char		out[MAXPGPATH];
++
++		snprintf(out, sizeof(out), "%s/initdb-post.out", pg_data);
++		if (unlink(out) != 0)
++			pg_fatal("could not remove file \"%s\": %m", out);
++	}
+ 
+ 	check_ok();
+ }

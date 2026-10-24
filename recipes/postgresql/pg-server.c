@@ -15,6 +15,14 @@
  * stays in the foreground, as long as the run: pg_ctl start would end with
  * its own run. Ctrl+C reaches postgres, which shuts down fast; this waits.
  *
+ * Installed extensions (images that extend org.postgresql.PostgreSQL) name
+ * their directories in PG_EXTENSION_DIRS, and what a server must load at
+ * start in PG_PRELOAD_LIBRARIES, each a ;-list, as zigsaw joins them. The
+ * server gets extension_control_path and dynamic_library_path with each
+ * directory's share and lib after PostgreSQL's own, and
+ * shared_preload_libraries, before the options given here, so that those
+ * win. postgres and pg_ctl start, run on their own, load none of them.
+ *
  * postgres refuses to run as an administrator. As initdb and pg_ctl do,
  * this runs itself again with Administrators and Power Users deny-only first
  * (get_restricted_token), and its children inherit that.
@@ -171,6 +179,75 @@ make_cluster(const char *bindir, const char *pgdata, const char *pgpass)
 	return true;
 }
 
+/*
+ * An environment variable's value, or NULL when it isn't set or is empty.
+ * The caller frees it.
+ */
+static char *
+getenv_copy(const char *name)
+{
+	DWORD		size = GetEnvironmentVariableA(name, NULL, 0);
+	char	   *value;
+
+	if (size <= 1)
+		return NULL;
+	value = malloc(size);
+	if (!value || GetEnvironmentVariableA(name, value, size) != size - 1)
+		pg_fatal("could not read %s", name);
+	return value;
+}
+
+/*
+ * The -c options for installed extensions, from PG_EXTENSION_DIRS and
+ * PG_PRELOAD_LIBRARIES, each quoted and followed by a space; "" for none.
+ */
+static char *
+extension_options(void)
+{
+	char	   *dirs = getenv_copy("PG_EXTENSION_DIRS");
+	char	   *preload = getenv_copy("PG_PRELOAD_LIBRARIES");
+	/* Each directory, of a character or more, gains at most 7 in each path. */
+	size_t		size = 8 * (dirs ? strlen(dirs) : 0) + (preload ? strlen(preload) : 0) + 128;
+	char	   *control = malloc(size);
+	char	   *library = malloc(size);
+	char	   *options = malloc(3 * size);
+
+	if (!control || !library || !options)
+		pg_fatal("out of memory");
+	strcpy(control, "$system");
+	strcpy(library, "$libdir");
+	options[0] = '\0';
+	if (dirs)
+	{
+		for (char *dir = strtok(dirs, ";"); dir; dir = strtok(NULL, ";"))
+		{
+			strcat(control, ";");
+			strcat(control, dir);
+			strcat(control, "\\share");
+			strcat(library, ";");
+			strcat(library, dir);
+			strcat(library, "\\lib");
+		}
+		snprintf(options, 3 * size,
+				 "\"-cextension_control_path=%s\" \"-cdynamic_library_path=%s\" ",
+				 control, library);
+	}
+	if (preload)
+	{
+		for (char *p = preload; *p; p++)
+			if (*p == ';')
+				*p = ',';
+		strcat(options, "\"-cshared_preload_libraries=");
+		strcat(options, preload);
+		strcat(options, "\" ");
+	}
+	free(dirs);
+	free(preload);
+	free(control);
+	free(library);
+	return options;
+}
+
 /* Whether postgres is asked only for its help, version or settings. */
 static bool
 informational(int argc, char **argv)
@@ -192,6 +269,7 @@ main(int argc, char **argv)
 	char		version[MAXPGPATH + 16];
 	char	   *slash;
 	char	   *cmdline;
+	char	   *extensions = "";
 	const char *args;
 	size_t		size;
 	int			code;
@@ -213,15 +291,16 @@ main(int argc, char **argv)
 		if (GetFileAttributesA(version) == INVALID_FILE_ATTRIBUTES &&
 			!make_cluster(bindir, pgdata, pgpass))
 			return 1;
+		extensions = extension_options();
 	}
 
 	SetConsoleCtrlHandler(ignore_console_event, TRUE);
 	args = arguments();
-	size = strlen(bindir) + strlen(args) + 32;
+	size = strlen(bindir) + strlen(extensions) + strlen(args) + 32;
 	cmdline = malloc(size);
 	if (!cmdline)
 		pg_fatal("out of memory");
-	snprintf(cmdline, size, "\"%s\\postgres.exe\" %s", bindir, args);
+	snprintf(cmdline, size, "\"%s\\postgres.exe\" %s%s", bindir, extensions, args);
 	code = run(cmdline);
 	free(cmdline);
 	return code < 0 ? 1 : code;

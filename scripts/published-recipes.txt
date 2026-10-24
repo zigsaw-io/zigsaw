@@ -66,4 +66,8 @@ flameshot.json
 notes.json
 ghostscript.json
 texlive.json
+make.json
+postgresql-sdk.json
 postgresql.json
+postgresql-pgvector.json
+postgresql-pg-cron.json

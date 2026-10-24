@@ -37,7 +37,7 @@ export MSYS_NO_PATHCONV=1
 groups=(
     "base: runtimes images extensions aliases projects prettier msvc sevenzip" # 2
     "zig: commands sqlite"                                                     # 7
-    "cmake-meson: cmake meson"                                                 # 7
+    "cmake-meson: cmake meson make"                                            # 7
     "langs: rust go dotnet java php"                                           # 9
 )
 if [ "${1:-}" = --groups ]; then
@@ -920,6 +920,33 @@ start=$SECONDS
 meson_again() { [ "$(rebuilt_manifest "$work\\meson\\hello.json")" = "$meson_app_digest" ]; }
 check "built again, it's the same image" meson_again
 printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$meson_time"
+fi
+
+# --- GNU make -----------------------------------------------------------------------
+
+if section make; then
+need_zig
+# GNU make's image (built with zig) runs a Makefile only GNU make reads
+# (patsubst, foreach, define and call, $(shell), a pattern rule) with -j4
+# and a sub-make; its recipes run in BusyBox's sh through the image's
+# sh.exe, so echo, mkdir -p and a for loop are BusyBox's, on any line.
+MAKEAPP=test.build.make
+check "make.json builds GNU make's image" z build "$root\\recipes\\make.json"
+mkdir -p "$work\\make" && cp "$(cygpath -u "$root")"/tests/build/make/{Makefile,sub.mk,*.c} "$(cygpath -u "$work")/make/" &&
+    sed -e "s/@MAKE@/$(manifest_of org.gnu.make)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\make\\make.json.in" >"$work\\make\\make.json"
+check "a GNU Makefile builds with make's, zig's and BusyBox's images" z build "$work\\make\\make.json"
+make_runs() {
+    local out dir="$ZIGSAW_HOME\\deploy\\$(own_layer $MAKEAPP)"
+    out=$(z run $MAKEAPP | tr -d '\r')
+    [ "$out" = "one plus two is 3" ] || { echo "got: $out"; return 1; }
+    out=$(cat "$dir\\names.txt" "$dir\\shell.txt" "$dir\\sub.txt" | tr -d '\r')
+    [ "$out" = "one
+two
+shell works
+the sub-make ran" ] || { echo "got: $out"; return 1; }
+}
+check "it runs, and the recipes ran in sh" make_runs
 fi
 
 # --- MSVC, if Visual Studio is installed ----------------------------------------------

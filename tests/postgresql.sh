@@ -12,13 +12,17 @@
 # made, and nothing written in the deployment. Under low and in an
 # AppContainer: a cluster made there, with the server's default settings,
 # and the procedural languages. A client outside an AppContainer can't reach
-# the server in it (no loopback exemption): a known gap.
+# the server in it (no loopback exemption): a known gap. Under each, the
+# installed extension images join: pgvector's HNSW index answers a
+# nearest-neighbour query, and pg_cron, which the server preloads, runs a
+# job every second; --noextension leaves pg_cron out.
 #
 #   POSTGRES_HOME=path\to\store bash tests/postgresql.sh [path\to\zigsaw.exe]
 #
 # Building PostgreSQL takes some 10 minutes, so this uses a store that has
-# it (POSTGRES_HOME, or BUILD_HOME as tests/published.sh leaves it), and
-# says so and stops if neither has.
+# it and both extensions (POSTGRES_HOME, or BUILD_HOME as tests/published.sh
+# leaves it), and says so and stops if neither has. With LOG_DIR set, each
+# server's output (initdb's too) is left there.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -27,11 +31,13 @@ root=$(cygpath -w "$(cd "$(dirname "$0")/.." && pwd)")
 zigsaw=${1:-$root/zig-out/bin/zigsaw.exe}
 ZIGSAW_HOME=${POSTGRES_HOME:-${BUILD_HOME:-}}
 APP=org.postgresql.PostgreSQL
-if [ -z "$ZIGSAW_HOME" ] || [ ! -f "$ZIGSAW_HOME\\refs\\$APP.json" ]; then
-    echo "tests/postgresql.sh needs a store with $APP in POSTGRES_HOME or BUILD_HOME;"
-    echo "build recipes\\postgresql.json into one first."
-    exit 1
-fi
+for id in $APP $APP.pgvector $APP.pg_cron; do
+    if [ -z "$ZIGSAW_HOME" ] || [ ! -f "$ZIGSAW_HOME\\refs\\$id.json" ]; then
+        echo "tests/postgresql.sh needs a store with $id in POSTGRES_HOME or BUILD_HOME;"
+        echo "build recipes\\postgresql.json, postgresql-pgvector.json and postgresql-pg-cron.json into one first."
+        exit 1
+    fi
+done
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
 data="$ZIGSAW_HOME\\data\\$APP"
@@ -82,14 +88,14 @@ is() {
     [ "$got" = "$want" ] || { echo "got: $got"; return 1; }
 }
 
-# start [postgres options]: a fresh cluster, made and served by `postgresql`.
-# check runs it in a subshell, so the server's run leaves its exit code in
-# a file, for stop.
+# start [postgres options]: a fresh cluster, made and served by `postgresql`,
+# with zigsaw's run options in RUN_OPTIONS. check runs it in a subshell, so
+# the server's run leaves its exit code in a file, for stop.
 start() {
-    local log="$work\\server-${SANDBOX:-soft}.out" i
+    local log="$work\\server-${SANDBOX:-soft}${RUN_OPTIONS:+-options}.out" i
     rm -rf "$data\\data" "$data\\pgpass.conf" "$work\\server.exit"
     (
-        timeout 600 "$zigsaw" run ${SANDBOX:+--sandbox=$SANDBOX} $APP -p $port "$@" >"$log" 2>&1
+        timeout 600 "$zigsaw" run ${SANDBOX:+--sandbox=$SANDBOX} ${RUN_OPTIONS:-} $APP -p $port "$@" >"$log" 2>&1
         echo $? >"$work\\server.exit"
     ) </dev/null >/dev/null 2>&1 &
     for i in $(seq 60); do
@@ -106,6 +112,29 @@ stop() {
     pg pg_ctl stop -m fast >/dev/null || return 1
     for i in $(seq 30); do [ -e "$work\\server.exit" ] && break; sleep 1; done
     [ "$(cat "$work\\server.exit" 2>/dev/null)" = 0 ] || { echo "the server's run exited with $(cat "$work\\server.exit" 2>/dev/null)"; return 1; }
+}
+# vectors: pgvector's HNSW index finds the nearest of three vectors.
+vectors() {
+    local out
+    out=$(sql "create extension vector" "create table items (id int, v vector(3))" \
+        "insert into items values (1, '[1,2,3]'), (2, '[4,5,6]'), (3, '[1,1,1]')" \
+        "create index on items using hnsw (v vector_l2_ops)" "set enable_seqscan = off" \
+        "select id from items order by v <-> '[1,1,2]' limit 1" \
+        "explain (costs off) select id from items order by v <-> '[1,1,2]' limit 1" 2>&1)
+    grep -qx 3 <<<"$out" && grep -q 'Index Scan using items_v_idx' <<<"$out" || { echo "$out"; return 1; }
+}
+# cron: pg_cron, which the server preloads, runs a job every second.
+cron() {
+    local i n=0
+    sql "create extension pg_cron" "create table ticks (at timestamptz default now())" \
+        "select cron.schedule('tick', '1 seconds', 'insert into ticks default values')" >/dev/null || return 1
+    for i in $(seq 10); do
+        sleep 1
+        n=$(sql "select count(*) from ticks") || return 1
+        [ "$n" -lt 2 ] || return 0
+    done
+    echo "$n tick(s) in 10 s; last run: $(sql "select status || ' ' || coalesce(return_message, '') from cron.job_run_details order by runid desc limit 1")"
+    return 1
 }
 
 # Runs from the work directory: the app has no filesystem permission.
@@ -159,6 +188,8 @@ backup() {
     pg pg_basebackup -p $port -Ft --compress=client-zstd --checkpoint=fast -D "$data\\backup" && test -s "$data\\backup\\base.tar.zst"
 }
 check "pg_basebackup makes a zstd-compressed backup" backup
+check "pgvector's HNSW index finds the nearest vector" vectors
+check "pg_cron, preloaded, runs a job every second" cron
 check "pg_ctl stops it from another run" stop
 tree=$(cygpath -w "$("$zigsaw" run --command=pg_config $APP --bindir 2>/dev/null | tr -d '\r')\\..")
 written() {
@@ -168,6 +199,13 @@ written() {
 }
 check "nothing was written in the deployment" written
 
+RUN_OPTIONS=--noextension=$APP.pg_cron
+check "with --noextension=…pg_cron, a server starts without it" start
+check "  and preloads nothing, while pgvector still joins" is "|1" \
+    "create extension vector" "select current_setting('shared_preload_libraries') || '|' || count(*) from pg_extension where extname = 'vector'"
+check "  and pg_ctl stops it" stop
+unset RUN_OPTIONS
+
 for SANDBOX in low appcontainer; do
     check "$SANDBOX: postgresql makes a cluster and serves it" start
     check "$SANDBOX: with the server's default settings" is "100|128MB" "select current_setting('max_connections') || '|' || current_setting('shared_buffers')"
@@ -176,6 +214,8 @@ for SANDBOX in low appcontainer; do
         "create function perlv() returns text as \$\$ return sprintf('perl %vd', \$^V); \$\$ language plperl" \
         "create function pyv() returns text as \$\$ import sys; return 'python %d.%d.%d' % sys.version_info[:3] \$\$ language plpython3u" \
         "select perlv() || '|' || pyv()"
+    check "$SANDBOX: pgvector's HNSW index finds the nearest vector" vectors
+    check "$SANDBOX: pg_cron runs a job every second" cron
     if [ $SANDBOX = appcontainer ]; then
         outside() { timeout 60 "$zigsaw" run --sandbox=soft --command=psql $APP -p $port -XAt -c "select 1" | tr -d '\r' | grep -qx 1; }
         gap "appcontainer: a client outside the container reaches the server in it" outside
@@ -188,6 +228,7 @@ check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep
 
 cd "$root" || exit 1
 rm -rf "$data\\data" "$data\\pgpass.conf" "$data\\backup" "$data\\postgres.dump" "$data\\server.crt" "$data\\server.key"
+[ -z "${LOG_DIR:-}" ] || cp "$(cygpath -u "$work")"/server-*.out "$(cygpath -u "$LOG_DIR")" 2>/dev/null
 rm -rf "$work"
 echo
 echo "$failures check(s) failed, and $gaps known gap(s)."

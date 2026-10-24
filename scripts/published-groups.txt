@@ -58,5 +58,6 @@ qt: qt6-sdk.json qt6.json flameshot.json notes.json
 # after another; under 6 with them cached)
 texlive: ghostscript.json texlive.json
 
-# PostgreSQL alone (10 here: OpenSSL, then PostgreSQL's 2,000 compiles)
-postgresql: postgresql.json
+# PostgreSQL's SDK (10 here: OpenSSL, then PostgreSQL's 2,000 compiles),
+# PostgreSQL from it, and its extensions, with GNU make (under a minute each)
+postgresql: make.json postgresql-sdk.json postgresql.json postgresql-pgvector.json postgresql-pg-cron.json

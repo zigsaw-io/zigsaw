@@ -1,0 +1,43 @@
+{
+  "id": "org.gnu.make",
+  "version": "4.4.1",
+  "name": "GNU Make",
+  "summary": "GNU make, built with zig, running recipes in BusyBox's sh: for builds whose Makefiles need GNU make (PostgreSQL's pgxs)",
+  "homepage": "https://www.gnu.org/software/make/",
+  "license": "GPL-3.0-or-later",
+  "command": "bin/make.exe",
+  "path": ["bin"],
+  "permissions": { "filesystem": ["cwd"] },
+  "exports": {},
+  "aliases": {
+    "make": { "command": "bin/make.exe" },
+    "gmake": { "command": "bin/make.exe" }
+  },
+  "sdk": {
+    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "make",
+      "sources": [
+        {
+          "url": "https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz",
+          "sha256": "dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3",
+          "strip": 1
+        },
+        { "path": "make/posix-shell.patch", "dest": "zigsaw/posix-shell.patch" },
+        { "path": "make/sh.c", "dest": "zigsaw/sh.c" }
+      ],
+      "build": [
+        "patch -p1 < zigsaw/posix-shell.patch",
+        "cp src/config.h.W32 src/config.h && cp lib/glob.in.h lib/glob.h && cp lib/fnmatch.in.h lib/fnmatch.h",
+        "mkdir -p \"$PREFIX/bin\"",
+        "cc -O2 -std=gnu99 -Isrc -Ilib -Isrc/w32/include -DHAVE_CONFIG_H -s -Wl,-Brepro -o \"$PREFIX/bin/make.exe\" src/ar.c src/arscan.c src/commands.c src/default.c src/dir.c src/expand.c src/file.c src/function.c src/getopt.c src/getopt1.c src/guile.c src/hash.c src/implicit.c src/job.c src/load.c src/loadapi.c src/main.c src/misc.c src/output.c src/read.c src/remake.c src/remote-stub.c src/rule.c src/shuffle.c src/signame.c src/strcache.c src/variable.c src/version.c src/vpath.c src/w32/pathstuff.c src/w32/w32os.c src/w32/compat/posixfcn.c src/w32/subproc/misc.c src/w32/subproc/sub_proc.c src/w32/subproc/w32err.c lib/fnmatch.c lib/glob.c lib/getloadavg.c",
+        "cc -O2 -municode -s -Wl,-Brepro -o \"$PREFIX/bin/sh.exe\" zigsaw/sh.c",
+        "\"$PREFIX/bin/make.exe\" --version",
+        "cp COPYING README \"$PREFIX/\""
+      ]
+    }
+  ]
+}

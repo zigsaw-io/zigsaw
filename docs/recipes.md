@@ -140,7 +140,9 @@ A runtime's permissions don't carry over: the app's own apply.
 ## Extension points
 
 Some images are made to be added to a runtime after the fact, as a
-Flatpak runtime's extensions are: PHP's extensions to PHP. A runtime (or
+Flatpak runtime's extensions are: PHP's extensions to PHP, GTK's
+dictionaries, and [PostgreSQL's extensions](#postgresql-extensions) to its
+server. A runtime (or
 any app) declares an extension point, and an image that `extends` it joins
 every run of whatever has the point, once installed, without apps listing
 it. PHP's runtime ([`recipes/php.json`](recipes/php.json)):
@@ -673,6 +675,27 @@ Paths it writes into what it builds, such as the absolute ones in its unity
 builds' sources (GTK's SVG code, whose asserts name their files), would
 then differ from store to store. The image's Meson keeps the paths as given
 instead (the recipe changes its `realpath` calls with `sed`), so they stay on `B:`.
+
+## GNU make
+
+BusyBox's `make` is pdpmake, POSIX make with a few extensions, which runs
+most autotools builds but not Makefiles written for GNU make
+(`$(patsubst)`, `$(foreach)`, `define`, `$(call)`), such as PostgreSQL's
+pgxs. [`org.gnu.make`](recipes/make.json) is GNU make 4.4.1, built with
+zig from the files `build_w32.bat` compiles, with no configure. Builds that
+list it get `make` (and `gmake`) as an [alias](#building-from-source), ahead
+of BusyBox's applet.
+
+On Windows, GNU make runs recipes in the first `sh.exe` on PATH, or in
+cmd.exe without one. The image's `bin` has an `sh.exe`
+([`sh.c`](recipes/make/sh.c)) that runs `busybox.exe sh` with its command
+line, so recipes run in BusyBox's sh. GNU make also starts a line without
+shell syntax itself, as on Unix, where `echo` and `mkdir` are programs; on
+Windows they're BusyBox's applets, so
+[`posix-shell.patch`](recipes/make/posix-shell.patch) has every line go
+through the shell when it's a POSIX one. The builder looks for an `sh.exe`
+on the build's PATH before `busybox.exe`, so with this image it runs the
+build commands through it too, one process more per command.
 
 ## GTK
 
@@ -2617,7 +2640,11 @@ image answer.
 
 [`org.postgresql.PostgreSQL`](recipes/postgresql.json) is PostgreSQL 18
 built from its release tarball with Meson and zig, as PostgreSQL's MinGW
-build. Its libraries are modules of the recipe, built static and linked in:
+build. As GTK's runtime does, it takes its files from an SDK,
+[`org.postgresql.PostgreSQL.Sdk`](recipes/postgresql-sdk.json), which builds
+PostgreSQL and keeps what extensions are built with (see
+[Extensions](#postgresql-extensions)); the runtime's cleanup leaves those
+out. Its libraries are modules of the SDK's recipe, built static and linked in:
 zlib, lz4 and zstd with CMake, libxml2 with Meson, and OpenSSL as GTK's SDK
 builds it (with Perl's image and
 [`openssl-unixspec.pm`](recipes/gtk4-sdk/openssl-unixspec.pm)). ICU is
@@ -2660,8 +2687,7 @@ Besides: PostgreSQL 17 and later don't ship their bison and flex output, so
 winflexbison builds it; zlib's CMake names its static library `libzs.a`; and
 libxml2's `.pc` lacks `-DLIBXML_STATIC`, and OpenSSL's lists its system
 libraries as private, which the recipe puts right for static linking. The
-image has no headers, static libraries or pgxs (whose `Makefile.global`
-names the store's Perl by its path, which made each store's layer differ).
+runtime has no headers, static libraries or pgxs.
 [`signal-pipes.patch`](recipes/postgresql/signal-pipes.patch) moves the named
 pipes PostgreSQL emulates signals with under `\\.\pipe\LOCAL\`, the only
 place an AppContainer may make them.
@@ -2688,6 +2714,75 @@ place an AppContainer may make them.
   running postgres through cmd.exe, which there can't start a program in the
   store, and would take its least (20 and 400kB); the launcher sets the
   server's defaults (100 and 128MB).
+- initdb's last step runs a backend through cmd.exe with its output sent to
+  `nul`, which an AppContainer on Server 2025 can't open (Windows 11 26300's
+  can): [`initdb-nul.patch`](recipes/postgresql/initdb-nul.patch) sends it to
+  a file in the cluster's directory instead, removed once the backend is
+  done. Its errors were on stderr already.
+
+### PostgreSQL extensions
+
+PostgreSQL's image has an [extension point](#extension-points),
+`org.postgresql.PostgreSQL` at version `18` (an extension's `PG_MODULE_MAGIC`
+is for a major version), that joins `PG_EXTENSION_DIRS` and
+`PG_PRELOAD_LIBRARIES`. An extension image names its directory in the first
+and, if the server must load it at start, its library in the second; the
+launcher turns them into `extension_control_path` and `dynamic_library_path`
+(each directory's `share` and `lib` after PostgreSQL's own) and
+`shared_preload_libraries`, before the options it's given, so those win.
+PostgreSQL 18 finds a control file on that path and loads its
+`$libdir/<name>` from the directories after `$libdir`, so extensions build
+and install as they do anywhere. `postgres` or `pg_ctl start`, run on their
+own, load no extensions.
+
+Extensions build with pgxs from the SDK, with [GNU make](#gnu-make)'s image,
+as their documentation says, installing into the image's prefix rather
+than the SDK's read-only deployment:
+
+```json
+"extends": { "point": "org.postgresql.PostgreSQL", "version": "18" },
+"env": { "PG_EXTENSION_DIRS": "${app}" },
+"sdk": { "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:...", "make": "org.gnu.make:4.4.1@sha256:...", "zig": "...", "busybox": "..." },
+"modules": [
+  {
+    "name": "pgvector",
+    "sources": [...],
+    "build": [
+      "sdk=$(dirname \"$(pg_config --bindir)\") && make -j\"$(nproc)\" USE_PGXS=1 OPTFLAGS= \"COPT=-fmacro-prefix-map=$sdk=pgsdk\"",
+      "make install USE_PGXS=1 OPTFLAGS= pkglibdir=\"$PREFIX/lib\" datadir=\"$PREFIX/share\" includedir_server=\"$PREFIX/include/server\""
+    ]
+  }
+]
+```
+
+What the SDK does for that: zig's linker looks for `-lpq` only as
+`libpq.a`, not as `libpq.dll.a`, so the import libraries of PostgreSQL's
+DLLs are named `lib<name>.a` in place of the static ones (pg_cron linked
+libpq's static library, LDAP and all, before); pgxs's `Makefile.global`
+names tools by name rather than by the build's or the store's paths (Perl's
+path in it made each store's SDK differ), and links without the build's
+`noexport.o` (extensions mark what they export, so nothing else is);
+pkg-config files are relocatable, as Qt's are. Its static libraries are
+compiled with `CFLAGS=-s`: zig's cc otherwise writes debug info into each
+object, with clang's command line naming the store's zig and a random
+temporary file, so the libraries differed between stores (programs linked
+with `-s` don't keep it). An extension's build maps the SDK's directory away
+(`COPT=-fmacro-prefix-map=...`, as GTK 3's SDK does with GTK's): PostgreSQL's
+headers' `__FILE__`s would otherwise put the SDK's path in the store into
+the DLL.
+
+- [`org.postgresql.PostgreSQL.pgvector`](recipes/postgresql-pgvector.json),
+  pgvector 0.8.7: `OPTFLAGS=` drops pgvector's default `-march=native`,
+  which would make the image depend on the building machine's CPU; its
+  AVX-512 functions are still chosen at run time, once zig's clang has the
+  `evex512` it wants beside `avx512f` (a `sed`).
+- [`org.postgresql.PostgreSQL.pg_cron`](recipes/postgresql-pg-cron.json),
+  pg_cron 1.6.8, preloaded (`PG_PRELOAD_LIBRARIES=pg_cron`), in the
+  `postgres` database. Its jobs connect to the server with libpq by
+  default, and on Windows those connections never got past connecting (its
+  poll() is WSAPoll), so every job timed out at startup; the image makes
+  `cron.use_background_workers` on by default, which runs jobs in
+  background workers without a connection or a password.
 
 PostgreSQL's regression suites pass on the build: regress (231 tests),
 isolation (122), plpgsql, plperl and plpython. [`tests/postgresql.sh`](tests/postgresql.sh)
