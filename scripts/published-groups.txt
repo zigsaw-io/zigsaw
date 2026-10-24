@@ -57,3 +57,6 @@ qt: qt6-sdk.json qt6.json flameshot.json notes.json
 # here from a cold cache, most of it downloading its 432 pinned files one
 # after another; under 6 with them cached)
 texlive: ghostscript.json texlive.json
+
+# PostgreSQL alone (10 here: OpenSSL, then PostgreSQL's 2,000 compiles)
+postgresql: postgresql.json

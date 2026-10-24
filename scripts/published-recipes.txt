@@ -66,3 +66,4 @@ flameshot.json
 notes.json
 ghostscript.json
 texlive.json
+postgresql.json

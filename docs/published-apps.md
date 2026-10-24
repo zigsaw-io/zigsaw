@@ -73,6 +73,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Notes (built from source, on Qt Quick) | `io.github.nuttyartist.notes` | 2.3.1 | `notes` |
 | Ghostscript (built from source) | `com.artifex.Ghostscript` | 10.08.0 | `gs`, `gswin64c` |
 | TeX Live, its small scheme (on Perl and Ghostscript; packages from tlnet) | `org.tug.texlive` | 2026.80721 | `latexmk`, `pdflatex`, `xelatex`, `lualatex`, `latex`, `tex`, `bibtex`, `biber`, `makeindex`, `mpost`, `kpsewhich`, `dvips`, `dvipdfmx`, `epstopdf`, `ps2pdf` and 116 more |
+| PostgreSQL, with PL/Perl and PL/Python (built from source with zig; on Perl and Python) | `org.postgresql.PostgreSQL` | 18.6 | `postgresql`, `postgres`, `initdb`, `pg_ctl`, `psql`, `pg_dump`, `pg_dumpall`, `pg_restore`, `pg_basebackup`, `pg_isready`, `createdb`, `dropdb`, `createuser`, `dropuser`, `vacuumdb`, `reindexdb`, `clusterdb`, `pgbench` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -145,6 +146,16 @@ debugger opens `.pdf` files and Logisim `.circ` files, and all three keep
 their settings with the app. So is Scene Builder, which designs JavaFX
 user interfaces: it brings its own JavaFX (OpenJFX) and opens `.fxml`
 files.
+[PostgreSQL](recipes.md#postgresql) is built from source with Meson and
+zig, with OpenSSL, zlib, lz4, zstd and libxml2 built in, ICU from Windows'
+own `icu.dll`, and PL/Perl and PL/Python on Perl's and Python's images as
+runtimes. `postgresql` runs the server in the foreground, on `localhost:5432`
+(`postgresql -p 5433` for another port): its first run makes a cluster in
+the app's data, UTF-8 in the builtin `C.UTF-8` locale, with a random
+password for the `postgres` user, which the app's own clients (`psql`,
+`pg_dump`...) find in its password file there. The server lasts as long as
+its run: `pg_ctl stop`, or Ctrl+C, stops it, and `pg_ctl start` doesn't
+outlive its own run.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.

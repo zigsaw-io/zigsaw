@@ -1,0 +1,11 @@
+# ICU's C API in Windows' own icu.dll (ICU 72.1 on Windows 11 and Server
+# 2025): ICU 72.1's headers, with the unversioned names that DLL exports, and
+# the import library mingw-w64 has for it (zig's -licu).
+prefix=B:/prefix
+includedir=${prefix}/include
+
+Name: icu-uc
+Description: ICU's common library, as Windows' icu.dll
+Version: 72.1
+Cflags: -I${includedir} -DU_DISABLE_RENAMING=1 -DU_SHOW_CPLUSPLUS_API=0
+Libs: -licu

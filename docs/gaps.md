@@ -329,6 +329,26 @@
   upstream's default; plugins go in `plugins` in its data by hand. Its
   router keeps `app\`, `libs\`, `vendor\` and `cli` from the web; PHP's
   server ignores Kanboard's `.htaccess` files.
+- PostgreSQL's server lasts as long as the run that started it, as every
+  run's processes do: `pg_ctl start` starts one that ends with pg_ctl's run,
+  and there's no Windows service (that takes an administrator). Run
+  `postgresql` in a console of its own, and `pg_ctl stop` or Ctrl+C there to
+  stop it.
+- Under `--sandbox=appcontainer`, PostgreSQL's server can only be reached by
+  the app's own runs (psql, pg_dump...) in an AppContainer too: other
+  programs can't reach `127.0.0.1` in the container without a loopback
+  exemption, which takes an administrator. In an AppContainer, what
+  PostgreSQL runs through cmd.exe can't start the store's programs:
+  `archive_command`, `restore_command`, `COPY ... PROGRAM` and psql's `\!`
+  with them, and initdb's test of `max_connections` and `shared_buffers`
+  (`postgresql` sets them; a cluster made with `initdb` itself there gets
+  initdb's least).
+- PostgreSQL's ICU collations are Windows' `icu.dll`'s (ICU 72.1 on Windows
+  11 and Server 2025): a Windows update that changes ICU changes their
+  version, and PostgreSQL warns about the indexes on them, as it does on any
+  system whose ICU is updated. The default, `C.UTF-8`, is PostgreSQL's own.
+  There's no SDK for building extensions (pgvector, PostGIS): the image has
+  no server headers or import library.
 - Composer's image can't update itself (`self-update`): its `composer.phar`
   is in the read-only image; a newer Composer is a newer image.
   `composer diagnose` reports its keys for verifying updates missing.

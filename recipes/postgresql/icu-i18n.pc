@@ -1,0 +1,5 @@
+# ICU's i18n library is in Windows' icu.dll too (see icu-uc.pc).
+Name: icu-i18n
+Description: ICU's i18n library, as Windows' icu.dll
+Version: 72.1
+Requires: icu-uc

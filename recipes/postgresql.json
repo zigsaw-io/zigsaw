@@ -1,0 +1,232 @@
+{
+  "id": "org.postgresql.PostgreSQL",
+  "version": "18.6",
+  "name": "PostgreSQL",
+  "summary": "The PostgreSQL database server and its client programs, built with zig, with PL/Perl and PL/Python",
+  "homepage": "https://www.postgresql.org/",
+  "license": "PostgreSQL",
+  "command": "bin/pg-server.exe",
+  "path": ["bin"],
+  "env": {
+    "PGDATA": "${data}\\data",
+    "PGPASSFILE": "${data}\\pgpass.conf",
+    "PGUSER": "postgres",
+    "PGHOST": "localhost"
+  },
+  "permissions": { "network": true },
+  "exports": {
+    "postgresql": { "command": "bin/pg-server.exe" },
+    "postgres": { "command": "bin/postgres.exe" },
+    "initdb": { "command": "bin/initdb.exe" },
+    "pg_ctl": { "command": "bin/pg_ctl.exe" },
+    "psql": { "command": "bin/psql.exe" },
+    "pg_dump": { "command": "bin/pg_dump.exe" },
+    "pg_dumpall": { "command": "bin/pg_dumpall.exe" },
+    "pg_restore": { "command": "bin/pg_restore.exe" },
+    "pg_basebackup": { "command": "bin/pg_basebackup.exe" },
+    "pg_isready": { "command": "bin/pg_isready.exe" },
+    "createdb": { "command": "bin/createdb.exe" },
+    "dropdb": { "command": "bin/dropdb.exe" },
+    "createuser": { "command": "bin/createuser.exe" },
+    "dropuser": { "command": "bin/dropuser.exe" },
+    "vacuumdb": { "command": "bin/vacuumdb.exe" },
+    "reindexdb": { "command": "bin/reindexdb.exe" },
+    "clusterdb": { "command": "bin/clusterdb.exe" },
+    "pgbench": { "command": "bin/pgbench.exe" }
+  },
+  "sdk": {
+    "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
+    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
+    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "runtimes": {
+    "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85",
+    "python": "org.python.python:3.14.7@sha256:fa12bbaf83e7ba1ad30551c90eb85b3655e8ecea933ea9ee6b1728de02fe809d"
+  },
+  "cleanup": ["/include", "/lib/cmake", "/lib/pkgconfig", "*.a", "/share/doc", "/share/man", "/bin/xml2-config", "/bin/xmllint.exe", "/bin/xmlcatalog.exe", "/bin/test_cloexec.exe", "/lib/postgresql/pgxs"],
+  "modules": [
+    {
+      "name": "crt-noexport",
+      "build": [
+        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
+        "cc -c noexport.s -o noexport.o"
+      ]
+    },
+    {
+      "name": "flex-bison",
+      "sources": [
+        {
+          "url": "https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip",
+          "sha256": "8d324b62be33604b2c45ad1dd34ab93d722534448f55a16ca7292de32b6ac135"
+        }
+      ],
+      "build": ["./win_flex.exe --version && ./win_bison.exe --version"]
+    },
+    {
+      "name": "windres",
+      "sources": [{ "path": "gtk4-sdk/windres.c" }],
+      "build": ["cc -O2 -s -municode windres.c -o windres.exe"]
+    },
+    {
+      "name": "nm",
+      "sources": [{ "path": "gtk4-sdk/nm.c" }],
+      "build": ["cc -O2 -s nm.c -o nm.exe"]
+    },
+    {
+      "name": "zlib",
+      "sources": [
+        {
+          "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz",
+          "sha256": "d7a0654783a4da529d1bb793b7ad9c3318020af77667bcae35f95d0e42a792f3",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DZLIB_BUILD_TESTING=OFF -DZLIB_BUILD_SHARED=OFF",
+        "cmake --build out",
+        "cmake --install out",
+        "mv \"$PREFIX/lib/libzs.a\" \"$PREFIX/lib/libz.a\"",
+        "cp LICENSE \"$PREFIX/LICENSE.zlib\""
+      ]
+    },
+    {
+      "name": "lz4",
+      "sources": [
+        {
+          "url": "https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz",
+          "sha256": "537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S build/cmake -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DLZ4_BUILD_CLI=OFF -DLZ4_BUILD_LEGACY_LZ4C=OFF",
+        "cmake --build out",
+        "cmake --install out",
+        "cp lib/LICENSE \"$PREFIX/LICENSE.lz4\""
+      ]
+    },
+    {
+      "name": "zstd",
+      "sources": [
+        {
+          "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+          "sha256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S build/cmake -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DZSTD_BUILD_SHARED=OFF -DZSTD_BUILD_PROGRAMS=OFF -DZSTD_BUILD_TESTS=OFF",
+        "cmake --build out",
+        "cmake --install out",
+        "cp LICENSE \"$PREFIX/LICENSE.zstd\""
+      ]
+    },
+    {
+      "name": "libxml2",
+      "sources": [
+        {
+          "url": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz",
+          "sha256": "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "sed -i \"/^r = run_command('git', 'describe', check: false)$/,/^endif$/d\" meson.build",
+        "! grep -q \"run_command('git'\" meson.build",
+        "meson setup out --prefix=\"$PREFIX\" --buildtype=release --default-library=static -Ddocs=disabled -Dpython=disabled -Dhttp=disabled -Dicu=disabled -Diconv=disabled -Dreadline=disabled -Dhistory=disabled -Dzlib=disabled",
+        "meson install -C out",
+        "sed -i 's/^Cflags: .*/& -DLIBXML_STATIC/' \"$PREFIX/lib/pkgconfig/libxml-2.0.pc\"",
+        "grep -q '^Cflags: .* -DLIBXML_STATIC$' \"$PREFIX/lib/pkgconfig/libxml-2.0.pc\"",
+        "cp Copyright \"$PREFIX/LICENSE.libxml2\""
+      ]
+    },
+    {
+      "name": "openssl",
+      "env": {
+        "CFLAGS": "-s -O2",
+        "PERL": "perl",
+        "PERL5OPT": "-IB:/src/openssl/zigsaw -Munixspec"
+      },
+      "sources": [
+        {
+          "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+          "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/openssl-unixspec.pm", "dest": "zigsaw/unixspec.pm" }
+      ],
+      "build": [
+        "perl Configure mingw64 no-shared no-asm no-tests no-docs no-apps no-module --prefix=\"$PREFIX\" --libdir=lib",
+        "make build_generated $(sed -n '/^GENERATED=/,/[^\\\\]$/p' Makefile | tr ' ' '\\n' | grep '[.][ch]$')",
+        "make -n build_libs | grep -e ' -c -o ' | tr '\\n' '\\0' | xargs -0 -P \"$(nproc)\" -n 1 sh -c",
+        "make build_sw",
+        "make install_dev",
+        "sed -i 's/^Libs: .* -lcrypto$/& -lws2_32 -lgdi32 -lcrypt32/' \"$PREFIX/lib/pkgconfig/libcrypto.pc\"",
+        "grep -q '^Libs: .* -lcrypt32$' \"$PREFIX/lib/pkgconfig/libcrypto.pc\"",
+        "cp LICENSE.txt \"$PREFIX/LICENSE.openssl\""
+      ]
+    },
+    {
+      "name": "icu-headers",
+      "sources": [
+        {
+          "url": "https://github.com/unicode-org/icu/releases/download/release-72-1/icu4c-72_1-src.tgz",
+          "sha256": "a2d2d38217092a7ed56635e34467f92f976b370e20182ad325edea6681a71d68",
+          "strip": 1
+        },
+        { "path": "postgresql/icu-uc.pc", "dest": "zigsaw/icu-uc.pc" },
+        { "path": "postgresql/icu-i18n.pc", "dest": "zigsaw/icu-i18n.pc" }
+      ],
+      "build": [
+        "mkdir -p \"$PREFIX/include/unicode\" \"$PREFIX/lib/pkgconfig\"",
+        "cp source/common/unicode/*.h source/i18n/unicode/*.h \"$PREFIX/include/unicode/\"",
+        "cp zigsaw/icu-uc.pc zigsaw/icu-i18n.pc \"$PREFIX/lib/pkgconfig/\""
+      ]
+    },
+    {
+      "name": "python-dev",
+      "sources": [
+        {
+          "url": "https://www.nuget.org/api/v2/package/python/3.14.7",
+          "sha256": "46a4da5529a92d18ff894911f6e6033a8253198d705b8161bf28c9123c87d46b",
+          "type": "zip",
+          "dest": "nupkg"
+        }
+      ],
+      "build": ["./nupkg/tools/python.exe -B -c 'import sysconfig; print(sysconfig.get_platform())'"]
+    },
+    {
+      "name": "postgresql",
+      "env": {
+        "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o",
+        "RC": "B:/src/windres/windres.exe"
+      },
+      "sources": [
+        {
+          "url": "https://ftp.postgresql.org/pub/source/v18.6/postgresql-18.6.tar.gz",
+          "sha256": "983ee554ec53dbeb9b70797bef9fcf4e67e117e7e48ca1463cc80b3ff8e8ff3f",
+          "strip": 1
+        },
+        { "path": "postgresql/signal-pipes.patch", "dest": "zigsaw/signal-pipes.patch" },
+        { "path": "postgresql/zig-mingw.patch", "dest": "zigsaw/zig-mingw.patch" },
+        { "path": "postgresql/mingw_gendef.pl", "dest": "src/tools/mingw_gendef.pl" }
+      ],
+      "build": [
+        "patch -p1 < zigsaw/signal-pipes.patch",
+        "patch -p1 < zigsaw/zig-mingw.patch",
+        "PATH=\"B:/src/flex-bison;B:/src/nm;$PATH\" meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dauto_features=disabled -Dssl=openssl -Dzlib=enabled -Dlz4=enabled -Dzstd=enabled -Dicu=enabled -Dlibxml=enabled -Dldap=enabled -Dplperl=enabled -Dplpython=enabled -Dtap_tests=disabled -Ddocs=disabled -Ddocs_pdf=disabled -DPYTHON=B:/src/python-dev/nupkg/tools/python.exe",
+        "PATH=\"B:/src/nm;$PATH\" meson install -C out",
+        "cp COPYRIGHT \"$PREFIX/COPYRIGHT\""
+      ]
+    },
+    {
+      "name": "pg-server",
+      "sources": [{ "path": "postgresql/pg-server.c" }],
+      "build": [
+        "cc -O2 -s -Wl,-Brepro -I B:/src/postgresql/src/include -I B:/src/postgresql/out/src/include -I B:/src/postgresql/src/include/port/win32 -D_POSIX_C_SOURCE -o \"$PREFIX/bin/pg-server.exe\" pg-server.c B:/src/postgresql/out/src/common/libpgcommon.a B:/src/postgresql/out/src/port/libpgport.a -lws2_32 -lsecur32 -lbcrypt -ladvapi32",
+        "\"$PREFIX/bin/pg-server.exe\" --version"
+      ]
+    }
+  ]
+}

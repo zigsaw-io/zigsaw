@@ -115,8 +115,8 @@ jobs:
     # 70 (48 here), in a qt job of 77 minutes; in iteration 41's, on slower
     # runners, every command of the SDK half took half as long again: 109
     # minutes, in a qt job of 120. Ghostscript and TeX Live took 16 and 15
-    # minutes here (iteration 43).
-    timeout-minutes: ${{ startsWith(matrix.group, 'qt') && 180 || (startsWith(matrix.group, 'gtk') || matrix.group == 'gettext' || matrix.group == 'rnote' || matrix.group == 'gnumeric' || matrix.group == 'texlive') && 75 || 30 }}
+    # minutes here (iteration 43), and PostgreSQL 10 (iteration 45).
+    timeout-minutes: ${{ startsWith(matrix.group, 'qt') && 180 || (startsWith(matrix.group, 'gtk') || matrix.group == 'gettext' || matrix.group == 'rnote' || matrix.group == 'gnumeric' || matrix.group == 'texlive' || matrix.group == 'postgresql') && 75 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -186,7 +186,7 @@ jobs:
           ZIGSAW_HOME: ${{ runner.temp }}\store
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
-          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls texlive 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
+          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls texlive postgresql 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
 
       # The suites run whether or not the steps before them passed.
       - name: tests/store.sh
@@ -243,6 +243,16 @@ jobs:
         env:
           TEXLIVE_HOME: ${{ runner.temp }}\store
         run: bash tests/texlive.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/texlive.txt"
+
+      # PostgreSQL as published, with Perl's and Python's images as its
+      # runtimes, in the seeded store: its server in each sandbox, on a port
+      # of its own, away from the runner's PostgreSQL's 5432.
+      - name: tests/postgresql.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          POSTGRES_HOME: ${{ runner.temp }}\store
+        run: bash tests/postgresql.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/postgresql.txt"
 
       # Last, in the seeded store, whose apps it runs: it changes their data.
       - name: tests/matrix.sh

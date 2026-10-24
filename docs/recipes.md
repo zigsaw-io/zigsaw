@@ -2613,6 +2613,86 @@ It builds in about 16 minutes here, as BusyBox's make compiles one file at
 a time. Its licence is the AGPL 3, which the sources pushed next to its
 image answer.
 
+## PostgreSQL
+
+[`org.postgresql.PostgreSQL`](recipes/postgresql.json) is PostgreSQL 18
+built from its release tarball with Meson and zig, as PostgreSQL's MinGW
+build. Its libraries are modules of the recipe, built static and linked in:
+zlib, lz4 and zstd with CMake, libxml2 with Meson, and OpenSSL as GTK's SDK
+builds it (with Perl's image and
+[`openssl-unixspec.pm`](recipes/gtk4-sdk/openssl-unixspec.pm)). ICU is
+Windows' own `icu.dll`: the recipe takes ICU 72.1's headers (what Windows 11
+and Server 2025 ship), with `U_DISABLE_RENAMING` for the unversioned names
+that DLL exports, and links mingw-w64's import library for it (`-licu`),
+through two `.pc` files of its own. PL/Perl and PL/Python are linked against
+Perl's image's `perl542.dll` and Python 3.14's `python314.dll` (headers and
+import library from Python's NuGet package, at build time), and those images
+are the app's runtimes, so their DLLs are on PATH. Its layer is 33 MB.
+
+What PostgreSQL's MinGW build needs from zig
+([`zig-mingw.patch`](recipes/postgresql/zig-mingw.patch)):
+
+- **A .def file for `postgres.exe`.** Extensions link against the server's
+  import library, which a MinGW build makes with `--export-all-symbols`; zig's
+  linker takes that flag and ignores it, so the server exported only the
+  variables marked `PGDLLIMPORT`, and every extension linked with undefined
+  symbols. As with MSVC, the build now writes `postgres.def`, of everything
+  the backend's libraries define:
+  [`mingw_gendef.pl`](recipes/postgresql/mingw_gendef.pl) reads it from
+  GTK's SDK's `nm`, built by the recipe, and the member lists of Meson's thin
+  archives, which that `nm` doesn't read. zig's cc takes a `.def` file as an
+  input.
+- **No `--allow-multiple-definition` or `--disable-auto-import`**, which
+  zig's linker refuses. The first let PostgreSQL's getopt replace mingw's:
+  on Windows, its getopt now keeps its own variables too, as mingw's are in
+  the object that has mingw's getopt.
+- **MinGW's setjmp and longjmp, not GCC's builtins**, which PostgreSQL uses
+  for MinGW-64: with clang's, a backend crashed after some errors (a `DO`
+  block in a language that doesn't exist), on a bad portal once longjmp was
+  back in `PortalRun()`. clang gives every function the unwind data that
+  MinGW's longjmp needs; errors raised through PL/Perl and PL/Python, both
+  ways, unwind too.
+- **A windres.** Meson takes `RC` for windres, so the module's `RC` is GTK's
+  SDK's [`windres.c`](recipes/gtk4-sdk/windres.c) over zig's rc, and
+  PostgreSQL's `rcgen` passes it the input before the output.
+
+Besides: PostgreSQL 17 and later don't ship their bison and flex output, so
+winflexbison builds it; zlib's CMake names its static library `libzs.a`; and
+libxml2's `.pc` lacks `-DLIBXML_STATIC`, and OpenSSL's lists its system
+libraries as private, which the recipe puts right for static linking. The
+image has no headers, static libraries or pgxs (whose `Makefile.global`
+names the store's Perl by its path, which made each store's layer differ).
+[`signal-pipes.patch`](recipes/postgresql/signal-pipes.patch) moves the named
+pipes PostgreSQL emulates signals with under `\\.\pipe\LOCAL\`, the only
+place an AppContainer may make them.
+
+**Running it.** `postgresql` is
+[`pg-server.c`](recipes/postgresql/pg-server.c):
+
+- It makes the cluster on its first run, in `PGDATA` (`${data}\data`), with
+  initdb: UTF-8 in the builtin provider's `C.UTF-8`, which no Windows update
+  changes as it would ICU's collations (ICU's are there for
+  `CREATE COLLATION` and `COLLATE "de-x-icu"`), and scram-sha-256 for every
+  connection, as `postgres` with a random password.
+- The password goes in `PGPASSFILE` (`${data}\pgpass.conf`), so the app's
+  clients log in with it and anyone else needs it from there.
+- It then runs `postgres` in the foreground, as a run's job ends what the
+  run leaves behind: a `pg_ctl start` ends with its own run. Ctrl+C, or
+  `pg_ctl stop` from another run, stops it.
+- postgres refuses to run as an administrator, which a runner's user is: as
+  initdb and pg_ctl do, the launcher runs itself again with Administrators
+  deny-only first.
+- In an AppContainer, initdb can't make the cluster's directory, as it
+  stats each parent, which the container can't for the store's; the launcher
+  makes it. initdb also picks `max_connections` and `shared_buffers` by
+  running postgres through cmd.exe, which there can't start a program in the
+  store, and would take its least (20 and 400kB); the launcher sets the
+  server's defaults (100 and 128MB).
+
+PostgreSQL's regression suites pass on the build: regress (231 tests),
+isolation (122), plpgsql, plperl and plpython. [`tests/postgresql.sh`](tests/postgresql.sh)
+runs the image in each sandbox, in about 75 s.
+
 ## MSVC
 
 Projects that need Microsoft's compiler can use the Visual Studio installed

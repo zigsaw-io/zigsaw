@@ -1,0 +1,38 @@
+PostgreSQL's signal pipes under \\.\pipe\LOCAL\, for zigsaw: an AppContainer
+may only make named pipes there, and LOCAL\ works in every sandbox. Both
+ends are renamed: the listener each process makes (signal.c) and kill()'s
+client (kill.c).
+
+diff --git a/src/backend/port/win32/signal.c b/src/backend/port/win32/signal.c
+--- a/src/backend/port/win32/signal.c
++++ b/src/backend/port/win32/signal.c
+@@ -229,7 +229,7 @@ pgwin32_create_signal_listener(pid_t pid)
+ 	char		pipename[128];
+ 	HANDLE		pipe;
+ 
+-	snprintf(pipename, sizeof(pipename), "\\\\.\\pipe\\pgsignal_%u", (int) pid);
++	snprintf(pipename, sizeof(pipename), "\\\\.\\pipe\\LOCAL\\pgsignal_%u", (int) pid);
+ 
+ 	pipe = CreateNamedPipe(pipename, PIPE_ACCESS_DUPLEX,
+ 						   PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+@@ -277,7 +277,7 @@ pg_signal_thread(LPVOID param)
+ 	HANDLE		pipe = pgwin32_initial_signal_pipe;
+ 
+ 	/* Set up pipe name, in case we have to re-create the pipe. */
+-	snprintf(pipename, sizeof(pipename), "\\\\.\\pipe\\pgsignal_%lu", GetCurrentProcessId());
++	snprintf(pipename, sizeof(pipename), "\\\\.\\pipe\\LOCAL\\pgsignal_%lu", GetCurrentProcessId());
+ 
+ 	for (;;)
+ 	{
+diff --git a/src/port/kill.c b/src/port/kill.c
+--- a/src/port/kill.c
++++ b/src/port/kill.c
+@@ -58,7 +58,7 @@ pgkill(int pid, int sig)
+ 		CloseHandle(prochandle);
+ 		return 0;
+ 	}
+-	snprintf(pipename, sizeof(pipename), "\\\\.\\pipe\\pgsignal_%u", pid);
++	snprintf(pipename, sizeof(pipename), "\\\\.\\pipe\\LOCAL\\pgsignal_%u", pid);
+ 
+ 	if (CallNamedPipe(pipename, &sigData, 1, &sigRet, 1, &bytes, 1000))
+ 	{

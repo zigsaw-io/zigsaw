@@ -1503,6 +1503,53 @@ JDK's image, and compiled on the JRE's):
   for another zigsaw build to finish with B:"), so builds in parallel stores
   run one after another.
 
+## PostgreSQL (iteration 45)
+
+- **zig's linker ignores `--export-all-symbols`.** `zig cc -Wl,--export-all-symbols`
+  links without a word, and the program exports only what's marked
+  `__declspec(dllexport)`. Linking a `.def` file, given to zig's cc as an
+  input, exports what it lists. zig's linker refuses
+  `--allow-multiple-definition` and `--disable-auto-import`, which MinGW
+  builds of PostgreSQL pass.
+- **clang's `__builtin_setjmp`/`__builtin_longjmp` crash PostgreSQL**, which
+  uses them for MinGW-64 (mingw's setjmp had problems with GCC): a `DO` block
+  in a language that doesn't exist, or the statement after a failed
+  `CREATE EXTENSION`, ended the backend with 0xC0000005, in
+  `MarkPortalFailed()` calling a bad portal's cleanup after longjmp had come
+  back to `PortalRun()`. Division by zero didn't. With mingw's setjmp and
+  longjmp (SEH unwinding, which clang emits unwind data for) all of these
+  raise their errors, as do errors raised through PL/Perl and PL/Python.
+  Neither crash dumps (`PGDATA\crashdumps`) nor WER caught it. A debugger
+  made with Python's ctypes did: attached to the backend of a psql session,
+  it named the stack's return addresses from `postgres.exe`'s exports.
+- **Meson reads `RC` before `WINDRES`** for its windres, and zig's image sets
+  `RC` to zig's rc, which doesn't take windres's `-o`/`-i`.
+- **Meson makes its static libraries thin archives**, whose members are
+  only names, which a tool reading archives (GTK's SDK's `nm`) has to follow.
+  `-Dprefer_static=true` made Meson's `find_library('ws2_32')` fail.
+- **zigsaw takes `.tar.gz`, `.tgz`, `.tar.xz` and `.zip`, not `.tar.bz2`**:
+  PostgreSQL's `.tar.gz` is used.
+- **In an AppContainer, a program can't stat the store's parents**
+  (`D:\zs`, here): initdb's `pg_mkdir_p` stats each parent and `mkdir`s what
+  it can't stat, which fails with EEXIST, and cmd.exe answers "Access is
+  denied" to running a program by its path in the store, or a batch file in
+  the app's data. initdb's test of `max_connections` and `shared_buffers`
+  runs postgres through `system()`, and falls back to 20 and 400kB.
+  CreateProcess of the same path works.
+- **Everything else of PostgreSQL works in an AppContainer**: its named
+  shared memory (`Global/PostgreSQL:<path>`, which with `/`s is a name in
+  the session's namespace, not `Global\`), its signal pipes once under
+  `\\.\pipe\LOCAL\`, its child processes, PL/Perl and PL/Python, and
+  connections on `127.0.0.1` between runs of the same app, whose runs share
+  its container. A client outside the container can't connect (no loopback
+  exemption). At low integrity and under soft, nothing needed changing.
+- **pgxs's `Makefile.global` names the build's Perl by its path in the
+  store** (`D:/zs/i45/p/deploy/<layer>/perl/bin\perl.exe`), so three stores
+  built three layers, the same but for that file. The image leaves pgxs out,
+  as it has no headers to build extensions with.
+- **pg_basebackup waits for a spread checkpoint** by default: after a few
+  writes, longer than a test's two minutes. `--checkpoint=fast` doesn't wait.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.
