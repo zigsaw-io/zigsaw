@@ -58,6 +58,8 @@ qt: qt6-sdk.json qt6.json flameshot.json notes.json
 # after another; under 6 with them cached)
 texlive: ghostscript.json texlive.json
 
-# PostgreSQL's SDK (10 here: OpenSSL, then PostgreSQL's 2,000 compiles),
-# PostgreSQL from it, and its extensions, with GNU make (under a minute each)
+# PostgreSQL's SDK (24 on a runner, 15 here: OpenSSL, then PostgreSQL's
+# 2,000 compiles), PostgreSQL from it, and its extensions, with GNU make:
+# pgvector and pg_cron under a minute each, PostGIS 9 here (GEOS and PROJ)
 postgresql: make.json postgresql-sdk.json postgresql.json postgresql-pgvector.json postgresql-pg-cron.json
+postgresql: postgresql-postgis.json

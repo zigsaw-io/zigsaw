@@ -11,16 +11,19 @@
 # PL/Python (with errors raised through them), a dump restored, a backup
 # made, and nothing written in the deployment. Under low and in an
 # AppContainer: a cluster made there, with the server's default settings,
-# and the procedural languages. A client outside an AppContainer can't reach
-# the server in it (no loopback exemption): a known gap. Under each, the
-# installed extension images join: pgvector's HNSW index answers a
-# nearest-neighbour query, and pg_cron, which the server preloads, runs a
-# job every second; --noextension leaves pg_cron out.
+# and the procedural languages (plperl.on_init too). A client outside an
+# AppContainer can't reach the server in it (no loopback exemption): a
+# known gap. Under each, the installed extension images join: pgvector's
+# HNSW index answers a nearest-neighbour query, pg_cron, which the server
+# preloads, runs a job every second, and PostGIS transforms a point with
+# PROJ's proj.db, buffers with GEOS, reads GeoJSON and GML and uses a GiST
+# index (and makes a topology, under soft); --noextension leaves pg_cron
+# out.
 #
 #   POSTGRES_HOME=path\to\store bash tests/postgresql.sh [path\to\zigsaw.exe]
 #
 # Building PostgreSQL takes some 10 minutes, so this uses a store that has
-# it and both extensions (POSTGRES_HOME, or BUILD_HOME as tests/published.sh
+# it and the three extensions (POSTGRES_HOME, or BUILD_HOME as tests/published.sh
 # leaves it), and says so and stops if neither has. With LOG_DIR set, each
 # server's output (initdb's too) is left there.
 
@@ -31,10 +34,10 @@ root=$(cygpath -w "$(cd "$(dirname "$0")/.." && pwd)")
 zigsaw=${1:-$root/zig-out/bin/zigsaw.exe}
 ZIGSAW_HOME=${POSTGRES_HOME:-${BUILD_HOME:-}}
 APP=org.postgresql.PostgreSQL
-for id in $APP $APP.pgvector $APP.pg_cron; do
+for id in $APP $APP.pgvector $APP.pg_cron $APP.PostGIS; do
     if [ -z "$ZIGSAW_HOME" ] || [ ! -f "$ZIGSAW_HOME\\refs\\$id.json" ]; then
         echo "tests/postgresql.sh needs a store with $id in POSTGRES_HOME or BUILD_HOME;"
-        echo "build recipes\\postgresql.json, postgresql-pgvector.json and postgresql-pg-cron.json into one first."
+        echo "build recipes\\postgresql.json, postgresql-pgvector.json, postgresql-pg-cron.json and postgresql-postgis.json into one first."
         exit 1
     fi
 done
@@ -123,6 +126,35 @@ vectors() {
         "explain (costs off) select id from items order by v <-> '[1,1,2]' limit 1" 2>&1)
     grep -qx 3 <<<"$out" && grep -q 'Index Scan using items_v_idx' <<<"$out" || { echo "$out"; return 1; }
 }
+# postgis: PostGIS on GEOS, PROJ (with proj.db, found through PROJ_DATA),
+# json-c and libxml2, and a GiST index; topology in soft only.
+postgis() {
+    local out
+    out=$(sql "create extension postgis" \
+        "select postgis_lib_version() || '|' || postgis_geos_version() || '|' || split_part(postgis_proj_version(), ' ', 1)" \
+        "select st_astext(st_snaptogrid(st_transform(st_setsrid(st_point(10, 50), 4326), 3857), 0.01))" \
+        "select st_intersects(st_buffer(st_point(0, 0), 1), st_point(0.5, 0.5))" \
+        "select st_asgeojson(st_geomfromgeojson('{\"type\":\"LineString\",\"coordinates\":[[1,2],[3,4]]}'))" \
+        "select st_astext(st_geomfromgml('<gml:Point><gml:coordinates>1,2</gml:coordinates></gml:Point>'))" \
+        "create table places (id int, g geometry(point, 4326))" \
+        "insert into places select i, st_setsrid(st_point(i % 100, i / 100), 4326) from generate_series(0, 9999) i" \
+        "create index on places using gist (g)" "analyze places" \
+        "select count(*) from places where g && st_makeenvelope(10, 10, 12, 12, 4326)" \
+        "explain (costs off) select count(*) from places where g && st_makeenvelope(10, 10, 12, 12, 4326)" 2>&1)
+    grep -qx '3.6.4|3.15.0-CAPI-1.21.0|9.9.0' <<<"$out" &&
+        grep -qx 'POINT(1113194.91 6446275.84)' <<<"$out" && grep -qx t <<<"$out" &&
+        grep -qx '{"type":"LineString","coordinates":\[\[1,2\],\[3,4\]\]}' <<<"$out" &&
+        grep -qx 'POINT(1 2)' <<<"$out" && grep -qx 9 <<<"$out" &&
+        grep -q 'Index.* Scan .*places_g_idx' <<<"$out" || { echo "$out"; return 1; }
+}
+# topology: postgis_topology makes a topology and adds an edge to it.
+topology() {
+    local out
+    out=$(sql "create extension postgis_topology" "select topology.createtopology('t', 4326) > 0" \
+        "select topology.topogeo_addlinestring('t', 'LINESTRING(0 0, 1 1)'::geometry(linestring, 4326)) is not null" \
+        "select count(*) from t.edge_data")
+    [ "$(printf '%s\n' "$out" | tail -3 | tr '\n' ' ')" = "t t 1 " ] || { echo "$out" | tr '\n' ' '; return 1; }
+}
 # cron: pg_cron, which the server preloads, runs a job every second.
 cron() {
     local i n=0
@@ -190,6 +222,8 @@ backup() {
 check "pg_basebackup makes a zstd-compressed backup" backup
 check "pgvector's HNSW index finds the nearest vector" vectors
 check "pg_cron, preloaded, runs a job every second" cron
+check "PostGIS: GEOS, PROJ with its proj.db, json-c, GML and a GiST index" postgis
+check "PostGIS topology makes a topology with an edge" topology
 check "pg_ctl stops it from another run" stop
 tree=$(cygpath -w "$("$zigsaw" run --command=pg_config $APP --bindir 2>/dev/null | tr -d '\r')\\..")
 written() {
@@ -207,15 +241,23 @@ check "  and pg_ctl stops it" stop
 unset RUN_OPTIONS
 
 for SANDBOX in low appcontainer; do
-    check "$SANDBOX: postgresql makes a cluster and serves it" start
+    check "$SANDBOX: postgresql makes a cluster and serves it" start -c 'plperl.on_init=$main::booted = 47;'
     check "$SANDBOX: with the server's default settings" is "100|128MB" "select current_setting('max_connections') || '|' || current_setting('shared_buffers')"
-    check "$SANDBOX: PL/Perl and PL/Python run" is "perl 5.42.3|python 3.14.7" \
-        "create extension plperl" "create extension plpython3u" \
+    check "$SANDBOX: PL/Perl runs" is "perl 5.42.3" \
+        "create extension plperl" \
         "create function perlv() returns text as \$\$ return sprintf('perl %vd', \$^V); \$\$ language plperl" \
+        "select perlv()"
+    check "$SANDBOX: plperl.on_init ran when Perl started" is 47 \
+        "create extension plperlu" \
+        "create function booted() returns int as \$\$ return \$main::booted; \$\$ language plperlu" \
+        "select booted()"
+    check "$SANDBOX: PL/Python runs" is "python 3.14.7" \
+        "create extension plpython3u" \
         "create function pyv() returns text as \$\$ import sys; return 'python %d.%d.%d' % sys.version_info[:3] \$\$ language plpython3u" \
-        "select perlv() || '|' || pyv()"
+        "select pyv()"
     check "$SANDBOX: pgvector's HNSW index finds the nearest vector" vectors
     check "$SANDBOX: pg_cron runs a job every second" cron
+    check "$SANDBOX: PostGIS, with PROJ's proj.db" postgis
     if [ $SANDBOX = appcontainer ]; then
         outside() { timeout 60 "$zigsaw" run --sandbox=soft --command=psql $APP -p $port -XAt -c "select 1" | tr -d '\r' | grep -qx 1; }
         gap "appcontainer: a client outside the container reaches the server in it" outside

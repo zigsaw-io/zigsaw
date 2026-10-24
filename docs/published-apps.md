@@ -78,6 +78,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | PostgreSQL, with PL/Perl and PL/Python (from its SDK; on Perl and Python) | `org.postgresql.PostgreSQL` | 18.6 | `postgresql`, `postgres`, `initdb`, `pg_ctl`, `psql`, `pg_dump`, `pg_dumpall`, `pg_restore`, `pg_basebackup`, `pg_isready`, `createdb`, `dropdb`, `createuser`, `dropuser`, `vacuumdb`, `reindexdb`, `clusterdb`, `pgbench` |
 | pgvector, extending PostgreSQL (built from source with pgxs) | `org.postgresql.PostgreSQL.pgvector` | 0.8.7 | |
 | pg_cron, extending PostgreSQL (built from source with pgxs) | `org.postgresql.PostgreSQL.pg_cron` | 1.6.8 | |
+| PostGIS, extending PostgreSQL (built from source, with GEOS and PROJ) | `org.postgresql.PostgreSQL.PostGIS` | 3.6.4 | |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -159,10 +160,10 @@ the app's data, UTF-8 in the builtin `C.UTF-8` locale, with a random
 password for the `postgres` user, which the app's own clients (`psql`,
 `pg_dump`...) find in its password file there. The server lasts as long as
 its run: `pg_ctl stop`, or Ctrl+C, stops it, and `pg_ctl start` doesn't
-outlive its own run. Installed beside it, pgvector and pg_cron join every run of
-its server as [extensions](recipes.md#postgresql-extensions): `CREATE
-EXTENSION vector` in a database, or `CREATE EXTENSION pg_cron` in
-`postgres`, which the server preloads.
+outlive its own run. Installed beside it, pgvector, pg_cron and PostGIS join
+every run of its server as [extensions](recipes.md#postgresql-extensions):
+`CREATE EXTENSION vector` or `CREATE EXTENSION postgis` in a database, or
+`CREATE EXTENSION pg_cron` in `postgres`, which the server preloads.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.

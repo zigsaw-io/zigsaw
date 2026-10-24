@@ -190,14 +190,19 @@
         { "path": "postgresql/signal-pipes.patch", "dest": "zigsaw/signal-pipes.patch" },
         { "path": "postgresql/zig-mingw.patch", "dest": "zigsaw/zig-mingw.patch" },
         { "path": "postgresql/initdb-nul.patch", "dest": "zigsaw/initdb-nul.patch" },
+        { "path": "postgresql/plperl-nul.patch", "dest": "zigsaw/plperl-nul.patch" },
+        { "path": "postgresql/pg-config-long.patch", "dest": "zigsaw/pg-config-long.patch" },
         { "path": "postgresql/mingw_gendef.pl", "dest": "src/tools/mingw_gendef.pl" }
       ],
       "build": [
         "patch -p1 < zigsaw/signal-pipes.patch",
         "patch -p1 < zigsaw/zig-mingw.patch",
         "patch -p1 < zigsaw/initdb-nul.patch",
+        "patch -p1 < zigsaw/plperl-nul.patch",
+        "patch -p1 < zigsaw/pg-config-long.patch",
         "PATH=\"B:/src/flex-bison;B:/src/nm;$PATH\" meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dauto_features=disabled -Dssl=openssl -Dzlib=enabled -Dlz4=enabled -Dzstd=enabled -Dicu=enabled -Dlibxml=enabled -Dldap=enabled -Dplperl=enabled -Dplpython=enabled -Dtap_tests=disabled -Ddocs=disabled -Ddocs_pdf=disabled -DPYTHON=B:/src/python-dev/nupkg/tools/python.exe",
         "PATH=\"B:/src/nm;$PATH\" meson install -C out",
+        "cmp src/pl/plperl/plc_perlboot.pl \"$PREFIX/share/postgresql/plperl_boot.pl\"",
         "cp COPYRIGHT \"$PREFIX/COPYRIGHT\""
       ]
     },
@@ -214,8 +219,9 @@
       "build": [
         "for f in \"$PREFIX\"/lib/*.dll.a; do mv \"$f\" \"${f%.dll.a}.a\"; done",
         "sed -i 's|B:/prefix|${pcfiledir}/../..|g' \"$PREFIX\"/lib/pkgconfig/*.pc",
-        "sed -i -e 's| B:/src/crt-noexport/noexport.o||' -e 's|^\\(PERL\\s*=\\).*|\\1 perl|' -e 's|^\\(PROVE\\s*=\\).*|\\1 prove|' -e 's|^\\(PYTHON\\s*=\\).*|\\1 python|' -e 's|^\\(BISON\\s*=\\).*|\\1 bison|' -e 's|^\\(FLEX\\s*=\\).*|\\1 flex|' -e 's|^\\(AR\\s*=\\).*|\\1 ar|' -e 's|^\\(WINDRES\\s*=\\).*|\\1 windres|' \"$PREFIX/lib/postgresql/pgxs/src/Makefile.global\"",
-        "! grep -rlE 'B:/src|B:/bin|[Dd]eploy[/\\\\]' \"$PREFIX/lib/postgresql/pgxs\" \"$PREFIX/lib/pkgconfig\""
+        "sed -i -e 's| B:/src/crt-noexport/noexport.o||' -e 's|^\\(PERL\\s*=\\).*|\\1 perl|' -e 's|^\\(PROVE\\s*=\\).*|\\1 prove|' -e 's|^\\(PYTHON\\s*=\\).*|\\1 python|' -e 's|^\\(BISON\\s*=\\).*|\\1 bison|' -e 's|^\\(FLEX\\s*=\\).*|\\1 flex|' -e 's|^\\(AR\\s*=\\).*|\\1 ar|' -e 's|^\\(WINDRES\\s*=\\).*|\\1 windres|' -e 's|^\\(TAR\\s*=\\).*|\\1 tar|' \"$PREFIX/lib/postgresql/pgxs/src/Makefile.global\"",
+        "! grep -rlE 'B:/src|B:/bin|[Dd]eploy[/\\\\]' \"$PREFIX/lib/postgresql/pgxs\" \"$PREFIX/lib/pkgconfig\"",
+        "! grep -nE '^[A-Z_0-9]+[[:space:]]*:?=[[:space:]]*[A-Za-z]:' \"$PREFIX/lib/postgresql/pgxs/src/Makefile.global\""
       ]
     }
   ]

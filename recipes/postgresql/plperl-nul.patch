@@ -1,0 +1,96 @@
+--- a/src/pl/plperl/meson.build
++++ b/src/pl/plperl/meson.build
+@@ -69,6 +69,15 @@
+   install_dir: dir_data_extension,
+ )
+ 
++# On Windows, plperl.c has Perl read its boot code from this file.
++if host_system == 'windows'
++  install_data(
++    'plc_perlboot.pl',
++    install_dir: dir_data,
++    rename: 'plperl_boot.pl',
++  )
++endif
++
+ install_headers(
+   'plperl.h',
+   'plperl_system.h',
+--- a/src/pl/plperl/plperl.c
++++ b/src/pl/plperl/plperl.c
+@@ -708,10 +708,25 @@
+ {
+ 	PerlInterpreter *plperl;
+ 
++#ifdef WIN32
++
++	/*
++	 * Not -e: with -e, Perl opens nul as its script, and an AppContainer
++	 * can't open nul on some Windows (Server 2025). Perl reads the boot code
++	 * from plperl_boot.pl in the share directory instead (plc_perlboot.pl,
++	 * which PLC_PERLBOOT is made from), and plperl.on_init runs after it.
++	 */
++	static char boot_path[MAXPGPATH];
++	static char *embedding[3 + 2] = {
++		"", boot_path
++	};
++	int			nargs = 2;
++#else
+ 	static char *embedding[3 + 2] = {
+ 		"", "-e", PLC_PERLBOOT
+ 	};
+ 	int			nargs = 3;
++#endif
+ 
+ #ifdef WIN32
+ 
+@@ -759,11 +774,24 @@
+ 	} STMT_END
+ #endif							/* WIN32 */
+ 
++#ifdef WIN32
++	if (boot_path[0] == '\0')
++	{
++		get_share_path(my_exec_path, boot_path);
++		strlcat(boot_path, "/plperl_boot.pl", sizeof(boot_path));
++	}
++	if (access(boot_path, R_OK) != 0)
++		ereport(ERROR,
++				(errcode_for_file_access(),
++				 errmsg("could not read PL/Perl's boot code \"%s\": %m",
++						boot_path)));
++#else
+ 	if (plperl_on_init && *plperl_on_init)
+ 	{
+ 		embedding[nargs++] = "-e";
+ 		embedding[nargs++] = plperl_on_init;
+ 	}
++#endif
+ 
+ 	/*
+ 	 * The perl API docs state that PERL_SYS_INIT3 should be called before
+@@ -858,6 +886,24 @@
+ 					 errmsg("%s", strip_trailing_ws(sv2cstr(ERRSV))),
+ 					 errcontext("while running Perl initialization")));
+ 
++#ifdef WIN32
++
++		/*
++		 * plperl.on_init, as if it were a second -e: in package main, under
++		 * the boot code's pragmas.
++		 */
++		if (plperl_on_init && *plperl_on_init)
++		{
++			eval_pv(psprintf("package main; use strict; use warnings FATAL => 'all';\n%s",
++							 plperl_on_init), FALSE);
++			if (SvTRUE(ERRSV))
++				ereport(ERROR,
++						(errcode(ERRCODE_EXTERNAL_ROUTINE_EXCEPTION),
++						 errmsg("%s", strip_trailing_ws(sv2cstr(ERRSV))),
++						 errcontext("while running Perl initialization")));
++		}
++#endif
++
+ #ifdef PLPERL_RESTORE_LOCALE
+ 		PLPERL_RESTORE_LOCALE(LC_COLLATE, save_collate);
+ 		PLPERL_RESTORE_LOCALE(LC_CTYPE, save_ctype);

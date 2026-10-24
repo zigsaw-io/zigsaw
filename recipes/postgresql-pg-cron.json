@@ -10,7 +10,7 @@
   "extends": { "point": "org.postgresql.PostgreSQL", "version": "18" },
   "exports": {},
   "sdk": {
-    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:04a5c98a6dfd19eb7effe78d3e25db8b62e3382aa70fb9e933e0ac99109581f4",
+    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:c685eda60e9225e3f0c91471a988518a76c85e931527892ad4853ffb461ea289",
     "make": "org.gnu.make:4.4.1@sha256:045e39d447d7d760a15ea5ebadaf2b45a885fe5616e626b224f31171a18c1faf",
     "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
@@ -29,6 +29,7 @@
         "sed -i '/\"cron.use_background_workers\"/,/PGC_POSTMASTER/ s/^\\(\\s*\\)false,$/\\1true,/' src/pg_cron.c && sed -n '/\"cron.use_background_workers\"/,/PGC_POSTMASTER/p' src/pg_cron.c | grep -q 'true,'",
         "sdk=$(dirname \"$(pg_config --bindir)\") && make -j\"$(nproc)\" USE_PGXS=1 \"COPT=-fmacro-prefix-map=$sdk=pgsdk\"",
         "make install USE_PGXS=1 pkglibdir=\"$PREFIX/lib\" datadir=\"$PREFIX/share\" includedir_server=\"$PREFIX/include/server\"",
+        "! grep -aqE 'pgsdk[^[:cntrl:]]*~[0-9]' \"$PREFIX\"/lib/*.dll",
         "cp LICENSE README.md \"$PREFIX/\"",
         "printf '%s\\r\\n' '@echo off' 'echo This image is pg_cron 1.6.8, for PostgreSQL 18.' 'echo Installed, PostgreSQL'\"'\"'s server loads it at start: CREATE EXTENSION pg_cron; in the postgres database.' 'echo Its jobs run in background workers: cron.use_background_workers is on.' 'echo zigsaw run --noextension=^<its id^> leaves it out.' > \"$PREFIX/about.bat\""
       ]

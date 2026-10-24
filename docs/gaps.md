@@ -347,8 +347,11 @@
   11 and Server 2025): a Windows update that changes ICU changes their
   version, and PostgreSQL warns about the indexes on them, as it does on any
   system whose ICU is updated. The default, `C.UTF-8`, is PostgreSQL's own.
-  There's no SDK for building extensions (pgvector, PostGIS): the image has
-  no server headers or import library.
+- PostgreSQL's extensions join `postgresql`'s runs only: `postgres` or
+  `pg_ctl start` run on their own load none. PostGIS has no raster support
+  (that needs GDAL), protobuf output (`ST_AsMVT`, `ST_AsGeobuf`) or address
+  standardizer, and none of its commands (`shp2pgsql`, `pgsql2shp`); PROJ
+  has no grids beyond those in `proj.db`, and doesn't download any.
 - Composer's image can't update itself (`self-update`): its `composer.phar`
   is in the read-only image; a newer Composer is a newer image.
   `composer diagnose` reports its keys for verifying updates missing.

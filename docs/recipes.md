@@ -2719,6 +2719,14 @@ place an AppContainer may make them.
   can): [`initdb-nul.patch`](recipes/postgresql/initdb-nul.patch) sends it to
   a file in the cluster's directory instead, removed once the backend is
   done. Its errors were on stderr already.
+- PL/Perl started Perl with `-e` and its boot code, and with `-e` Perl opens
+  `nul` as its script: in an AppContainer on Server 2025, `CREATE EXTENSION
+  plperl` failed with an empty error. On Windows,
+  [`plperl-nul.patch`](recipes/postgresql/plperl-nul.patch) has Perl read the
+  boot code from `share\postgresql\plperl_boot.pl` (PL/Perl's
+  `plc_perlboot.pl`, which the build otherwise compiles in; Meson installs
+  it) and runs `plperl.on_init` after it, as `-e` did, in package `main`.
+  PostgreSQL's plperl suite passes with it.
 
 ### PostgreSQL extensions
 
@@ -2762,7 +2770,12 @@ libpq's static library, LDAP and all, before); pgxs's `Makefile.global`
 names tools by name rather than by the build's or the store's paths (Perl's
 path in it made each store's SDK differ), and links without the build's
 `noexport.o` (extensions mark what they export, so nothing else is);
-pkg-config files are relocatable, as Qt's are. Its static libraries are
+pkg-config files are relocatable, as Qt's are. `pg_config` prints long
+paths ([`pg-config-long.patch`](recipes/postgresql/pg-config-long.patch)):
+PostgreSQL turns every path it works out into its 8.3 short name where the
+volume has those (`include/POSTGR~1/server`), which depends on the volume and
+on the order directories were made in, and the DLLs pgxs built kept them, so
+pgvector's differed between this machine and a runner. Its static libraries are
 compiled with `CFLAGS=-s`: zig's cc otherwise writes debug info into each
 object, with clang's command line naming the store's zig and a random
 temporary file, so the libraries differed between stores (programs linked
@@ -2783,10 +2796,33 @@ the DLL.
   poll() is WSAPoll), so every job timed out at startup; the image makes
   `cron.use_background_workers` on by default, which runs jobs in
   background workers without a connection or a password.
+- [`org.postgresql.PostgreSQL.PostGIS`](recipes/postgresql-postgis.json),
+  PostGIS 3.6.4 with its topology and TIGER geocoder extensions (no raster,
+  protobuf or address standardizer). Its libraries are modules of the
+  recipe, static and linked into `postgis-3.dll`: GEOS 3.15.0 (from GitHub's
+  tag archive, as its release is a `.tar.bz2`) and PROJ 9.9.0 with CMake,
+  json-c 0.19, SQLite for PROJ, and libiconv. PostgreSQL loads an extension
+  with `LoadLibrary`, which doesn't look for its DLLs beside it, so static
+  is what keeps them found. The image sets `PROJ_DATA` to its `share\proj`,
+  where PROJ's `proj.db` is (built from PROJ's SQL with the module's
+  `sqlite3.exe`; the same in every store). The build runs PostGIS's
+  configure and make under BusyBox: `PATH_SEPARATOR=;` (as Ghostscript's),
+  `perl` and `pg_config` given as full paths (configure looks for
+  programs without `.exe`), PROJ's `proj.pc` fixed for static linking (it
+  names MSVC's `proj_9` and a `sqlite3.pc` there isn't), the SQL
+  preprocessor as `cc -E -x c -traditional-cpp`, FlatGeobuf's C++ with `c++
+  -O2` (zig's `cc -x c++` has no C++ headers, and without `-O` zig builds
+  debug code, with UBSan), its archive named `.a` (it was `.la`, which zig's
+  linker refuses), and functions declared `PGDLLEXPORT` before their use
+  (clang refuses to add `dllexport` to a function already used, where
+  `PG_FUNCTION_INFO_V1` does). The loaders (`shp2pgsql`, `pgsql2shp`) are
+  left out, as extensions export no commands; so are the upgrade scripts
+  from earlier PostGIS versions, which this image never had (the
+  `…--ANY.sql` stubs, links in the build, are copies). Its layer is 12 MB.
 
 PostgreSQL's regression suites pass on the build: regress (231 tests),
 isolation (122), plpgsql, plperl and plpython. [`tests/postgresql.sh`](tests/postgresql.sh)
-runs the image in each sandbox, in about 75 s.
+runs the image in each sandbox, in about 100 s.
 
 ## MSVC
 

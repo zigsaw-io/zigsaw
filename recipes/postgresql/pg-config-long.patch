@@ -1,0 +1,34 @@
+--- a/src/bin/pg_config/pg_config.c
++++ b/src/bin/pg_config/pg_config.c
+@@ -155,6 +155,31 @@
+ 	}
+ 
+ 	configdata = get_configdata(my_exec_path, &configdata_len);
++#ifdef WIN32
++
++	/*
++	 * The paths went through cleanup_path(), which turns them into their 8.3
++	 * names where the volume has those: they differ from volume to volume,
++	 * and with the order directories were made in, and what builds with them
++	 * keeps them (headers' __FILE__). Print the long names.
++	 */
++	for (i = 0; i < configdata_len; i++)
++	{
++		char		longpath[MAXPGPATH];
++		char	   *setting = configdata[i].setting;
++		DWORD		n;
++
++		if (setting[0] == '\0' || setting[1] != ':')
++			continue;
++		n = GetLongPathNameA(setting, longpath, sizeof(longpath));
++		if (n == 0 || n >= sizeof(longpath))
++			continue;
++		for (char *p = longpath; *p; p++)
++			if (*p == '\\')
++				*p = '/';
++		configdata[i].setting = pstrdup(longpath);
++	}
++#endif
+ 	/* no arguments -> print everything */
+ 	if (argc < 2)
+ 	{
