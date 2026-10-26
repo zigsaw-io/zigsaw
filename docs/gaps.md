@@ -69,8 +69,6 @@
   gettext and GTK's SDK and runtime. Naming any of them changes its digest,
   and the GTK SDK pins them all, so they get one at their next version
   (Node and Go got theirs in iteration 22).
-- `pull` and `update` tell what an app may reach, and don't ask whether to
-  go on.
 - An app sees only the user's folders its permissions name (Desktop,
   Documents, Downloads, Music, Pictures, Videos), linked into its profile;
   others don't exist there, and an app that asks for one to save in gets
@@ -348,10 +346,18 @@
   version, and PostgreSQL warns about the indexes on them, as it does on any
   system whose ICU is updated. The default, `C.UTF-8`, is PostgreSQL's own.
 - PostgreSQL's extensions join `postgresql`'s runs only: `postgres` or
-  `pg_ctl start` run on their own load none. PostGIS has no raster support
-  (that needs GDAL), protobuf output (`ST_AsMVT`, `ST_AsGeobuf`) or address
-  standardizer, and none of its commands (`shp2pgsql`, `pgsql2shp`); PROJ
-  has no grids beyond those in `proj.db`, and doesn't download any.
+  `pg_ctl start` run on their own load none. PostGIS has no protobuf output
+  (`ST_AsMVT`, `ST_AsGeobuf`), address standardizer or SFCGAL, and none of
+  its commands (`shp2pgsql`, `pgsql2shp`, `raster2pgsql`); PROJ has no grids
+  beyond those in `proj.db`, and doesn't download any. PostGIS's GDAL is a
+  copy of GDAL's own DLL in its image, found through the server's PATH: a
+  program the server starts (`COPY ... PROGRAM`) sees it there too.
+- GDAL's image has no network drivers (no curl: no `/vsicurl/`, WMS, WFS
+  or other web services), none of the drivers that need a library it
+  doesn't build (netCDF, HDF, PDF, WebP, JPEG-XL, PostgreSQL, Spatialite and
+  the rest), and no Python, so none of GDAL's Python scripts
+  (`gdal_calc.py`, `gdal_merge.py`...). Its tools reach files only in the
+  directory they run from (its `cwd` permission).
 - Composer's image can't update itself (`self-update`): its `composer.phar`
   is in the read-only image; a newer Composer is a newer image.
   `composer diagnose` reports its keys for verifying updates missing.

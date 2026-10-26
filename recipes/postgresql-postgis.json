@@ -2,119 +2,28 @@
   "id": "org.postgresql.PostgreSQL.PostGIS",
   "version": "3.6.4",
   "name": "PostGIS for PostgreSQL 18",
-  "summary": "PostGIS, spatial types and functions for PostgreSQL on GEOS and PROJ, as an extension built with zig; once installed, PostgreSQL's server finds it",
+  "summary": "PostGIS, spatial types, rasters and functions for PostgreSQL on GEOS, PROJ and GDAL, built with zig; once installed, PostgreSQL's server finds it",
   "homepage": "https://postgis.net/",
-  "license": "GPL-2.0-or-later AND LGPL-2.1-or-later AND MIT AND blessing",
+  "license": "GPL-2.0-or-later AND LGPL-2.1-or-later AND MIT AND blessing AND Zlib AND libtiff AND IJG AND libpng-2.0 AND Apache-2.0 AND Qhull",
   "command": "about.bat",
-  "env": { "PG_EXTENSION_DIRS": "${app}", "PROJ_DATA": "${app}\\share\\proj" },
+  "path": ["bin"],
+  "env": { "PG_EXTENSION_DIRS": "${app}", "PROJ_DATA": "${app}\\share\\proj", "GDAL_DATA": "${app}\\share\\gdal" },
   "extends": { "point": "org.postgresql.PostgreSQL", "version": "18" },
   "exports": {},
   "sdk": {
     "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:c685eda60e9225e3f0c91471a988518a76c85e931527892ad4853ffb461ea289",
+    "gdalsdk": "org.gdal.GDAL.Sdk:3.13.3@sha256:4e13cd0a2a0187c5c04f23d9b6428586e2c49f2129245ce60ae217f8d2f2b51d",
     "make": "org.gnu.make:4.4.1@sha256:045e39d447d7d760a15ea5ebadaf2b45a885fe5616e626b224f31171a18c1faf",
     "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
-    "cmake": "org.cmake.cmake:4.4.4@sha256:fa7efc2e143063055620628a8867dbd904bb0464a36f6a44943f7dba50a8bcd0",
     "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85",
     "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
-  "cleanup": ["/bin", "/include", "/lib/cmake", "/lib/pkgconfig", "*.a", "*.la", "/share/bash-completion", "/share/doc", "/share/man", "/share/contrib"],
+  "cleanup": ["/include", "/lib/cmake", "/lib/pkgconfig", "*.a", "*.la", "/share/bash-completion", "/share/doc", "/share/man", "/share/contrib"],
   "modules": [
     {
-      "name": "libiconv",
-      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "EGREP_TRADITIONAL": "grep -E", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2 -s", "LD": "sh B:/src/libiconv/zigsaw/ld.sh", "RC": "sh B:/src/libiconv/zigsaw/windres.sh", "WINDRES": "sh B:/src/libiconv/zigsaw/windres.sh" },
-      "sources": [
-        {
-          "url": "https://ftp.gnu.org/gnu/libiconv/libiconv-1.19.tar.gz",
-          "sha256": "88dd96a8c0464eca144fc791ae60cd31cd8ee78321e67397e25fc095c4a19aa6",
-          "strip": 1
-        },
-        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
-        { "path": "gtk4-sdk/autotools-ld.sh", "dest": "zigsaw/ld.sh" },
-        { "path": "gtk4-sdk/autotools-windres.sh", "dest": "zigsaw/windres.sh" }
-      ],
-      "build": [
-        "sh zigsaw/mtimes.sh",
-        "sh ./configure --disable-dependency-tracking --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --enable-static --disable-shared --disable-nls lt_cv_deplibs_check_method=pass_all gl_cv_cc_visibility=no > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
-        "make -j\"$(nproc)\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",
-        "make install > install.log 2>&1 || { tail -60 install.log; exit 1; }",
-        "mkdir -p \"$PREFIX/licenses\" && cp COPYING.LIB \"$PREFIX/licenses/libiconv.txt\""
-      ]
-    },
-    {
-      "name": "sqlite",
-      "sources": [
-        {
-          "url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
-          "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
-          "strip": 1
-        }
-      ],
-      "build": [
-        "mkdir -p \"$PREFIX/bin\" \"$PREFIX/include\" \"$PREFIX/lib\"",
-        "cc -O2 -s -c -o sqlite3.o sqlite3.c",
-        "ar rcs \"$PREFIX/lib/libsqlite3.a\" sqlite3.o",
-        "cp sqlite3.h sqlite3ext.h \"$PREFIX/include/\"",
-        "cc -O2 -s -Wl,-Brepro -o \"$PREFIX/bin/sqlite3.exe\" shell.c sqlite3.o"
-      ]
-    },
-    {
-      "name": "json-c",
-      "env": { "CFLAGS": "-s" },
-      "sources": [
-        {
-          "url": "https://s3.amazonaws.com/json-c_releases/releases/json-c-0.19.tar.gz",
-          "sha256": "37ad0249902e301bd9052bf712e511fcc6acff4ecaad4b5900aad9ce564e26de",
-          "strip": 1
-        }
-      ],
-      "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DBUILD_TESTING=OFF -DBUILD_APPS=OFF -DDISABLE_EXTRA_LIBS=ON",
-        "cmake --build out",
-        "cmake --install out",
-        "mkdir -p \"$PREFIX/licenses\" && cp COPYING \"$PREFIX/licenses/json-c.txt\""
-      ]
-    },
-    {
-      "name": "geos",
-      "env": { "CFLAGS": "-s", "CXXFLAGS": "-s" },
-      "sources": [
-        {
-          "url": "https://github.com/libgeos/geos/archive/refs/tags/3.15.0.tar.gz",
-          "sha256": "134aaf78026f4311737e20ff1465cd31a48c4ca8858fb68e99d13ccd3d52753a",
-          "strip": 1
-        }
-      ],
-      "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DBUILD_GEOSOP=OFF -DBUILD_BENCHMARKS=OFF",
-        "cmake --build out",
-        "cmake --install out",
-        "sed -i '/--clibs)/{n;s/-lgeos_c$/-lgeos_c -lgeos -lc++/}' \"$PREFIX/bin/geos-config\" && sh \"$PREFIX/bin/geos-config\" --clibs | grep -q -- '-lgeos -lc++'",
-        "mkdir -p \"$PREFIX/licenses\" && cp COPYING \"$PREFIX/licenses/geos.txt\""
-      ]
-    },
-    {
-      "name": "proj",
-      "env": { "CFLAGS": "-s", "CXXFLAGS": "-s" },
-      "sources": [
-        {
-          "url": "https://download.osgeo.org/proj/proj-9.9.0.tar.gz",
-          "sha256": "791a0610547eeabb17006cfd49cdbd2034f3240f47ed5e88a1031811f4e2bcf3",
-          "strip": 1
-        }
-      ],
-      "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_SHARED_LIBS=OFF -DBUILD_APPS=OFF -DBUILD_TESTING=OFF -DENABLE_TIFF=OFF -DENABLE_CURL=OFF -DEMBED_PROJ_DATA_PATH=OFF -DNLOHMANN_JSON_ORIGIN=internal -DSQLite3_INCLUDE_DIR=\"$PREFIX/include\" -DSQLite3_LIBRARY=\"$PREFIX/lib/libsqlite3.a\" -DEXE_SQLITE3=\"$PREFIX/bin/sqlite3.exe\"",
-        "cmake --build out",
-        "cmake --install out",
-        "sed -i -e 's/-lproj_9$/-lproj/' -e 's/^Libs.private:.*/Libs.private: -lsqlite3 -lc++ -lshell32 -lole32/' -e 's/^Requires.private:.*/Requires.private:/' \"$PREFIX/lib/pkgconfig/proj.pc\" && [ \"$(pkg-config --static --libs proj)\" = '-LB:/prefix/lib -lproj -lsqlite3 -lc++ -lshell32 -lole32' ]",
-        "test -s \"$PREFIX/share/proj/proj.db\"",
-        "mkdir -p \"$PREFIX/licenses\" && cp COPYING \"$PREFIX/licenses/proj.txt\""
-      ]
-    },
-    {
       "name": "postgis",
-      "env": { "PATH_SEPARATOR": ";", "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2 -s", "LDFLAGS": "-s -Wl,-Brepro", "LD": "sh B:/src/postgis/zigsaw/ld.sh", "PKG_CONFIG": "pkg-config --static", "PKG_CONFIG_PATH": "B:/prefix/lib/pkgconfig" },
+      "env": { "PATH_SEPARATOR": ";", "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2 -s", "LDFLAGS": "-s -Wl,-Brepro", "LD": "sh B:/src/postgis/zigsaw/ld.sh", "PKG_CONFIG": "pkg-config --static" },
       "sources": [
         {
           "url": "https://download.osgeo.org/postgis/source/postgis-3.6.4.tar.gz",
@@ -127,15 +36,20 @@
       "build": [
         "sh zigsaw/mtimes.sh",
         "sed -i 's/^SUBDIRS += @RASTER@ loader$/SUBDIRS += @RASTER@/' GNUmakefile.in && grep -q '^SUBDIRS += @RASTER@$' GNUmakefile.in",
+        "sed -i -e '/^[[:space:]]*$(MAKE) @RT_LOADER@$/d' -e '/^[[:space:]]*$(MAKE) -C loader install$/d' raster/Makefile.in && ! grep -q 'RT_LOADER@\\|-C loader install' raster/Makefile.in",
+        "sed -i '1i .NOTPARALLEL:' utils/Makefile.in && head -1 utils/Makefile.in | grep -qx '[.]NOTPARALLEL:'",
         "sed -i 's/^FLATGEOBUF_LIB=libflatgeobuf\\.la$/FLATGEOBUF_LIB=libflatgeobuf.a/' configure && grep -q '^FLATGEOBUF_LIB=libflatgeobuf.a$' configure",
-        "sed -i 's/^Datum \\([A-Za-z_0-9]*\\)(PG_FUNCTION_ARGS);/PGDLLEXPORT Datum \\1(PG_FUNCTION_ARGS);/' postgis/*.c topology/*.c && grep -q '^PGDLLEXPORT Datum ST_SymDifference(PG_FUNCTION_ARGS);$' postgis/lwgeom_geos.c",
-        "p=B:/prefix && sdk=$(dirname \"$(pg_config --bindir)\") && PKG_CONFIG_PATH=\"$PKG_CONFIG_PATH;$sdk/lib/pkgconfig\" CFLAGS=\"$CFLAGS -fmacro-prefix-map=$sdk=pgsdk\" sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=$p --with-pgconfig=\"$(command -v pg_config)\" --with-geosconfig=$p/bin/geos-config --with-jsondir=$p --with-libiconv=$p --without-raster --without-protobuf --without-address-standardizer --without-interrupt-tests --disable-nls --disable-extension-upgrades-install lt_cv_deplibs_check_method=pass_all PERL=\"$(command -v perl)\" > configure.log 2>&1 || { tail -40 configure.log; tail -80 config.log; exit 1; }",
-        "sdk=$(dirname \"$(pg_config --bindir)\") && make -j\"$(nproc)\" \"SQLPP=cc -E -x c -traditional-cpp -P -w -Upixel -Ubool\" \"CXX=c++ -std=c++11 -O2 -s\" \"COPT=-fmacro-prefix-map=$sdk=pgsdk\" > make.log 2>&1 || { grep -n 'error:' make.log | head -20; tail -40 make.log; exit 1; }",
-        "p=$(echo \"$PREFIX\" | tr '\\\\' /) && mkdir -p \"$p/bin\" && make install \"INSTALL=install -c\" \"SQLPP=cc -E -x c -traditional-cpp -P -w -Upixel -Ubool\" \"CXX=c++ -std=c++11 -O2 -s\" pkglibdir=\"$p/lib\" datadir=\"$p/share\" includedir_server=\"$p/include/server\" bindir=\"$p/bin\" > install.log 2>&1 || { tail -40 install.log; exit 1; }",
+        "sed -i 's/^Datum \\([A-Za-z_0-9]*\\)(PG_FUNCTION_ARGS);/PGDLLEXPORT Datum \\1(PG_FUNCTION_ARGS);/' postgis/*.c topology/*.c raster/rt_pg/*.c && grep -q '^PGDLLEXPORT Datum ST_SymDifference(PG_FUNCTION_ARGS);$' postgis/lwgeom_geos.c",
+        "g=$(dirname \"$(dirname \"$(command -v gdalinfo)\")\") && sdk=$(dirname \"$(pg_config --bindir)\") && PKG_CONFIG_PATH=\"$g/lib/pkgconfig;$sdk/lib/pkgconfig\" CFLAGS=\"$CFLAGS -fmacro-prefix-map=$sdk=pgsdk -fmacro-prefix-map=$g=gdalsdk\" sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=B:/prefix --with-pgconfig=\"$(command -v pg_config)\" --with-gdalconfig=\"$g/bin/gdal-config\" --with-geosconfig=\"$g/bin/geos-config\" --with-jsondir=\"$g\" --with-libiconv=\"$g\" --with-raster --without-protobuf --without-address-standardizer --without-interrupt-tests --disable-nls --disable-extension-upgrades-install lt_cv_deplibs_check_method=pass_all PERL=\"$(command -v perl)\" > configure.log 2>&1 || { tail -40 configure.log; tail -80 config.log; exit 1; }",
+        "grep -A40 'PostGIS is now configured' configure.log || true",
+        "g=$(dirname \"$(dirname \"$(command -v gdalinfo)\")\") && sdk=$(dirname \"$(pg_config --bindir)\") && make -j\"$(nproc)\" \"SQLPP=cc -E -x c -traditional-cpp -P -w -Upixel -Ubool\" \"CXX=c++ -std=c++11 -O2 -s\" \"COPT=-fmacro-prefix-map=$sdk=pgsdk -fmacro-prefix-map=$g=gdalsdk\" > make.log 2>&1 || { grep -n 'error:' make.log | head -20; tail -40 make.log; exit 1; }",
+        "p=$(echo \"$PREFIX\" | tr '\\\\' /) && make install \"INSTALL=install -c\" \"SQLPP=cc -E -x c -traditional-cpp -P -w -Upixel -Ubool\" \"CXX=c++ -std=c++11 -O2 -s\" pkglibdir=\"$p/lib\" datadir=\"$p/share\" includedir_server=\"$p/include/server\" bindir=B:/src/postgis/out-bin > install.log 2>&1 || { tail -40 install.log; exit 1; }",
         "cd \"$PREFIX/share/extension\" && for f in *.sql; do if [ -L \"$f\" ]; then t=$(readlink \"$f\") && rm \"$f\" && cp \"$t\" \"$f\"; fi; done && [ -z \"$(find . -type l)\" ]",
-        "! grep -aqE 'pgsdk[^[:cntrl:]]*~[0-9]|[Dd]eploy[/\\]' \"$PREFIX\"/lib/*.dll",
+        "g=$(dirname \"$(dirname \"$(command -v gdalinfo)\")\") && mkdir -p \"$PREFIX/bin\" && cp \"$g\"/bin/libgdal-*.dll \"$PREFIX/bin/\" && cp -r \"$g/share/gdal\" \"$g/share/proj\" \"$PREFIX/share/\" && cp -r \"$g/licenses\" \"$PREFIX/\"",
+        "ls \"$PREFIX/bin\" \"$PREFIX/lib\" && test -f \"$PREFIX/lib/postgis_raster-3.dll\" && test -s \"$PREFIX/share/proj/proj.db\"",
+        "! grep -aqE 'pgsdk[^[:cntrl:]]*~[0-9]|gdalsdk[^[:cntrl:]]*~[0-9]|[Dd]eploy[/\\]' \"$PREFIX\"/lib/*.dll \"$PREFIX\"/bin/*.dll",
         "cp COPYING LICENSE.TXT \"$PREFIX/\"",
-        "printf '%s\\r\\n' '@echo off' 'echo This image is PostGIS 3.6.4, with GEOS 3.15.0, PROJ 9.9.0 and json-c 0.19, for PostgreSQL 18.' 'echo Installed, PostgreSQL'\"'\"'s server finds it: CREATE EXTENSION postgis; in a database, and postgis_topology, postgis_tiger_geocoder.' 'echo PROJ finds its proj.db through PROJ_DATA, which this image sets.' 'echo zigsaw run --noextension=^<its id^> leaves it out.' > \"$PREFIX/about.bat\""
+        "printf '%s\\r\\n' '@echo off' 'echo This image is PostGIS 3.6.4, with GEOS 3.15.0, PROJ 9.9.0, GDAL 3.13.3 and json-c 0.19, for PostgreSQL 18.' 'echo Installed, PostgreSQL'\"'\"'s server finds it: CREATE EXTENSION postgis; in a database, and postgis_raster, postgis_topology, postgis_tiger_geocoder.' 'echo PROJ finds its proj.db through PROJ_DATA, and GDAL its data through GDAL_DATA, which this image sets; GDAL'\"'\"'s DLL is on its PATH.' 'echo zigsaw run --noextension=^<its id^> leaves it out.' > \"$PREFIX/about.bat\""
       ]
     }
   ]

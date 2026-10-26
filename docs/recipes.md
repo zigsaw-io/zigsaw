@@ -2797,32 +2797,77 @@ the DLL.
   `cron.use_background_workers` on by default, which runs jobs in
   background workers without a connection or a password.
 - [`org.postgresql.PostgreSQL.PostGIS`](recipes/postgresql-postgis.json),
-  PostGIS 3.6.4 with its topology and TIGER geocoder extensions (no raster,
-  protobuf or address standardizer). Its libraries are modules of the
-  recipe, static and linked into `postgis-3.dll`: GEOS 3.15.0 (from GitHub's
-  tag archive, as its release is a `.tar.bz2`) and PROJ 9.9.0 with CMake,
-  json-c 0.19, SQLite for PROJ, and libiconv. PostgreSQL loads an extension
-  with `LoadLibrary`, which doesn't look for its DLLs beside it, so static
-  is what keeps them found. The image sets `PROJ_DATA` to its `share\proj`,
-  where PROJ's `proj.db` is (built from PROJ's SQL with the module's
-  `sqlite3.exe`; the same in every store). The build runs PostGIS's
-  configure and make under BusyBox: `PATH_SEPARATOR=;` (as Ghostscript's),
-  `perl` and `pg_config` given as full paths (configure looks for
-  programs without `.exe`), PROJ's `proj.pc` fixed for static linking (it
-  names MSVC's `proj_9` and a `sqlite3.pc` there isn't), the SQL
-  preprocessor as `cc -E -x c -traditional-cpp`, FlatGeobuf's C++ with `c++
-  -O2` (zig's `cc -x c++` has no C++ headers, and without `-O` zig builds
-  debug code, with UBSan), its archive named `.a` (it was `.la`, which zig's
-  linker refuses), and functions declared `PGDLLEXPORT` before their use
-  (clang refuses to add `dllexport` to a function already used, where
-  `PG_FUNCTION_INFO_V1` does). The loaders (`shp2pgsql`, `pgsql2shp`) are
-  left out, as extensions export no commands; so are the upgrade scripts
-  from earlier PostGIS versions, which this image never had (the
-  `…--ANY.sql` stubs, links in the build, are copies). Its layer is 12 MB.
+  PostGIS 3.6.4 with its raster, topology and TIGER geocoder extensions (no
+  protobuf, address standardizer or SFCGAL), built on [GDAL's SDK](#gdal).
+  GEOS, PROJ, json-c and libiconv are the SDK's static libraries, linked
+  into `postgis-3.dll` and `postgis_raster-3.dll`; GDAL is the SDK's
+  `libgdal-39.dll`, which the image carries in its `bin`. PostgreSQL loads
+  an extension with `LoadLibrary`, which doesn't look for its DLLs beside
+  it, so the image names its `bin` in its `path`: an extension's PATH
+  entries join the server's runs, and Windows finds the DLL there, in each
+  sandbox. The image sets `PROJ_DATA` and `GDAL_DATA` to the copies of PROJ's
+  `proj.db` and GDAL's data it carries. The build runs PostGIS's configure
+  and make under BusyBox: `PATH_SEPARATOR=;` (as Ghostscript's), `perl`
+  and `pg_config` given as full paths (configure looks for programs without
+  `.exe`), the SQL preprocessor as `cc -E -x c -traditional-cpp`,
+  FlatGeobuf's C++ with `c++ -O2` (zig's `cc -x c++` has no C++ headers, and
+  without `-O` zig builds debug code, with UBSan), its archive named `.a`
+  (it was `.la`, which zig's linker refuses), and functions declared
+  `PGDLLEXPORT` before their use (clang refuses to add `dllexport` to a
+  function already used, where `PG_FUNCTION_INFO_V1` does). `utils`, whose
+  make ran two makes in `raster/rt_pg` at once that both wrote
+  `rtpostgis.sql` through one temporary file, makes its targets one at a
+  time (`.NOTPARALLEL`; it failed so on a runner in iteration 47). The
+  loaders (`shp2pgsql`, `pgsql2shp`, `raster2pgsql`) are left out, as
+  extensions export no commands; so are the upgrade scripts from earlier
+  PostGIS versions, which this image never had (the `…--ANY.sql` stubs,
+  links in the build, are copies). Its layer is 29 MB (12 MB without
+  raster); GDAL's DLL is 42 MB of the files it unpacks.
 
 PostgreSQL's regression suites pass on the build: regress (231 tests),
 isolation (122), plpgsql, plperl and plpython. [`tests/postgresql.sh`](tests/postgresql.sh)
 runs the image in each sandbox, in about 100 s.
+
+## GDAL
+
+[`org.gdal.GDAL`](recipes/gdal.json) is GDAL 3.13.3's raster and vector
+tools: the `gdal` command and its subcommands, `gdalinfo`,
+`gdal_translate`, `gdalwarp`, `ogr2ogr`, `ogrinfo` and the rest, exported,
+with the `cwd` permission. As PostgreSQL's image does, it takes its files
+from an SDK, [`org.gdal.GDAL.Sdk`](recipes/gdal-sdk.json), which builds
+GDAL with CMake and zig and keeps what other builds link with: headers,
+`gdal-config`, the import library, and static libraries of what GDAL is
+built on, which are modules of its recipe: GEOS 3.15.0, PROJ 9.9.0 (with
+`proj.db`), SQLite (with its R-tree, which GDAL's GeoPackage driver
+needs), json-c 0.19, expat 2.9.0 and libiconv. PostGIS builds against
+them (see [extensions](#postgresql-extensions)).
+
+- GDAL is one DLL, `libgdal-39.dll`, with those libraries inside, and GDAL's
+  own copies of zlib, libtiff, libgeotiff, libjpeg, libpng, giflib, LERC,
+  qhull and Shapelib (`GDAL_USE_EXTERNAL_LIBS=OFF`, then the external ones
+  it should use turned on by name, so nothing else it might find in a
+  build is used). No curl, so no drivers for web services; no Python, Java
+  or C# bindings.
+- [`cpu-model.patch`](recipes/gdal/cpu-model.patch): GDAL asks whether the
+  CPU has AVX2 and FMA with `__builtin_cpu_supports()`, which reads
+  compiler-rt's `__cpu_model`, and zig's compiler-rt has none for Windows:
+  the DLL didn't link. The patch asks CPUID instead, through `<cpuid.h>`.
+- The DLL links with the [`crt-noexport`](#building-without-a-recipe)
+  object, as GTK's and PostgreSQL's SDKs' do: it otherwise exported the C
+  runtime's `atexit`, which the tools linking it then defined twice.
+- `-DXML_STATIC`, as expat is a static library (its header otherwise
+  declares its functions `dllimport`).
+- The import library is named `libgdal.a`, as zig's linker never looks for
+  `libgdal.dll.a`; `gdal-config` and `geos-config` work out their prefix
+  from where they are, and the pkg-config files from `${pcfiledir}`, so they
+  work from the SDK's deployment, wherever a store puts it (the build fails
+  if one still names a drive).
+- The image sets `GDAL_DATA` and `PROJ_DATA` to its `share\gdal` and
+  `share\proj`.
+
+The SDK takes 16 minutes here, 7 of them GDAL's 1,500 compiles, and its
+layer is 39 MB; the tools' image is 25 MB. [`tests/gdal.sh`](tests/gdal.sh)
+runs the tools in each sandbox, in about 10 s.
 
 ## MSVC
 

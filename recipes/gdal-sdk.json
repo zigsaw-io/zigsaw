@@ -1,0 +1,162 @@
+{
+  "id": "org.gdal.GDAL.Sdk",
+  "version": "3.13.3",
+  "name": "GDAL SDK",
+  "summary": "GDAL built with zig, with static GEOS, PROJ, SQLite, json-c, expat and libiconv and their headers, to build against; GDAL's image takes its files from it",
+  "homepage": "https://gdal.org/",
+  "license": "MIT AND LGPL-2.1-or-later AND blessing AND Zlib AND libtiff AND IJG AND libpng-2.0 AND Apache-2.0 AND Qhull",
+  "command": "bin/gdalinfo.exe",
+  "path": ["bin"],
+  "env": { "GDAL_DATA": "${app}\\share\\gdal", "PROJ_DATA": "${app}\\share\\proj" },
+  "exports": {},
+  "sdk": {
+    "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
+    "cmake": "org.cmake.cmake:4.4.4@sha256:fa7efc2e143063055620628a8867dbd904bb0464a36f6a44943f7dba50a8bcd0",
+    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "cleanup": ["/lib/cmake", "*.la", "/share/bash-completion", "/share/doc", "/share/man"],
+  "modules": [
+    {
+      "name": "crt-noexport",
+      "build": [
+        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
+        "cc -c noexport.s -o noexport.o"
+      ]
+    },
+    {
+      "name": "libiconv",
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "EGREP_TRADITIONAL": "grep -E", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2 -s", "LD": "sh B:/src/libiconv/zigsaw/ld.sh", "RC": "sh B:/src/libiconv/zigsaw/windres.sh", "WINDRES": "sh B:/src/libiconv/zigsaw/windres.sh" },
+      "sources": [
+        {
+          "url": "https://ftp.gnu.org/gnu/libiconv/libiconv-1.19.tar.gz",
+          "sha256": "88dd96a8c0464eca144fc791ae60cd31cd8ee78321e67397e25fc095c4a19aa6",
+          "strip": 1
+        },
+        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
+        { "path": "gtk4-sdk/autotools-ld.sh", "dest": "zigsaw/ld.sh" },
+        { "path": "gtk4-sdk/autotools-windres.sh", "dest": "zigsaw/windres.sh" }
+      ],
+      "build": [
+        "sh zigsaw/mtimes.sh",
+        "sh ./configure --disable-dependency-tracking --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --enable-static --disable-shared --disable-nls lt_cv_deplibs_check_method=pass_all gl_cv_cc_visibility=no > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
+        "make -j\"$(nproc)\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",
+        "make install > install.log 2>&1 || { tail -60 install.log; exit 1; }",
+        "mkdir -p \"$PREFIX/licenses\" && cp COPYING.LIB \"$PREFIX/licenses/libiconv.txt\""
+      ]
+    },
+    {
+      "name": "sqlite",
+      "sources": [
+        {
+          "url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+          "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "mkdir -p \"$PREFIX/bin\" \"$PREFIX/include\" \"$PREFIX/lib\"",
+        "cc -O2 -s -DSQLITE_ENABLE_RTREE=1 -c -o sqlite3.o sqlite3.c",
+        "ar rcs \"$PREFIX/lib/libsqlite3.a\" sqlite3.o",
+        "cp sqlite3.h sqlite3ext.h \"$PREFIX/include/\"",
+        "cc -O2 -s -Wl,-Brepro -o \"$PREFIX/bin/sqlite3.exe\" shell.c sqlite3.o"
+      ]
+    },
+    {
+      "name": "json-c",
+      "env": { "CFLAGS": "-s" },
+      "sources": [
+        {
+          "url": "https://s3.amazonaws.com/json-c_releases/releases/json-c-0.19.tar.gz",
+          "sha256": "37ad0249902e301bd9052bf712e511fcc6acff4ecaad4b5900aad9ce564e26de",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DBUILD_TESTING=OFF -DBUILD_APPS=OFF -DDISABLE_EXTRA_LIBS=ON",
+        "cmake --build out",
+        "cmake --install out",
+        "mkdir -p \"$PREFIX/licenses\" && cp COPYING \"$PREFIX/licenses/json-c.txt\""
+      ]
+    },
+    {
+      "name": "geos",
+      "env": { "CFLAGS": "-s", "CXXFLAGS": "-s" },
+      "sources": [
+        {
+          "url": "https://github.com/libgeos/geos/archive/refs/tags/3.15.0.tar.gz",
+          "sha256": "134aaf78026f4311737e20ff1465cd31a48c4ca8858fb68e99d13ccd3d52753a",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DBUILD_GEOSOP=OFF -DBUILD_BENCHMARKS=OFF",
+        "cmake --build out",
+        "cmake --install out",
+        "sed -i '/--clibs)/{n;s/-lgeos_c$/-lgeos_c -lgeos -lc++/}' \"$PREFIX/bin/geos-config\" && sh \"$PREFIX/bin/geos-config\" --clibs | grep -q -- '-lgeos -lc++'",
+        "mkdir -p \"$PREFIX/licenses\" && cp COPYING \"$PREFIX/licenses/geos.txt\""
+      ]
+    },
+    {
+      "name": "proj",
+      "env": { "CFLAGS": "-s", "CXXFLAGS": "-s" },
+      "sources": [
+        {
+          "url": "https://download.osgeo.org/proj/proj-9.9.0.tar.gz",
+          "sha256": "791a0610547eeabb17006cfd49cdbd2034f3240f47ed5e88a1031811f4e2bcf3",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_SHARED_LIBS=OFF -DBUILD_APPS=OFF -DBUILD_TESTING=OFF -DENABLE_TIFF=OFF -DENABLE_CURL=OFF -DEMBED_PROJ_DATA_PATH=OFF -DNLOHMANN_JSON_ORIGIN=internal -DSQLite3_INCLUDE_DIR=\"$PREFIX/include\" -DSQLite3_LIBRARY=\"$PREFIX/lib/libsqlite3.a\" -DEXE_SQLITE3=\"$PREFIX/bin/sqlite3.exe\"",
+        "cmake --build out",
+        "cmake --install out",
+        "sed -i -e 's/-lproj_9$/-lproj/' -e 's/^Libs.private:.*/Libs.private: -lsqlite3 -lc++ -lshell32 -lole32/' -e 's/^Requires.private:.*/Requires.private:/' \"$PREFIX/lib/pkgconfig/proj.pc\" && [ \"$(pkg-config --static --libs proj)\" = '-LB:/prefix/lib -lproj -lsqlite3 -lc++ -lshell32 -lole32' ]",
+        "test -s \"$PREFIX/share/proj/proj.db\"",
+        "mkdir -p \"$PREFIX/licenses\" && cp COPYING \"$PREFIX/licenses/proj.txt\""
+      ]
+    },
+    {
+      "name": "expat",
+      "env": { "CFLAGS": "-s" },
+      "sources": [
+        {
+          "url": "https://github.com/libexpat/libexpat/releases/download/R_2_9_0/expat-2.9.0.tar.gz",
+          "sha256": "16afbb9cefead2aa278105cf27d9f597bde7fbf3dbb85015857ca7ca6a4e89ba",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DEXPAT_SHARED_LIBS=OFF -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_BUILD_EXAMPLES=OFF -DEXPAT_BUILD_TESTS=OFF -DEXPAT_BUILD_DOCS=OFF -DEXPAT_BUILD_PKGCONFIG=ON",
+        "cmake --build out",
+        "cmake --install out",
+        "mkdir -p \"$PREFIX/licenses\" && cp COPYING \"$PREFIX/licenses/expat.txt\""
+      ]
+    },
+    {
+      "name": "gdal",
+      "env": { "CFLAGS": "-s -DXML_STATIC", "CXXFLAGS": "-s -DXML_STATIC", "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o" },
+      "sources": [
+        {
+          "url": "https://download.osgeo.org/gdal/3.13.3/gdal-3.13.3.tar.gz",
+          "sha256": "5e0c388d83da2d686cc00a40272882432cdb54edff43d4af173e532844a0a0ea",
+          "strip": 1
+        },
+        { "path": "gdal/cpu-model.patch", "dest": "zigsaw/cpu-model.patch" }
+      ],
+      "build": [
+        "patch -p1 < zigsaw/cpu-model.patch && ! grep -rq '__builtin_cpu_supports(\"' port gcore alg frmts ogr",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=B:/prefix -DCMAKE_PREFIX_PATH=B:/prefix -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF -DBUILD_PYTHON_BINDINGS=OFF -DBUILD_JAVA_BINDINGS=OFF -DBUILD_CSHARP_BINDINGS=OFF -DGDAL_USE_EXTERNAL_LIBS=OFF -DGDAL_USE_SQLITE3=ON -DGDAL_USE_GEOS=ON -DGDAL_USE_ICONV=ON -DGDAL_USE_EXPAT=ON -DGDAL_USE_JSONC=ON -DSQLite3_INCLUDE_DIR=B:/prefix/include -DSQLite3_LIBRARY=B:/prefix/lib/libsqlite3.a > configure.log 2>&1 || { tail -80 configure.log; exit 1; }",
+        "grep -E 'GDAL_USE_[A-Z0-9_]+ *:|Enabled drivers|internal' configure.log | head -60 || true",
+        "cmake --build out",
+        "cmake --install out > install.log 2>&1 || { tail -40 install.log; exit 1; }",
+        "for f in B:/prefix/lib/*.dll.a; do mv \"$f\" \"${f%.dll.a}.a\"; done && test -f B:/prefix/lib/libgdal.a",
+        "sed -i 's|B:/prefix|${pcfiledir}/../..|g' B:/prefix/lib/pkgconfig/*.pc",
+        "for f in B:/prefix/bin/gdal-config B:/prefix/bin/geos-config; do sed -i -e '1a p=$(cd \"$(dirname \"$0\")/..\" && pwd)' -e 's|B:/prefix|$p|g' \"$f\"; done",
+        "[ \"$(sh B:/prefix/bin/gdal-config --libs)\" = '-LB:/prefix/lib -lgdal' ] && [ \"$(sh B:/prefix/bin/geos-config --clibs)\" = '-LB:/prefix/lib -lgeos_c -lgeos -lc++' ]",
+        "! grep -lE '(^|[^A-Za-z])[A-Za-z]:[/\\\\]' B:/prefix/bin/gdal-config B:/prefix/bin/geos-config B:/prefix/lib/pkgconfig/*.pc",
+        "mkdir -p \"$PREFIX/licenses\" && cp LICENSE.TXT \"$PREFIX/licenses/gdal.txt\""
+      ]
+    }
+  ]
+}

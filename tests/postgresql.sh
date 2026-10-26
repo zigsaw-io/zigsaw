@@ -17,8 +17,9 @@
 # HNSW index answers a nearest-neighbour query, pg_cron, which the server
 # preloads, runs a job every second, and PostGIS transforms a point with
 # PROJ's proj.db, buffers with GEOS, reads GeoJSON and GML and uses a GiST
-# index (and makes a topology, under soft); --noextension leaves pg_cron
-# out.
+# index (and makes a topology, under soft), and its rasters, on GDAL's DLL,
+# give a band's values and statistics, reproject, and go through GeoTIFF
+# and PNG; --noextension leaves pg_cron out.
 #
 #   POSTGRES_HOME=path\to\store bash tests/postgresql.sh [path\to\zigsaw.exe]
 #
@@ -147,6 +148,21 @@ postgis() {
         grep -qx 'POINT(1 2)' <<<"$out" && grep -qx 9 <<<"$out" &&
         grep -q 'Index.* Scan .*places_g_idx' <<<"$out" || { echo "$out"; return 1; }
 }
+# rasters: postgis_raster on GDAL's DLL (found through the extension's
+# PATH entry): a band's value and statistics, a raster reprojected (GDAL's
+# warper and PROJ), and through GDAL's GeoTIFF and PNG drivers and back.
+rasters() {
+    local out r="st_addband(st_makeemptyraster(10, 10, 0, 10, 1, -1, 0, 0, 4326), '8BUI'::text, 7)"
+    out=$(sql "create extension if not exists postgis" "create extension if not exists postgis_raster" \
+        "select split_part(postgis_gdal_version(), ' ', 2)" \
+        "set postgis.gdal_enabled_drivers = 'GTiff PNG'" \
+        "select st_value($r, 3, 3) || '|' || (st_summarystats($r)).mean" \
+        "select st_srid(st_transform($r, 3857)) || '|' || st_value(st_transform($r, 3857), 2, 2)" \
+        "select st_value(st_fromgdalraster(st_asgdalraster($r, 'GTiff')), 1, 1)" \
+        "select substr(encode(st_aspng($r), 'hex'), 1, 8)" 2>&1)
+    grep -qx 3.13.3 <<<"$out" && grep -qx '7|7' <<<"$out" && grep -qx '3857|7' <<<"$out" &&
+        grep -qx 7 <<<"$out" && grep -qx 89504e47 <<<"$out" || { grep -v NOTICE <<<"$out" | tr '\n' ' '; return 1; }
+}
 # topology: postgis_topology makes a topology and adds an edge to it.
 topology() {
     local out
@@ -223,6 +239,7 @@ check "pg_basebackup makes a zstd-compressed backup" backup
 check "pgvector's HNSW index finds the nearest vector" vectors
 check "pg_cron, preloaded, runs a job every second" cron
 check "PostGIS: GEOS, PROJ with its proj.db, json-c, GML and a GiST index" postgis
+check "PostGIS raster, on GDAL: values, statistics, reprojection, GeoTIFF and PNG" rasters
 check "PostGIS topology makes a topology with an edge" topology
 check "pg_ctl stops it from another run" stop
 tree=$(cygpath -w "$("$zigsaw" run --command=pg_config $APP --bindir 2>/dev/null | tr -d '\r')\\..")
@@ -258,6 +275,7 @@ for SANDBOX in low appcontainer; do
     check "$SANDBOX: pgvector's HNSW index finds the nearest vector" vectors
     check "$SANDBOX: pg_cron runs a job every second" cron
     check "$SANDBOX: PostGIS, with PROJ's proj.db" postgis
+    check "$SANDBOX: PostGIS raster, on GDAL" rasters
     if [ $SANDBOX = appcontainer ]; then
         outside() { timeout 60 "$zigsaw" run --sandbox=soft --command=psql $APP -p $port -XAt -c "select 1" | tr -d '\r' | grep -qx 1; }
         gap "appcontainer: a client outside the container reaches the server in it" outside

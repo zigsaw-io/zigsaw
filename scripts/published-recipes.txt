@@ -66,6 +66,8 @@ flameshot.json
 notes.json
 ghostscript.json
 texlive.json
+gdal-sdk.json
+gdal.json
 make.json
 postgresql-sdk.json
 postgresql.json

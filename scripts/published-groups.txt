@@ -58,8 +58,14 @@ qt: qt6-sdk.json qt6.json flameshot.json notes.json
 # after another; under 6 with them cached)
 texlive: ghostscript.json texlive.json
 
+# GDAL's SDK (16 here: some 1,500 compiles in 7, CMake's checks, then GEOS,
+# libiconv and PROJ) and GDAL's tools from it. PostGIS, in `postgresql`, pulls
+# the SDK from the registry.
+gdal: gdal-sdk.json gdal.json
+
 # PostgreSQL's SDK (24 on a runner, 15 here: OpenSSL, then PostgreSQL's
 # 2,000 compiles), PostgreSQL from it, and its extensions, with GNU make:
-# pgvector and pg_cron under a minute each, PostGIS 9 here (GEOS and PROJ)
+# pgvector and pg_cron under a minute each, PostGIS under 3 here (on GDAL's
+# SDK; 9 in iteration 47, when it built GEOS and PROJ itself)
 postgresql: make.json postgresql-sdk.json postgresql.json postgresql-pgvector.json postgresql-pg-cron.json
 postgresql: postgresql-postgis.json

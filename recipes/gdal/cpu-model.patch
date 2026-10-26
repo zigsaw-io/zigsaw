@@ -1,0 +1,53 @@
+--- a/port/cpl_cpu_features.cpp
++++ b/port/cpl_cpu_features.cpp
+@@ -202,6 +202,8 @@
+ 
+ #if defined(__GNUC__)
+ 
++#include <cpuid.h>
++
+ bool bCPLHasAVX2 = false;
+ // Use 102 because  CPLHaveRuntimeAVXInitialize() uses 101, so we are run
+ // afterwards
+@@ -209,7 +211,12 @@
+ 
+ static void CPLHaveRuntimeAVX2Initialize()
+ {
+-    bCPLHasAVX2 = CPLHaveRuntimeAVX() && __builtin_cpu_supports("avx2");
++    // AVX2 is CPUID leaf 7, EBX bit 5: __builtin_cpu_supports() needs
++    // compiler-rt's __cpu_model, which zig's doesn't have on Windows.
++    unsigned int nEAX = 0, nEBX = 0, nECX = 0, nEDX = 0;
++    bCPLHasAVX2 = CPLHaveRuntimeAVX() &&
++                  __get_cpuid_count(7, 0, &nEAX, &nEBX, &nECX, &nEDX) &&
++                  (nEBX & (1 << 5)) != 0;
+ }
+ 
+ #else
+--- a/gcore/gdaldataset.cpp
++++ b/gcore/gdaldataset.cpp
+@@ -51,6 +51,7 @@
+ 
+ #ifdef CAN_DETECT_AVX2_FMA_AT_RUNTIME
+ #include "gdal_matrix_avx2_fma.h"
++#include <cpuid.h>
+ #endif
+ 
+ #include "gdalsubdatasetinfo.h"
+@@ -13222,9 +13223,14 @@
+ #endif
+ 
+ #ifdef CAN_DETECT_AVX2_FMA_AT_RUNTIME
+-    const bool bHasAVX2_FMA = CPLHaveRuntimeAVX() &&
+-                              __builtin_cpu_supports("avx2") &&
+-                              __builtin_cpu_supports("fma");
++    // AVX2 is CPUID leaf 7, EBX bit 5, and FMA leaf 1, ECX bit 12, as
++    // __builtin_cpu_supports() needs compiler-rt's __cpu_model.
++    unsigned int nEAX = 0, nEBX = 0, nECX = 0, nEDX = 0;
++    const bool bHasAVX2_FMA =
++        CPLHaveRuntimeAVX() &&
++        __get_cpuid_count(7, 0, &nEAX, &nEBX, &nECX, &nEDX) &&
++        (nEBX & (1 << 5)) != 0 && __get_cpuid(1, &nEAX, &nEBX, &nECX, &nEDX) &&
++        (nECX & (1 << 12)) != 0;
+ #endif
+ 
+     // Iterate over all blocks
