@@ -1,11 +1,17 @@
 //! How long zigsaw's changes to host paths last: the access an app's
 //! AppContainer is given to a path, and the low integrity labels its low
-//! runs need (see run.zig). Store.zig records them in grants\<id>.txt, and
-//! which of them were a run's working directory in grants\<id>.cwd.
+//! runs need (see run.zig); and the loopback exemption of its container.
+//! Store.zig records them in grants\<id>.txt, and which of them were a
+//! run's working directory in grants\<id>.cwd.
 //!
-//! A change stays between runs only while a run of the app with nothing on
-//! its command line would make it again: under the sandbox the app's
-//! overrides choose, for the paths and user folders its permissions and
+//! The loopback exemption (see appcontainer.loopback) lasts only while the
+//! app's runs go: an exempt container reaches this machine whatever its
+//! capabilities, so a run without the network would too, and making it
+//! takes milliseconds.
+//!
+//! A change to a path stays between runs only while a run of the app with
+//! nothing on its command line would make it again: under the sandbox the
+//! app's overrides choose, for the paths and user folders its permissions and
 //! overrides name, and for the working directories such runs had, while
 //! the app keeps `cwd` (granting a large directory takes a while, so they
 //! aren't granted afresh on each run). What a run's command line asked for,
@@ -102,7 +108,7 @@ pub fn settle(ctx: *Context, id: []const u8) !void {
     var kept: std.ArrayList(Store.Grant) = .empty;
     for (recorded) |g| {
         // A deleted path took its ACL with it.
-        if (!try Store.exists(ctx.io, g.path)) continue;
+        if (g.kind != .loopback and !try Store.exists(ctx.io, g.path)) continue;
         if (standing.keeps(g, containsPath(cwds, g.path))) |access| {
             try kept.append(arena, g);
             tidy(ctx, g, access, sids) catch |err| switch (err) {
@@ -131,7 +137,7 @@ pub fn undoAll(ctx: *Context, id: []const u8) !void {
     if (recorded.len > 0) {
         const sids: Sids = try .of(arena, id);
         for (recorded) |g| {
-            if (!try Store.exists(ctx.io, g.path)) continue;
+            if (g.kind != .loopback and !try Store.exists(ctx.io, g.path)) continue;
             _ = try undo(ctx, id, g, sids, true);
         }
     }
@@ -157,6 +163,7 @@ const Sids = struct {
 /// Takes back one change. False if that failed (and was reported), so it
 /// stays recorded, to be tried again. A label other apps need stays, which
 /// is told only when `tell_kept`: `rm` asked for it to go, a run's end didn't.
+/// So is the loopback exemption's end, which every run's end would tell.
 fn undo(ctx: *Context, id: []const u8, g: Store.Grant, sids: Sids, tell_kept: bool) !bool {
     const arena = ctx.arena;
     const start = Io.Timestamp.now(ctx.io, .awake);
@@ -186,6 +193,14 @@ fn undo(ctx: *Context, id: []const u8, g: Store.Grant, sids: Sids, tell_kept: bo
                 else => |e| return e,
             };
             note("removed the low integrity label of {s} ({d} ms)", .{ g.path, millis(ctx, start) });
+        },
+        .loopback => {
+            const was = appcontainer.loopback.unexempt(arena, sids.package) catch |err| switch (err) {
+                error.Failed => return false,
+                else => |e| return e,
+            };
+            if (was and (tell_kept or ctx.verbose))
+                note("took back the loopback exemption of {s} ({d} ms)", .{ sids.name, millis(ctx, start) });
         },
     }
     return true;
@@ -248,6 +263,8 @@ const Standing = struct {
     /// The access a recorded change stands for, if it stands: `was_cwd`
     /// if it was a run's working directory.
     fn keeps(s: Standing, g: Store.Grant, was_cwd: bool) ?acl.Access {
+        // Only while runs go (see the top).
+        if (g.kind == .loopback) return null;
         var access: ?acl.Access = if (was_cwd) s.cwd else null;
         for (s.paths) |p| if (samePath(p.path, g.path)) {
             access = wider(access, p.access);
@@ -257,6 +274,7 @@ const Standing = struct {
             .appcontainer => if (s.sandbox == .appcontainer) a else null,
             // Low runs label only what they may write.
             .low => if (s.sandbox == .low and a == .full) a else null,
+            .loopback => unreachable,
         };
     }
 };
@@ -338,4 +356,6 @@ test "Standing.keeps: under the saved sandbox, for what the app may reach withou
     const soft: Standing = .{};
     try std.testing.expectEqual(null, soft.keeps(ac("D:\\rw"), true));
     try std.testing.expectEqual(null, soft.keeps(low("D:\\rw"), true));
+    // The loopback exemption never does.
+    try std.testing.expectEqual(null, saved_ac.keeps(.loopback, false));
 }

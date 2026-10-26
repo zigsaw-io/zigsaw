@@ -33,6 +33,7 @@ const environment = @import("environment.zig");
 const exports = @import("exports.zig");
 const extensions = @import("extensions.zig");
 const folders = @import("folders.zig");
+const forward = @import("forward.zig");
 const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
 const override = @import("override.zig");
@@ -117,15 +118,25 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     if (usesCache(cfg, found.loaded)) try Io.Dir.cwd().createDirPath(io, cache_dir);
 
     const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
-    const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir, cache_dir);
+    // The ports the run uses, its extensions' too, and where it reaches them.
+    const used = try services.usedBy(arena, cfg, try extensionConfigs(arena, found.loaded));
+    const targets = try services.targets(arena, used, settings.ports);
     // Where the app listens for its services, and where they're reached.
-    const service_ports = try services.resolve(ctx, cfg, settings.ports, sandbox);
+    const service_ports = try services.resolve(ctx, cfg, used, settings.ports, sandbox);
+    // How it reaches other programs on this machine: in an AppContainer
+    // that isn't exempt, only the ports it uses, through zigsaw.
+    const reach: Loopback = if (sandbox == .appcontainer) try exemptLoopback(ctx, cfg.id, network, targets.len > 0) else .open;
+    const forwarding = reach == .isolated and targets.len > 0;
+    if (forwarding) try services.forwardThrough(ctx, targets, service_ports);
+    const uses = try services.usePlaceholders(arena, targets);
+    const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir, cache_dir, uses);
     const placeholders: oci.Placeholders = .{
         .app = image.deploy_dir,
         .data = data_dir,
         .cache = cache_dir,
         .runtimes = runtimes.dirs,
         .services = try services.placeholders(arena, service_ports),
+        .uses = uses,
     };
     // The aliases first, as in builds, then the app's directories, then each
     // runtime's.
@@ -136,7 +147,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // Then the extensions', as runtimes the app didn't list; in them, ${app}
     // is the extension's directory.
     const ext_own = try arena.alloc(oci.Placeholders, found.loaded.len);
-    for (ext_own, found.loaded) |*p, e| p.* = .{ .app = e.dir, .data = data_dir, .cache = cache_dir };
+    for (ext_own, found.loaded) |*p, e| p.* = .{ .app = e.dir, .data = data_dir, .cache = cache_dir, .uses = uses };
     for (ext_own, found.loaded) |p, e| try app_path.appendSlice(arena, try environment.pathDirs(arena, p, e.config.path));
     const command = try resolveCommand(io, arena, placeholders, cfg, opts.command, app_path.items, system_root);
     const args = try std.mem.concat(arena, []const u8, &.{ command.args, opts.args, files });
@@ -179,10 +190,22 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         if (app_aliases) |a| note("aliases  {s} ({s})", .{ a.names, a.dir });
         if (!saved.isEmpty()) note("override {f}", .{saved});
         note("sandbox  {t}, network {s}", .{ sandbox, if (network) "on" else "off" });
+        switch (reach) {
+            .open => {},
+            .exempt => note("loopback exempt while the app's runs go: it reaches other programs on this machine", .{}),
+            .isolated => if (forwarding)
+                note("loopback isolated: it reaches other programs on this machine only on the ports it uses, which zigsaw forwards", .{})
+            else
+                note("loopback isolated: it reaches no other program on this machine", .{}),
+        }
         for (service_ports) |s| if (s.listen == s.port)
             note("service  {s}: localhost:{d}", .{ s.service.name, s.port })
         else
             note("service  {s}: localhost:{d}, which the app listens for on {d} in its container", .{ s.service.name, s.port, s.listen });
+        for (targets) |t| if (t.connect == t.port)
+            note("uses     {s}: localhost:{d}", .{ t.use.name, t.port })
+        else
+            note("uses     {s}: localhost:{d}, which zigsaw forwards from {d} in its container", .{ t.use.name, t.port, t.connect });
         note("exe      {s}", .{exe});
         if (command.batch) note("script   {s}", .{command.exe});
         note("cmdline  {s}", .{command_line});
@@ -195,7 +218,9 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // when the run ends, and so the ports are free again.
     const published = if (sandbox == .appcontainer) try services.publish(ctx, cfg, service_ports, opts.command) else null;
     defer if (published) |p| p.close();
-    const relay_exe = if (published != null) try services.relayExe(ctx) else null;
+    // The relay also forwards the ports the run uses, if it has to.
+    const forwards: ?forward.Forwards = if (forwarding) try forwardsOf(arena, targets) else null;
+    const relay_exe = if (published != null or forwards != null) try services.relayExe(ctx) else null;
 
     var security: ?win32.SECURITY_CAPABILITIES = null;
     var token: ?win32.HANDLE = null;
@@ -234,7 +259,11 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     if (ctx.verbose) if (cfg.registry) |r| note("registry {s} (kept in {s}\\registry)", .{ try std.mem.join(arena, ", ", r), data_dir });
 
     const env_block = try environment.encodeBlock(arena, env.items);
-    const child = try process.start(arena, .{
+    // The relay starts first, in the app's job: the app may connect to the
+    // ports it forwards at once.
+    const job = try process.newJob();
+    if (relay_exe) |r| startRelay(ctx, cfg.id, job, r, published, forwards, security.?, env_block);
+    const child: process.Child = .{ .job = job, .process = try process.startIn(arena, job, .{
         .exe = exe,
         .command_line = command_line,
         .env_block = env_block,
@@ -243,8 +272,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .token = token,
         // Set by a shim that a shortcut started (see shim.zig).
         .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
-    });
-    if (published) |p| startRelay(ctx, cfg.id, child, relay_exe.?, p, security.?, env_block);
+    }) };
     const code = try child.wait();
     // Commands the run installed, as `npm install -g` does, get shims. An
     // --ephemeral run's are gone with its data directory.
@@ -253,17 +281,36 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
 }
 
 /// Starts the relay in the app's container and job, with the sockets of the
-/// services the run publishes (see services.zig). It holds only the app's
-/// own capability: runs in one container reach each other without a network
-/// one. If it can't start, the app runs on, unpublished.
-fn startRelay(ctx: *Context, id: []const u8, child: process.Child, exe: []const u8, published: services.Published, app: win32.SECURITY_CAPABILITIES, env_block: []const u16) void {
+/// services the run publishes (see services.zig), and the pipes of the
+/// ports it forwards (see forward.zig), which it listens on before this
+/// returns. It holds only the app's own capability: runs in one container
+/// reach each other without a network one. If it can't start, the app runs
+/// on, without them.
+fn startRelay(
+    ctx: *Context,
+    id: []const u8,
+    job: win32.HANDLE,
+    exe: []const u8,
+    published: ?services.Published,
+    forwards: ?forward.Forwards,
+    app: win32.SECURITY_CAPABILITIES,
+    env_block: []const u16,
+) void {
     const arena = ctx.arena;
     var own = app;
     own.CapabilityCount = 1;
-    const handles = arena.alloc(win32.HANDLE, published.sockets.len) catch return;
-    for (handles, published.sockets) |*h, s| h.* = @ptrFromInt(s);
-    const command_line = process.buildCommandLine(arena, exe, published.args) catch return;
-    const relay = process.startIn(arena, child.job, .{
+    var handles: std.ArrayList(win32.HANDLE) = .empty;
+    var args: std.ArrayList([]const u8) = .empty;
+    if (published) |p| {
+        for (p.sockets) |s| handles.append(arena, @ptrFromInt(s)) catch return;
+        args.appendSlice(arena, p.args) catch return;
+    }
+    if (forwards) |f| {
+        handles.appendSlice(arena, &.{ f.relay_in, f.relay_out }) catch return;
+        args.appendSlice(arena, f.args(arena) catch return) catch return;
+    }
+    const command_line = process.buildCommandLine(arena, exe, args.items) catch return;
+    const relay = process.startIn(arena, job, .{
         .exe = exe,
         .command_line = command_line,
         .env_block = env_block,
@@ -271,12 +318,34 @@ fn startRelay(ctx: *Context, id: []const u8, child: process.Child, exe: []const 
         .security = &own,
         .creation_flags = win32.DETACHED_PROCESS,
         .stdio = .{ null, null, null },
-        .inherit = handles,
+        .inherit = handles.items,
     }) catch {
-        note("note: the relay that publishes {s}'s services didn't start, so they aren't published this run", .{id});
+        if (forwards) |f| f.close();
+        note("note: the relay of {s}'s run didn't start, so it {s} this run", .{
+            id,
+            if (published != null and forwards != null)
+                "publishes no service, and reaches none of the ports it uses,"
+            else if (published != null)
+                "publishes no service"
+            else
+                "reaches none of the ports it uses",
+        });
         return;
     };
+    if (forwards) |f| if (!f.serve(relay))
+        note("note: the relay of {s}'s run couldn't listen for the ports it uses, so it doesn't reach them this run", .{id});
     _ = win32.CloseHandle(relay);
+}
+
+/// The forwards of the ports a run uses, to the ports the relay listens on.
+fn forwardsOf(arena: Allocator, targets: []const services.Target) !forward.Forwards {
+    const ports = try arena.alloc(u16, targets.len);
+    const connect = try arena.alloc(u16, targets.len);
+    for (ports, connect, targets) |*p, *c, t| {
+        p.* = t.port;
+        c.* = t.connect;
+    }
+    return forward.Forwards.open(arena, ports, connect);
 }
 
 /// A host path the run may use, which the enforcing sandboxes grant: null
@@ -458,6 +527,54 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     };
 }
 
+/// How a run reaches other programs on this machine, over the loopback.
+const Loopback = enum {
+    /// As any program does: outside an AppContainer.
+    open,
+    /// Its container is exempt from loopback isolation while the app's
+    /// runs go.
+    exempt,
+    /// It reaches no program outside its container.
+    isolated,
+};
+
+/// Exempts the app's container from loopback isolation for a run with the
+/// network (see appcontainer.loopback), unless ZIGSAW_LOOPBACK_EXEMPTION is
+/// 0 or Windows refuses. Recorded first, as host grants are, so that the
+/// app's last run to end takes it back (see grants.zig). An exemption you
+/// made yourself isn't recorded, and stays. `uses` if the run uses ports,
+/// which zigsaw then forwards.
+fn exemptLoopback(ctx: *Context, id: []const u8, network: bool, uses: bool) !Loopback {
+    if (!network) return .isolated;
+    if (ctx.env.get("ZIGSAW_LOOPBACK_EXEMPTION")) |v| if (std.mem.eql(u8, v, "0")) return .isolated;
+    const arena = ctx.arena;
+    const sid = try appcontainer.packageSid(arena, id);
+    const changes = try ctx.store.lockGrantChanges(arena);
+    defer changes.release(ctx.io);
+    const recorded = for (try ctx.store.readGrants(arena, id)) |g| {
+        if (g.kind == .loopback) break true;
+    } else false;
+    if (!recorded and (appcontainer.loopback.isExempt(sid) orelse false)) return .exempt;
+    if (!recorded) try ctx.store.recordGrant(arena, id, .loopback);
+    const start = Io.Timestamp.now(ctx.io, .awake);
+    switch (try appcontainer.loopback.exempt(arena, sid)) {
+        .added => if (ctx.verbose) note("exempted {s} from loopback isolation ({d} ms)", .{
+            try appcontainer.profileName(arena, id), start.untilNow(ctx.io, .awake).toMilliseconds(),
+        }),
+        .already => {},
+        .refused => |code| {
+            if (!recorded) try ctx.store.forgetGrant(arena, id, .loopback);
+            note("note: Windows didn't let zigsaw exempt {s} from loopback isolation (error {d}), so this run reaches {s} on this machine", .{
+                try appcontainer.profileName(arena, id),
+                code,
+                if (uses) "other programs only on the ports it uses, through zigsaw," else "no other program",
+            });
+            return .isolated;
+        },
+    }
+    return .exempt;
+}
+
 // ---------------------------------------------------------------------------
 // Low integrity
 
@@ -565,16 +682,24 @@ const Runtimes = struct {
     /// Each runtime's directory, by alias, for the app's placeholders.
     dirs: []const oci.Placeholders.Dir,
     /// The placeholders of each runtime's own entries: ${app} is the
-    /// runtime's directory, and ${data} and ${cache} are the app's.
+    /// runtime's directory, and ${data}, ${cache} and ${uses:x} are the
+    /// app's.
     own: []const oci.Placeholders,
 };
 
-fn runtimeDirs(arena: Allocator, cfg: oci.AppConfig, dirs: []const []const u8, data_dir: []const u8, cache_dir: []const u8) !Runtimes {
+fn runtimeDirs(
+    arena: Allocator,
+    cfg: oci.AppConfig,
+    dirs: []const []const u8,
+    data_dir: []const u8,
+    cache_dir: []const u8,
+    uses: []const oci.Placeholders.UsedPort,
+) !Runtimes {
     const named = try arena.alloc(oci.Placeholders.Dir, dirs.len);
     const own = try arena.alloc(oci.Placeholders, dirs.len);
     for (cfg.runtimes.map.keys(), dirs, named, own) |alias, dir, *n, *o| {
         n.* = .{ .alias = alias, .path = dir };
-        o.* = .{ .app = dir, .data = data_dir, .cache = cache_dir };
+        o.* = .{ .app = dir, .data = data_dir, .cache = cache_dir, .uses = uses };
     }
     return .{ .dirs = named, .own = own };
 }
@@ -586,6 +711,12 @@ fn usesCache(cfg: oci.AppConfig, exts: []const extensions.Extension) bool {
     for (cfg.runtimes.map.values()) |r| if (oci.usesCache(r.path, r.env)) return true;
     for (exts) |e| if (oci.usesCache(e.config.path, e.config.env)) return true;
     return false;
+}
+
+fn extensionConfigs(arena: Allocator, exts: []const extensions.Extension) ![]const oci.AppConfig {
+    const configs = try arena.alloc(oci.AppConfig, exts.len);
+    for (configs, exts) |*c, e| c.* = e.config;
+    return configs;
 }
 
 fn extensionDirs(arena: Allocator, exts: []const extensions.Extension) ![]const []const u8 {

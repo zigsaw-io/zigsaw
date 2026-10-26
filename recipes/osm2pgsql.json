@@ -7,8 +7,8 @@
   "license": "GPL-2.0-or-later AND MIT AND BSL-1.0 AND bzip2-1.0.6 AND blessing AND Zlib AND PostgreSQL AND Apache-2.0",
   "command": "bin/osm2pgsql.exe",
   "path": ["bin"],
-  "env": { "PROJ_DATA": "${app}\\share\\proj" },
-  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "env": { "PROJ_DATA": "${app}\\share\\proj", "PGPORT": "${uses:postgresql}" },
+  "permissions": { "network": true, "filesystem": ["cwd"], "uses": [{ "name": "postgresql", "port": 5432 }] },
   "exports": {
     "osm2pgsql": { "command": "bin/osm2pgsql.exe" },
     "osm2pgsql-expire": { "command": "bin/osm2pgsql-expire.exe" }

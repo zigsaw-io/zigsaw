@@ -6,7 +6,8 @@
   "homepage": "https://xdebug.org/",
   "license": "Xdebug-1.03",
   "command": "about.bat",
-  "env": { "PHP_EXT_XDEBUG": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d" },
+  "env": { "PHP_EXT_XDEBUG": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d", "XDEBUG_CLIENT_PORT": "${uses:dbgp}" },
+  "permissions": { "uses": [{ "name": "dbgp", "port": 9003 }] },
   "extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17" },
   "exports": {},
   "sdk": { "phpsdk": "net.php.php.Sdk:8.5.11@sha256:b8828d57c9aaf22e1093b84f2e1c2a60004d189a27ca6e884505076af0786656" },
@@ -20,7 +21,10 @@
           "strip": 1
         }
       ],
-      "build": ["php-ext build --with-xdebug --with-xdebug-compression"]
+      "build": [
+        "php-ext build --with-xdebug --with-xdebug-compression",
+        "printf '%s\\n' '; Where the step debugger connects: XDEBUG_CLIENT_PORT, which zigsaw sets for its port dbgp.' 'xdebug.client_port=${XDEBUG_CLIENT_PORT:-9003}' >>\"$PREFIX/conf.d/xdebug.ini\""
+      ]
     }
   ]
 }

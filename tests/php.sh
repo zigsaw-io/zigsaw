@@ -9,8 +9,9 @@
 # ssh2's and redis's against servers of tests/php/servers, built with Go, as
 # this machine has none. An app that lists PHP, APCu and Xdebug as runtimes
 # loads those through their .ini files, the installed others too, and
-# Xdebug's step debugger connects to a DBGp client from it, except in an
-# AppContainer, which can't reach 127.0.0.1 (docs/gaps.md). Composer's image
+# Xdebug's step debugger connects to a DBGp client from it, in every sandbox,
+# and in an AppContainer without the loopback exemption, through zigsaw.
+# Composer's image
 # (recipes/composer.json) installs a project offline; Kanboard
 # (recipes/kanboard.json), whose dependencies a build installed with it,
 # serves its pages and API with PHP's web server, under soft only.
@@ -305,20 +306,20 @@ debugs() {
     (cd "$work\\consumer" && "$zigsaw" run --command=php --noextension=$XDEBUG $PHP listener.php $port 10 >"$work\\listener.out" 2>&1) &
     local listener=$!
     for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q listening "$work\\listener.out" 2>/dev/null && break; sleep 0.5; done
-    out=$(cd "$work\\consumer" && z run --sandbox=$sb --env=XDEBUG_MODE=debug --env=XDEBUG_SESSION=1 --env=XDEBUG_CONFIG=client_port=$port $CONSUMER 2>&1 | tr -d '\r' | grep '^xdebug mode')
+    # Xdebug's image uses port 9003, dbgp, which --port moves.
+    out=$(cd "$work\\consumer" && z run --sandbox=$sb --env=XDEBUG_MODE=debug --env=XDEBUG_SESSION=1 --port=dbgp=$port $CONSUMER 2>&1 | tr -d '\r' | grep '^xdebug mode')
     wait $listener
     heard=$(tr -d '\r' <"$work\\listener.out" | paste -sd' ')
-    case $sb in
-    appcontainer)
-        # An AppContainer can't connect to 127.0.0.1 without a loopback
-        # exemption, which needs an administrator (docs/gaps.md).
-        [ "$out" = "xdebug mode debug, debugger not connected" ] && [ "$heard" = "listening no connection" ] ;;
-    *) [ "$out" = "xdebug mode debug, debugger connected" ] && [ "$heard" = "listening init PHP status stopping" ] ;;
-    esac || { echo "$sb: app: $out; listener: $heard"; return 1; }
+    [ "$out" = "xdebug mode debug, debugger connected" ] && [ "$heard" = "listening init PHP status stopping" ] ||
+        { echo "$sb: app: $out; listener: $heard"; return 1; }
 }
 check "Xdebug's step debugger connects to a DBGp client under soft" debugs soft
 check "and under low" debugs low
-check "but not under appcontainer, which can't reach 127.0.0.1 (known gap)" debugs appcontainer
+# The consumer has the network: its container is exempt from loopback
+# isolation while it runs. Without the exemption, zigsaw forwards the port.
+check "and under appcontainer" debugs appcontainer
+forwarded_debugs() { (export ZIGSAW_LOOPBACK_EXEMPTION=0 && debugs appcontainer); }
+check "and under appcontainer without the loopback exemption, through zigsaw" forwarded_debugs
 
 # --- Composer and Kanboard ----------------------------------------------------
 

@@ -34,7 +34,7 @@ pub const Profile = struct {
     pub fn ensure(arena: Allocator, id: []const u8) !Profile {
         const name = try profileName(arena, id);
         const name_w = try win32.wide(arena, name);
-        const mutex = try Mutex.acquire();
+        const mutex = try Mutex.acquire(Mutex.profiles);
         defer mutex.release();
         var sid: ?win32.PSID = null;
         var hr = win32.CreateAppContainerProfile(name_w, name_w, name_w, null, 0, &sid);
@@ -48,14 +48,16 @@ pub const Profile = struct {
     }
 };
 
-/// Held while zigsaw creates a profile (see `Profile.ensure`).
+/// Held while zigsaw creates a profile (see `Profile.ensure`), or changes
+/// the containers exempt from loopback isolation (see `loopback`).
 const Mutex = struct {
     handle: win32.HANDLE,
 
-    const name = "Local\\zigsaw-appcontainer";
+    const profiles = std.unicode.utf8ToUtf16LeStringLiteral("Local\\zigsaw-appcontainer");
+    const exemptions = std.unicode.utf8ToUtf16LeStringLiteral("Local\\zigsaw-loopback");
 
-    fn acquire() !Mutex {
-        const handle = win32.CreateMutexW(null, win32.FALSE, std.unicode.utf8ToUtf16LeStringLiteral(name)) orelse
+    fn acquire(name: win32.LPCWSTR) !Mutex {
+        const handle = win32.CreateMutexW(null, win32.FALSE, name) orelse
             return win32.lastErrorFail("CreateMutexW");
         // Abandoned: a zigsaw that had it ended without releasing it.
         switch (win32.WaitForSingleObject(handle, win32.INFINITE)) {
@@ -70,6 +72,80 @@ const Mutex = struct {
     fn release(m: Mutex) void {
         _ = win32.ReleaseMutex(m.handle);
         _ = win32.CloseHandle(m.handle);
+    }
+};
+
+/// Loopback isolation keeps an AppContainer from connecting to programs
+/// outside it on this machine. Windows keeps one list, for the whole
+/// machine, of the containers exempt from it, which this account may change
+/// without elevation. An exempt container reaches this machine's servers
+/// whatever its capabilities, and nothing outside it can connect in all the
+/// same (docs/networking.md). zigsaw exempts an app's container only while
+/// runs of it with the network go (see run.zig and grants.zig).
+pub const loopback = struct {
+    pub const Exempted = union(enum) {
+        added,
+        /// On the list already.
+        already,
+        /// Windows' error.
+        refused: win32.DWORD,
+    };
+
+    /// Puts the container `sid` on the list.
+    pub fn exempt(arena: Allocator, sid: win32.PSID) !Exempted {
+        const mutex = try Mutex.acquire(Mutex.exemptions);
+        defer mutex.release();
+        const list = switch (get()) {
+            .list => |l| l,
+            .failed => |code| return .{ .refused = code },
+        };
+        if (find(list, sid) != null) return .already;
+        const next = try arena.alloc(win32.SID_AND_ATTRIBUTES, list.len + 1);
+        @memcpy(next[0..list.len], list);
+        next[list.len] = .{ .Sid = sid, .Attributes = 0 };
+        const code = win32.NetworkIsolationSetAppContainerConfig(@intCast(next.len), next.ptr);
+        return if (code == 0) .added else .{ .refused = code };
+    }
+
+    /// Takes the container `sid` off the list: whether it was on it. Fails,
+    /// reporting it, if Windows refuses.
+    pub fn unexempt(arena: Allocator, sid: win32.PSID) !bool {
+        const mutex = try Mutex.acquire(Mutex.exemptions);
+        defer mutex.release();
+        const list = switch (get()) {
+            .list => |l| l,
+            .failed => |code| return fail("reading the containers exempt from loopback isolation: error {d}", .{code}),
+        };
+        const at = find(list, sid) orelse return false;
+        var next: std.ArrayList(win32.SID_AND_ATTRIBUTES) = .empty;
+        try next.appendSlice(arena, list[0..at]);
+        try next.appendSlice(arena, list[at + 1 ..]);
+        const code = win32.NetworkIsolationSetAppContainerConfig(@intCast(next.items.len), if (next.items.len > 0) next.items.ptr else null);
+        if (code != 0) return fail("taking back the loopback exemption of a container: error {d}", .{code});
+        return true;
+    }
+
+    /// Whether the container `sid` is on the list; null if Windows didn't
+    /// say.
+    pub fn isExempt(sid: win32.PSID) ?bool {
+        return switch (get()) {
+            .list => |l| find(l, sid) != null,
+            .failed => null,
+        };
+    }
+
+    /// The list, which is left to be freed at process exit.
+    fn get() union(enum) { list: []win32.SID_AND_ATTRIBUTES, failed: win32.DWORD } {
+        var count: win32.DWORD = 0;
+        var sids: ?[*]win32.SID_AND_ATTRIBUTES = null;
+        const code = win32.NetworkIsolationGetAppContainerConfig(&count, &sids);
+        if (code != 0) return .{ .failed = code };
+        return .{ .list = if (sids) |s| s[0..count] else &.{} };
+    }
+
+    fn find(list: []const win32.SID_AND_ATTRIBUTES, sid: win32.PSID) ?usize {
+        for (list, 0..) |e, i| if (win32.EqualSid(e.Sid, sid) != 0) return i;
+        return null;
     }
 };
 

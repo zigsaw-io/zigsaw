@@ -9,9 +9,9 @@
 # that `require`s a module from the working directory, from tiny.osm.pbf,
 # with a flat node file and an area table in UTM zone 32N (PROJ's proj.db);
 # gzip and bzip2 input; and osm2pgsql-expire. In an AppContainer,
-# osm2pgsql-expire runs, but osm2pgsql can't reach the server on 127.0.0.1
-# (no loopback exemption): a known gap. Nothing is written in the store's
-# deployments.
+# osm2pgsql-expire runs, and osm2pgsql reaches the server on 127.0.0.1, as
+# its container is exempt from loopback isolation while it runs. Nothing is
+# written in the store's deployments.
 #
 #   OSM2PGSQL_HOME=path\to\store bash tests/osm2pgsql.sh [path\to\zigsaw.exe]
 #
@@ -193,7 +193,17 @@ done
 SANDBOX=appcontainer
 check "appcontainer: osm2pgsql-expire lists the map's tiles" has '^14/8529/5974$' osm2pgsql-expire -z 14 tiny.osm
 check "appcontainer: a database with PostGIS and hstore" database osm_appcontainer
-gap "appcontainer: osm2pgsql reaches the server on 127.0.0.1" import osm_appcontainer -O pgsql --slim tiny.osm
+check "appcontainer: osm2pgsql reaches the server on 127.0.0.1" import osm_appcontainer -O pgsql --slim tiny.osm
+# Without the exemption, it reaches the port it uses, postgresql, through
+# zigsaw: PGPORT is ${uses:postgresql}, which --port moves to the server's.
+forwarded() {
+    local out
+    out=$(ZIGSAW_LOOPBACK_EXEMPTION=0 timeout 120 "$zigsaw" run --sandbox=appcontainer --env="PGPASSWORD=$password" --env=PGCONNECT_TIMEOUT=5 \
+        --port=postgresql=$port --command=osm2pgsql $APP -U postgres -d osm_forwarded -O pgsql --slim tiny.osm 2>&1 | tr -d '\r'; exit "${PIPESTATUS[0]}") ||
+        { echo "$out" | tail -5; return 1; }
+}
+check "appcontainer: a database for the forwarded run" database osm_forwarded
+check "appcontainer, without the loopback exemption: osm2pgsql reaches the server through zigsaw" forwarded
 unset SANDBOX
 
 check "the server stops" stop

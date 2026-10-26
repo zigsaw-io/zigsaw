@@ -366,7 +366,7 @@ to finish.
 | `--nofilesystem=<location>` | Take away access that the app's permissions or its overrides give to a location |
 | `--file=<path>` | Have the app open a file of yours: grants it that file, to read and write, and adds the file's path to the app's arguments (see [below](#opening-a-file)) |
 | `--share=network` / `--unshare=network` | Override the app's network permission. With the network, a run gets your `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` |
-| `--port=<service>=<port>` | Serve one of the app's [services](#services) on another port |
+| `--port=<name>=<port>` | Serve one of the app's [services](#services) on another port, or reach a port it [uses](#reaching-this-machine) on another |
 | `--env=NAME=VALUE` | Set an environment variable |
 | `--noextension=<id>` | Leave out an installed [extension](docs/recipes.md#extension-points), which otherwise joins the runs of what it extends; `--extension=<id>` has one an override leaves out join again |
 | `--ephemeral` | Use a fresh data directory, deleted after the run |
@@ -418,6 +418,27 @@ an internal port of its own, and zigsaw's relay, in the app's container,
 publishes the service while the run lasts. `--port` moves a service, for
 the app's own clients too. Services are on the loopback only
 ([networking](docs/networking.md), [recipes](docs/recipes.md#services)).
+
+### Reaching this machine
+
+Under `soft` and `low`, an app reaches the servers on this machine as any
+program does. Under `appcontainer`:
+
+- A run of an app with the network has its container exempt from loopback
+  isolation while the app's runs go, so it reaches them too. Windows lets
+  you change that setting without elevation; the app's last run to end
+  takes it back, and so do `zigsaw repair` and `zigsaw rm` after a run that
+  was killed. With `ZIGSAW_LOOPBACK_EXEMPTION=0`, zigsaw never exempts one.
+- An app that isn't exempt reaches only the ports it declares it uses, such
+  as osm2pgsql's PostgreSQL and Xdebug's debugger client: zigsaw makes those
+  connections outside its container and hands them in. `zigsaw info` lists
+  the ports, and `--port` moves one:
+
+```powershell
+zigsaw run --sandbox=appcontainer --port=postgresql=5433 org.osm2pgsql.osm2pgsql -d osm data.osm.pbf
+```
+
+([networking](docs/networking.md), [recipes](docs/recipes.md#ports-an-app-uses))
 
 ### Your folders
 
@@ -829,7 +850,7 @@ while for a big folder.
 zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash, network)
 bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, how long it lasts, and rm undoes; --file; your folders (fake ones); registry keys kept with an app
-bash tests/network.sh   # an app's service reached from the host in each sandbox, on its port, one --port or an override moves it to, and not after the run; in an AppContainer, an internal port the app's runs agree on and reach each other on without the network, and a port another program holds; proxy variables passed to runs with the network; eight first AppContainer runs at once; the probe's report of what Windows lets AppContainers do on the loopback (tests/netprobe.zig)
+bash tests/network.sh   # an app's service reached from the host in each sandbox, on its port, one --port or an override moves it to, and not after the run; in an AppContainer, an internal port the app's runs agree on and reach each other on without the network, and a port another program holds; an AppContainer run with the network exempt from loopback isolation while it goes (not without the network, nor with ZIGSAW_LOOPBACK_EXEMPTION=0), a killed run's exemption taken back by repair, one you made kept; a port the app uses reached directly, or through zigsaw's forward when not exempt, and --port moving it; proxy variables passed to runs with the network; eight first AppContainer runs at once; the probe's report of what Windows lets AppContainers do on the loopback (tests/netprobe.zig)
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility

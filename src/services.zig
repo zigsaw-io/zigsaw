@@ -13,6 +13,14 @@
 //! on its port, on 127.0.0.1 and ::1, outside the container, and hands those
 //! sockets to the relay (relay.zig), which it starts in the app's container
 //! and job. Services are on the loopback only.
+//!
+//! The other way round, an app, its runtimes and its extensions declare the
+//! ports on this machine they use (oci.Use): another app's service, say, or
+//! a debugger's client. ${uses:<name>} is where the app connects for one:
+//! the port itself under `soft` and `low`, and in an AppContainer that's
+//! exempt from loopback isolation (see run.zig); in one that isn't, a port
+//! of the relay's in the container, which zigsaw forwards (forward.zig). A
+//! declared port is reached either way, with the network or without.
 
 const std = @import("std");
 const Io = std.Io;
@@ -36,15 +44,21 @@ pub const Ports = struct {
 };
 
 /// The app's services and their ports, for a run in `sandbox` with
-/// `moved` ("NAME=PORT", from --port and overrides).
-pub fn resolve(ctx: *Context, cfg: oci.AppConfig, moved: []const []const u8, sandbox: override.Sandbox) ![]const Ports {
+/// `moved` ("NAME=PORT", from --port and overrides), which may also name a
+/// port the run uses (see `usedBy`).
+pub fn resolve(ctx: *Context, cfg: oci.AppConfig, uses: []const oci.Use, moved: []const []const u8, sandbox: override.Sandbox) ![]const Ports {
     const arena = ctx.arena;
     const services = cfg.permissions.services orelse &.{};
     for (moved) |m| {
         const p = override.parsePort(m) orelse return fail("--port expects <service>=<port>; got \"{s}\"", .{m});
-        for (services) |s| {
-            if (std.mem.eql(u8, s.name, p.name)) break;
-        } else return fail("--port={s}: {s} has no service \"{s}\"{s}", .{ m, cfg.id, p.name, try namesOf(arena, services) });
+        const known = for (services) |s| {
+            if (std.mem.eql(u8, s.name, p.name)) break true;
+        } else for (uses) |u| {
+            if (std.mem.eql(u8, u.name, p.name)) break true;
+        } else false;
+        if (!known) return fail("--port={s}: {s} has no service \"{s}\"{s}{s}", .{
+            m, cfg.id, p.name, if (uses.len > 0) " or used port of that name" else "", try namesOf(arena, services, uses),
+        });
     }
     const out = try arena.alloc(Ports, services.len);
     for (out, services) |*o, s| {
@@ -62,11 +76,83 @@ pub fn resolve(ctx: *Context, cfg: oci.AppConfig, moved: []const []const u8, san
     return out;
 }
 
-fn namesOf(arena: Allocator, services: []const oci.Service) ![]const u8 {
-    if (services.len == 0) return "; it has none";
-    const names = try arena.alloc([]const u8, services.len);
-    for (names, services) |*n, s| n.* = s.name;
-    return std.fmt.allocPrint(arena, "; it has {s}", .{try oci.joinAnd(arena, names)});
+fn namesOf(arena: Allocator, services: []const oci.Service, uses: []const oci.Use) ![]const u8 {
+    if (services.len + uses.len == 0) return "; it has none";
+    var names: std.ArrayList([]const u8) = .empty;
+    for (services) |s| try names.append(arena, s.name);
+    for (uses) |u| try names.append(arena, u.name);
+    return std.fmt.allocPrint(arena, "; it has {s}", .{try oci.joinAnd(arena, names.items)});
+}
+
+// ---------------------------------------------------------------------------
+// Used ports
+
+/// The ports a run uses: the app's, its runtimes', then its extensions', the
+/// first of a name winning.
+pub fn usedBy(arena: Allocator, cfg: oci.AppConfig, extensions: []const oci.AppConfig) ![]const oci.Use {
+    var list: std.ArrayList(oci.Use) = .empty;
+    try oci.addUses(arena, &list, cfg.permissions.uses orelse &.{});
+    for (cfg.runtimes.map.values()) |r| try oci.addUses(arena, &list, r.uses orelse &.{});
+    for (extensions) |e| try oci.addUses(arena, &list, e.permissions.uses orelse &.{});
+    return list.items;
+}
+
+/// A port a run uses, and where the app connects for it.
+pub const Target = struct {
+    use: oci.Use,
+    /// Where it's reached: the config's port, or the one --port gives.
+    port: u16,
+    /// Where the app connects: `port`, or the relay's, where zigsaw
+    /// forwards it (see forward.zig).
+    connect: u16,
+};
+
+/// Where a run reaches each of `uses`, with `moved` as `resolve` takes it.
+pub fn targets(arena: Allocator, uses: []const oci.Use, moved: []const []const u8) ![]Target {
+    const out = try arena.alloc(Target, uses.len);
+    for (out, uses) |*t, u| {
+        var port = u.port;
+        for (moved) |m| if (override.parsePort(m)) |p| if (std.mem.eql(u8, p.name, u.name)) {
+            port = p.port;
+        };
+        t.* = .{ .use = u, .port = port, .connect = port };
+    }
+    return out;
+}
+
+/// What ${uses:<name>} says for them.
+pub fn usePlaceholders(arena: Allocator, list: []const Target) ![]const oci.Placeholders.UsedPort {
+    const out = try arena.alloc(oci.Placeholders.UsedPort, list.len);
+    for (out, list) |*o, t| o.* = .{ .name = t.use.name, .port = try std.fmt.allocPrint(arena, "{d}", .{t.connect}) };
+    return out;
+}
+
+test usedBy {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const digest = "sha256:" ++ "a" ** 64;
+    var cfg: oci.AppConfig = .{ .id = "app", .version = "1", .command = "x.exe" };
+    cfg.permissions.uses = &.{.{ .name = "db", .port = 5432 }};
+    try cfg.runtimes.map.put(arena, "php", .{ .id = "php", .version = "1", .image = digest, .layer = digest, .uses = &.{
+        .{ .name = "db", .port = 5433 },
+        .{ .name = "cache", .port = 6379 },
+    } });
+    var ext: oci.AppConfig = .{ .id = "ext", .version = "1", .command = "x.exe" };
+    ext.permissions.uses = &.{ .{ .name = "dbgp", .port = 9003 }, .{ .name = "cache", .port = 1 } };
+    const used = try usedBy(arena, cfg, &.{ext});
+    // The app's db, the runtime's cache, the extension's dbgp.
+    try std.testing.expectEqual(3, used.len);
+    try std.testing.expectEqual(5432, used[0].port);
+    try std.testing.expectEqual(6379, used[1].port);
+    try std.testing.expectEqualStrings("dbgp", used[2].name);
+
+    const t = try targets(arena, used, &.{ "dbgp=9100", "other=1" });
+    try std.testing.expectEqual(9100, t[2].port);
+    try std.testing.expectEqual(9100, t[2].connect);
+    try std.testing.expectEqual(5432, t[0].port);
+    const p = try usePlaceholders(arena, t);
+    try std.testing.expectEqualStrings("9100", p[2].port);
 }
 
 /// What the app's placeholders say for them.
@@ -132,7 +218,10 @@ fn internalPorts(ctx: *Context, id: []const u8, ports: []const Ports) ![]const u
         o.* = for (kept.items) |k| {
             if (std.mem.eql(u8, k.name, s.service.name)) break k.port;
         } else port: {
-            const new = try pick(ctx, kept.items, ports);
+            var taken: std.ArrayList(u16) = .empty;
+            for (kept.items) |k| try taken.append(arena, k.port);
+            for (ports) |other| try taken.append(arena, other.port);
+            const new = try pick(ctx, taken.items);
             try kept.append(arena, .{ .name = s.service.name, .port = new });
             picked = true;
             break :port new;
@@ -167,25 +256,33 @@ fn parseKept(arena: Allocator, text: []const u8) !std.ArrayList(Kept) {
 const internal_first = 20000;
 const internal_count = 29000;
 
-/// A port that's free now, and none of the app's others.
-fn pick(ctx: *Context, kept: []const Kept, ports: []const Ports) !u16 {
+/// A port that's free now, and none of `taken`, the app's others.
+fn pick(ctx: *Context, taken: []const u16) !u16 {
     net.startup() catch return fail("Windows' sockets aren't available", .{});
     var tries: usize = 0;
     while (tries < 200) : (tries += 1) {
         var random: [4]u8 = undefined;
         ctx.io.random(&random);
         const candidate: u16 = @intCast(internal_first + std.mem.readInt(u32, &random, .little) % internal_count);
-        if (isTaken(candidate, kept, ports)) continue;
+        if (std.mem.indexOfScalar(u16, taken, candidate) != null) continue;
         if (!isFree(candidate)) continue;
         return candidate;
     }
     return fail("found no free port for the app's services", .{});
 }
 
-fn isTaken(candidate: u16, kept: []const Kept, ports: []const Ports) bool {
-    for (kept) |k| if (k.port == candidate) return true;
-    for (ports) |p| if (p.port == candidate) return true;
-    return false;
+/// Has the app connect to a port of the relay's, inside its container, for
+/// each of `list`, which zigsaw then forwards (see forward.zig). They're
+/// picked as internal ports are, but for the run only: each run has a
+/// relay of its own.
+pub fn forwardThrough(ctx: *Context, list: []Target, ports: []const Ports) !void {
+    var taken: std.ArrayList(u16) = .empty;
+    for (ports) |p| try taken.appendSlice(ctx.arena, &.{ p.port, p.listen });
+    for (list) |t| try taken.append(ctx.arena, t.port);
+    for (list) |*t| {
+        t.connect = try pick(ctx, taken.items);
+        try taken.append(ctx.arena, t.connect);
+    }
 }
 
 fn isFree(port: u16) bool {

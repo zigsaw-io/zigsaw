@@ -128,6 +128,48 @@ own. A service doesn't need the `network` permission, which is about what
 the app may reach. `info`, and what `pull` shows before it asks, list the
 services.
 
+## Ports an app uses
+
+An app that connects to a server on this machine declares the port, as
+osm2pgsql's recipe does for PostgreSQL's:
+
+```json
+"env": { "PGPORT": "${uses:postgresql}" },
+"permissions": {
+  "network": true,
+  "uses": [{ "name": "postgresql", "port": 5432 }]
+}
+```
+
+`${uses:<name>}` is where the app connects for it, in its `env`, `args` and
+export arguments:
+
+- Under `soft` and `low`, it's the port, or the one
+  `--port=<name>=<port>` or an override gives.
+- Under `--sandbox=appcontainer`, a run with the network has its container
+  exempt from loopback isolation while the app's runs go, where Windows lets
+  zigsaw do that, and so it's the port there too.
+- In a container that isn't exempt (no network, Windows refused, or
+  `ZIGSAW_LOOPBACK_EXEMPTION=0`), it's a port of the run's relay, inside the
+  container. For each connection there, zigsaw connects to the port outside
+  the container and hands that connection in (`zigsaw-relay.exe`,
+  [networking](networking.md)).
+
+So a declared port is reached in every sandbox, with the network or
+without. Nothing else on this machine is reached from a container that
+isn't exempt: an app given another port of its own (`-P`, say) bypasses
+the forward.
+
+Runtimes and extensions declare the ports they use in the same way, and
+those join the runs of apps that have them: Xdebug's image uses `dbgp` on
+9003, and its `.ini` reads `xdebug.client_port` from a variable its image
+sets from `${uses:dbgp}`. A runtime's or extension's `${uses:x}` names one
+of its own; an app's may also name one of its runtimes'. When two use the
+same name, the app's wins, then its runtimes' and its extensions' in order.
+Names are those of services too, for `--port`. `info`, and what `pull`
+shows before it asks, list the ports an app and its runtimes use, and an
+update that uses another one asks first.
+
 ## Runtimes
 
 An app can run on another app's image, as Flatpak apps run on a runtime.

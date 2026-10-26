@@ -8,8 +8,12 @@
 # override moves it to, and not after the run ends; in an AppContainer, the
 # app listens on an internal port that all its runs agree on, and its runs
 # reach each other there without the network; a port another program holds
-# leaves the service unpublished, and the app running. Last, the probe's
-# report: what this Windows lets AppContainers do on the loopback.
+# leaves the service unpublished, and the app running. In an AppContainer, a
+# run with the network reaches a server on this machine, as its container is
+# exempt from loopback isolation while it goes; without the network, or with
+# ZIGSAW_LOOPBACK_EXEMPTION=0, it doesn't; `repair` takes back a killed
+# run's exemption, and one you made stays. Last, the probe's report: what
+# this Windows lets AppContainers do on the loopback.
 #
 #   bash tests/network.sh [path\to\zigsaw.exe]
 #
@@ -47,10 +51,14 @@ mkdir -p "$probe_dir" && cp "$root\\zig-out\\test\\zigsaw-netprobe.exe" "$probe_
 icacls "$probe_dir" /grant '*S-1-15-2-1:(OI)(CI)RX' >/dev/null || { echo "granting the probe to AppContainers failed"; exit 1; }
 probe="$probe_dir\\zigsaw-netprobe.exe"
 
-# The ports the service is on: the app's config's, and two others.
+# The ports the service is on: the app's config's, and two others. Then
+# the port of a server on this machine, outside zigsaw, which the app uses,
+# and another.
 declared=$((47000 + RANDOM % 600))
 moved=$((declared + 700))
 saved=$((declared + 800))
+host_port=$((declared + 900))
+host_port2=$((declared + 1000))
 
 # recipe <id> <command args> <more>: the probe as an app.
 recipe() {
@@ -59,11 +67,15 @@ recipe() {
     z build "$probe_dir\\$1.json" >/dev/null 2>&1 || { z build "$probe_dir\\$1.json"; exit 1; }
 }
 recipe $APP '"serve", "${listen:echo}"' '
-  "env": { "ECHO_LISTEN": "${listen:echo}", "ECHO_PORT": "${port:echo}" },
-  "permissions": { "services": [{ "name": "echo", "port": '$declared', "command": "netprobe-serve" }] },
+  "env": { "ECHO_LISTEN": "${listen:echo}", "ECHO_PORT": "${port:echo}", "UPSTREAM_PORT": "${uses:upstream}" },
+  "permissions": {
+    "services": [{ "name": "echo", "port": '$declared', "command": "netprobe-serve" }],
+    "uses": [{ "name": "upstream", "port": '$host_port' }]
+  },
   "exports": {
     "netprobe-serve": { "command": "zigsaw-netprobe.exe", "args": ["serve", "${listen:echo}"] },
     "netprobe-ping": { "command": "zigsaw-netprobe.exe", "args": ["ping", "${listen:echo}"] },
+    "netprobe-upstream": { "command": "zigsaw-netprobe.exe", "args": ["ping", "${uses:upstream}"] },
     "netprobe-env": { "command": "zigsaw-netprobe.exe", "args": ["env"] }
   },'
 recipe $RACE '"env", "ZIGSAW_ID"' ' "exports": {},'
@@ -184,7 +196,7 @@ z override --reset $APP >/dev/null 2>&1
 unknown_service() {
     local out
     out=$(z run --port=db=5432 $APP 2>&1) && return 1
-    grep -q 'has no service "db"; it has echo' <<<"$out" || { echo "$out"; return 1; }
+    grep -q 'has no service "db" or used port of that name; it has echo and upstream' <<<"$out" || { echo "$out"; return 1; }
 }
 check "--port for a service the app doesn't have fails" unknown_service
 
@@ -220,6 +232,150 @@ taken() {
     [ "$out" = connects ] || { echo "the app didn't run on: $out"; return 1; }
 }
 check "appcontainer: a port another program holds leaves the service unpublished" taken
+
+# --- Reaching this machine ---------------------------------------------------
+
+# A server on this machine, outside zigsaw.
+"$probe" serve $host_port >"$work\\host.out" 2>&1 &
+host_server=$!
+sleep 0.5
+
+# exempt: whether Windows lists the app's container as exempt from loopback
+# isolation.
+exempt() { CheckNetIsolation.exe LoopbackExempt -s | tr -d '\r' | grep -qx "    Name: zigsaw.$APP"; }
+# pings <expected> <run options...>: a run of the app pings the server, and
+# the probe says <expected>.
+pings() {
+    local expected=$1 out
+    shift
+    out=$(z run "$@" --command=zigsaw-netprobe.exe $APP ping $host_port 2>&1 | tr -d '\r')
+    [ "$out" = "$expected" ] || { echo "got $out"; return 1; }
+}
+# waiting <run options...>: a run of the app that waits 3 s, in the
+# background; $waiter is its zigsaw.
+waiting() {
+    "$zigsaw" run "$@" --command=zigsaw-netprobe.exe $APP wait 3000 >/dev/null 2>&1 &
+    waiter=$!
+}
+# becomes <exempt|!exempt>: whether the container is (or isn't) exempt within 3 s.
+becomes() {
+    local i
+    for i in $(seq 30); do
+        if [ "$1" = exempt ]; then exempt && return 0; else exempt || return 0; fi
+        sleep 0.1
+    done
+    return 1
+}
+
+reaches_host() {
+    pings connects --sandbox=appcontainer --share=network || return 1
+    ! exempt || { echo "still exempt after the run"; return 1; }
+}
+check "appcontainer: a run with the network reaches a server on this machine" reaches_host
+exempt_while_it_runs() {
+    waiting --sandbox=appcontainer --share=network
+    becomes exempt || { wait $waiter; echo "not exempt while it ran"; return 1; }
+    wait $waiter
+    becomes '!exempt' || { echo "still exempt after it ended"; return 1; }
+}
+check "its container is exempt while the run goes, and not after" exempt_while_it_runs
+without_network() {
+    waiting --sandbox=appcontainer
+    pings dropped --sandbox=appcontainer || { wait $waiter; return 1; }
+    ! exempt || { wait $waiter; echo "exempt"; return 1; }
+    wait $waiter
+}
+check "without the network, it doesn't, and isn't exempt" without_network
+switched_off() {
+    (
+        export ZIGSAW_LOOPBACK_EXEMPTION=0
+        pings dropped --sandbox=appcontainer --share=network
+    ) || return 1
+    ! exempt || { echo "exempt"; return 1; }
+}
+check "ZIGSAW_LOOPBACK_EXEMPTION=0: not even with the network" switched_off
+# A zigsaw that's killed can't take the exemption back: `repair` does.
+killed() {
+    waiting --sandbox=appcontainer --share=network
+    becomes exempt || { wait $waiter; echo "not exempt while it ran"; return 1; }
+    # bash's kill would let it end as on Ctrl+C.
+    taskkill /F /PID "$(cat /proc/$waiter/winpid)" >/dev/null
+    wait $waiter 2>/dev/null
+    sleep 0.5
+    exempt || { echo "not exempt after zigsaw was killed"; return 1; }
+    grep -qx loopback "$ZIGSAW_HOME\\grants\\$APP.txt" || { echo "not recorded"; return 1; }
+    z repair >/dev/null 2>&1
+    ! exempt || { echo "still exempt after repair"; return 1; }
+}
+check "a killed run's exemption is taken back by \`zigsaw repair\`" killed
+# An exemption you made yourself, with CheckNetIsolation, isn't zigsaw's.
+yours() {
+    CheckNetIsolation.exe LoopbackExempt -a -n=zigsaw.$APP >/dev/null || { echo "CheckNetIsolation -a failed"; return 1; }
+    local ok=0
+    pings connects --sandbox=appcontainer --share=network || ok=1
+    exempt || { echo "not exempt after the run"; ok=1; }
+    CheckNetIsolation.exe LoopbackExempt -d -n=zigsaw.$APP >/dev/null
+    return $ok
+}
+check "an exemption you made stays after the run" yours
+
+# The server's port is one the app uses: ${uses:upstream}.
+# upstream <run options...>: what the app's runs see as ${uses:upstream}.
+upstream() { z run "$@" --command=netprobe-env $APP UPSTREAM_PORT | tr -d '\r' | sed -n 's/^UPSTREAM_PORT=//p'; }
+# reaches_upstream <expected> <run options...>: a run of the app pings
+# ${uses:upstream}, and the probe says <expected>.
+reaches_upstream() {
+    local expected=$1 out
+    shift
+    out=$(z run "$@" --command=netprobe-upstream $APP 2>&1 | tr -d '\r')
+    [ "$out" = "$expected" ] || { echo "got $out"; return 1; }
+}
+direct_use() {
+    local sb got
+    for sb in soft low; do
+        got=$(upstream --sandbox=$sb)
+        [ "$got" = $host_port ] || { echo "$sb: got $got"; return 1; }
+    done
+    got=$(upstream --sandbox=appcontainer --share=network)
+    [ "$got" = $host_port ] || { echo "exempt: got $got"; return 1; }
+    reaches_upstream connects --sandbox=low
+}
+check "soft, low, and appcontainer when exempt: \${uses:x} is the port itself" direct_use
+forwarded() {
+    local got
+    got=$(upstream --sandbox=appcontainer)
+    [ "$got" != $host_port ] && [ "$got" -ge 20000 ] && [ "$got" -le 48999 ] || { echo "got $got"; return 1; }
+    reaches_upstream connects --sandbox=appcontainer
+}
+check "appcontainer, not exempt: it's a port of the relay's, from which zigsaw forwards it" forwarded
+check "  without the network, as the app has none, but not to the port itself" pings dropped --sandbox=appcontainer
+forwarded_switched_off() {
+    (
+        export ZIGSAW_LOOPBACK_EXEMPTION=0
+        reaches_upstream connects --sandbox=appcontainer --share=network
+    ) || return 1
+    ! exempt || { echo "exempt"; return 1; }
+}
+check "  and with the network, under ZIGSAW_LOOPBACK_EXEMPTION=0" forwarded_switched_off
+
+kill $host_server 2>/dev/null
+wait $host_server 2>/dev/null
+
+# --port moves a port the app uses, as it moves a service.
+moved_use() {
+    local second ok=0
+    "$probe" serve $host_port2 >/dev/null 2>&1 &
+    second=$!
+    sleep 0.5
+    reaches_upstream connects --sandbox=appcontainer --port=upstream=$host_port2 || ok=1
+    [ "$(upstream --sandbox=soft --port=upstream=$host_port2)" = $host_port2 ] || { echo "soft: not moved"; ok=1; }
+    # Where nothing listens, the app's connection is closed.
+    reaches_upstream connects --sandbox=appcontainer >/dev/null && { echo "the old port answered"; ok=1; }
+    kill $second 2>/dev/null
+    wait $second 2>/dev/null
+    return $ok
+}
+check "--port moves a port the app uses" moved_use
 
 # --- What this Windows does --------------------------------------------------
 

@@ -58,7 +58,7 @@ fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent) !void {
         const installed = try ctx.store.readImage(ctx.arena, ref.id, ref.manifest);
         break :newer try remote.fetch(ctx, source, .{
             .unless = ref.manifest,
-            .installed = .{ .version = ref.version, .access = .of(installed.config) },
+            .installed = .{ .version = ref.version, .access = try .of(ctx.arena, installed.config) },
             .consent = consent,
         });
     };

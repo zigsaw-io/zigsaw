@@ -83,12 +83,13 @@ pub fn writeContents(ctx: *Context, w: *Io.Writer, manifest: oci.Manifest, cfg: 
     }
     if (cfg.associations) |a| try writeLine(w, "opens", try std.mem.join(arena, ", ", a.map.keys()));
     if (cfg.permissions.services) |s| try writeLine(w, "serves", try oci.describeServices(arena, s));
-    try writeAccess(arena, w, .of(cfg));
+    try writeAccess(arena, w, try .of(arena, cfg));
 }
 
 /// The lines saying what an app may reach: all of it, or what an update adds.
 pub fn writeAccess(arena: std.mem.Allocator, w: *Io.Writer, access: oci.Access) !void {
     try writeLine(w, "permits", try oci.describePermissions(arena, access.permissions));
+    if (access.uses.len > 0) try writeLine(w, "uses", try oci.describeUses(arena, access.uses));
     if (access.registry.len > 0) try writeLine(w, "keeps", try std.fmt.allocPrint(arena, "{s} with its data", .{try oci.describeRegistry(arena, access.registry)}));
 }
 

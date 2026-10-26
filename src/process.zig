@@ -267,13 +267,22 @@ pub fn output(arena: Allocator, spec: SpawnSpec, input: []const u8, ms: win32.DW
 
 /// Starts a process as `spawn` does, without waiting for it.
 pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
+    const job = try newJob();
+    errdefer _ = win32.CloseHandle(job);
+    return .{ .job = job, .process = try startIn(arena, job, spec) };
+}
+
+/// A job object whose processes end when it's closed, as when we end. For
+/// `startIn`, when another process has to be in the job before the one a
+/// `Child` waits for.
+pub fn newJob() !win32.HANDLE {
     const job = win32.CreateJobObjectW(null, null) orelse return win32.lastErrorFail("CreateJobObjectW");
     errdefer _ = win32.CloseHandle(job);
     var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
     limits.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (win32.SetInformationJobObject(job, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits))) == 0)
         return win32.lastErrorFail("SetInformationJobObject");
-    return .{ .job = job, .process = try startIn(arena, job, spec) };
+    return job;
 }
 
 /// Starts a process in `job`, another process's, which ends it with that

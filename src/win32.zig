@@ -288,6 +288,11 @@ pub extern "userenv" fn CreateAppContainerProfile(
 ) callconv(.winapi) HRESULT;
 pub extern "userenv" fn DeriveAppContainerSidFromAppContainerName(name: LPCWSTR, sid: *?PSID) callconv(.winapi) HRESULT;
 pub extern "userenv" fn DeleteAppContainerProfile(name: LPCWSTR) callconv(.winapi) HRESULT;
+/// The AppContainers exempt from loopback isolation, which may connect to
+/// programs outside their container on this machine. Set replaces the whole
+/// list. Both return a Win32 error code, 0 for success.
+pub extern "api-ms-win-net-isolation-l1-1-0" fn NetworkIsolationGetAppContainerConfig(count: *DWORD, sids: *?[*]SID_AND_ATTRIBUTES) callconv(.winapi) DWORD;
+pub extern "api-ms-win-net-isolation-l1-1-0" fn NetworkIsolationSetAppContainerConfig(count: DWORD, sids: ?[*]SID_AND_ATTRIBUTES) callconv(.winapi) DWORD;
 /// The capability SIDs for a capability name, as S-1-15-3-1024-..., and the
 /// group SIDs Windows also derives from it. The arrays and SIDs are LocalAlloc'd.
 pub extern "api-ms-win-security-base-l1-2-2" fn DeriveCapabilitySidsFromName(
@@ -734,6 +739,22 @@ pub extern "ws2_32" fn getsockname(s: SOCKET, addr: *anyopaque, len: *c_int) cal
 pub extern "ws2_32" fn getsockopt(s: SOCKET, level: c_int, name: c_int, value: *anyopaque, len: *c_int) callconv(.winapi) c_int;
 pub extern "ws2_32" fn ioctlsocket(s: SOCKET, cmd: c_long, arg: *u32) callconv(.winapi) c_int;
 pub extern "ws2_32" fn select(nfds: c_int, read: ?*fd_set, write: ?*fd_set, except: ?*fd_set, timeout: ?*const timeval) callconv(.winapi) c_int;
+
+/// What another process needs to open a socket of ours (WSADuplicateSocketW,
+/// then WSASocketW with FROM_PROTOCOL_INFO): only passed along, so its
+/// fields are left opaque.
+pub const WSAPROTOCOL_INFOW = extern struct { data: [157]u32 };
+comptime {
+    std.debug.assert(@sizeOf(WSAPROTOCOL_INFOW) == 628);
+}
+pub const FROM_PROTOCOL_INFO: c_int = -1;
+pub extern "ws2_32" fn WSADuplicateSocketW(s: SOCKET, pid: DWORD, info: *WSAPROTOCOL_INFOW) callconv(.winapi) c_int;
+pub extern "kernel32" fn GetProcessId(process: HANDLE) callconv(.winapi) DWORD;
+
+/// A lock for threads that don't have std.Io's: zero is unlocked.
+pub const SRWLOCK = extern struct { ptr: ?*anyopaque = null };
+pub extern "kernel32" fn AcquireSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) void;
+pub extern "kernel32" fn ReleaseSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) void;
 
 // ---------------------------------------------------------------------------
 // Helpers

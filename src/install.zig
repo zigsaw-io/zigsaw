@@ -57,6 +57,8 @@ pub fn install(ctx: *Context, image: Image) !void {
     if (!image.described) {
         if (cfg.permissions.services) |s| note("  serves   {s}", .{try oci.describeServices(arena, s)});
         note("  permits  {s}", .{try oci.describePermissions(arena, cfg.permissions)});
+        const access: oci.Access = try .of(arena, cfg);
+        if (access.uses.len > 0) note("  uses     {s}", .{try oci.describeUses(arena, access.uses)});
         if (cfg.registry) |keys| note("  keeps    {s} with its data", .{try oci.describeRegistry(arena, keys)});
     }
     const saved = try override.load(ctx.store, arena, cfg.id);

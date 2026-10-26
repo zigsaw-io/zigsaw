@@ -559,19 +559,25 @@ pub fn listBuildImages(s: Store, arena: Allocator) ![]const []const u8 {
 // Changes to host paths' ACLs, so that they can be undone (see grants.zig):
 // one line per path, "<path>" for access granted to the app's AppContainer,
 // "low <path>" for a low integrity label zigsaw gave it. Paths are absolute,
-// so a line starting "low " is always a label. grants\<id>.cwd lists the
-// paths among them that were a run's working directory, one per line. Both
-// change under grants.lock.
+// so a line starting "low " is always a label, and the line "loopback" is
+// the app's container's loopback exemption, a change to Windows rather than
+// to a path. grants\<id>.cwd lists the paths among them that were a run's
+// working directory, one per line. Both change under grants.lock.
 
-/// A change zigsaw made to a host path for an app.
+/// A change zigsaw made to a host path for an app, or to Windows.
 pub const Grant = struct {
     kind: Kind,
+    /// Empty for `loopback`.
     path: []const u8,
 
-    pub const Kind = enum { appcontainer, low };
+    pub const Kind = enum { appcontainer, low, loopback };
+
+    /// The app's container's loopback exemption (see appcontainer.loopback).
+    pub const loopback: Grant = .{ .kind = .loopback, .path = "" };
 
     fn parse(line: []const u8) Grant {
         if (std.mem.startsWith(u8, line, label_prefix)) return .{ .kind = .low, .path = line[label_prefix.len..] };
+        if (std.mem.eql(u8, line, loopback_line)) return loopback;
         return .{ .kind = .appcontainer, .path = line };
     }
 
@@ -580,10 +586,15 @@ pub const Grant = struct {
     }
 
     pub fn format(g: Grant, w: *Io.Writer) Io.Writer.Error!void {
-        try w.print("{s}{s}", .{ if (g.kind == .low) label_prefix else "", g.path });
+        switch (g.kind) {
+            .appcontainer => try w.writeAll(g.path),
+            .low => try w.print("{s}{s}", .{ label_prefix, g.path }),
+            .loopback => try w.writeAll(loopback_line),
+        }
     }
 
     const label_prefix = "low ";
+    const loopback_line = "loopback";
 };
 
 fn grantsPath(s: Store, arena: Allocator, id: []const u8) ![]u8 {
@@ -612,6 +623,12 @@ pub fn recordGrant(s: Store, arena: Allocator, id: []const u8, grant: Grant) !vo
     try all.appendSlice(arena, existing);
     try all.append(arena, grant);
     try s.writeGrants(arena, id, all.items);
+}
+
+pub fn forgetGrant(s: Store, arena: Allocator, id: []const u8, grant: Grant) !void {
+    var rest: std.ArrayList(Grant) = .empty;
+    for (try s.readGrants(arena, id)) |g| if (!g.eql(grant)) try rest.append(arena, g);
+    try s.writeGrants(arena, id, rest.items);
 }
 
 /// Replaces the app's grants; none deletes the file.
@@ -830,7 +847,7 @@ test "renameRetrying waits while a file in the directory is open" {
     try std.testing.expect(try exists(io, try std.fs.path.join(arena, &.{ to, "f" })));
 }
 
-test "grants: both kinds round-trip, once each; others' found by kind and path" {
+test "grants: every kind round-trips, once each; others' found by kind and path" {
     const io = std.testing.io;
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
@@ -846,6 +863,8 @@ test "grants: both kinds round-trip, once each; others' found by kind and path" 
     try s.recordGrant(arena, "a.app", .{ .kind = .low, .path = "d:\\PROJ" });
     try s.recordGrant(arena, "a.app", .{ .kind = .appcontainer, .path = "D:\\other" });
     try s.recordGrant(arena, "b.app", .{ .kind = .low, .path = "d:\\Proj" });
+    try s.recordGrant(arena, "b.app", .loopback);
+    try s.recordGrant(arena, "b.app", .loopback);
     const a = try s.readGrants(arena, "a.app");
     try std.testing.expectEqual(3, a.len);
     try std.testing.expectEqual(Grant.Kind.low, a[0].kind);
@@ -859,6 +878,10 @@ test "grants: both kinds round-trip, once each; others' found by kind and path" 
     try std.testing.expect(!try s.grantedToOthers(arena, "a.app", .{ .kind = .appcontainer, .path = "D:\\proj" }));
     try std.testing.expect(!try s.grantedToOthers(arena, "b.app", .{ .kind = .low, .path = "D:\\other" }));
     try std.testing.expect(try s.grantedToOthers(arena, "b.app", .{ .kind = .low, .path = "D:\\proj" }));
+    const b = try s.readGrants(arena, "b.app");
+    try std.testing.expectEqual(2, b.len);
+    try std.testing.expectEqual(Grant.Kind.loopback, b[1].kind);
+    try std.testing.expect(try s.grantedToOthers(arena, "a.app", .loopback));
 
     // The working directories among them, in a file of their own that
     // grantedToOthers doesn't read.

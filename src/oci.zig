@@ -72,6 +72,10 @@ pub const Permissions = struct {
     /// publishes in every sandbox (see services.zig). Absent unless there
     /// are some.
     services: ?[]const Service = null,
+    /// Ports on this machine the app connects to, which it reaches in every
+    /// sandbox, with the network or without (see services.zig). Absent
+    /// unless there are some.
+    uses: ?[]const Use = null,
 };
 
 /// A port an app listens on for other programs on this machine. Its config
@@ -84,6 +88,18 @@ pub const Service = struct {
     port: u16,
     /// The export whose runs serve it; without one, the app's own command.
     command: ?[]const u8 = null,
+};
+
+/// A port on this machine an app connects to: another app's service, or a
+/// program of yours, such as a debugger's client in an IDE. Its config says
+/// ${uses:<name>} where the app should connect, which isn't always the port
+/// itself (see services.zig).
+pub const Use = struct {
+    /// Lowercase letters, digits and '-', for --port=<name>=<port>. Services
+    /// and uses share the names of a run.
+    name: []const u8,
+    /// Where it's reached, unless --port moves it.
+    port: u16,
 };
 
 /// A command an app provides, which `zigsaw build` puts on the user's PATH as
@@ -136,6 +152,7 @@ pub const Association = struct {
 ///   ${listen:<name>}  the port the app listens on for its service <name>,
 ///               where its own runs connect too (see services.zig)
 ///   ${port:<name>}    the port other programs reach that service on
+///   ${uses:<name>}    the port the app connects to for a port it uses
 pub const Placeholders = struct {
     app: []const u8,
     data: []const u8,
@@ -145,10 +162,16 @@ pub const Placeholders = struct {
     /// The app's services, in its own runs only; elsewhere their
     /// placeholders are kept as they are.
     services: []const ServicePorts = &.{},
+    /// The ports a run uses, the app's, its runtimes' and its extensions',
+    /// in all their entries; elsewhere their placeholders are kept as they
+    /// are.
+    uses: []const UsedPort = &.{},
 
     pub const Dir = struct { alias: []const u8, path: []const u8 };
     /// A service's ports, in decimal.
     pub const ServicePorts = struct { name: []const u8, listen: []const u8, port: []const u8 };
+    /// Where a run connects for a port it uses, in decimal.
+    pub const UsedPort = struct { name: []const u8, port: []const u8 };
 
     /// Replaces the placeholders in `template`. Any other text, including
     /// other "${...}", is kept as is.
@@ -185,9 +208,41 @@ pub const Placeholders = struct {
         for (p.runtimes) |r| if (std.mem.eql(u8, r.alias, name)) return r.path;
         if (servicePlaceholder(name)) |s| for (p.services) |ports| if (std.mem.eql(u8, ports.name, s.service))
             return if (s.listen) ports.listen else ports.port;
+        if (usePlaceholder(name)) |u| for (p.uses) |used| if (std.mem.eql(u8, used.name, u))
+            return used.port;
         return null;
     }
 };
+
+/// The used port a "uses:<name>" placeholder names.
+fn usePlaceholder(name: []const u8) ?[]const u8 {
+    return if (std.mem.startsWith(u8, name, "uses:")) name["uses:".len..] else null;
+}
+
+/// The used ports an image's entries may name: its own, and an app's
+/// runtimes'.
+const UseScope = struct {
+    own: []const Use,
+    runtimes: []const Runtime = &.{},
+
+    fn has(s: UseScope, name: []const u8) bool {
+        for (s.own) |u| if (std.mem.eql(u8, u.name, name)) return true;
+        for (s.runtimes) |r| for (r.uses orelse &.{}) |u| if (std.mem.eql(u8, u.name, name)) return true;
+        return false;
+    }
+};
+
+/// The first ${uses:x} in `template` whose x isn't in `scope`.
+fn undeclaredUse(template: []const u8, scope: UseScope) ?[]const u8 {
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, template, i, "${")) |at| {
+        i = at + 2;
+        const name = placeholderAt(template[at..]) orelse return null;
+        const u = usePlaceholder(name) orelse continue;
+        if (!scope.has(u)) return name;
+    }
+    return null;
+}
 
 /// The service a "listen:<name>" or "port:<name>" placeholder names.
 fn servicePlaceholder(name: []const u8) ?struct { service: []const u8, listen: bool } {
@@ -290,6 +345,9 @@ pub const Runtime = struct {
     /// The runtime's extension points, which runs of the app have too.
     /// Absent unless it has some.
     extensions: ?std.json.ArrayHashMap(ExtensionPoint) = null,
+    /// The ports the runtime uses (its `permissions.uses`), which runs of the
+    /// app reach too. Absent unless it has some.
+    uses: ?[]const Use = null,
 };
 
 /// Where images that extend an app or runtime plug in, like a Flatpak
@@ -486,6 +544,16 @@ pub fn validateConfig(what: []const u8, c: AppConfig) error{Failed}!void {
     try validateEntryPoints(what, c, c.runtimes.map.keys());
     if (c.extends != null and c.runtimes.map.count() > 0)
         return fail("{s} extends {s}, so it can't have runtimes: the runs it joins wouldn't have them", .{ what, c.extends.?.point });
+    // Its runtimes are known here, and an app's entries may name the ports
+    // they use.
+    const scope: UseScope = .{ .own = c.permissions.uses orelse &.{}, .runtimes = c.runtimes.map.values() };
+    const where = "the app's arguments, variables and exports' arguments";
+    for (c.args) |a| if (undeclaredUse(a, scope)) |name|
+        return fail("{s}: ${{{s}}} names a port neither the app nor its runtimes use ({s} may name those)", .{ what, name, where });
+    for (c.env.map.values()) |v| if (undeclaredUse(v, scope)) |name|
+        return fail("{s}: ${{{s}}} names a port neither the app nor its runtimes use ({s} may name those)", .{ what, name, where });
+    for (c.exports.map.values()) |e| for (e.args) |a| if (undeclaredUse(a, scope)) |name|
+        return fail("{s}: ${{{s}}} names a port neither the app nor its runtimes use ({s} may name those)", .{ what, name, where });
 }
 
 /// The checks that don't need the runtimes resolved: recipes run them before
@@ -515,6 +583,7 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
     for (c.permissions.filesystem) |spec| if (parseFsGrant(spec) == null)
         return fail("{s}: filesystem permission \"{s}\" must be \"cwd\", one of the user's folders ({s}) or an absolute path, optionally with \":ro\"", .{ what, spec, UserFolder.list });
     try validateServices(what, c);
+    try validateUses(what, "", c.permissions.uses, c.permissions.services orelse &.{});
     var it = c.exports.map.iterator();
     while (it.next()) |e| {
         if (!isValidExportName(e.key_ptr.*))
@@ -596,6 +665,32 @@ fn validateServices(what: []const u8, c: AppConfig) error{Failed}!void {
         return fail("{s}: ${{{s}}} names a service the app doesn't have ({s} may name its own)", .{ what, name, where });
     for (c.exports.map.values()) |e| for (e.args) |a| if (undeclaredService(a, services)) |name|
         return fail("{s}: ${{{s}}} names a service the app doesn't have ({s} may name its own)", .{ what, name, where });
+}
+
+/// Checks the ports an image uses, or (`owner` "runtime x's ") those an
+/// app's config copied from a runtime. Their names are those of services
+/// too, for --port, so none is a service's.
+fn validateUses(what: []const u8, owner: []const u8, uses: ?[]const Use, services: []const Service) error{Failed}!void {
+    const list = uses orelse return;
+    if (list.len == 0) return fail("{s}: {s}uses must list at least one port, or be left out", .{ what, owner });
+    for (list, 0..) |u, i| {
+        if (!isValidServiceName(u.name))
+            return fail("{s}: {s}used port name \"{s}\" must be 1-32 lowercase letters, digits and '-'", .{ what, owner, u.name });
+        for (list[0..i]) |earlier| if (std.mem.eql(u8, earlier.name, u.name))
+            return fail("{s}: {s}uses two ports called \"{s}\"", .{ what, owner, u.name });
+        for (services) |s| if (std.mem.eql(u8, s.name, u.name))
+            return fail("{s}: \"{s}\" is the name of both a service and a port the app uses", .{ what, u.name });
+        if (u.port == 0) return fail("{s}: {s}used port {s} must be from 1 to 65535", .{ what, owner, u.name });
+        for (list[0..i]) |earlier| if (earlier.port == u.port)
+            return fail("{s}: {s}uses port {d} as both {s} and {s}", .{ what, owner, u.port, earlier.name, u.name });
+    }
+}
+
+/// "localhost:9003 (dbgp)", for `info` and what `pull` shows.
+pub fn describeUses(arena: std.mem.Allocator, uses: []const Use) ![]const u8 {
+    const parts = try arena.alloc([]const u8, uses.len);
+    for (parts, uses) |*p, u| p.* = try std.fmt.allocPrint(arena, "localhost:{d} ({s})", .{ u.port, u.name });
+    return joinAnd(arena, parts);
 }
 
 fn isValidServiceName(name: []const u8) bool {
@@ -740,25 +835,49 @@ pub fn joinAnd(arena: std.mem.Allocator, items: []const []const u8) ![]const u8 
     return std.fmt.allocPrint(arena, "{s} and {s}", .{ try std.mem.join(arena, ", ", items[0 .. items.len - 1]), items[items.len - 1] });
 }
 
-/// What an app reaches outside its own files: its permissions, and the HKCU
-/// keys it keeps, which its runs write into the user's registry.
+/// What an app reaches outside its own files: its permissions, the ports it
+/// and its runtimes use, and the HKCU keys it keeps, which its runs write
+/// into the user's registry.
 pub const Access = struct {
     permissions: Permissions = .{},
+    /// The app's, then its runtimes' not of a name already there, as runs
+    /// have them.
+    uses: []const Use = &.{},
     registry: []const []const u8 = &.{},
 
-    pub fn of(cfg: AppConfig) Access {
-        return .{ .permissions = cfg.permissions, .registry = cfg.registry orelse &.{} };
+    pub fn of(arena: std.mem.Allocator, cfg: AppConfig) !Access {
+        var uses: std.ArrayList(Use) = .empty;
+        try addUses(arena, &uses, cfg.permissions.uses orelse &.{});
+        for (cfg.runtimes.map.values()) |r| try addUses(arena, &uses, r.uses orelse &.{});
+        return .{ .permissions = cfg.permissions, .uses = uses.items, .registry = cfg.registry orelse &.{} };
     }
 
     pub fn isEmpty(a: Access) bool {
-        return !a.permissions.network and a.permissions.filesystem.len == 0 and a.registry.len == 0;
+        return !a.permissions.network and a.permissions.filesystem.len == 0 and a.uses.len == 0 and a.registry.len == 0;
     }
 };
 
+/// Adds the used ports of `more` whose names `list` doesn't have yet: the
+/// first image to use a name has it.
+pub fn addUses(arena: std.mem.Allocator, list: *std.ArrayList(Use), more: []const Use) !void {
+    for (more) |u| {
+        for (list.items) |had| {
+            if (std.mem.eql(u8, had.name, u.name)) break;
+        } else try list.append(arena, u);
+    }
+}
+
 /// What `after` lets an app reach that `before` didn't, which an update asks
-/// about: the network, a location it couldn't use, or could only read, and a
-/// key it didn't keep. A location or key inside one it had counts as had.
+/// about: the network, a location it couldn't use, or could only read, a
+/// port it didn't use, and a key it didn't keep. A location or key inside
+/// one it had counts as had.
 pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Access {
+    var uses: std.ArrayList(Use) = .empty;
+    for (after.uses) |u| {
+        for (before.uses) |had| {
+            if (had.port == u.port) break;
+        } else try uses.append(arena, u);
+    }
     var filesystem: std.ArrayList([]const u8) = .empty;
     for (after.permissions.filesystem) |spec| {
         const want = parseFsGrant(spec) orelse continue;
@@ -777,6 +896,7 @@ pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Acc
     }
     return .{
         .permissions = .{ .network = after.permissions.network and !before.permissions.network, .filesystem = filesystem.items },
+        .uses = uses.items,
         .registry = keys.items,
     };
 }
@@ -967,6 +1087,9 @@ fn validateRuntimes(what: []const u8, runtimes: std.json.ArrayHashMap(Runtime)) 
         const owner = std.fmt.bufPrint(&owner_buf, "runtime {s}'s ", .{alias}) catch "a runtime's ";
         if (r.aliases) |a| try validateAliases(what, owner, a, &.{});
         if (r.extensions) |e| try validateExtensionPoints(what, owner, e);
+        try validateUses(what, owner, r.uses, &.{});
+        for (r.env.map.values()) |v| if (undeclaredUse(v, .{ .own = r.uses orelse &.{} })) |name|
+            return fail("{s}: ${{{s}}} in {s}variables names a port it doesn't use", .{ what, name, owner });
     }
 }
 
@@ -1201,6 +1324,84 @@ test validateServices {
         .{ .name = "http", .port = 8471 },
         .{ .name = "db", .port = 5432 },
     }));
+}
+
+test "Placeholders.expand uses" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const p: Placeholders = .{ .app = "C:\\a", .data = "C:\\d", .uses = &.{.{ .name = "dbgp", .port = "23817" }} };
+    try std.testing.expectEqualStrings("client_port=23817", try p.expand(arena, "client_port=${uses:dbgp}"));
+    try std.testing.expectEqualStrings("${uses:db} ${uses}", try p.expand(arena, "${uses:db} ${uses}"));
+}
+
+test "uses: names, ports, and the placeholders that name them" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const digest = "sha256:" ++ "a" ** 64;
+    var c: AppConfig = .{ .id = "app", .version = "1", .command = "app.exe" };
+    try c.env.map.put(arena, "PGPORT", "${uses:postgresql}");
+    // Nothing uses it.
+    try std.testing.expectError(error.Failed, validateConfig("x", c));
+    c.permissions.uses = &.{.{ .name = "postgresql", .port = 5432 }};
+    try validateConfig("x", c);
+    // A runtime's, which the app may name too, and whose own variables
+    // name only its own.
+    c.permissions.uses = null;
+    var rt_env: std.json.ArrayHashMap([]const u8) = .{};
+    try rt_env.map.put(arena, "XDEBUG_CLIENT_PORT", "${uses:dbgp}");
+    try c.runtimes.map.put(arena, "xdebug", .{ .id = "x", .version = "1", .image = digest, .layer = digest, .env = rt_env, .uses = &.{.{ .name = "dbgp", .port = 9003 }} });
+    try std.testing.expectError(error.Failed, validateConfig("x", c));
+    _ = c.env.map.orderedRemove("PGPORT");
+    try c.env.map.put(arena, "DEBUGGER", "${uses:dbgp}");
+    try validateConfig("x", c);
+    try rt_env.map.put(arena, "PGPORT", "${uses:postgresql}");
+    c.runtimes.map.getPtr("xdebug").?.env = rt_env;
+    c.permissions.uses = &.{.{ .name = "postgresql", .port = 5432 }};
+    try std.testing.expectError(error.Failed, validateConfig("x", c));
+    _ = c.runtimes.map.orderedRemove("xdebug");
+    _ = c.env.map.orderedRemove("DEBUGGER");
+
+    const bad = [_][]const Use{
+        &.{},
+        &.{.{ .name = "Postgres", .port = 5432 }},
+        &.{.{ .name = "db", .port = 0 }},
+        &.{ .{ .name = "db", .port = 5432 }, .{ .name = "db", .port = 5433 } },
+        &.{ .{ .name = "db", .port = 5432 }, .{ .name = "pg", .port = 5432 } },
+        // A service's name.
+        &.{.{ .name = "http", .port = 80 }},
+    };
+    c.permissions.services = &.{.{ .name = "http", .port = 8471 }};
+    for (bad) |uses| {
+        c.permissions.uses = uses;
+        try std.testing.expectError(error.Failed, validateConfig("x", c));
+    }
+    try std.testing.expectEqualStrings("localhost:5432 (postgresql) and localhost:9003 (dbgp)", try describeUses(arena, &.{
+        .{ .name = "postgresql", .port = 5432 },
+        .{ .name = "dbgp", .port = 9003 },
+    }));
+}
+
+test "Access: the runtimes' uses, and a new port counted as added" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const digest = "sha256:" ++ "a" ** 64;
+    var c: AppConfig = .{ .id = "app", .version = "1", .command = "app.exe" };
+    c.permissions.uses = &.{.{ .name = "db", .port = 5432 }};
+    try c.runtimes.map.put(arena, "x", .{ .id = "x", .version = "1", .image = digest, .layer = digest, .uses = &.{
+        .{ .name = "db", .port = 1 },
+        .{ .name = "dbgp", .port = 9003 },
+    } });
+    const access: Access = try .of(arena, c);
+    try std.testing.expectEqual(2, access.uses.len);
+    try std.testing.expectEqual(5432, access.uses[0].port);
+    try std.testing.expect(!access.isEmpty());
+    // The same ports under other names aren't more; another port is.
+    try std.testing.expect((try addedAccess(arena, access, .{ .uses = &.{.{ .name = "pg", .port = 5432 }} })).isEmpty());
+    const added = try addedAccess(arena, access, .{ .uses = &.{.{ .name = "redis", .port = 6379 }} });
+    try std.testing.expectEqual(1, added.uses.len);
 }
 
 test usesCache {

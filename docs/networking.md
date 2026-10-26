@@ -2,7 +2,8 @@
 
 Designed 2026-10-26; the [decisions](#decisions) were taken the same day.
 Slices 0 to 2 were built in [iteration 50](iteration-50.md) (zigsaw
-0.50.0): the profile race, proxies, and services. Slice 3 isn't built yet.
+0.50.0): the profile race, proxies, and services. Slice 3, reaching this
+machine from a container, in [iteration 51](iteration-51.md) (0.51.0).
 The facts below are from a probe run unelevated on Windows 11 26300, now
 [`tests/netprobe.zig`](../tests/netprobe.zig), whose report
 [`tests/network.sh`](../tests/network.sh) prints, on Server 2025 in CI too.
@@ -49,6 +50,9 @@ passed only if a message went there and back.
 | a named pipe the host makes for one capability | opens only from a process that holds that capability |
 | `OpenProcess` for memory writes and handle duplication | allowed within one AppContainer, even with different capabilities. Denied across containers |
 | `CheckNetIsolation LoopbackExempt -a -p=<sid>`, unelevated (this account is in Administrators, with UAC's filtered token) | succeeded. The exempt container then reached the host, also through the LAN address. Connections into containers were still dropped |
+| `NetworkIsolationSetAppContainerConfig`, the API underneath, unelevated (iteration 51) | succeeds, in 2 to 4 ms; so does taking the exemption back |
+| an exempt container with no network capability, to the host | connects: the exemption doesn't need `internetClient` or `privateNetworkClientServer` |
+| the host to an exempt container | dropped |
 | `CreateAppContainerProfile` of one new name, from 8 threads at once | some calls fail with `0x8007000a` or `0x8000ffff`, not "already exists". On the runner it was `0x80070003` |
 
 Not tried yet:
@@ -57,8 +61,9 @@ Not tried yet:
 - two exempt containers talking to each other;
 - `-is`, the exemption's inbound mode.
 
-The permission classifier stopped the last two. The probe's one exemption
-was removed, and its profiles deleted.
+The probe's report has the exemption's rows since iteration 51
+(`exempt-set`, `exempt-to-host`, `exempt-no-caps`, `exempt-inbound`,
+`exempt-unset`), on a container of its own that it exempts and takes back.
 
 So:
 
@@ -148,37 +153,51 @@ service.
 
 There are two ways, and zigsaw uses both.
 
-**(a) Loopback exemption.** Runs of apps with `network` get their container
-exempted (`NetworkIsolationSetAppContainerConfig`), where Windows lets you.
+**(a) Loopback exemption.** Built in iteration 51. A run of an app with
+`network` has its container exempted (`NetworkIsolationSetAppContainerConfig`),
+where Windows lets you.
 
 - It's transparent: `localhost:5432` works as it does under `soft`.
-- It's a setting of Windows' firewall service, outside the store, and it
-  lasts. So it's handled like a grant: taken back when `network` is, and at
-  `zigsaw rm` and `zigsaw repair`.
+- It's a setting of Windows' firewall service, for the whole machine,
+  outside the store. An exempt container reaches this machine's servers
+  whatever its capabilities, so it lasts only while the app's runs go:
+  each run with the network makes it, recorded in `grants\<id>.txt` as
+  `loopback`, and the app's last run to end takes it back. Making it takes
+  milliseconds. `zigsaw repair` and `zigsaw rm` take back what a killed
+  run left. One you made yourself isn't recorded, and stays.
 - It's all or nothing: an exempt app reaches every server on the machine.
   That's what `network` means in principle 1.
-- It works for this account. A standard user's is untested.
+- `ZIGSAW_LOOPBACK_EXEMPTION=0` turns it off, for whoever doesn't want the
+  machine's setting changed.
+- It works for this account, and on GitHub's runners. A standard user's is
+  untested.
 
-**(b) Forwards.** An app declares what it uses: another app's service, or a
-port on the host.
+**(b) Forwards.** Built in iteration 51. An app, a runtime or an extension
+declares the ports it uses (`permissions.uses`): another app's service, or
+a program of yours. `${uses:<name>}` is where the app connects for one.
 
-- A relay in its container listens on an internal port.
-- For each connection, zigsaw connects to the target from outside and
-  duplicates the connected socket in.
+- In a container that isn't exempt, the run's relay listens on a port of
+  its own for each, inside the container, and `${uses:<name>}` is that
+  port. zigsaw starts the relay before the app, and the app once the relay
+  listens.
+- For each connection, the relay asks zigsaw over a pair of pipes it
+  inherits. zigsaw connects to the port from outside, on 127.0.0.1 or ::1,
+  and duplicates the connected socket in (`WSADuplicateSocketW`). The relay
+  copies bytes both ways.
 - It changes no system setting, and works for any user. It allows only what
-  was declared.
+  was declared, with the network or without.
 - It isn't transparent. The target's port on `127.0.0.1` is taken, so the
-  app must take another one, or a host, from its environment
-  (`PGPORT`, `XDEBUG_CONFIG`...).
+  app takes the relay's from its environment (`PGPORT`,
+  `XDEBUG_CLIENT_PORT`).
 - zigsaw takes part in each connection.
 
 **Decided: both.** The exemption where Windows allows it, and forwards
-where it refuses.
+where it refuses, or for an app without the network.
 
 - Recipes that use a local server declare it, so that the fallback has
-  something to forward. osm2pgsql would declare PostgreSQL's service, and
-  PHP would declare the host's port 9003 for Xdebug.
-- A run says which way it went.
+  something to forward. osm2pgsql declares PostgreSQL's port, and Xdebug's
+  image declares 9003, which joins the runs of PHP and of apps with PHP.
+- `-v` says which way a run went; a refused exemption is noted.
 
 Either way, osm2pgsql reaches PostgreSQL in a container through PostgreSQL's
 published service, and Xdebug reaches your IDE.
@@ -232,9 +251,9 @@ initdb's `NUL` on Server 2025, and kpathsea's long names, among others.
 2. **Services and the relay** (built). Kanboard and PostgreSQL declare
    theirs, and the suites dropped two known gaps: curl to Kanboard, and a
    host psql to PostgreSQL in its container.
-3. **Reaching this machine:** first the exemption, taken back like a grant,
-   then forwards, with `uses` in recipes. Xdebug's and osm2pgsql's gaps
-   close.
+3. **Reaching this machine** (built in iteration 51): first the exemption,
+   while the app's runs go, then forwards, with `uses` in recipes.
+   Xdebug's and osm2pgsql's gaps closed.
 4. **Later:** AF_UNIX directories, and certificate trust.
 
 ## Decisions
@@ -246,3 +265,13 @@ Taken 2026-10-26:
 2. **Services are published whenever the recipe declares them.**
 3. **No dead proxy.** Apps without `network` stay open under `soft` and
    `low`.
+
+Taken for iteration 51, the same day:
+
+4. **`${uses:<name>}`**, the placeholder for where an app connects for a
+   port it uses.
+5. **Xdebug declares 9003 itself**, so runtimes and extensions declare the
+   ports they use, which join the runs that have them.
+6. **The exemption lasts only while the app's runs go**, rather than while
+   its overrides give it the network: the probe found that an exempt
+   container reaches this machine without any network capability.

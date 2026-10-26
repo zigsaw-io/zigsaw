@@ -6,6 +6,7 @@
 //!                                 127.0.0.1:<port>, until it's ended
 //!   zigsaw-netprobe ping <port>   exits 0 if 127.0.0.1:<port> answers
 //!   zigsaw-netprobe env <name>... prints `<name>=<value>` for each one set
+//!   zigsaw-netprobe wait <ms>     exits after <ms> milliseconds
 //!
 //! The report's endpoints are processes of its own, on the host or in two
 //! AppContainer profiles it makes and deletes (zigsaw.test.netprobe.a and
@@ -29,6 +30,18 @@
 //!                           handed in: the container connects it to the
 //!                           host, which is why zigsaw never hands one in
 //!
+//! Then the loopback exemption, on a third container (.c), which the probe
+//! exempts and takes back after:
+//!
+//!   exempt-set              whether this account may change the list of
+//!                           exempt containers, and how long that took:
+//!                           `ok <ms> ms`, or `refused <Win32 error>`
+//!   exempt-to-host          from the exempt container, with the `network`
+//!                           permission's capabilities, to the host
+//!   exempt-no-caps          the same, with no network capability
+//!   exempt-inbound          from the host to the exempt container
+//!   exempt-unset            taking the exemption back, as `exempt-set`
+//!
 //! Results are `connects`, `dropped` (no answer within 3 s), or
 //! `error <Winsock code>`. Last, `profile-race`: one new profile created by
 //! 8 threads at once, 5 times, and how many calls failed with errors other
@@ -46,7 +59,7 @@ const DWORD = win32.DWORD;
 /// one.
 const timeout_ms = 3000;
 
-const profiles = [_][]const u8{ "zigsaw.test.netprobe.a", "zigsaw.test.netprobe.b" };
+const profiles = [_][]const u8{ "zigsaw.test.netprobe.a", "zigsaw.test.netprobe.b", "zigsaw.test.netprobe.c" };
 const race_profile = "zigsaw.test.netprobe.race";
 
 pub fn main(init: std.process.Init) !u8 {
@@ -61,7 +74,7 @@ pub fn main(init: std.process.Init) !u8 {
     defer out.flush() catch {};
 
     if (std.mem.eql(u8, mode, "report")) {
-        try report(arena, out);
+        try report(arena, init.io, out);
         return 0;
     }
     if (std.mem.eql(u8, mode, "serve") and args.len == 3) return serve(out, try port(args[2]));
@@ -72,6 +85,10 @@ pub fn main(init: std.process.Init) !u8 {
     }
     if (std.mem.eql(u8, mode, "env")) {
         for (args[2..]) |name| if (init.environ_map.get(name)) |value| try out.print("{s}={s}\n", .{ name, value });
+        return 0;
+    }
+    if (std.mem.eql(u8, mode, "wait") and args.len == 3) {
+        win32.Sleep(try std.fmt.parseInt(DWORD, args[2], 10));
         return 0;
     }
     // The report's endpoints, which exit with 0 for a round trip, or a
@@ -85,7 +102,7 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn usage() u8 {
-    std.debug.print("usage: zigsaw-netprobe report | serve <port> | ping <port> | env <name>...\n", .{});
+    std.debug.print("usage: zigsaw-netprobe report | serve <port> | ping <port> | env <name>... | wait <ms>\n", .{});
     return 2;
 }
 
@@ -213,7 +230,7 @@ const Where = union(enum) {
     container: struct { profile: usize, network: bool },
 };
 
-fn report(arena: std.mem.Allocator, out: *std.Io.Writer) !void {
+fn report(arena: std.mem.Allocator, io: std.Io, out: *std.Io.Writer) !void {
     var sids: [profiles.len]win32.PSID = undefined;
     for (&sids, profiles) |*sid, name| sid.* = try profile(arena, name);
     defer for (profiles) |name| {
@@ -239,7 +256,52 @@ fn report(arena: std.mem.Allocator, out: *std.Io.Writer) !void {
     try out.print("handed-connected {f}\n", .{try ctx.handedConnected(a)});
     try out.print("handed-unconnected {f}\n", .{try ctx.handedUnconnected(a)});
     try out.flush();
+    try exemptRows(ctx, io, out);
+    try out.flush();
     try profileRace(arena, out);
+}
+
+/// The loopback exemption's rows, on container c, which ends as it started:
+/// not exempt.
+fn exemptRows(s: Spawner, io: std.Io, out: *std.Io.Writer) !void {
+    const sid = s.sids[2];
+    var start = std.Io.Timestamp.now(io, .awake);
+    const set = setExempt(s.arena, sid, true);
+    if (set != 0) {
+        try out.print("exempt-set refused {d}\n", .{set});
+        return;
+    }
+    try out.print("exempt-set ok {d} ms\n", .{start.untilNow(io, .awake).toMilliseconds()});
+    var unset_done = false;
+    defer if (!unset_done) {
+        _ = setExempt(s.arena, sid, false);
+    };
+    try out.flush();
+    const c: Where = .{ .container = .{ .profile = 2, .network = false } };
+    const c_net: Where = .{ .container = .{ .profile = 2, .network = true } };
+    try out.print("exempt-to-host {f}\n", .{try s.pair(.host, c_net)});
+    try out.print("exempt-no-caps {f}\n", .{try s.pair(.host, c)});
+    try out.print("exempt-inbound {f}\n", .{try s.pair(c_net, .host)});
+    start = std.Io.Timestamp.now(io, .awake);
+    const unset = setExempt(s.arena, sid, false);
+    unset_done = true;
+    if (unset != 0)
+        try out.print("exempt-unset refused {d}\n", .{unset})
+    else
+        try out.print("exempt-unset ok {d} ms\n", .{start.untilNow(io, .awake).toMilliseconds()});
+}
+
+/// Adds `sid` to the exempt containers, or takes it out, keeping the rest:
+/// 0, or the Win32 error.
+fn setExempt(arena: std.mem.Allocator, sid: win32.PSID, on: bool) DWORD {
+    var count: DWORD = 0;
+    var list: ?[*]win32.SID_AND_ATTRIBUTES = null;
+    const got = win32.NetworkIsolationGetAppContainerConfig(&count, &list);
+    if (got != 0) return got;
+    var next: std.ArrayList(win32.SID_AND_ATTRIBUTES) = .empty;
+    if (list) |l| for (l[0..count]) |e| if (win32.EqualSid(e.Sid, sid) == 0) next.append(arena, e) catch return 8;
+    if (on) next.append(arena, .{ .Sid = sid, .Attributes = 0 }) catch return 8;
+    return win32.NetworkIsolationSetAppContainerConfig(@intCast(next.items.len), if (next.items.len > 0) next.items.ptr else null);
 }
 
 fn profile(arena: std.mem.Allocator, name: []const u8) !win32.PSID {

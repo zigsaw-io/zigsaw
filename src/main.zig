@@ -109,6 +109,10 @@ const usage =
     \\An app's services (`info` lists them) are on localhost, on the ports its config says
     \\or --port gives, in every sandbox.
     \\
+    \\Under appcontainer, a run of an app with the network has its container exempt from
+    \\loopback isolation while the app's runs go, so that it reaches other programs on this
+    \\machine; with ZIGSAW_LOOPBACK_EXEMPTION=0, zigsaw never exempts one.
+    \\
     \\Data lives in %ZIGSAW_HOME%, or %LOCALAPPDATA%\zigsaw when that isn't set.
     \\
 ;

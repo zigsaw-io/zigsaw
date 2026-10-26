@@ -116,7 +116,7 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
     var told = opts;
     if (told.installed == null and told.consent != .not_asked) if (try ctx.store.readRef(arena, config.id)) |r| {
         const installed = try ctx.store.readImage(arena, r.id, r.manifest);
-        told.installed = .{ .version = r.version, .access = .of(installed.config) };
+        told.installed = .{ .version = r.version, .access = try .of(arena, installed.config) };
     };
     try agree(ctx, manifest, config, told);
 
@@ -170,7 +170,7 @@ fn agree(ctx: *Context, manifest: oci.Manifest, cfg: oci.AppConfig, opts: FetchO
     var out: Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
     if (opts.installed) |before| {
-        const added = try oci.addedAccess(arena, before.access, .of(cfg));
+        const added = try oci.addedAccess(arena, before.access, try .of(arena, cfg));
         if (added.isEmpty()) {
             const permits = try oci.describePermissions(arena, cfg.permissions);
             const was = try oci.describePermissions(arena, before.access.permissions);
@@ -180,6 +180,8 @@ fn agree(ctx: *Context, manifest: oci.Manifest, cfg: oci.AppConfig, opts: FetchO
         try w.print("{s} {s} may reach more than {s}:\n", .{ cfg.id, cfg.version, before.version });
         if (added.permissions.network or added.permissions.filesystem.len > 0)
             try info.writeLine(w, "permits", try oci.describePermissions(arena, added.permissions));
+        if (added.uses.len > 0)
+            try info.writeLine(w, "uses", try oci.describeUses(arena, added.uses));
         if (added.registry.len > 0)
             try info.writeLine(w, "keeps", try std.fmt.allocPrint(arena, "{s} with its data", .{try oci.describeRegistry(arena, added.registry)}));
     } else {

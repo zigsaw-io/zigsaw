@@ -45,7 +45,24 @@
   listening there, which the app reports in its own way.
 - A zigsaw older than 0.50 ignores an image's services and leaves
   `${listen:...}` and `${port:...}` as they are: PostgreSQL's and Kanboard's
-  images from then on need 0.50.
+  images from then on need 0.50. One older than 0.51 leaves `${uses:...}`
+  as it is: osm2pgsql's and Xdebug's images from then on need 0.51 (libpq
+  refuses that `PGPORT`, and Xdebug connects to no port).
+- Under `--sandbox=appcontainer`, an app's container is exempt from
+  loopback isolation while a run of it with the network goes, and an
+  exempt container reaches this machine's programs whatever its
+  capabilities: a run of the same app without the network, at the same
+  time, reaches them too.
+- The loopback exemption is a setting of Windows for the whole machine,
+  which this account (an administrator's, unelevated) and GitHub's runners
+  may change. A standard user's account is untested: where Windows refuses,
+  the run says so, and the app reaches only the ports it uses. Two users'
+  zigsaws changing the list at the same moment could undo each other's
+  change, as the lock zigsaw takes for it is per session.
+- An app in a container that isn't exempt reaches only the ports it
+  declares, on `localhost`: one given another port or host of its own
+  bypasses the forward, and isn't reached. zigsaw makes each forwarded
+  connection itself, one at a time, waiting up to 2 s for each.
 - A host path an earlier zigsaw granted an app's AppContainer, to the
   container's own SID, keeps other apps' low runs out until that app's last
   run ends, `zigsaw repair` or `zigsaw rm`, which take that SID's access
@@ -305,11 +322,10 @@
 - PHP needs Microsoft's Visual C++ Redistributable installed, which takes
   an administrator: its images don't carry it, as its licence doesn't let
   it be published.
-- Xdebug's step debugger can't connect to an IDE from an app running under
-  `--sandbox=appcontainer`: an AppContainer can't reach a program outside
-  it on `127.0.0.1`, and zigsaw doesn't yet exempt containers from that, or
-  forward their connections out ([networking](networking.md), slice 3). It
-  does under `soft` and `low`.
+- Xdebug's step debugger connects to the port its image uses, `dbgp`
+  (9003, or where `--port=dbgp=<port>` moves it). `XDEBUG_CONFIG` with a
+  `client_port` of its own still wins, and in an AppContainer that isn't
+  exempt from loopback isolation, that port isn't reached.
 - Installed extensions join every run of what they extend: what a run
   loads depends on what's installed, not only on the app's image, as with
   Flatpak's extensions. A run notes, each time, an installed extension that
@@ -370,16 +386,14 @@
   the rest), and no Python, so none of GDAL's Python scripts
   (`gdal_calc.py`, `gdal_merge.py`...). Its tools reach files only in the
   directory they run from (its `cwd` permission).
-- osm2pgsql, under `--sandbox=appcontainer`, can't reach a PostgreSQL server
-  on this machine, whichever sandbox the server runs in: an AppContainer
-  can't connect to a program outside it on `127.0.0.1`, and zigsaw doesn't
-  yet exempt containers from that, or forward their connections out
-  ([networking](networking.md), slice 3). libpq waits out its connection
-  timeout (42 s here, unless `PGCONNECT_TIMEOUT` is set). It reaches a
-  server on another machine there, and a local one under `soft` and `low`.
-  It can't read PostgreSQL's password file, which is in that app's data:
-  `-W` asks for the password (from the console or stdin), or set
-  `PGPASSWORD` with `--env`.
+- osm2pgsql, under `--sandbox=appcontainer` in a container that isn't
+  exempt from loopback isolation, reaches only the local server on the port
+  it uses, `postgresql` (5432, or where `--port=postgresql=<port>` moves
+  it): `-P` with another port isn't reached, and libpq waits out its
+  connection timeout (42 s here, unless `PGCONNECT_TIMEOUT` is set). It
+  can't read PostgreSQL's password file, which is in that app's data: `-W`
+  asks for the password (from the console or stdin), or set `PGPASSWORD`
+  with `--env`.
 - osm2pgsql's image has no `osm2pgsql-replication` (a Python script that
   needs pyosmium and psycopg) and no `osm2pgsql-gen` (it needs potrace and
   OpenCV). Its Lua is linked in statically, so a style can `require` Lua
