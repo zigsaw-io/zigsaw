@@ -56,8 +56,8 @@ path_value() { reg query "HKCU\\$env_key" /v Path | tr -d '\r' | grep ' Path '; 
 
 check "the package has the zip, the installer and their hashes" sh -c \
     "test -f '$package\\zigsaw-x86_64-windows.zip' -a -f '$package\\install.ps1' && grep -q 'zigsaw-x86_64-windows.zip' '$package\\SHA256SUMS' && grep -q 'install.ps1' '$package\\SHA256SUMS'"
-programs_noted() { for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe; do grep -q "^| \`$f\` | \`[0-9a-f]\{64\}\` |$" "$package\\notes.md" || return 1; done; }
-check "its notes list the three programs' hashes" programs_noted
+programs_noted() { for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe; do grep -q "^| \`$f\` | \`[0-9a-f]\{64\}\` |$" "$package\\notes.md" || return 1; done; }
+check "its notes list the four programs' hashes" programs_noted
 
 # An app that an earlier zigsaw installed, here the one in zig-out: its shim
 # names that zigsaw.
@@ -84,14 +84,14 @@ installs() {
     local out
     out=$(install 2>&1) || { echo "$out"; return 1; }
     grep -q "^Installed zigsaw [0-9][0-9.]* in " <<<"$out" || { echo "$out"; return 1; }
-    for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe; do [ -f "$bin\\$f" ] || { echo "no $f"; return 1; }; done
+    for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe; do [ -f "$bin\\$f" ] || { echo "no $f"; return 1; }; done
     [ "$("$bin\\zigsaw.exe" version | tr -d '\r')" = "zigsaw $(sed -n 's/^ *\.version = "\(.*\)",$/\1/p' "$root\\build.zig.zon")" ]
 }
 check "it installs zigsaw and its shims, with build.zig.zon's version" installs
 version_info() {
     local version f info
     version=$("$bin\\zigsaw.exe" version | tr -d '\r' | cut -d' ' -f2)
-    for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe; do
+    for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe; do
         info=$(powershell -NoProfile -Command "\$v = (Get-Item -LiteralPath '$bin\\$f').VersionInfo; \$v.ProductVersion + '|' + \$v.OriginalFilename" | tr -d '\r')
         [ "$info" = "$version|$f" ] || { echo "$f: $info"; return 1; }
         grep -a -q 'level="asInvoker"' "$bin\\$f" || { echo "$f has no manifest"; return 1; }
@@ -144,7 +144,7 @@ check "uninstalling is refused while apps are installed" refuses_with_apps
 uninstalls() {
     local out
     out=$(install -Uninstall 2>&1) || { echo "$out"; return 1; }
-    for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe; do [ ! -e "$bin\\$f" ] || { echo "$f is still there"; return 1; }; done
+    for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe; do [ ! -e "$bin\\$f" ] || { echo "$f is still there"; return 1; }; done
     path_value | grep -q 'REG_EXPAND_SZ.*%USERPROFILE%\\tools;C:\\other$' || { path_value; return 1; }
 }
 check "uninstalling removes the programs and the PATH entry, and nothing else of PATH" uninstalls

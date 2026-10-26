@@ -85,6 +85,49 @@ PATH entries in `${data}` are also where the app's runs install commands,
 which then get shims (see
 [commands installed while an app runs](#commands-installed-while-an-app-runs)).
 
+## Services
+
+An app that other programs on this machine connect to declares what it
+serves, with the export that serves it, as PostgreSQL's recipe does:
+
+```json
+"env": { "PGPORT": "${listen:postgresql}" },
+"permissions": {
+  "network": true,
+  "services": [{ "name": "postgresql", "port": 5432, "command": "postgresql" }]
+}
+```
+
+Each service gives the app's `env`, `args` and export arguments two
+placeholders:
+
+- `${listen:<name>}`: where the app listens, and where its own runs connect.
+- `${port:<name>}`: where other programs reach it, for an address the app
+  prints or opens. Kanboard's opens `http://127.0.0.1:${port:http}/`.
+
+Under `soft` and `low`, both are the service's port, or the one
+`--port=<name>=<port>` or an override gives. Under `--sandbox=appcontainer`,
+nothing outside the container can connect into it, but the app's runs reach
+each other on the loopback ([networking](networking.md)):
+
+- `${listen:<name>}` is an internal port of the app's, picked on its first
+  run there and kept in the store's `ports\<id>.txt`, so that all its runs
+  agree.
+- A run of the export that serves it publishes the service. So does a run
+  of the app's own command, when it runs the same program with the same
+  arguments.
+- zigsaw listens on the service's port, on 127.0.0.1 and ::1, outside the
+  container. It hands those sockets to `zigsaw-relay.exe`, which it starts
+  in the app's container and job, with no network capability. The relay
+  passes each connection on to the internal port, and ends with the run.
+- If the port is taken, the run says so and goes on unpublished.
+
+`command` names an export; without it, the app's own command serves. Names
+are lowercase letters, digits and `-`, and each service has a port of its
+own. A service doesn't need the `network` permission, which is about what
+the app may reach. `info`, and what `pull` shows before it asks, list the
+services.
+
 ## Runtimes
 
 An app can run on another app's image, as Flatpak apps run on a runtime.
@@ -2480,7 +2523,8 @@ Composer's cache, make the same files.
 
 Kanboard is a web app. Its `kanboard` command
 ([`serve.php`](recipes/kanboard/serve.php)) runs PHP's built-in web server
-on `127.0.0.1:8471` (`--listen=<host>:<port>` for another), with a
+on its [service](#services) `http`, `127.0.0.1:8471` (`--port=http=<port>`
+for another, or `--listen=<host>:<port>`, which bypasses the service), with a
 [router](recipes/kanboard/router.php) that refuses the directories
 Kanboard's `.htaccess` keeps from the web, and opens the page in the default
 browser (`--no-browser` doesn't): Explorer opens it, so the browser runs
@@ -2489,9 +2533,9 @@ shortcut runs it, with a console window for the server's log; closing it
 stops the server. `DATA_DIR` is the app's data, where Kanboard keeps its
 SQLite database and files; `PLUGINS_DIR` is `plugins` in it. `kanboard-cli`
 is Kanboard's command line (`kanboard-cli db:version`). It works under
-`soft` only: at low integrity PHP's `is_writable()` says no to what the run
-may write, and Kanboard refuses its data directory; in an AppContainer the
-browser can't reach it ([known gaps](gaps.md)).
+`soft` and `--sandbox=appcontainer`, where the browser reaches it through
+the service; at low integrity PHP's `is_writable()` says no to what the run
+may write, and Kanboard refuses its data directory ([known gaps](gaps.md)).
 
 ### What zig needs to build for MSVC's PHP
 
@@ -2727,6 +2771,13 @@ place an AppContainer may make them.
   `plc_perlboot.pl`, which the build otherwise compiles in; Meson installs
   it) and runs `plperl.on_init` after it, as `-e` did, in package `main`.
   PostgreSQL's plperl suite passes with it.
+
+The server is the app's [service](#services) `postgresql`, on 5432.
+`PGPORT` is `${listen:postgresql}`, which postgres and libpq both read, so
+the server and the app's clients agree in every sandbox, and in an
+AppContainer, programs outside it reach the server through the service.
+`--port=postgresql=5433` moves it, for the clients too; a server given `-p`
+itself bypasses the service.
 
 ### PostgreSQL extensions
 

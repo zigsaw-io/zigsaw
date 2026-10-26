@@ -55,6 +55,7 @@ pub fn install(ctx: *Context, image: Image) !void {
     }
     // What the app may reach, so nobody installs an app without seeing it.
     if (!image.described) {
+        if (cfg.permissions.services) |s| note("  serves   {s}", .{try oci.describeServices(arena, s)});
         note("  permits  {s}", .{try oci.describePermissions(arena, cfg.permissions)});
         if (cfg.registry) |keys| note("  keeps    {s} with its data", .{try oci.describeRegistry(arena, keys)});
     }

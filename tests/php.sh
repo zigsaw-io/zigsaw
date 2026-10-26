@@ -331,16 +331,20 @@ composer_installs() {
     grep -q 'Installing zigsaw/hello (1.0.0)' <<<"$out" || { echo "$sb: $(tail -1 <<<"$out")"; return 1; }
     out=$(cd "$work\\composer" && z run --sandbox=$sb --ephemeral $COMPOSER run-script which --no-ansi 2>&1 | tr -d '\r')
     grep -q '^Composer version 2\.10\.3' <<<"$out" || { echo "$sb, its script: $(tail -1 <<<"$out")"; return 1; }
-    out=$(cd "$work\\composer" && z run --sandbox=$sb $PHP -r 'require "vendor/autoload.php"; echo Zigsaw\Hello\Hello::hi(), "\n";' 2>&1 | tr -d '\r')
+    # Without what zigsaw says about grants: the run's grant of the working
+    # directory under low goes when it ends.
+    out=$(cd "$work\\composer" && z run --sandbox=$sb $PHP -r 'require "vendor/autoload.php"; echo Zigsaw\Hello\Hello::hi(), "\n";' 2>&1 | tr -d '\r' |
+        grep -v -e '^labelled ' -e '^removed the low integrity label ')
     [ "$out" = "hello from a package Composer installed" ] || { echo "$sb, PHP: $out"; return 1; }
 }
 check "Composer installs a project offline, and runs its script, under soft" composer_installs soft
 check "and under low" composer_installs low
 
-# Kanboard's web server, on a port of its own, without opening a browser.
+# Kanboard's web server, its service on a port of its own, without opening a
+# browser.
 kanboard_port=$((9100 + RANDOM % 800))
 kanboard_start() {
-    "$zigsaw" run --sandbox=$1 --ephemeral $KANBOARD --no-browser --listen=127.0.0.1:$kanboard_port >"$work\\kanboard.out" 2>&1 &
+    "$zigsaw" run --sandbox=$1 --ephemeral --port=http=$kanboard_port $KANBOARD --no-browser >"$work\\kanboard.out" 2>&1 &
     kanboard=$!
     for _ in $(seq 40); do grep -q 'Development Server' "$work\\kanboard.out" 2>/dev/null && break; sleep 0.25; done
 }
@@ -363,6 +367,15 @@ kanboard_serves() {
 }
 kanboard_start soft
 check "Kanboard logs in, creates a project through its API, and keeps its code from the web, under soft" kanboard_serves
+kanboard_stop
+# In an AppContainer, Kanboard listens on an internal port, and zigsaw's
+# relay publishes it; the address it gives is the published one.
+kanboard_published() {
+    grep -q "Kanboard is at http://127.0.0.1:$kanboard_port/ " "$work\\kanboard.out" || { cat "$work\\kanboard.out"; return 1; }
+    kanboard_serves
+}
+kanboard_start appcontainer
+check "and under appcontainer, through the service zigsaw publishes" kanboard_published
 kanboard_stop
 kanboard_data() {
     local out

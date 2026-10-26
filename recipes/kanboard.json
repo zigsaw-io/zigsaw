@@ -7,8 +7,16 @@
   "license": "MIT",
   "command": "${php}\\php.exe",
   "args": ["${app}\\serve.php"],
-  "env": { "DATA_DIR": "${data}", "PLUGINS_DIR": "${data}\\plugins" },
-  "permissions": { "network": true },
+  "env": {
+    "DATA_DIR": "${data}",
+    "PLUGINS_DIR": "${data}\\plugins",
+    "KANBOARD_LISTEN": "127.0.0.1:${listen:http}",
+    "KANBOARD_URL": "http://127.0.0.1:${port:http}/"
+  },
+  "permissions": {
+    "network": true,
+    "services": [{ "name": "http", "port": 8471, "command": "kanboard" }]
+  },
   "runtimes": { "php": "net.php.php:8.5.11@sha256:04d03b791cf0f75048aecc06560521266e756258a3720a5551a132fe8e56f7a4" },
   "exports": {
     "kanboard": { "command": "${php}\\php.exe", "args": ["${app}\\serve.php"] },

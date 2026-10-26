@@ -11,9 +11,10 @@
 # PL/Python (with errors raised through them), a dump restored, a backup
 # made, and nothing written in the deployment. Under low and in an
 # AppContainer: a cluster made there, with the server's default settings,
-# and the procedural languages (plperl.on_init too). A client outside an
-# AppContainer can't reach the server in it (no loopback exemption): a
-# known gap. Under each, the installed extension images join: pgvector's
+# and the procedural languages (plperl.on_init too). Every run gets the
+# test's port with --port: the server's service is published there, so a
+# client outside an AppContainer reaches the server in it, through zigsaw's
+# relay. Under each, the installed extension images join: pgvector's
 # HNSW index answers a nearest-neighbour query, pg_cron, which the server
 # preloads, runs a job every second, and PostGIS transforms a point with
 # PROJ's proj.db, buffers with GEOS, reads GeoJSON and GML and uses a GiST
@@ -46,6 +47,9 @@ export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
 data="$ZIGSAW_HOME\\data\\$APP"
 port=$((57000 + RANDOM % 900))
+# Every run gets it: the server listens there, or in an AppContainer is
+# published there, and its clients connect there (PGPORT).
+on_port=--port=postgresql=$port
 
 failures=0
 gaps=0
@@ -76,13 +80,13 @@ gap() {
 pg() {
     local command=$1
     shift
-    timeout 120 "$zigsaw" run ${SANDBOX:+--sandbox=$SANDBOX} --command=$command $APP "$@"
+    timeout 120 "$zigsaw" run ${SANDBOX:+--sandbox=$SANDBOX} $on_port --command=$command $APP "$@"
 }
 # sql <statement...>: psql's unaligned output, one line per row.
 sql() {
     local args=() s
     for s in "$@"; do args+=(-c "$s"); done
-    pg psql -p $port -X -At -v ON_ERROR_STOP=1 "${args[@]}" | tr -d '\r'
+    pg psql -X -At -v ON_ERROR_STOP=1 "${args[@]}" | tr -d '\r'
 }
 # is <want> <statement...>: the last row is want.
 is() {
@@ -99,11 +103,11 @@ start() {
     local log="$work\\server-${SANDBOX:-soft}${RUN_OPTIONS:+-options}.out" i
     rm -rf "$data\\data" "$data\\pgpass.conf" "$work\\server.exit"
     (
-        timeout 600 "$zigsaw" run ${SANDBOX:+--sandbox=$SANDBOX} ${RUN_OPTIONS:-} $APP -p $port "$@" >"$log" 2>&1
+        timeout 600 "$zigsaw" run ${SANDBOX:+--sandbox=$SANDBOX} ${RUN_OPTIONS:-} $on_port $APP "$@" >"$log" 2>&1
         echo $? >"$work\\server.exit"
     ) </dev/null >/dev/null 2>&1 &
     for i in $(seq 60); do
-        pg pg_isready -q -p $port && return 0
+        pg pg_isready -q && return 0
         [ ! -e "$work\\server.exit" ] || break
         sleep 1
     done
@@ -199,7 +203,7 @@ check "the cluster is UTF-8, in the builtin provider's C.UTF-8" is "UTF8|b|C.UTF
     "select pg_encoding_to_char(encoding), datlocprovider, datlocale from pg_database where datname = 'postgres'"
 check "with the server's default settings" is "100|128MB" "select current_setting('max_connections') || '|' || current_setting('shared_buffers')"
 check "its password is in the app's data" grep -q '^\*:\*:\*:postgres:[A-Za-z0-9]\{24\}$' "$data\\pgpass.conf"
-nopass() { timeout 60 "$zigsaw" run --env="PGPASSFILE=$data\\none" --command=psql $APP -p $port -X -w -c "select 1" 2>&1 | grep -q 'no password supplied'; }
+nopass() { timeout 60 "$zigsaw" run --env="PGPASSFILE=$data\\none" $on_port --command=psql $APP -X -w -c "select 1" 2>&1 | grep -q 'no password supplied'; }
 check "a client without it is refused" nopass
 check "a connection over TLS 1.3" sh -c "\"\$0\" run --command=psql $APP 'host=localhost port=$port sslmode=require' -XAt -c 'select ssl, version from pg_stat_ssl where pid = pg_backend_pid()' | tr -d '\r' | grep -qx 't|TLSv1.3'" "$zigsaw"
 check "pgcrypto hashes with OpenSSL" is "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" \
@@ -217,7 +221,7 @@ check "a PL/Python function runs on Python's image" is "python 3.14.7" \
     "create extension plpython3u" "create function pyv() returns text as \$\$ import sys; return 'python %d.%d.%d' % sys.version_info[:3] \$\$ language plpython3u" "select pyv()"
 errors() {
     local out
-    out=$(pg psql -p $port -X -At \
+    out=$(pg psql -X -At \
         -c "do \$\$ spi_exec_query('select 1/0'); \$\$ language plperl" \
         -c "do \$\$ plpy.execute('select 1/0') \$\$ language plpython3u" \
         -c "do \$\$ begin perform 1/0; exception when division_by_zero then raise notice 'caught'; end \$\$" \
@@ -227,13 +231,13 @@ errors() {
 }
 check "errors raised through PL/Perl, PL/Python and PL/pgSQL leave the session working" errors
 dump() {
-    pg pg_dump -p $port -Fc -f "$data\\postgres.dump" postgres &&
-        pg createdb -p $port restored && pg pg_restore -p $port -d restored "$data\\postgres.dump" &&
-        [ "$(pg psql -p $port -XAt -d restored -c 'select perlv() || pyv() || count(*) from big' | tr -d '\r')" = "perl 5.42.3python 3.14.71" ]
+    pg pg_dump -Fc -f "$data\\postgres.dump" postgres &&
+        pg createdb restored && pg pg_restore -d restored "$data\\postgres.dump" &&
+        [ "$(pg psql -XAt -d restored -c 'select perlv() || pyv() || count(*) from big' | tr -d '\r')" = "perl 5.42.3python 3.14.71" ]
 }
 check "pg_dump's dump restores into another database" dump
 backup() {
-    pg pg_basebackup -p $port -Ft --compress=client-zstd --checkpoint=fast -D "$data\\backup" && test -s "$data\\backup\\base.tar.zst"
+    pg pg_basebackup -Ft --compress=client-zstd --checkpoint=fast -D "$data\\backup" && test -s "$data\\backup\\base.tar.zst"
 }
 check "pg_basebackup makes a zstd-compressed backup" backup
 check "pgvector's HNSW index finds the nearest vector" vectors
@@ -277,8 +281,9 @@ for SANDBOX in low appcontainer; do
     check "$SANDBOX: PostGIS, with PROJ's proj.db" postgis
     check "$SANDBOX: PostGIS raster, on GDAL" rasters
     if [ $SANDBOX = appcontainer ]; then
-        outside() { timeout 60 "$zigsaw" run --sandbox=soft --command=psql $APP -p $port -XAt -c "select 1" | tr -d '\r' | grep -qx 1; }
-        gap "appcontainer: a client outside the container reaches the server in it" outside
+        # The service, which the relay publishes.
+        outside() { timeout 60 "$zigsaw" run --sandbox=soft $on_port --command=psql $APP -XAt -c "select 1" | tr -d '\r' | grep -qx 1; }
+        check "appcontainer: a client outside the container reaches the server in it" outside
     fi
     check "$SANDBOX: pg_ctl stops it from another run" stop
 done

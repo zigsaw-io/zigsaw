@@ -3,6 +3,7 @@ const Io = std.Io;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const appcontainer = @import("appcontainer.zig");
+const services = @import("services.zig");
 const builder = @import("builder.zig");
 const catalog = @import("catalog.zig");
 const credentials = @import("credentials.zig");
@@ -92,8 +93,9 @@ const usage =
     \\                                  or one of your folders: desktop, documents, downloads,
     \\                                  music, pictures, videos
     \\  --nofilesystem=<location>       take away access the app or an override grants
-    \\  --share=network                 allow network access
+    \\  --share=network                 allow network access, and pass on your proxy variables
     \\  --unshare=network               deny network access
+    \\  --port=<service>=<port>         serve one of the app's services on another port
     \\  --env=NAME=VALUE                set an environment variable
     \\  --noextension=<id>              leave out an installed extension, which otherwise
     \\                                  joins the runs of what it extends
@@ -103,6 +105,9 @@ const usage =
     \\What the low and appcontainer sandboxes grant on host paths stays while the app's
     \\permissions and overrides give it; what a command line adds goes when the app's
     \\last run ends.
+    \\
+    \\An app's services (`info` lists them) are on localhost, on the ports its config says
+    \\or --port gives, in every sandbox.
     \\
     \\Data lives in %ZIGSAW_HOME%, or %LOCALAPPDATA%\zigsaw when that isn't set.
     \\
@@ -335,6 +340,7 @@ const SettingsParser = struct {
     env: std.ArrayList([]const u8) = .empty,
     noextension: std.ArrayList([]const u8) = .empty,
     extension: std.ArrayList([]const u8) = .empty,
+    ports: std.ArrayList([]const u8) = .empty,
 
     const flags = [_][]const u8{"ephemeral"};
 
@@ -370,6 +376,9 @@ const SettingsParser = struct {
         } else if (std.mem.eql(u8, name, "noextension") or std.mem.eql(u8, name, "extension")) {
             if (!oci.isValidId(value)) return fail("--{s} takes an extension's id; got \"{s}\"", .{ name, value });
             try (if (name[0] == 'n') &p.noextension else &p.extension).append(arena, value);
+        } else if (std.mem.eql(u8, name, "port")) {
+            if (override.parsePort(value) == null) return fail("--port expects <service>=<port>, a port from 1 to 65535; got \"{s}\"", .{value});
+            try p.ports.append(arena, value);
         } else return false;
         return true;
     }
@@ -381,6 +390,7 @@ const SettingsParser = struct {
         s.env = p.env.items;
         s.noextension = p.noextension.items;
         s.extension = p.extension.items;
+        s.ports = p.ports.items;
         return s;
     }
 };
@@ -553,6 +563,7 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     // AppContainer, and low integrity labels no other app's runs need.
     try grants.undoAll(ctx, id);
     try appcontainer.deleteProfile(arena, id);
+    try services.forget(store, arena, id);
     // The keys the app keeps, if a run that didn't end left them in HKCU:
     // back into its data, before that goes too.
     try hkcu.settleLeftovers(ctx, id);
@@ -591,6 +602,7 @@ test {
     _ = @import("hkcu.zig");
     _ = @import("info.zig");
     _ = @import("msvc.zig");
+    _ = @import("net.zig");
     _ = @import("oci.zig");
     _ = @import("override.zig");
     _ = @import("pe.zig");
@@ -604,6 +616,7 @@ test {
     _ = @import("remote.zig");
     _ = @import("layer.zig");
     _ = @import("run.zig");
+    _ = @import("services.zig");
     _ = @import("shortcuts.zig");
     _ = @import("Sidecar.zig");
     _ = @import("Store.zig");

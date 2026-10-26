@@ -1,11 +1,15 @@
 # Networking
 
-Designed 2026-10-26, not built yet; the [decisions](#decisions) were
-taken the same day. The facts below are from a probe run
-unelevated on Windows 11 26300 (`netprobe.c`, kept outside the repository
-for now). None of them has been checked on Server 2025.
+Designed 2026-10-26; the [decisions](#decisions) were taken the same day.
+Slices 0 to 2 were built in [iteration 50](iteration-50.md) (zigsaw
+0.50.0): the profile race, proxies, and services. Slice 3 isn't built yet.
+The facts below are from a probe run unelevated on Windows 11 26300, now
+[`tests/netprobe.zig`](../tests/netprobe.zig), whose report
+[`tests/network.sh`](../tests/network.sh) prints, on Server 2025 in CI too.
 
-## Today
+## Before
+
+What was so when this was designed:
 
 - Apps have one permission, `network` (`permissions.network` in a recipe,
   `--share=network` and `--unshare=network`, overrides).
@@ -17,13 +21,14 @@ for now). None of them has been checked on Server 2025.
   can.
 - Build steps get proxy variables that point nowhere, by convention. Vendor
   steps have the network.
-- zigsaw's own requests honour `HTTP_PROXY` and `HTTPS_PROXY`. Runs don't
+- zigsaw's own requests honour `HTTP_PROXY` and `HTTPS_PROXY`. Runs didn't
   pass them on, because a run's environment is built from scratch. An app
-  behind a proxy that's set by variables can't get out.
-- Four known gaps have one cause, AppContainer's loopback isolation:
+  behind a proxy that's set by variables couldn't get out.
+- Four known gaps had one cause, AppContainer's loopback isolation:
   - Xdebug can't reach an IDE.
-  - A browser can't reach Kanboard.
-  - A client outside PostgreSQL's container can't reach its server.
+  - A browser couldn't reach Kanboard. (Closed by services.)
+  - A client outside PostgreSQL's container couldn't reach its server.
+    (Closed by services.)
   - osm2pgsql can't reach a server on this machine.
 
 ## What Windows does
@@ -89,12 +94,14 @@ So:
 
 ### Private loopback
 
-Already so, and nothing changes. It gets documented, and a matrix row runs a
-server and a client in one container with `--unshare=network`.
+Already so, and nothing changes. `tests/network.sh` runs a server and a
+client of an app without the network in its container, the client on
+`${listen:<name>}`.
 
 ### Services: reaching an app in a container
 
-A recipe declares what it serves, and which command serves it:
+Built in iteration 50. A recipe declares what it serves, and which command
+serves it:
 
 ```json
 "permissions": {
@@ -103,21 +110,27 @@ A recipe declares what it serves, and which command serves it:
 }
 ```
 
-- **The image gets two placeholders per service** (names to be settled):
-  - one for where to listen;
-  - one for where clients reach it, for a launcher that opens a browser.
+- **The image gets two placeholders per service**:
+  - `${listen:<name>}`, where the app listens, and where its own runs
+    connect;
+  - `${port:<name>}`, where other programs reach it, for a launcher that
+    opens a browser.
 - **Under `soft` and `low`, both are the declared port.** The app listens
   on it itself.
 - **Under `appcontainer`, the app listens on an internal port** that zigsaw
-  picks once per app and keeps in the store, so that every run of the app
-  agrees on it.
+  picks once per app and keeps in the store (`ports\<id>.txt`), so that
+  every run of the app agrees on it. It's random, from 20000 to 48999,
+  below Windows' dynamic range, and free when picked.
   - A run of the serving command binds the declared port on `127.0.0.1` and
     `::1` itself, from outside the container.
   - It hands those listening sockets to a relay inside the app's container:
-    zigsaw's own executable, in the run's job.
+    `zigsaw-relay.exe`, a small program of its own installed next to
+    zigsaw's, copied into the store, and started in the run's job with the
+    app's own capability, and no network one.
   - The relay accepts each connection, connects to the internal port, which
     is allowed within one container, and copies bytes both ways.
-  - zigsaw needs no part in the relay after it starts.
+  - zigsaw needs no part in the relay after it starts. It keeps its own
+    copies of the sockets until the run ends, which frees the port.
 - **A declared service is published on every run of its command** under
   `appcontainer`, with nothing to ask for.
 - **`--port=http=9090` and overrides move the published port.** `info` and
@@ -184,8 +197,10 @@ Later.
 
 ### Proxies
 
-Runs of apps with `network` get `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`
-and `NO_PROXY`, and their lowercase forms, passed on from your environment.
+Built in iteration 50. Runs of apps with `network` get `HTTP_PROXY`,
+`HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` passed on from your environment.
+Names are case-insensitive on Windows, so those are also the lowercase
+forms, such as curl's `http_proxy`. The app's own variables and `--env` win.
 
 Apps without `network` get nothing, and under `soft` and `low` they stay
 open (decided). The builds' dead proxy would make tools that honour proxies
@@ -209,13 +224,14 @@ initdb's `NUL` on Server 2025, and kpathsea's long names, among others.
 
 ## Slices
 
-0. **The profile race.** A named mutex around creating a profile, and
-   deriving the SID after a failed creation. This fixes iteration 49's run.
-1. **Proxies passed into runs.** The probe goes into the repository, and CI
-   prints its rows for Server 2025.
-2. **Services and the relay.** Kanboard and PostgreSQL declare theirs, and
-   the suites drop two known gaps: curl to Kanboard, and a host psql to
-   PostgreSQL in its container.
+0. **The profile race** (built). A named mutex around creating a profile,
+   and one more try after a failure that isn't "already exists". This fixes
+   iteration 49's run.
+1. **Proxies passed into runs** (built). The probe is in the repository,
+   and CI prints its rows for Server 2025.
+2. **Services and the relay** (built). Kanboard and PostgreSQL declare
+   theirs, and the suites dropped two known gaps: curl to Kanboard, and a
+   host psql to PostgreSQL in its container.
 3. **Reaching this machine:** first the exemption, taken back like a grant,
    then forwards, with `uses` in recipes. Xdebug's and osm2pgsql's gaps
    close.

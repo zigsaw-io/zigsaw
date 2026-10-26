@@ -65,7 +65,7 @@ if [ -z "${PACKAGE_DIR:-}" ]; then
     expected="$work\\strip\\bin"
     what="zig build -Dstrip's"
 fi
-for program in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe; do
+for program in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe; do
     check "its $program is the same bytes as $what" cmp "$built\\$program" "$expected\\$program"
 done
 check "it runs, as an app" sh -c "\"\$0\" run $APP version | tr -d '\r' | grep -qx 'zigsaw $version'" "$zigsaw"
@@ -101,7 +101,7 @@ grep -q 'catalog of the default registry' "$work\\incremental\\zigsaw.exe" || { 
 start=$SECONDS
 check "with --clean, it builds the copy afresh" sh -c "cd '$copy' && \"\$0\" build --clean" "$zigsaw"
 printf '      (%d s)\n' $((SECONDS - start))
-for program in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe; do
+for program in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe; do
     check "the incremental build's $program is the same bytes as --clean's" cmp "$work\\incremental\\$program" "$(own_bin)\\$program"
 done
 if [ -z "${PACKAGE_DIR:-}" ]; then

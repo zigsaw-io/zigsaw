@@ -10,6 +10,7 @@ const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const oci = @import("oci.zig");
+const services = @import("services.zig");
 const note = Context.note;
 
 pub const Options = struct {
@@ -181,6 +182,10 @@ pub fn prune(ctx: *Context, opts: Options) !void {
             if (entry.kind != .directory or isInstalled(refs, entry.name)) continue;
             Store.deleteTree(io, arena, try std.fs.path.join(arena, &.{ open_dir, entry.name })) catch {};
         }
+        // And their internal ports, and relays an earlier zigsaw copied.
+        const ids = try arena.alloc([]const u8, refs.len);
+        for (ids, refs) |*i, r| i.* = r.id;
+        try services.prune(ctx, ids);
     }
 
     // Report.

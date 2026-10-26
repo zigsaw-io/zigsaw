@@ -68,6 +68,22 @@ pub const Permissions = struct {
     /// ("documents"; see `UserFolder`) or an absolute path, each optionally
     /// suffixed with ":ro". Anything not listed is off limits.
     filesystem: []const []const u8 = &.{},
+    /// What the app serves to other programs on this machine, which zigsaw
+    /// publishes in every sandbox (see services.zig). Absent unless there
+    /// are some.
+    services: ?[]const Service = null,
+};
+
+/// A port an app listens on for other programs on this machine. Its config
+/// says ${listen:<name>} where the app should listen, which is where its own
+/// runs connect too, and ${port:<name>} where other programs reach it.
+pub const Service = struct {
+    /// Lowercase letters, digits and '-', for --port=<name>=<port>.
+    name: []const u8,
+    /// Where other programs reach it, unless --port moves it.
+    port: u16,
+    /// The export whose runs serve it; without one, the app's own command.
+    command: ?[]const u8 = null,
 };
 
 /// A command an app provides, which `zigsaw build` puts on the user's PATH as
@@ -117,14 +133,22 @@ pub const Association = struct {
 ///   ${cache}    a directory for caches that are safe to keep: <data>\cache in
 ///               runs, and one kept between builds when a build uses the app
 ///   ${<alias>}  the directory of the runtime the app calls <alias>
+///   ${listen:<name>}  the port the app listens on for its service <name>,
+///               where its own runs connect too (see services.zig)
+///   ${port:<name>}    the port other programs reach that service on
 pub const Placeholders = struct {
     app: []const u8,
     data: []const u8,
     /// Null where caches don't apply; "${cache}" is then kept as is.
     cache: ?[]const u8 = null,
     runtimes: []const Dir = &.{},
+    /// The app's services, in its own runs only; elsewhere their
+    /// placeholders are kept as they are.
+    services: []const ServicePorts = &.{},
 
     pub const Dir = struct { alias: []const u8, path: []const u8 };
+    /// A service's ports, in decimal.
+    pub const ServicePorts = struct { name: []const u8, listen: []const u8, port: []const u8 };
 
     /// Replaces the placeholders in `template`. Any other text, including
     /// other "${...}", is kept as is.
@@ -159,9 +183,33 @@ pub const Placeholders = struct {
         if (std.mem.eql(u8, name, "data")) return p.data;
         if (std.mem.eql(u8, name, "cache")) return p.cache;
         for (p.runtimes) |r| if (std.mem.eql(u8, r.alias, name)) return r.path;
+        if (servicePlaceholder(name)) |s| for (p.services) |ports| if (std.mem.eql(u8, ports.name, s.service))
+            return if (s.listen) ports.listen else ports.port;
         return null;
     }
 };
+
+/// The service a "listen:<name>" or "port:<name>" placeholder names.
+fn servicePlaceholder(name: []const u8) ?struct { service: []const u8, listen: bool } {
+    if (std.mem.startsWith(u8, name, "listen:")) return .{ .service = name["listen:".len..], .listen = true };
+    if (std.mem.startsWith(u8, name, "port:")) return .{ .service = name["port:".len..], .listen = false };
+    return null;
+}
+
+/// The first ${listen:x} or ${port:x} in `template` whose service isn't one
+/// of `services`.
+fn undeclaredService(template: []const u8, services: []const Service) ?[]const u8 {
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, template, i, "${")) |at| {
+        i = at + 2;
+        const name = placeholderAt(template[at..]) orelse return null;
+        const s = servicePlaceholder(name) orelse continue;
+        for (services) |declared| {
+            if (std.mem.eql(u8, declared.name, s.service)) break;
+        } else return name;
+    }
+    return null;
+}
 
 /// Whether PATH entries and variables, an app's or a runtime's, use
 /// ${cache}, so that whatever runs with them, a build included, needs a
@@ -466,6 +514,7 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
     // which a run leaves out.
     for (c.permissions.filesystem) |spec| if (parseFsGrant(spec) == null)
         return fail("{s}: filesystem permission \"{s}\" must be \"cwd\", one of the user's folders ({s}) or an absolute path, optionally with \":ro\"", .{ what, spec, UserFolder.list });
+    try validateServices(what, c);
     var it = c.exports.map.iterator();
     while (it.next()) |e| {
         if (!isValidExportName(e.key_ptr.*))
@@ -521,6 +570,48 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
         if (x.needs) |needs| for (needs) |id| if (!isValidId(id) or std.ascii.eqlIgnoreCase(id, c.id))
             return fail("{s}: extends needs \"{s}\", which must be another extension's id", .{ what, id });
     }
+}
+
+/// Checks the app's services, and that the placeholders of its own entries
+/// name only services it has.
+fn validateServices(what: []const u8, c: AppConfig) error{Failed}!void {
+    const services = c.permissions.services orelse &.{};
+    if (c.permissions.services != null and services.len == 0)
+        return fail("{s}: services must list at least one, or be left out", .{what});
+    for (services, 0..) |s, i| {
+        if (!isValidServiceName(s.name))
+            return fail("{s}: service name \"{s}\" must be 1-32 lowercase letters, digits and '-'", .{ what, s.name });
+        for (services[0..i]) |earlier| if (std.mem.eql(u8, earlier.name, s.name))
+            return fail("{s}: two services are called \"{s}\"", .{ what, s.name });
+        if (s.port == 0) return fail("{s}: service {s} must have a port from 1 to 65535", .{ what, s.name });
+        for (services[0..i]) |earlier| if (earlier.port == s.port)
+            return fail("{s}: services {s} and {s} both have port {d}", .{ what, earlier.name, s.name, s.port });
+        if (s.command) |command| if (!c.exports.map.contains(command))
+            return fail("{s}: service {s} is served by \"{s}\", which isn't one of the app's exports", .{ what, s.name, command });
+    }
+    const where = "the app's arguments, variables and exports' arguments";
+    for (c.args) |a| if (undeclaredService(a, services)) |name|
+        return fail("{s}: ${{{s}}} names a service the app doesn't have ({s} may name its own)", .{ what, name, where });
+    for (c.env.map.values()) |v| if (undeclaredService(v, services)) |name|
+        return fail("{s}: ${{{s}}} names a service the app doesn't have ({s} may name its own)", .{ what, name, where });
+    for (c.exports.map.values()) |e| for (e.args) |a| if (undeclaredService(a, services)) |name|
+        return fail("{s}: ${{{s}}} names a service the app doesn't have ({s} may name its own)", .{ what, name, where });
+}
+
+fn isValidServiceName(name: []const u8) bool {
+    if (name.len == 0 or name.len > 32) return false;
+    for (name) |ch| switch (ch) {
+        'a'...'z', '0'...'9', '-' => {},
+        else => return false,
+    };
+    return true;
+}
+
+/// "postgresql on localhost:5432", for `info` and what `pull` shows.
+pub fn describeServices(arena: std.mem.Allocator, services: []const Service) ![]const u8 {
+    const parts = try arena.alloc([]const u8, services.len);
+    for (parts, services) |*p, s| p.* = try std.fmt.allocPrint(arena, "{s} on localhost:{d}", .{ s.name, s.port });
+    return joinAnd(arena, parts);
 }
 
 /// Checks an image's extension points, or (`owner` "runtime x's ") those an
@@ -1061,6 +1152,55 @@ test "Placeholders.expand" {
     var with_cache = p;
     with_cache.cache = "B:\\cache\\org.ziglang.zig";
     try std.testing.expectEqualStrings("B:\\cache\\org.ziglang.zig", try with_cache.expand(arena, "${cache}"));
+}
+
+test "Placeholders.expand services" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const p: Placeholders = .{
+        .app = "C:\\z\\deploy\\ab",
+        .data = "C:\\z\\data\\x",
+        .services = &.{ .{ .name = "http", .listen = "23817", .port = "8471" }, .{ .name = "admin", .listen = "9000", .port = "9000" } },
+    };
+    try std.testing.expectEqualStrings("127.0.0.1:23817", try p.expand(arena, "127.0.0.1:${listen:http}"));
+    try std.testing.expectEqualStrings("http://127.0.0.1:8471/", try p.expand(arena, "http://127.0.0.1:${port:http}/"));
+    try std.testing.expectEqualStrings("9000", try p.expand(arena, "${port:admin}"));
+    // A service the app doesn't have, and other names, stay as they are.
+    try std.testing.expectEqualStrings("${listen:db} ${listen} ${port:}", try p.expand(arena, "${listen:db} ${listen} ${port:}"));
+}
+
+test validateServices {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var c: AppConfig = .{ .id = "app", .version = "1", .command = "server.exe", .args = &.{"--port=${listen:http}"} };
+    try c.exports.map.put(arena, "server", .{ .command = "server.exe", .args = &.{"--url=http://localhost:${port:http}/"} });
+    // Without a service, its placeholders name nothing.
+    try std.testing.expectError(error.Failed, validateServices("x", c));
+    c.permissions.services = &.{.{ .name = "http", .port = 8471, .command = "server" }};
+    try validateServices("x", c);
+    try c.env.map.put(arena, "DB_PORT", "${port:db}");
+    try std.testing.expectError(error.Failed, validateServices("x", c));
+    _ = c.env.map.orderedRemove("DB_PORT");
+
+    const bad = [_][]const Service{
+        &.{},
+        &.{.{ .name = "HTTP", .port = 80 }},
+        &.{.{ .name = "a_b", .port = 80 }},
+        &.{.{ .name = "http", .port = 0 }},
+        &.{ .{ .name = "http", .port = 80 }, .{ .name = "http", .port = 81 } },
+        &.{ .{ .name = "http", .port = 80 }, .{ .name = "other", .port = 80 } },
+        &.{.{ .name = "http", .port = 80, .command = "missing" }},
+    };
+    for (bad) |services| {
+        c.permissions.services = services;
+        try std.testing.expectError(error.Failed, validateServices("x", c));
+    }
+    try std.testing.expectEqualStrings("http on localhost:8471 and db on localhost:5432", try describeServices(arena, &.{
+        .{ .name = "http", .port = 8471 },
+        .{ .name = "db", .port = 5432 },
+    }));
 }
 
 test usesCache {

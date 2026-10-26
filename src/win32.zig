@@ -191,6 +191,7 @@ pub const ERROR_FILE_NOT_FOUND: DWORD = 2;
 pub extern "kernel32" fn DefineDosDeviceW(flags: DWORD, device: LPCWSTR, target: ?LPCWSTR) callconv(.winapi) BOOL;
 pub extern "kernel32" fn QueryDosDeviceW(device: ?LPCWSTR, target: [*]u16, max: DWORD) callconv(.winapi) DWORD;
 pub extern "kernel32" fn GetExitCodeProcess(h: HANDLE, exit_code: *DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn TerminateProcess(h: HANDLE, exit_code: u32) callconv(.winapi) BOOL;
 
 // ---------------------------------------------------------------------------
 // Job objects
@@ -650,6 +651,89 @@ pub extern "kernel32" fn DeviceIoControl(
     returned: ?*DWORD,
     overlapped: ?*anyopaque,
 ) callconv(.winapi) BOOL;
+
+// ---------------------------------------------------------------------------
+// Winsock: the sockets of services and their relay (net.zig)
+
+pub const SOCKET = usize;
+pub const INVALID_SOCKET: SOCKET = std.math.maxInt(usize);
+pub const SOCKET_ERROR: c_int = -1;
+
+pub const AF_INET: c_int = 2;
+pub const AF_INET6: c_int = 23;
+pub const SOCK_STREAM: c_int = 1;
+pub const IPPROTO_TCP: c_int = 6;
+pub const SOL_SOCKET: c_int = 0xffff;
+pub const SO_RCVTIMEO: c_int = 0x1006;
+pub const SO_ERROR: c_int = 0x1007;
+/// No other socket may bind the address, even with SO_REUSEADDR.
+pub const SO_EXCLUSIVEADDRUSE: c_int = ~@as(c_int, 0x0004);
+pub const SD_SEND: c_int = 1;
+pub const SD_BOTH: c_int = 2;
+pub const FIONBIO: c_long = @bitCast(@as(u32, 0x8004667E));
+pub const WSA_FLAG_OVERLAPPED: DWORD = 0x01;
+
+/// Also what binding a port another program holds exclusively gives.
+pub const WSAEACCES: c_int = 10013;
+pub const WSAEWOULDBLOCK: c_int = 10035;
+pub const WSAEAFNOSUPPORT: c_int = 10047;
+pub const WSAEADDRINUSE: c_int = 10048;
+pub const WSAEADDRNOTAVAIL: c_int = 10049;
+pub const WSAETIMEDOUT: c_int = 10060;
+pub const WSAECONNREFUSED: c_int = 10061;
+
+pub const WSADATA = extern struct {
+    wVersion: WORD,
+    wHighVersion: WORD,
+    iMaxSockets: u16,
+    iMaxUdpDg: u16,
+    lpVendorInfo: ?[*]u8,
+    szDescription: [257]u8,
+    szSystemStatus: [129]u8,
+};
+
+/// The port and address are in network byte order.
+pub const sockaddr_in = extern struct {
+    family: u16 = AF_INET,
+    port: u16,
+    addr: [4]u8,
+    zero: [8]u8 = @splat(0),
+};
+
+pub const sockaddr_in6 = extern struct {
+    family: u16 = AF_INET6,
+    port: u16,
+    flowinfo: u32 = 0,
+    addr: [16]u8,
+    scope_id: u32 = 0,
+};
+
+pub const fd_set = extern struct {
+    fd_count: u32,
+    fd_array: [64]SOCKET,
+};
+
+pub const timeval = extern struct {
+    tv_sec: c_long,
+    tv_usec: c_long,
+};
+
+pub extern "ws2_32" fn WSAStartup(version: WORD, data: *WSADATA) callconv(.winapi) c_int;
+pub extern "ws2_32" fn WSAGetLastError() callconv(.winapi) c_int;
+pub extern "ws2_32" fn WSASocketW(af: c_int, kind: c_int, protocol: c_int, info: ?*anyopaque, group: u32, flags: DWORD) callconv(.winapi) SOCKET;
+pub extern "ws2_32" fn closesocket(s: SOCKET) callconv(.winapi) c_int;
+pub extern "ws2_32" fn bind(s: SOCKET, addr: *const anyopaque, len: c_int) callconv(.winapi) c_int;
+pub extern "ws2_32" fn listen(s: SOCKET, backlog: c_int) callconv(.winapi) c_int;
+pub extern "ws2_32" fn accept(s: SOCKET, addr: ?*anyopaque, len: ?*c_int) callconv(.winapi) SOCKET;
+pub extern "ws2_32" fn connect(s: SOCKET, addr: *const anyopaque, len: c_int) callconv(.winapi) c_int;
+pub extern "ws2_32" fn send(s: SOCKET, buf: [*]const u8, len: c_int, flags: c_int) callconv(.winapi) c_int;
+pub extern "ws2_32" fn recv(s: SOCKET, buf: [*]u8, len: c_int, flags: c_int) callconv(.winapi) c_int;
+pub extern "ws2_32" fn shutdown(s: SOCKET, how: c_int) callconv(.winapi) c_int;
+pub extern "ws2_32" fn setsockopt(s: SOCKET, level: c_int, name: c_int, value: *const anyopaque, len: c_int) callconv(.winapi) c_int;
+pub extern "ws2_32" fn getsockname(s: SOCKET, addr: *anyopaque, len: *c_int) callconv(.winapi) c_int;
+pub extern "ws2_32" fn getsockopt(s: SOCKET, level: c_int, name: c_int, value: *anyopaque, len: *c_int) callconv(.winapi) c_int;
+pub extern "ws2_32" fn ioctlsocket(s: SOCKET, cmd: c_long, arg: *u32) callconv(.winapi) c_int;
+pub extern "ws2_32" fn select(nfds: c_int, read: ?*fd_set, write: ?*fd_set, except: ?*fd_set, timeout: ?*const timeval) callconv(.winapi) c_int;
 
 // ---------------------------------------------------------------------------
 // Helpers

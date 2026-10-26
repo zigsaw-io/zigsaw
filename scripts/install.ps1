@@ -4,7 +4,7 @@ Installs zigsaw for the current user, upgrades it, or removes it.
 
 .DESCRIPTION
 Downloads a release of zigsaw from GitHub, checks it against the release's
-SHA256SUMS, puts zigsaw.exe and its two shim programs in
+SHA256SUMS, puts zigsaw.exe, its two shim programs and its relay in
 %LOCALAPPDATA%\zigsaw\bin, where zigsaw also puts the commands of the apps it
 installs, and adds that directory to the user's PATH. No administrator is
 needed. Run it again to upgrade: programs that are running are moved aside,
@@ -51,7 +51,7 @@ param(
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
 
-    $programs = 'zigsaw.exe', 'zigsaw-shim.exe', 'zigsaw-shimw.exe'
+    $programs = 'zigsaw.exe', 'zigsaw-shim.exe', 'zigsaw-shimw.exe', 'zigsaw-relay.exe'
     $archive = 'zigsaw-x86_64-windows.zip'
     # The user's environment variables. Tests name another key.
     $envKey = if ($env:ZIGSAW_INSTALL_ENV_KEY) { $env:ZIGSAW_INSTALL_ENV_KEY } else { 'Environment' }

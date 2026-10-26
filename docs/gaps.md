@@ -34,6 +34,18 @@
   writing to the registry fails outside `HKCU\Software\AppDataLow`, and the
   few directories Windows labels low itself, such as `AppData\LocalLow`, can
   be written.
+- An app's services are on the loopback only: serving other machines takes
+  a firewall rule, which takes an administrator. Under `soft` and `low`,
+  nothing keeps an app from listening wherever it likes. Under
+  `--sandbox=appcontainer`, a service is published only while a run of the
+  command that serves it lasts, and an app given a port of its own (`-p`,
+  `--listen`) bypasses its service.
+- Under `--sandbox=appcontainer`, an app's internal port is picked once and
+  kept until `zigsaw rm`: a program that takes it later keeps the app from
+  listening there, which the app reports in its own way.
+- A zigsaw older than 0.50 ignores an image's services and leaves
+  `${listen:...}` and `${port:...}` as they are: PostgreSQL's and Kanboard's
+  images from then on need 0.50.
 - A host path an earlier zigsaw granted an app's AppContainer, to the
   container's own SID, keeps other apps' low runs out until that app's last
   run ends, `zigsaw repair` or `zigsaw rm`, which take that SID's access
@@ -294,9 +306,10 @@
   an administrator: its images don't carry it, as its licence doesn't let
   it be published.
 - Xdebug's step debugger can't connect to an IDE from an app running under
-  `--sandbox=appcontainer`: an AppContainer can't reach `127.0.0.1` without
-  a loopback exemption (`CheckNetIsolation`), which takes an administrator.
-  It does under `soft` and `low`.
+  `--sandbox=appcontainer`: an AppContainer can't reach a program outside
+  it on `127.0.0.1`, and zigsaw doesn't yet exempt containers from that, or
+  forward their connections out ([networking](networking.md), slice 3). It
+  does under `soft` and `low`.
 - Installed extensions join every run of what they extend: what a run
   loads depends on what's installed, not only on the app's image, as with
   Flatpak's extensions. A run notes, each time, an installed extension that
@@ -318,9 +331,7 @@
   may write (its data, writable grants, `TEMP`): PHP leaves the integrity
   label out of its access check ([findings](findings.md#phps-is_writable-at-low-integrity)).
   PHP code that checks before it writes refuses: Kanboard doesn't start
-  under `--sandbox=low`. Under `--sandbox=appcontainer` it starts, but a
-  browser can't reach it, as an AppContainer can't be reached on
-  `127.0.0.1` without a loopback exemption. Kanboard works under `soft`.
+  under `--sandbox=low`. It works under `soft` and `--sandbox=appcontainer`.
 - Kanboard is served by PHP's built-in web server, which handles one
   request at a time and is meant for development: fine for one person on
   their own machine, not for a team. Its plugin installer is off, as
@@ -332,11 +343,12 @@
   and there's no Windows service (that takes an administrator). Run
   `postgresql` in a console of its own, and `pg_ctl stop` or Ctrl+C there to
   stop it.
-- Under `--sandbox=appcontainer`, PostgreSQL's server can only be reached by
-  the app's own runs (psql, pg_dump...) in an AppContainer too: other
-  programs can't reach `127.0.0.1` in the container without a loopback
-  exemption, which takes an administrator. In an AppContainer, what
-  PostgreSQL runs through cmd.exe can't start the store's programs:
+- Under `--sandbox=appcontainer`, other programs reach PostgreSQL's server
+  through its service, which `postgresql` publishes: a server started with
+  `postgres` or `pg_ctl start`, or given `-p`, can only be reached by the
+  app's own runs (psql, pg_dump...) in an AppContainer too. In an
+  AppContainer, what PostgreSQL runs through cmd.exe can't start the
+  store's programs:
   `archive_command`, `restore_command`, `COPY ... PROGRAM` and psql's `\!`
   with them, and initdb's test of `max_connections` and `shared_buffers`
   (`postgresql` sets them; a cluster made with `initdb` itself there gets
@@ -359,9 +371,10 @@
   (`gdal_calc.py`, `gdal_merge.py`...). Its tools reach files only in the
   directory they run from (its `cwd` permission).
 - osm2pgsql, under `--sandbox=appcontainer`, can't reach a PostgreSQL server
-  on this machine: an AppContainer can't connect to `127.0.0.1` without a
-  loopback exemption (`CheckNetIsolation`), which takes an administrator,
-  whichever sandbox the server runs in. libpq waits out its connection
+  on this machine, whichever sandbox the server runs in: an AppContainer
+  can't connect to a program outside it on `127.0.0.1`, and zigsaw doesn't
+  yet exempt containers from that, or forward their connections out
+  ([networking](networking.md), slice 3). libpq waits out its connection
   timeout (42 s here, unless `PGCONNECT_TIMEOUT` is set). It reaches a
   server on another machine there, and a local one under `soft` and `low`.
   It can't read PostgreSQL's password file, which is in that app's data:

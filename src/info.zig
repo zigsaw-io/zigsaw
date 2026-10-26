@@ -82,6 +82,7 @@ pub fn writeContents(ctx: *Context, w: *Io.Writer, manifest: oci.Manifest, cfg: 
         try writeLine(w, "shortcuts", try std.mem.join(arena, ", ", names.items));
     }
     if (cfg.associations) |a| try writeLine(w, "opens", try std.mem.join(arena, ", ", a.map.keys()));
+    if (cfg.permissions.services) |s| try writeLine(w, "serves", try oci.describeServices(arena, s));
     try writeAccess(arena, w, .of(cfg));
 }
 

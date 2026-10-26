@@ -141,6 +141,9 @@ pub const SpawnSpec = struct {
     creation_flags: win32.DWORD = 0,
     /// The child's stdin, stdout and stderr; null hands it ours.
     stdio: ?[3]?win32.HANDLE = null,
+    /// Handles the child inherits besides those, such as the relay's
+    /// sockets (see services.zig).
+    inherit: []const win32.HANDLE = &.{},
     /// The shortcut (.lnk) the child counts as started from, as a program
     /// Explorer starts from one does: Windows keeps it in the child's
     /// start-up information, where the shell can tell what started it.
@@ -270,22 +273,30 @@ pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
     limits.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (win32.SetInformationJobObject(job, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits))) == 0)
         return win32.lastErrorFail("SetInformationJobObject");
+    return .{ .job = job, .process = try startIn(arena, job, spec) };
+}
 
-    // Hand the app our stdio handles, or the ones given, and nothing else.
+/// Starts a process in `job`, another process's, which ends it with that
+/// one (see `Child.wait`). Returns its process handle.
+pub fn startIn(arena: Allocator, job: win32.HANDLE, spec: SpawnSpec) !win32.HANDLE {
+    // Hand the child our stdio handles, or the ones given, and nothing else
+    // but `spec.inherit`.
     var std_handles: [3]?win32.HANDLE = .{ null, null, null };
-    var inherit: [3]win32.HANDLE = undefined;
-    var inherit_count: usize = 0;
+    var inherit: std.ArrayList(win32.HANDLE) = .empty;
     for ([_]win32.DWORD{ win32.STD_INPUT_HANDLE, win32.STD_OUTPUT_HANDLE, win32.STD_ERROR_HANDLE }, 0..) |which, i| {
         const given = if (spec.stdio) |s| s[i] else win32.GetStdHandle(which);
         const h = given orelse continue;
         if (h == win32.INVALID_HANDLE_VALUE) continue;
         if (win32.SetHandleInformation(h, win32.HANDLE_FLAG_INHERIT, win32.HANDLE_FLAG_INHERIT) == 0) continue;
         std_handles[i] = h;
-        if (std.mem.indexOfScalar(win32.HANDLE, inherit[0..inherit_count], h) == null) {
-            inherit[inherit_count] = h;
-            inherit_count += 1;
-        }
+        if (std.mem.indexOfScalar(win32.HANDLE, inherit.items, h) == null) try inherit.append(arena, h);
     }
+    for (spec.inherit) |h| {
+        if (win32.SetHandleInformation(h, win32.HANDLE_FLAG_INHERIT, win32.HANDLE_FLAG_INHERIT) == 0)
+            return win32.lastErrorFail("SetHandleInformation");
+        try inherit.append(arena, h);
+    }
+    const inherit_count = inherit.items.len;
 
     const attr_count: win32.DWORD = 1 + @as(win32.DWORD, @intFromBool(inherit_count > 0)) + @intFromBool(spec.security != null);
     var attr_size: usize = 0;
@@ -300,7 +311,7 @@ pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
     if (win32.UpdateProcThreadAttribute(attrs.ptr, 0, win32.PROC_THREAD_ATTRIBUTE_JOB_LIST, &jobs, @sizeOf(win32.HANDLE), null, null) == 0)
         return win32.lastErrorFail("UpdateProcThreadAttribute(JOB_LIST)");
     if (inherit_count > 0) {
-        if (win32.UpdateProcThreadAttribute(attrs.ptr, 0, win32.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &inherit, inherit_count * @sizeOf(win32.HANDLE), null, null) == 0)
+        if (win32.UpdateProcThreadAttribute(attrs.ptr, 0, win32.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, @ptrCast(inherit.items.ptr), inherit_count * @sizeOf(win32.HANDLE), null, null) == 0)
             return win32.lastErrorFail("UpdateProcThreadAttribute(HANDLE_LIST)");
     }
     if (spec.security) |security| {
@@ -312,7 +323,7 @@ pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
         .StartupInfo = .{ .cb = @sizeOf(win32.STARTUPINFOEXW) },
         .lpAttributeList = attrs.ptr,
     };
-    if (inherit_count > 0) {
+    if (std_handles[0] != null or std_handles[1] != null or std_handles[2] != null) {
         startup.StartupInfo.dwFlags |= win32.STARTF_USESTDHANDLES;
         startup.StartupInfo.hStdInput = std_handles[0];
         startup.StartupInfo.hStdOutput = std_handles[1];
@@ -344,7 +355,7 @@ pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
             return win32.lastErrorFail("CreateProcessW");
     }
     _ = win32.CloseHandle(info.hThread);
-    return .{ .job = job, .process = info.hProcess };
+    return info.hProcess;
 }
 
 /// Ends whatever is left in the job, and waits a while for it to be gone.

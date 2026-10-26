@@ -33,11 +33,14 @@ pub const Settings = struct {
     /// Extensions a layer below leaves out, by id, that this one has join
     /// the runs again. Merging uses them up: a merge's result has none.
     extension: []const []const u8 = &.{},
+    /// "NAME=PORT": where other programs reach the app's service NAME,
+    /// instead of the port its config says (see services.zig).
+    ports: []const []const u8 = &.{},
 
     pub fn isEmpty(s: Settings) bool {
         return s.sandbox == null and s.network == null and s.ephemeral == null and
             s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.env.len == 0 and
-            s.noextension.len == 0 and s.extension.len == 0;
+            s.noextension.len == 0 and s.extension.len == 0 and s.ports.len == 0;
     }
 
     /// `upper` over `lower`. For the lists, an entry of `upper` replaces
@@ -52,6 +55,7 @@ pub const Settings = struct {
             .nofilesystem = try mergeList(arena, try without(arena, lower.nofilesystem, upper.filesystem, grantPath), upper.nofilesystem, grantPath),
             .env = try mergeList(arena, lower.env, upper.env, envName),
             .noextension = try mergeList(arena, try without(arena, lower.noextension, upper.extension, itself), upper.noextension, itself),
+            .ports = try mergeList(arena, lower.ports, upper.ports, envName),
         };
     }
 
@@ -62,15 +66,17 @@ pub const Settings = struct {
     }
 
     /// As saved: without the options left unset, and without the extension
-    /// lists when empty, so that a zigsaw from before them still reads it.
+    /// and port lists when empty, so that a zigsaw from before them still
+    /// reads it.
     pub fn jsonStringify(s: Settings, jw: anytype) !void {
         try jw.beginObject();
         inline for (std.meta.fields(Settings)) |f| {
             const v = @field(s, f.name);
-            const extension_list = comptime std.mem.eql(u8, f.name, "noextension") or std.mem.eql(u8, f.name, "extension");
+            const later_list = comptime std.mem.eql(u8, f.name, "noextension") or std.mem.eql(u8, f.name, "extension") or
+                std.mem.eql(u8, f.name, "ports");
             const skip = switch (@typeInfo(f.type)) {
                 .optional => v == null,
-                else => if (extension_list) v.len == 0 else false,
+                else => if (later_list) v.len == 0 else false,
             };
             if (!skip) {
                 try jw.objectField(f.name);
@@ -115,8 +121,20 @@ pub const Settings = struct {
             try w.print("{s}--extension={s}", .{ sep, id });
             sep = " ";
         }
+        for (s.ports) |p| {
+            try w.print("{s}--port={s}", .{ sep, p });
+            sep = " ";
+        }
     }
 };
+
+/// A --port value, "NAME=PORT", as two parts; null if it isn't one.
+pub fn parsePort(value: []const u8) ?struct { name: []const u8, port: u16 } {
+    const eq = std.mem.indexOfScalar(u8, value, '=') orelse return null;
+    const port = std.fmt.parseInt(u16, value[eq + 1 ..], 10) catch return null;
+    if (eq == 0 or port == 0) return null;
+    return .{ .name = value[0..eq], .port = port };
+}
 
 /// `lower` followed by `upper`, where each entry of `upper` first removes the
 /// entries with the same key.
@@ -269,6 +287,28 @@ test "Settings.merge: --noextension leaves an extension out until a layer above 
     var w: Io.Writer = .fixed(&buf);
     try (Settings{ .noextension = &.{"a"}, .extension = &.{"b"} }).format(&w);
     try std.testing.expectEqualStrings("--noextension=a --extension=b", w.buffered());
+}
+
+test "Settings.merge: --port replaces a lower layer's for the same service" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const s = try Settings.merge(arena, .{ .ports = &.{ "http=9090", "admin=9091" } }, .{ .ports = &.{"http=8080"} });
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "admin=9091", "http=8080" }), s.ports);
+    try std.testing.expect(!s.isEmpty());
+
+    var buf: [256]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    try s.format(&w);
+    try std.testing.expectEqualStrings("--port=admin=9091 --port=http=8080", w.buffered());
+
+    const p = parsePort("postgresql=5433").?;
+    try std.testing.expectEqualStrings("postgresql", p.name);
+    try std.testing.expectEqual(5433, p.port);
+    for ([_][]const u8{ "postgresql", "=5433", "pg=0", "pg=65536", "pg=x" }) |bad| try std.testing.expectEqual(null, parsePort(bad));
+
+    // A zigsaw from before ports reads settings without them.
+    try std.testing.expect(std.mem.indexOf(u8, try oci.toJson(arena, Settings{ .network = true }), "ports") == null);
 }
 
 test "Settings round-trips through JSON" {

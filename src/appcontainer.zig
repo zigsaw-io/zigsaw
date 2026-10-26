@@ -25,14 +25,51 @@ pub const Profile = struct {
 
     /// Creates the app's profile, or opens it if it already exists. The SIDs
     /// are left to be freed at process exit.
+    ///
+    /// Two runs that create one profile at once can both fail, with errors
+    /// other than "already exists" (0x80070003 on a fresh runner, 0x8007000a
+    /// or 0x8000ffff here), so zigsaw creates profiles one at a time. A
+    /// failure is tried once more: a profile another program is creating
+    /// may not be finished yet.
     pub fn ensure(arena: Allocator, id: []const u8) !Profile {
         const name = try profileName(arena, id);
         const name_w = try win32.wide(arena, name);
+        const mutex = try Mutex.acquire();
+        defer mutex.release();
         var sid: ?win32.PSID = null;
         var hr = win32.CreateAppContainerProfile(name_w, name_w, name_w, null, 0, &sid);
+        if (hr < 0 and hr != win32.E_ALREADY_EXISTS) {
+            win32.Sleep(100);
+            hr = win32.CreateAppContainerProfile(name_w, name_w, name_w, null, 0, &sid);
+        }
         if (hr == win32.E_ALREADY_EXISTS) hr = win32.DeriveAppContainerSidFromAppContainerName(name_w, &sid);
         if (hr < 0) return fail("AppContainer profile {s}: HRESULT 0x{x}", .{ name, @as(u32, @bitCast(hr)) });
         return .{ .name = name, .sid = sid.?, .capability = try capabilitySid(arena, name) };
+    }
+};
+
+/// Held while zigsaw creates a profile (see `Profile.ensure`).
+const Mutex = struct {
+    handle: win32.HANDLE,
+
+    const name = "Local\\zigsaw-appcontainer";
+
+    fn acquire() !Mutex {
+        const handle = win32.CreateMutexW(null, win32.FALSE, std.unicode.utf8ToUtf16LeStringLiteral(name)) orelse
+            return win32.lastErrorFail("CreateMutexW");
+        // Abandoned: a zigsaw that had it ended without releasing it.
+        switch (win32.WaitForSingleObject(handle, win32.INFINITE)) {
+            win32.WAIT_OBJECT_0, win32.WAIT_ABANDONED => return .{ .handle = handle },
+            else => {
+                _ = win32.CloseHandle(handle);
+                return win32.lastErrorFail("WaitForSingleObject");
+            },
+        }
+    }
+
+    fn release(m: Mutex) void {
+        _ = win32.ReleaseMutex(m.handle);
+        _ = win32.CloseHandle(m.handle);
     }
 };
 

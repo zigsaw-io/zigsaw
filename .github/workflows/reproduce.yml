@@ -216,6 +216,14 @@ jobs:
         shell: bash
         run: bash tests/ctrlc.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/ctrlc.txt"
 
+      # Services, proxies and AppContainer profiles, with tests/netprobe.zig
+      # as the app, in a store of its own; last, the probe's report of what
+      # this Windows lets AppContainers do on the loopback.
+      - name: tests/network.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/network.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/network.txt"
+
       # What the Release workflow publishes, and installing it.
       - name: tests/install.sh
         if: ${{ !cancelled() }}
@@ -255,8 +263,9 @@ jobs:
         run: bash tests/gdal.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/gdal.txt"
 
       # PostgreSQL as published, with Perl's and Python's images as its
-      # runtimes, in the seeded store: its server in each sandbox, on a port
-      # of its own, away from the runner's PostgreSQL's 5432.
+      # runtimes, in the seeded store: its server in each sandbox, its
+      # service on a port of its own (--port), away from the runner's
+      # PostgreSQL's 5432.
       - name: tests/postgresql.sh
         if: ${{ !cancelled() }}
         shell: bash

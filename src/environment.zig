@@ -18,6 +18,11 @@ const passthrough = [_][]const u8{
     "PROCESSOR_LEVEL",      "PROCESSOR_REVISION",     "USERNAME",
 };
 
+/// Passed through too for apps with the network: a proxy set in the
+/// environment is the way out of some networks. Names are case-insensitive
+/// on Windows, so these are also curl's `http_proxy` and the like.
+const proxies = [_][]const u8{ "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY" };
+
 /// User profile folders, laid out like a Windows user profile under `home`.
 pub const Profile = struct {
     home: []const u8,
@@ -51,6 +56,8 @@ pub const Spec = struct {
     vars: []const Var,
     /// "NAME=VALUE" from --env and overrides, set last.
     extra: []const []const u8 = &.{},
+    /// Whether the host's proxy variables pass through (see `proxies`).
+    proxies: bool = false,
 };
 
 pub fn build(arena: Allocator, host: *const std.process.Environ.Map, spec: Spec) !std.ArrayList(Var) {
@@ -58,6 +65,9 @@ pub fn build(arena: Allocator, host: *const std.process.Environ.Map, spec: Spec)
     for (passthrough) |name| {
         if (host.get(name)) |value| try set(arena, &env, name, value);
     }
+    if (spec.proxies) for (proxies) |name| {
+        if (host.get(name)) |value| try set(arena, &env, name, value);
+    };
 
     var path: std.ArrayList(u8) = .empty;
     for (spec.path) |dir| try path.print(arena, "{s};", .{dir});
@@ -84,6 +94,40 @@ pub fn build(arena: Allocator, host: *const std.process.Environ.Map, spec: Spec)
         try set(arena, &env, assignment[0..eq], assignment[eq + 1 ..]);
     }
     return env;
+}
+
+test "build passes proxies through for apps with the network" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var host: std.process.Environ.Map = .init(arena);
+    try host.put("SystemRoot", "C:\\Windows");
+    try host.put("http_proxy", "http://proxy:3128");
+    try host.put("NO_PROXY", "localhost");
+    try host.put("SECRET", "x");
+    const spec: Spec = .{ .id = "app", .profile = try .init(arena, "D:\\data\\app"), .path = &.{}, .system_root = "C:\\Windows", .vars = &.{} };
+    const without = try build(arena, &host, spec);
+    for (without.items) |kv| for (proxies ++ [_][]const u8{"SECRET"}) |name|
+        try std.testing.expect(!std.ascii.eqlIgnoreCase(kv.name, name));
+
+    var with_network = spec;
+    with_network.proxies = true;
+    with_network.vars = &.{.{ .name = "NO_PROXY", .value = "example.org" }};
+    const with = try build(arena, &host, with_network);
+    var found: usize = 0;
+    for (with.items) |kv| {
+        if (std.ascii.eqlIgnoreCase(kv.name, "HTTP_PROXY")) {
+            try std.testing.expectEqualStrings("http://proxy:3128", kv.value);
+            found += 1;
+        }
+        // The app's own variables win.
+        if (std.ascii.eqlIgnoreCase(kv.name, "NO_PROXY")) {
+            try std.testing.expectEqualStrings("example.org", kv.value);
+            found += 1;
+        }
+        try std.testing.expect(!std.ascii.eqlIgnoreCase(kv.name, "SECRET"));
+    }
+    try std.testing.expectEqual(2, found);
 }
 
 /// Adds a config's variables to `env`, with their placeholders expanded.

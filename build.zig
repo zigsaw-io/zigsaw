@@ -40,6 +40,15 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(shim);
     }
 
+    // Publishes an app's services from inside its AppContainer, from a copy
+    // in the store; small too. zigsaw expects it next to zigsaw.exe.
+    const relay = b.addExecutable(.{
+        .name = "zigsaw-relay",
+        .root_module = relayModule(b, target, .ReleaseSmall),
+    });
+    addWindowsResources(b, relay, "zigsaw service relay");
+    b.installArtifact(relay);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
@@ -85,6 +94,22 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     }));
     const acprobe = b.addExecutable(.{ .name = "zigsaw-acprobe", .root_module = acprobe_mod });
+    // What Windows lets AppContainers do on the loopback, and the test app
+    // of tests/network.sh. Also installed under zig-out\test.
+    const netprobe_mod = b.createModule(.{
+        .root_source_file = b.path("tests/netprobe.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // net.zig brings win32.zig, which a file can't be in two modules for.
+    netprobe_mod.addImport("net", b.createModule(.{
+        .root_source_file = b.path("src/net.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    const netprobe = b.addExecutable(.{ .name = "zigsaw-netprobe", .root_module = netprobe_mod });
+    const netprobe_step = b.step("netprobe", "Build the network probe used by tests/network.sh");
+    netprobe_step.dependOn(&b.addInstallArtifact(netprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
     const acprobe_step = b.step("acprobe", "Build the AppContainer probe used by tests/matrix.sh");
     acprobe_step.dependOn(&b.addInstallArtifact(acprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
@@ -169,6 +194,16 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize, null) })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shimModule(b, target, optimize, true) })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = relayModule(b, target, optimize) })).step);
+}
+
+fn relayModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path("src/relay.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = if (optimize == .ReleaseSmall) true else null,
+    });
 }
 
 /// Version information, which Explorer shows in the file's properties, and an

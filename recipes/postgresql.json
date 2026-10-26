@@ -11,9 +11,13 @@
     "PGDATA": "${data}\\data",
     "PGPASSFILE": "${data}\\pgpass.conf",
     "PGUSER": "postgres",
-    "PGHOST": "localhost"
+    "PGHOST": "localhost",
+    "PGPORT": "${listen:postgresql}"
   },
-  "permissions": { "network": true },
+  "permissions": {
+    "network": true,
+    "services": [{ "name": "postgresql", "port": 5432, "command": "postgresql" }]
+  },
   "extensions": {
     "org.postgresql.PostgreSQL": { "version": "18", "join": ["PG_EXTENSION_DIRS", "PG_PRELOAD_LIBRARIES"] }
   },

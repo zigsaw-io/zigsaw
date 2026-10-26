@@ -142,7 +142,8 @@ and as an SDK gives builds a `composer` command: Kanboard's recipe installs
 its dependencies with it, from their lock file. Kanboard is a web app:
 `kanboard` serves it with PHP's built-in web server on `127.0.0.1:8471` and
 opens it in your browser (its Start menu shortcut does that too), with its
-database in the app's data.
+database in the app's data. It's a [service](recipes.md#services), so it's
+there under `--sandbox=appcontainer` too, and `--port=http=9090` moves it.
 [Java](recipes.md#java)'s images are Eclipse Temurin's builds of
 OpenJDK 25: Java apps run on its JRE, and its JDK builds them, with Maven or
 Gradle, whose images run on it and whose dependencies a recipe pins with a
@@ -157,8 +158,9 @@ files.
 [PostgreSQL](recipes.md#postgresql) is built from source with Meson and
 zig, with OpenSSL, zlib, lz4, zstd and libxml2 built in, ICU from Windows'
 own `icu.dll`, and PL/Perl and PL/Python on Perl's and Python's images as
-runtimes. `postgresql` runs the server in the foreground, on `localhost:5432`
-(`postgresql -p 5433` for another port): its first run makes a cluster in
+runtimes. `postgresql` runs the server in the foreground, on `localhost:5432`,
+in every sandbox, as a [service](recipes.md#services)
+(`--port=postgresql=5433` moves it, for the clients too): its first run makes a cluster in
 the app's data, UTF-8 in the builtin `C.UTF-8` locale, with a random
 password for the `postgres` user, which the app's own clients (`psql`,
 `pg_dump`...) find in its password file there. The server lasts as long as

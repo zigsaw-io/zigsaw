@@ -37,6 +37,7 @@ const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
+const services = @import("services.zig");
 const fail = Context.fail;
 const note = Context.note;
 
@@ -117,7 +118,15 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
 
     const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
     const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir, cache_dir);
-    const placeholders: oci.Placeholders = .{ .app = image.deploy_dir, .data = data_dir, .cache = cache_dir, .runtimes = runtimes.dirs };
+    // Where the app listens for its services, and where they're reached.
+    const service_ports = try services.resolve(ctx, cfg, settings.ports, sandbox);
+    const placeholders: oci.Placeholders = .{
+        .app = image.deploy_dir,
+        .data = data_dir,
+        .cache = cache_dir,
+        .runtimes = runtimes.dirs,
+        .services = try services.placeholders(arena, service_ports),
+    };
     // The aliases first, as in builds, then the app's directories, then each
     // runtime's.
     var app_path: std.ArrayList([]const u8) = .empty;
@@ -156,6 +165,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .system_root = system_root,
         .vars = app_env.items,
         .extra = settings.env,
+        .proxies = network,
     });
     // The user's folders, where the app's environment says it looks for them.
     for (try folders.apply(ctx, data_dir, env.items, folder_grants.items)) |f|
@@ -169,12 +179,23 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         if (app_aliases) |a| note("aliases  {s} ({s})", .{ a.names, a.dir });
         if (!saved.isEmpty()) note("override {f}", .{saved});
         note("sandbox  {t}, network {s}", .{ sandbox, if (network) "on" else "off" });
+        for (service_ports) |s| if (s.listen == s.port)
+            note("service  {s}: localhost:{d}", .{ s.service.name, s.port })
+        else
+            note("service  {s}: localhost:{d}, which the app listens for on {d} in its container", .{ s.service.name, s.port, s.listen });
         note("exe      {s}", .{exe});
         if (command.batch) note("script   {s}", .{command.exe});
         note("cmdline  {s}", .{command_line});
         note("cwd      {s}", .{cwd});
         for (env.items) |kv| note("env      {s}={s}", .{ kv.name, kv.value });
     }
+
+    // In an AppContainer, the services this run serves are published by the
+    // relay, from sockets zigsaw listens on outside it. zigsaw's copies close
+    // when the run ends, and so the ports are free again.
+    const published = if (sandbox == .appcontainer) try services.publish(ctx, cfg, service_ports, opts.command) else null;
+    defer if (published) |p| p.close();
+    const relay_exe = if (published != null) try services.relayExe(ctx) else null;
 
     var security: ?win32.SECURITY_CAPABILITIES = null;
     var token: ?win32.HANDLE = null;
@@ -193,6 +214,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             .deploy_dir = image.deploy_dir,
             .runtime_dirs = try std.mem.concat(arena, []const u8, &.{ image.runtime_dirs, try extensionDirs(arena, found.loaded) }),
             .alias_dir = if (app_aliases) |a| a.dir else null,
+            .relay_dir = if (relay_exe) |r| std.fs.path.dirname(r).? else null,
             .data_dir = data_dir,
             .local_app_data = profile.local,
             .host_cwd = host_cwd,
@@ -211,20 +233,50 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     defer if (keys) |k| hkcu.leave(ctx, k);
     if (ctx.verbose) if (cfg.registry) |r| note("registry {s} (kept in {s}\\registry)", .{ try std.mem.join(arena, ", ", r), data_dir });
 
-    const code = try process.spawn(arena, .{
+    const env_block = try environment.encodeBlock(arena, env.items);
+    const child = try process.start(arena, .{
         .exe = exe,
         .command_line = command_line,
-        .env_block = try environment.encodeBlock(arena, env.items),
+        .env_block = env_block,
         .cwd = cwd,
         .security = if (security) |*s| s else null,
         .token = token,
         // Set by a shim that a shortcut started (see shim.zig).
         .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
     });
+    if (published) |p| startRelay(ctx, cfg.id, child, relay_exe.?, p, security.?, env_block);
+    const code = try child.wait();
     // Commands the run installed, as `npm install -g` does, get shims. An
     // --ephemeral run's are gone with its data directory.
     if (run_dir == null and exports.hasCommandDirs(cfg)) exports.syncAfterRun(ctx, cfg.id);
     return code;
+}
+
+/// Starts the relay in the app's container and job, with the sockets of the
+/// services the run publishes (see services.zig). It holds only the app's
+/// own capability: runs in one container reach each other without a network
+/// one. If it can't start, the app runs on, unpublished.
+fn startRelay(ctx: *Context, id: []const u8, child: process.Child, exe: []const u8, published: services.Published, app: win32.SECURITY_CAPABILITIES, env_block: []const u16) void {
+    const arena = ctx.arena;
+    var own = app;
+    own.CapabilityCount = 1;
+    const handles = arena.alloc(win32.HANDLE, published.sockets.len) catch return;
+    for (handles, published.sockets) |*h, s| h.* = @ptrFromInt(s);
+    const command_line = process.buildCommandLine(arena, exe, published.args) catch return;
+    const relay = process.startIn(arena, child.job, .{
+        .exe = exe,
+        .command_line = command_line,
+        .env_block = env_block,
+        .cwd = std.fs.path.dirname(exe).?,
+        .security = &own,
+        .creation_flags = win32.DETACHED_PROCESS,
+        .stdio = .{ null, null, null },
+        .inherit = handles,
+    }) catch {
+        note("note: the relay that publishes {s}'s services didn't start, so they aren't published this run", .{id});
+        return;
+    };
+    _ = win32.CloseHandle(relay);
 }
 
 /// A host path the run may use, which the enforcing sandboxes grant: null
@@ -335,6 +387,8 @@ const AppContainerSetup = struct {
     runtime_dirs: []const []const u8,
     /// The app's alias shims, if it has aliases.
     alias_dir: ?[]const u8,
+    /// The store's copies of the relay, if the run publishes services.
+    relay_dir: ?[]const u8,
     data_dir: []const u8,
     /// The run's LOCALAPPDATA, in its data directory.
     local_app_data: []const u8,
@@ -357,6 +411,7 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     try wanted.append(arena, .{ .path = setup.deploy_dir, .access = .read_execute, .host = false });
     for (setup.runtime_dirs) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     if (setup.alias_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
+    if (setup.relay_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     try wanted.append(arena, .{ .path = setup.data_dir, .access = .full, .host = false });
     for (setup.grants) |g| try wanted.append(arena, .{
         .path = g.path orelse setup.host_cwd,
