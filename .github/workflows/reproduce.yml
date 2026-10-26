@@ -145,9 +145,10 @@ jobs:
           bash tests/published.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/published.txt"
 
       # On every run, not only a failed one: each build log says how long
-      # each of its commands took.
+      # each of its commands took. Also when the job times out (iteration
+      # 48's apps job did, and left nothing to read).
       - name: Upload the logs
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-published-${{ matrix.group }}
@@ -187,7 +188,7 @@ jobs:
           ZIGSAW_HOME: ${{ runner.temp }}\store
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
-          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls texlive gdal postgresql postgresql-pgvector postgresql-pg-cron postgresql-postgis 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
+          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls texlive gdal postgresql postgresql-pgvector postgresql-pg-cron postgresql-postgis osm2pgsql 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
 
       # The suites run whether or not the steps before them passed.
       - name: tests/store.sh
@@ -263,6 +264,16 @@ jobs:
           POSTGRES_HOME: ${{ runner.temp }}\store
         run: bash tests/postgresql.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/postgresql.txt"
 
+      # osm2pgsql as published, against PostgreSQL's server with PostGIS
+      # under soft, in the seeded store: under soft and low, and in an
+      # AppContainer, where it can't reach the server (a known gap).
+      - name: tests/osm2pgsql.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          OSM2PGSQL_HOME: ${{ runner.temp }}\store
+        run: bash tests/osm2pgsql.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/osm2pgsql.txt"
+
       # Last, in the seeded store, whose apps it runs: it changes their data.
       - name: tests/matrix.sh
         if: ${{ !cancelled() }}
@@ -275,7 +286,7 @@ jobs:
         run: bash tests/matrix.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/matrix.txt"
 
       - name: Upload the logs
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-suites
@@ -327,7 +338,7 @@ jobs:
         run: bash tests/gtk3.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/gtk3.txt"
 
       - name: Upload the logs
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-gtk-suites
@@ -375,7 +386,7 @@ jobs:
         run: bash tests/qt.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/qt.txt"
 
       - name: Upload the logs
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-qt-suites
@@ -436,7 +447,7 @@ jobs:
           bash tests/build.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/build.txt"
 
       - name: Upload the logs
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-build-${{ matrix.group }}

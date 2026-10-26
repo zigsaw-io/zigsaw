@@ -66,6 +66,7 @@ gdal: gdal-sdk.json gdal.json
 # PostgreSQL's SDK (24 on a runner, 15 here: OpenSSL, then PostgreSQL's
 # 2,000 compiles), PostgreSQL from it, and its extensions, with GNU make:
 # pgvector and pg_cron under a minute each, PostGIS under 3 here (on GDAL's
-# SDK; 9 in iteration 47, when it built GEOS and PROJ itself)
+# SDK; 9 in iteration 47, when it built GEOS and PROJ itself), and osm2pgsql,
+# on both SDKs (2 here)
 postgresql: make.json postgresql-sdk.json postgresql.json postgresql-pgvector.json postgresql-pg-cron.json
-postgresql: postgresql-postgis.json
+postgresql: postgresql-postgis.json osm2pgsql.json

@@ -81,6 +81,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | GDAL SDK: GDAL built from source with zig, with GEOS, PROJ, SQLite, json-c and expat as static libraries | `org.gdal.GDAL.Sdk` | 3.13.3 | |
 | GDAL, its raster and vector tools (from its SDK) | `org.gdal.GDAL` | 3.13.3 | `gdal`, `gdalinfo`, `gdal_translate`, `gdalwarp`, `ogr2ogr`, `ogrinfo`, `gdalsrsinfo`, `gdaltransform`, `gdal_create` and 20 more |
 | PostGIS, extending PostgreSQL (built from source, on GDAL's SDK; with rasters) | `org.postgresql.PostgreSQL.PostGIS` | 3.6.4 | |
+| osm2pgsql, which imports OpenStreetMap data into PostGIS (built from source with zig, on PostgreSQL's and GDAL's SDKs) | `org.osm2pgsql.osm2pgsql` | 2.3.1 | `osm2pgsql`, `osm2pgsql-expire` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -169,6 +170,13 @@ every run of its server as [extensions](recipes.md#postgresql-extensions):
 rasters (`CREATE EXTENSION postgis_raster`) are on [GDAL](recipes.md#gdal),
 whose tools are an image of their own: `gdalinfo`, `gdalwarp`, `ogr2ogr`
 and the rest read and write files in the directory they're run from.
+[osm2pgsql](recipes.md#osm2pgsql) imports OpenStreetMap data (`.osm.pbf`,
+`.osm`, compressed or not, and change files for updates) from the directory
+it's run from into a PostGIS database: `osm2pgsql -U postgres -W -d <db>
+<file>` asks for the password `postgresql` made, which is in PostgreSQL's
+data (`pgpass.conf`); osm2pgsql can't read that, as it's another app's. It
+reaches a server running under soft or low, or on another machine, but not
+one on this machine from an AppContainer.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.

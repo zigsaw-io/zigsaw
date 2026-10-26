@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- tests/osm2pgsql.sh's map: in Monaco, two tagged points, a street, a
+     building and a park with a pond (a multipolygon with a hole). By hand;
+     tests/osm2pgsql/topbf.py makes tiny.osm.pbf from it. -->
+<osm version="0.6" generator="zigsaw tests">
+  <node id="1" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7384000" lon="7.4246000">
+    <tag k="amenity" v="cafe"/>
+    <tag k="name" v="Café Zig"/>
+  </node>
+  <node id="2" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7307000" lon="7.4250000">
+    <tag k="tourism" v="museum"/>
+    <tag k="name" v="Musée"/>
+  </node>
+  <node id="3" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7370000" lon="7.4200000"/>
+  <node id="4" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7375000" lon="7.4220000"/>
+  <node id="5" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7380000" lon="7.4240000"/>
+  <node id="6" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7390000" lon="7.4250000"/>
+  <node id="7" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7390000" lon="7.4255000"/>
+  <node id="8" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7393000" lon="7.4255000"/>
+  <node id="9" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7393000" lon="7.4250000"/>
+  <node id="10" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7340000" lon="7.4180000"/>
+  <node id="11" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7340000" lon="7.4210000"/>
+  <node id="12" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7360000" lon="7.4210000"/>
+  <node id="13" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7360000" lon="7.4180000"/>
+  <node id="14" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7345000" lon="7.4190000"/>
+  <node id="15" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7345000" lon="7.4200000"/>
+  <node id="16" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7355000" lon="7.4200000"/>
+  <node id="17" version="1" timestamp="2026-10-01T00:00:00Z" lat="43.7355000" lon="7.4190000"/>
+  <way id="101" version="1" timestamp="2026-10-01T00:00:00Z">
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <nd ref="5"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Rue du Test"/>
+  </way>
+  <way id="102" version="1" timestamp="2026-10-01T00:00:00Z">
+    <nd ref="6"/>
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <nd ref="9"/>
+    <nd ref="6"/>
+    <tag k="building" v="yes"/>
+  </way>
+  <way id="103" version="1" timestamp="2026-10-01T00:00:00Z">
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <nd ref="12"/>
+    <nd ref="13"/>
+    <nd ref="10"/>
+  </way>
+  <way id="104" version="1" timestamp="2026-10-01T00:00:00Z">
+    <nd ref="14"/>
+    <nd ref="15"/>
+    <nd ref="16"/>
+    <nd ref="17"/>
+    <nd ref="14"/>
+  </way>
+  <relation id="201" version="1" timestamp="2026-10-01T00:00:00Z">
+    <member type="way" ref="103" role="outer"/>
+    <member type="way" ref="104" role="inner"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="leisure" v="park"/>
+    <tag k="name" v="Parc"/>
+  </relation>
+</osm>

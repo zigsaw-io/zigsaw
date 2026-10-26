@@ -1,0 +1,109 @@
+{
+  "id": "org.osm2pgsql.osm2pgsql",
+  "version": "2.3.1",
+  "name": "osm2pgsql",
+  "summary": "Imports OpenStreetMap data into a PostgreSQL database with PostGIS (osm2pgsql and osm2pgsql-expire), with Lua styles, built with zig on PROJ and libpq",
+  "homepage": "https://osm2pgsql.org/",
+  "license": "GPL-2.0-or-later AND MIT AND BSL-1.0 AND bzip2-1.0.6 AND blessing AND Zlib AND PostgreSQL AND Apache-2.0",
+  "command": "bin/osm2pgsql.exe",
+  "path": ["bin"],
+  "env": { "PROJ_DATA": "${app}\\share\\proj" },
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "exports": {
+    "osm2pgsql": { "command": "bin/osm2pgsql.exe" },
+    "osm2pgsql-expire": { "command": "bin/osm2pgsql-expire.exe" }
+  },
+  "sdk": {
+    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:c685eda60e9225e3f0c91471a988518a76c85e931527892ad4853ffb461ea289",
+    "gdalsdk": "org.gdal.GDAL.Sdk:3.13.3@sha256:4e13cd0a2a0187c5c04f23d9b6428586e2c49f2129245ce60ae217f8d2f2b51d",
+    "cmake": "org.cmake.cmake:4.4.4@sha256:fa7efc2e143063055620628a8867dbd904bb0464a36f6a44943f7dba50a8bcd0",
+    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "cleanup": ["/include", "/lib", "*.a", "/share/doc", "/share/man", "/bin/osm2pgsql-replication"],
+  "modules": [
+    {
+      "name": "bzip2",
+      "sources": [
+        {
+          "url": "https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz",
+          "sha256": "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "mkdir -p \"$PREFIX/include\" \"$PREFIX/lib\" \"$PREFIX/licenses\"",
+        "for f in blocksort huffman crctable randtable compress decompress bzlib; do cc -O2 -s -c \"$f.c\" -o \"$f.o\" || exit 1; done",
+        "ar rcs \"$PREFIX/lib/libbz2.a\" blocksort.o huffman.o crctable.o randtable.o compress.o decompress.o bzlib.o",
+        "cp bzlib.h \"$PREFIX/include/\" && cp LICENSE \"$PREFIX/licenses/bzip2.txt\""
+      ]
+    },
+    {
+      "name": "lua",
+      "sources": [
+        {
+          "url": "https://www.lua.org/ftp/lua-5.4.9.tar.gz",
+          "sha256": "2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6",
+          "strip": 1
+        }
+      ],
+      "build": [
+        "cd src && for f in *.c; do case $f in lua.c|luac.c) ;; *) cc -O2 -s -c \"$f\" -o \"${f%.c}.o\" || exit 1 ;; esac; done",
+        "cd src && ar rcs \"$PREFIX/lib/liblua.a\" *.o && cp lua.h luaconf.h lualib.h lauxlib.h lua.hpp \"$PREFIX/include/\"",
+        "sed -n '/Copyright (C) 1994/,/\\*\\//p' src/lua.h > \"$PREFIX/licenses/lua.txt\" && grep -q 'MIT\\|Permission is hereby granted' \"$PREFIX/licenses/lua.txt\""
+      ]
+    },
+    {
+      "name": "nlohmann-json",
+      "sources": [
+        {
+          "url": "https://github.com/nlohmann/json/releases/download/v3.12.0/include.zip",
+          "sha256": "b8cb0ef2dd7f57f18933997c9934bb1fa962594f701cd5a8d3c2c80541559372"
+        }
+      ],
+      "build": [
+        "cp -r include/nlohmann \"$PREFIX/include/\" && cp LICENSE.MIT \"$PREFIX/licenses/nlohmann-json.txt\""
+      ]
+    },
+    {
+      "name": "boost",
+      "sources": [
+        {
+          "url": "https://github.com/boostorg/boost/releases/download/boost-1.92.0/boost-1.92.0-b2-nodocs.tar.xz",
+          "sha256": "ea7b982002cc9dfbe59b0b217b206f470dc75f3de0bb2973d844118934d82411",
+          "dest": "boost.tar.xz",
+          "type": "file"
+        },
+        { "path": "osm2pgsql/BoostConfig.cmake", "dest": "zigsaw/BoostConfig.cmake" },
+        { "path": "osm2pgsql/BoostConfigVersion.cmake", "dest": "zigsaw/BoostConfigVersion.cmake" }
+      ],
+      "build": [
+        "tar xJf boost.tar.xz boost-1.92.0/boost boost-1.92.0/LICENSE_1_0.txt && mv boost-1.92.0/boost \"$PREFIX/include/\" && test -f \"$PREFIX/include/boost/geometry.hpp\"",
+        "cp boost-1.92.0/LICENSE_1_0.txt \"$PREFIX/licenses/boost.txt\"",
+        "mkdir -p \"$PREFIX/lib/cmake/Boost-1.92.0\" && cp zigsaw/BoostConfig.cmake zigsaw/BoostConfigVersion.cmake \"$PREFIX/lib/cmake/Boost-1.92.0/\""
+      ]
+    },
+    {
+      "name": "osm2pgsql",
+      "env": { "CFLAGS": "-s", "CXXFLAGS": "-s -DXML_STATIC -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_POSIX_THREAD_SAFE_FUNCTIONS=200112L" },
+      "sources": [
+        {
+          "url": "https://github.com/osm2pgsql-dev/osm2pgsql/archive/refs/tags/2.3.1.tar.gz",
+          "sha256": "e90461bd78787fd5cf82f73ac4bc0cfccbc4f498f35dce59eb4d168a380d6ac0",
+          "strip": 1
+        },
+        { "path": "osm2pgsql/default-style.patch", "dest": "zigsaw/default-style.patch" }
+      ],
+      "build": [
+        "patch -p1 < zigsaw/default-style.patch && grep -q GetModuleFileNameW src/osm2pgsql.cpp",
+        "g=$(dirname \"$(dirname \"$(command -v gdalinfo)\")\") && sdk=$(dirname \"$(pg_config --bindir)\") && LDFLAGS=\"-s -Wl,-Brepro -L$g/lib\" cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=B:/prefix \"-DCMAKE_PREFIX_PATH=B:/prefix;$g;$sdk\" \"-DCMAKE_CXX_FLAGS_INIT=-fmacro-prefix-map=$sdk=pgsdk -fmacro-prefix-map=$g=gdalsdk\" \"-DCMAKE_CXX_STANDARD_LIBRARIES=-lsqlite3 -lshell32 -lole32\" -DBUILD_TESTS=OFF -DWITH_LUAJIT=OFF > configure.log 2>&1 || { tail -80 configure.log; exit 1; }",
+        "grep -E 'Found|Building|Libraries used|Not building|osm2pgsql-gen' configure.log || true",
+        "cmake --build out",
+        "cmake --install out > install.log 2>&1 || { tail -40 install.log; exit 1; }",
+        "g=$(dirname \"$(dirname \"$(command -v gdalinfo)\")\") && sdk=$(dirname \"$(pg_config --bindir)\") && cp \"$sdk/bin/libpq.dll\" B:/prefix/bin/ && cp -r \"$g/share/proj\" B:/prefix/share/ && cp -r flex-config B:/prefix/share/osm2pgsql/ && cp COPYING \"$PREFIX/licenses/osm2pgsql.txt\" && cp \"$g/licenses/proj.txt\" \"$g/licenses/expat.txt\" \"$PREFIX/licenses/\" && cp \"$sdk/COPYRIGHT\" \"$PREFIX/licenses/postgresql.txt\" && cp \"$sdk/LICENSE.openssl\" \"$PREFIX/licenses/openssl.txt\" && cp \"$sdk/LICENSE.zlib\" \"$PREFIX/licenses/zlib.txt\"",
+        "B:/prefix/bin/osm2pgsql.exe --version 2>&1",
+        "! grep -aqE 'pgsdk[^[:cntrl:]]*~[0-9]|gdalsdk[^[:cntrl:]]*~[0-9]|[Dd]eploy[/\\\\]' B:/prefix/bin/*.exe"
+      ]
+    }
+  ]
+}

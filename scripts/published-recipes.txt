@@ -74,3 +74,4 @@ postgresql.json
 postgresql-pgvector.json
 postgresql-pg-cron.json
 postgresql-postgis.json
+osm2pgsql.json

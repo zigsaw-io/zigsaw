@@ -358,6 +358,20 @@
   the rest), and no Python, so none of GDAL's Python scripts
   (`gdal_calc.py`, `gdal_merge.py`...). Its tools reach files only in the
   directory they run from (its `cwd` permission).
+- osm2pgsql, under `--sandbox=appcontainer`, can't reach a PostgreSQL server
+  on this machine: an AppContainer can't connect to `127.0.0.1` without a
+  loopback exemption (`CheckNetIsolation`), which takes an administrator,
+  whichever sandbox the server runs in. libpq waits out its connection
+  timeout (42 s here, unless `PGCONNECT_TIMEOUT` is set). It reaches a
+  server on another machine there, and a local one under `soft` and `low`.
+  It can't read PostgreSQL's password file, which is in that app's data:
+  `-W` asks for the password (from the console or stdin), or set
+  `PGPASSWORD` with `--env`.
+- osm2pgsql's image has no `osm2pgsql-replication` (a Python script that
+  needs pyosmium and psycopg) and no `osm2pgsql-gen` (it needs potrace and
+  OpenCV). Its Lua is linked in statically, so a style can `require` Lua
+  modules but not C modules (LPeg, LuaSocket...), which would need a Lua
+  DLL.
 - Composer's image can't update itself (`self-update`): its `composer.phar`
   is in the read-only image; a newer Composer is a newer image.
   `composer diagnose` reports its keys for verifying updates missing.

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- An update to tiny.osm: the café renamed, the museum gone, a bench new. -->
+<osmChange version="0.6" generator="zigsaw tests">
+  <modify>
+    <node id="1" version="2" timestamp="2026-10-02T00:00:00Z" lat="43.7384000" lon="7.4246000">
+      <tag k="amenity" v="cafe"/>
+      <tag k="name" v="Café Saw"/>
+    </node>
+  </modify>
+  <delete>
+    <node id="2" version="2" timestamp="2026-10-02T00:00:00Z" lat="43.7307000" lon="7.4250000"/>
+  </delete>
+  <create>
+    <node id="18" version="1" timestamp="2026-10-02T00:00:00Z" lat="43.7386000" lon="7.4248000">
+      <tag k="amenity" v="bench"/>
+    </node>
+  </create>
+</osmChange>

@@ -1,0 +1,42 @@
+--- a/src/osm2pgsql.cpp
++++ b/src/osm2pgsql.cpp
+@@ -28,6 +28,16 @@
+ #include <string>
+ #include <utility>
+ 
++#ifdef _WIN32
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#endif
++
+ namespace {
+ 
+ /**
+@@ -321,6 +331,22 @@
+         }
+         if (options->output_backend == "pgsql") {
+             options->style = DEFAULT_STYLE;
++#ifdef _WIN32
++            // A relative default is the one next to the program, in
++            // ..\share\osm2pgsql, not one in the working directory.
++            std::filesystem::path const style{DEFAULT_STYLE};
++            if (style.is_relative()) {
++                wchar_t exe[32768];
++                DWORD const n = GetModuleFileNameW(nullptr, exe, 32768);
++                if (n > 0 && n < 32768) {
++                    options->style = (std::filesystem::path{exe}
++                                          .parent_path()
++                                          .parent_path() /
++                                      "share" / "osm2pgsql" / style)
++                                         .string();
++                }
++            }
++#endif
+         }
+     }
+ }

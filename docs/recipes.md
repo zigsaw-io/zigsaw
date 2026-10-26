@@ -2869,6 +2869,63 @@ The SDK takes 16 minutes here, 7 of them GDAL's 1,500 compiles, and its
 layer is 39 MB; the tools' image is 25 MB. [`tests/gdal.sh`](tests/gdal.sh)
 runs the tools in each sandbox, in about 10 s.
 
+## osm2pgsql
+
+[`org.osm2pgsql.osm2pgsql`](recipes/osm2pgsql.json) is osm2pgsql 2.3.1,
+which imports OpenStreetMap data into PostgreSQL with PostGIS. It exports
+`osm2pgsql` and `osm2pgsql-expire`, with the `network` and `cwd`
+permissions. It's an app of its own, not a PostgreSQL extension, since it's
+a client: it reaches a server anywhere, except a local one from an
+AppContainer ([gaps](gaps.md)). It's built with CMake and zig on two SDKs:
+
+- **PostgreSQL's** for libpq (its import library, and `libpq.dll`, which
+  the image carries; OpenSSL is linked into it) and zlib.
+- **GDAL's** for PROJ, SQLite and expat, all static. The image carries
+  PROJ's `proj.db` and sets `PROJ_DATA`, so styles can use any EPSG
+  projection.
+
+Its recipe's own modules:
+
+- **bzip2** 1.0.8, as a static library.
+- **Lua** 5.4.9, as a static library. osm2pgsql's CMake looks for 5.1 to
+  5.4.
+- **nlohmann/json**, headers only.
+- **Boost**'s headers only: osm2pgsql
+  uses only Geometry, which is header-only. Boost's CMake release has a link
+  to a directory (in a library's docs), which zigsaw's tar reader refuses,
+  and building Geometry with it means building the 80 libraries it depends
+  on, several compiled. The b2 release is fetched as a file instead
+  (`"type": "file"`), and BusyBox's `tar` unpacks only its `boost/` headers
+  (26 s). [`BoostConfig.cmake`](recipes/osm2pgsql/BoostConfig.cmake) is
+  enough for osm2pgsql's `find_package(Boost CONFIG)`.
+
+osm2pgsql's own libosmium, protozero, fmt and CLI11 (its `contrib`) are
+used. The build needed:
+
+- `-D_POSIX_THREAD_SAFE_FUNCTIONS`, for MinGW's `localtime_r`; its code
+  uses that outside MSVC.
+- `-DXML_STATIC`, for the static expat; `-DNOMINMAX` and
+  `-DWIN32_LEAN_AND_MEAN`, as `bzlib.h` includes `windows.h`.
+- `CMAKE_CXX_STANDARD_LIBRARIES=-lsqlite3 -lshell32 -lole32`, for the
+  static PROJ's own dependencies.
+- [`default-style.patch`](recipes/osm2pgsql/default-style.patch). On
+  Windows, upstream's default style for the pgsql output is
+  `default.style` in the working directory. The patch looks for it next to
+  the program instead, in `..\share\osm2pgsql`, where the image has it. The
+  image also has upstream's example flex styles, in
+  `share\osm2pgsql\flex-config`.
+
+The build takes 2 minutes here, and the layer is 15 MB (two 18 MB programs,
+each with PROJ and SQLite inside). [`tests/osm2pgsql.sh`](tests/osm2pgsql.sh)
+runs PostgreSQL's server with PostGIS under soft, and osm2pgsql against it
+under soft and low, in about 40 s:
+
+- the pgsql output with the default style, then an update (`--append`)
+  that expires tiles;
+- the flex output with a Lua style that `require`s a module, from PBF, with
+  flat nodes and an area table in UTM;
+- gzip and bzip2 input, and `-W` reading the password.
+
 ## MSVC
 
 Projects that need Microsoft's compiler can use the Visual Studio installed
