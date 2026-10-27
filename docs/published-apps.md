@@ -58,8 +58,8 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Zstandard for PHP 8.5, with libzstd (built from source) | `net.php.php.Zstd` | 0.18.0 | |
 | Composer (on PHP) | `org.getcomposer.composer` | 2.10.3 | `composer` |
 | Kanboard (on PHP; dependencies installed by Composer) | `org.kanboard.Kanboard` | 1.2.54 | `kanboard`, `kanboard-cli` |
-| OpenJDK, Eclipse Temurin's JDK | `org.openjdk.java.Sdk` | 25.0.5_7-ea | `java`, `javaw`, `javac`, `jar`, `jshell`, `javadoc`, `jdeps`, `jlink`, `keytool` |
-| OpenJDK Runtime, Eclipse Temurin's JRE | `org.openjdk.java` | 25.0.5_7-ea | |
+| OpenJDK, Eclipse Temurin's JDK | `org.openjdk.java.Sdk` | 25.0.5_8 | `java`, `javaw`, `javac`, `jar`, `jshell`, `javadoc`, `jdeps`, `jlink`, `keytool` |
+| OpenJDK Runtime, Eclipse Temurin's JRE | `org.openjdk.java` | 25.0.5_8 | |
 | Apache Maven (on the JDK) | `org.apache.maven` | 3.10.0 | `mvn` |
 | Gradle (on the JDK) | `org.gradle.gradle` | 9.8.1 | `gradle`, `gradle-vendor` |
 | Apache PDFBox (built from source with Maven, on Java's runtime) | `org.apache.pdfbox` | 3.0.8 | `pdfbox`, `pdfbox-debugger` |

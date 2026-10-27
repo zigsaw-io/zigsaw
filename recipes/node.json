@@ -9,7 +9,8 @@
   "path": [".", "${data}\\npm"],
   "env": {
     "NPM_CONFIG_PREFIX": "${data}\\npm",
-    "NODE_OPTIONS": "--preserve-symlinks --preserve-symlinks-main"
+    "NODE_OPTIONS": "--preserve-symlinks --preserve-symlinks-main",
+    "NODE_USE_SYSTEM_CA": "1"
   },
   "permissions": { "network": true, "filesystem": ["cwd"] },
   "exports": {

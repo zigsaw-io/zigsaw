@@ -1,6 +1,6 @@
 {
   "id": "org.openjdk.java.Sdk",
-  "version": "25.0.5_7-ea",
+  "version": "25.0.5_8",
   "name": "OpenJDK",
   "summary": "Java's development kit, Eclipse Temurin's build of OpenJDK 25: java, javac, jar, jshell, jlink and the rest",
   "homepage": "https://adoptium.net/",
@@ -9,7 +9,7 @@
   "path": ["bin"],
   "env": {
     "JAVA_HOME": "${app}",
-    "JAVA_TOOL_OPTIONS": "\"-Duser.home=${data}\\home\" -Dsun.font.layout.ffm=false"
+    "JAVA_TOOL_OPTIONS": "\"-Duser.home=${data}\\home\" -Dsun.font.layout.ffm=false -Djavax.net.ssl.trustStoreType=Windows-ROOT-LOCALMACHINE"
   },
   "permissions": { "network": true, "filesystem": ["cwd"] },
   "exports": {
@@ -29,8 +29,8 @@
       "name": "jdk",
       "sources": [
         {
-          "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B7-ea-beta/OpenJDK25U-jdk_x64_windows_hotspot_25.0.5_7-ea.zip",
-          "sha256": "6f23408555a76d83cad9e01aea45a79a07ff6cf9dcc3826af66fbf31fcf12c7b",
+          "url": "https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_x64_windows_hotspot_25.0.5_8.zip",
+          "sha256": "636bdc13dc649ddc7d5921c5c7d23cca6e44fd19d662b45cc9c02135a6c96c42",
           "strip": 1
         }
       ]

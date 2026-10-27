@@ -680,6 +680,7 @@ pub const WSA_FLAG_OVERLAPPED: DWORD = 0x01;
 
 /// Also what binding a port another program holds exclusively gives.
 pub const WSAEACCES: c_int = 10013;
+pub const WSAEINVAL: c_int = 10022;
 pub const WSAEWOULDBLOCK: c_int = 10035;
 pub const WSAEAFNOSUPPORT: c_int = 10047;
 pub const WSAEADDRINUSE: c_int = 10048;
@@ -711,6 +712,15 @@ pub const sockaddr_in6 = extern struct {
     flowinfo: u32 = 0,
     addr: [16]u8,
     scope_id: u32 = 0,
+};
+
+/// AF_UNIX, for tests/netprobe.zig's rows: zigsaw itself doesn't use it.
+pub const AF_UNIX: c_int = 1;
+
+/// afunix.h's: a path of up to 108 bytes, NUL-terminated when shorter.
+pub const sockaddr_un = extern struct {
+    family: u16 = AF_UNIX,
+    path: [108]u8 = @splat(0),
 };
 
 pub const fd_set = extern struct {

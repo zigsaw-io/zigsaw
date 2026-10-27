@@ -18,7 +18,7 @@
   ],
   "permissions": { "network": true, "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "registry": ["Software\\JavaSoft\\Prefs\\com\\oracle\\javafx\\scenebuilder"],
-  "runtimes": { "java": "org.openjdk.java.Sdk:25.0.5_7-ea@sha256:e45ed698dd497b005fcace6cc23542305a2863321bef9e761bdf6b3e899a57a7" },
+  "runtimes": { "java": "org.openjdk.java.Sdk:25.0.5_8@sha256:e0e6bf207799725067178eca9c1df29a564d47a618319aae46b23ee72e821418" },
   "exports": {
     "scenebuilder": {
       "command": "${java}\\bin\\javaw.exe",
@@ -41,7 +41,7 @@
     ".fxml": { "command": "scenebuilder", "description": "FXML document", "icon": "SceneBuilder.ico" }
   },
   "sdk": {
-    "maven": "org.apache.maven:3.10.0@sha256:c5d44d3870fc590a71631ec41c31c00f8cc97f39e8ce2a44808bd1fb49ef159c",
+    "maven": "org.apache.maven:3.10.0@sha256:05d74d8cf97a8ad0adafb3594488d660a9aad616bf189ac17bea1b1d8cd73043",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [

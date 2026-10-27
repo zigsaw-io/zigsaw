@@ -13,7 +13,7 @@
     "-jar", "${app}\\lib\\gradle-gradle-cli-main-9.8.1.jar"
   ],
   "permissions": { "network": true, "filesystem": ["cwd"] },
-  "runtimes": { "java": "org.openjdk.java.Sdk:25.0.5_7-ea@sha256:e45ed698dd497b005fcace6cc23542305a2863321bef9e761bdf6b3e899a57a7" },
+  "runtimes": { "java": "org.openjdk.java.Sdk:25.0.5_8@sha256:e0e6bf207799725067178eca9c1df29a564d47a618319aae46b23ee72e821418" },
   "exports": {
     "gradle": {
       "command": "${java}\\bin\\java.exe",

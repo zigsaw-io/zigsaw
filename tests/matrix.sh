@@ -241,8 +241,13 @@ tool python
 in_each a.py 'print("hi")'
 expect ok ok ok "runs a script file" run $PY a.py
 expect ok "$(ac_if final-path-dos)" ok "realpath resolves cwd" run $PY -c 'import os, sys; sys.exit(os.path.realpath(".") != os.getcwd())'
-expect ok ok ok "https with system certs" run $PY -c 'import urllib.request as u; u.urlopen("https://example.com", timeout=20)'
-expect ok fails ok "network denied by --unshare" run --unshare=network $PY -c 'import urllib.request as u; u.urlopen("https://example.com", timeout=10)'
+# Python trusts the roots in Windows' store, which Windows fetches as its own
+# programs need them: a host whose root it hasn't yet fails (example.com, on
+# 2026-10-28). ghcr.io's is there wherever zigsaw pulls, as zig's std reads
+# the same store.
+ghcr_token='https://ghcr.io/token?scope=repository:zigsaw-io/org.python.python:pull'
+expect ok ok ok "https with system certs" run $PY -c "import urllib.request as u; u.urlopen('$ghcr_token', timeout=20)"
+expect ok fails ok "network denied by --unshare" run --unshare=network $PY -c "import urllib.request as u; u.urlopen('$ghcr_token', timeout=10)"
 expect fails fails fails "can't write into app dir" run $PY -c 'import os, sys; open(os.path.join(sys.prefix, "x.txt"), "w")'
 # Since Python 3.13, os.mkdir(path, 0o700), as tempfile makes its
 # directories, leaves an AppContainer out of the directory's permissions,

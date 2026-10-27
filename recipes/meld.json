@@ -26,7 +26,7 @@
     "gtk": "org.gtk.Gtk4:4.24.1@sha256:9a18362a2f85bc8852bdd1f71a8777d4afb981c93ebfb89f37ecebbffc878a4d",
     "gtk3": "org.gtk.Gtk3:3.24.52@sha256:76beb83cf2ffc1b8863b17731136cdbafb6a7a3c6646b3e71e9dbbffd476d51a",
     "pygobject": "org.gnome.PyGObject:3.58.1@sha256:68e29e6a862276ccb74208f7d674a9628cb3cc54f5932b75c38b6e958e15ed8e",
-    "git": "org.git_scm.MinGit:2.56.0.windows.1@sha256:636d59bc02546599b8f792e4461dcc87bac74d47b111096b6d1b0aa28af9313a"
+    "git": "org.git_scm.MinGit:2.56.0.windows.1@sha256:c6457f01e7e3a4c92a77c31d0c63c5ea72c4ce082123d3dfb11fdb1ef3796ec9"
   },
   "sdk": {
     "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2",

@@ -59,6 +59,32 @@
   the run says so, and the app reaches only the ports it uses. Two users'
   zigsaws changing the list at the same moment could undo each other's
   change, as the lock zigsaw takes for it is per session.
+- Apps trust the roots in Windows' certificate stores
+  ([certificate trust](networking.md#certificate-trust)), but not all of
+  them do:
+  - PHP's curl keeps its own bundle (`extras\ssl\cacert.pem`);
+  - Composer keeps its own, unless `SSL_CERT_FILE` names one;
+  - Perl keeps Mozilla::CA's;
+  - libpq's `sslrootcert=system` finds no roots at all, as OpenSSL looks
+    where PostgreSQL's SDK was built: name a file instead;
+  - BusyBox's `wget` doesn't check certificates.
+- `zig fetch` doesn't work at low integrity: zig's std can't open Windows'
+  roots there, as it asks to write them (`CertificateBundleLoadFailure`).
+  In an AppContainer, it needs `--share=network`, which zig's image
+  doesn't have.
+- Java's images trust the machine's roots in Windows' store. That leaves
+  out a root added for this user only, and a root Windows hasn't fetched
+  yet, which Temurin's `cacerts` (no longer used) may have had. Windows
+  fetches a missing root when its own programs check a chain, not when
+  Java or Python reads the store, as both do. On 2026-10-28, Java and
+  Python here failed on example.com, whose root (SSL.com TLS ECC Root CA
+  2022) Windows hadn't fetched, until a Windows program checks its chain
+  (Edge, or Windows' `curl.exe`). With `cacerts`, Java reached it. Node
+  adds Windows' roots to its own, so it does.
+- MinGit's image no longer reads Git for Windows' system config
+  (`C:\Program Files\Git\etc\gitconfig`), which its own config included.
+  What that config sets for this machine's git, such as `http.sslBackend`,
+  `http.proxy` or a credential helper, doesn't reach zigsaw's.
 - An app in a container that isn't exempt reaches only the ports it
   declares, on `localhost`: one given another port or host of its own
   bypasses the forward, and isn't reached. zigsaw makes each forwarded

@@ -9,7 +9,7 @@
   "args": ["-jar", "${app}\\pdfbox-app.jar"],
   "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "registry": ["Software\\JavaSoft\\Prefs\\org\\apache\\pdfbox"],
-  "runtimes": { "java": "org.openjdk.java:25.0.5_7-ea@sha256:4d05838bfe75a80fc0140a081fadf508a41504aa7dde26a9324b138f51217958" },
+  "runtimes": { "java": "org.openjdk.java:25.0.5_8@sha256:95555a36dec93c035655f66162ec5b557feaecb14c4cab3320a9181a93f1c823" },
   "exports": {
     "pdfbox": { "command": "${java}\\bin\\java.exe", "args": ["-jar", "${app}\\pdfbox-app.jar"] },
     "pdfbox-debugger": { "command": "${java}\\bin\\javaw.exe", "args": ["-jar", "${app}\\pdfbox-app.jar", "debug"] }
@@ -21,7 +21,7 @@
     ".pdf": { "command": "pdfbox-debugger", "description": "PDF document" }
   },
   "sdk": {
-    "maven": "org.apache.maven:3.10.0@sha256:c5d44d3870fc590a71631ec41c31c00f8cc97f39e8ce2a44808bd1fb49ef159c",
+    "maven": "org.apache.maven:3.10.0@sha256:05d74d8cf97a8ad0adafb3594488d660a9aad616bf189ac17bea1b1d8cd73043",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [

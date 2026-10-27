@@ -4,6 +4,8 @@ Designed 2026-10-26; the [decisions](#decisions) were taken the same day.
 Slices 0 to 2 were built in [iteration 50](iteration-50.md) (zigsaw
 0.50.0): the profile race, proxies, and services. Slice 3, reaching this
 machine from a container, in [iteration 51](iteration-51.md) (0.51.0).
+Slice 4, in [iteration 52](iteration-52.md): what AF_UNIX does, from the
+probe, and [certificate trust](#certificate-trust).
 The facts below are from a probe run unelevated on Windows 11 26300, now
 [`tests/netprobe.zig`](../tests/netprobe.zig), whose report
 [`tests/network.sh`](../tests/network.sh) prints, on Server 2025 in CI too.
@@ -46,7 +48,9 @@ passed only if a message went there and back.
 | a socket the host connected, handed to an AppContainer process | the container talks to the host's server |
 | `WSADuplicateSocket` into an AppContainer process that's already running | works |
 | an unconnected socket the host made, handed in | the container connects it to the host, and to the internet with no network capability |
-| AF_UNIX, between any two of host and containers | works, with no network capability. Only the socket file's ACL decides. Paths are limited to 108 bytes |
+| AF_UNIX, between the host and a container either way, or two containers (iteration 52) | works, with no network capability. Only the socket file's ACL decides, which it inherits from its directory: a client that may only read and execute it is refused (`10013`), as is a container not granted it at all |
+| AF_UNIX, from a low-integrity process to a socket a medium-integrity one made | refused (`10013`): connecting writes to the socket file, which has its directory's label (medium, by default). The host reaches a low-integrity server's socket, in a directory labelled low |
+| AF_UNIX paths | up to 108 bytes, all of `sun_path`, with no room for a NUL. PostgreSQL refuses a path of 108 or more |
 | a named pipe the host makes for one capability | opens only from a process that holds that capability |
 | `OpenProcess` for memory writes and handle duplication | allowed within one AppContainer, even with different capabilities. Denied across containers |
 | `CheckNetIsolation LoopbackExempt -a -p=<sid>`, unelevated (this account is in Administrators, with UAC's filtered token) | succeeded. The exempt container then reached the host, also through the LAN address. Connections into containers were still dropped |
@@ -63,7 +67,9 @@ Not tried yet:
 
 The probe's report has the exemption's rows since iteration 51
 (`exempt-set`, `exempt-to-host`, `exempt-no-caps`, `exempt-inbound`,
-`exempt-unset`), on a container of its own that it exempts and takes back.
+`exempt-unset`), on a container of its own that it exempts and takes back,
+and AF_UNIX's since iteration 52 (`unix-...`), in directories under `TEMP`
+whose ACLs it sets for each.
 
 So:
 
@@ -208,11 +214,27 @@ A placeholder for a socket directory in the store, granted to the serving
 app and to the apps that declare using it. PostgreSQL would listen there
 too (`unix_socket_directories`), and its clients would get `PGHOST`.
 
-- It needs no relay, no port and no exemption.
+- It needs no relay and no exemption.
 - It works only for programs that speak AF_UNIX. Clients outside zigsaw,
   such as a JDBC tool, still need the service.
 
-Later.
+Later: no app needs it yet, as services, forwards and the exemption close
+the gaps it would. What the probe found (iteration 52) and a design has to
+take in:
+
+- **PostgreSQL names its socket by its port.** The file is
+  `<dir>\.s.PGSQL.<port>`, with the `port` it listens on over TCP too.
+  Under `appcontainer`, that's the server's internal port, while another
+  app's client is told the declared port, or a relay's. It looks for
+  another file. The server's socket would need the port clients are told,
+  or clients the server's.
+- **Clients write.** Each app that uses a socket needs Modify on the
+  directory, not only read, and under `--sandbox=low` the directory needs
+  the low label, for a low-integrity client to reach a server's socket, or
+  a low-integrity server to make one.
+- **Paths are short.** `<store>\sockets\<app id>\.s.PGSQL.5432` is 82 bytes
+  in this account's default store, but the longest id published would make
+  it 114. A directory named by the service, or by a hash, fits.
 
 ### Proxies
 
@@ -226,6 +248,54 @@ open (decided). The builds' dead proxy would make tools that honour proxies
 fail fast there, but it would change the default sandbox for apps that work
 today: Meld's git push, for one.
 
+### Certificate trust
+
+Built in iteration 52. A network that inspects TLS has a root CA of its
+own, which its administrators add to Windows' trusted roots, for the
+machine. **Apps trust what Windows trusts.** Most images' TLS reads Windows'
+stores already; three images that didn't now do.
+
+| image | TLS | trusts |
+|---|---|---|
+| zigsaw itself, and zig's image (`zig fetch`) | zig's std | Windows' roots. At low integrity, zig's std can't open them, as it asks to write: `zig fetch` there fails with `CertificateBundleLoadFailure` |
+| GTK's runtime (libsoup), and the apps on it | glib-networking, with OpenSSL | Windows' roots and intermediates, read as glib-networking reads them (patched to read only, in iteration 12, for low integrity) |
+| Python, and PyGObject's | OpenSSL | Windows' (the `ssl` module's default context), and `SSL_CERT_FILE` |
+| MinGit, and Meld's git | Schannel | Windows'. **Changed:** MinGit's own `etc/gitconfig` included Git for Windows' system config, if this machine has Git for Windows, which can choose OpenSSL and its bundle. Its config no longer does, and says `http.sslBackend = schannel` |
+| Node, and Prettier | OpenSSL | its own list, and **now** Windows' too: `NODE_USE_SYSTEM_CA=1` in its image |
+| Java's images, and the apps on them | JSSE | **now** the machine's roots in Windows' store (`-Djavax.net.ssl.trustStoreType=Windows-ROOT-LOCALMACHINE`), instead of Temurin's `cacerts` |
+| Go, and zot | Go | Windows' |
+| Rust (cargo), CMake | curl, with Schannel | Windows' |
+| Qt's runtime, Flameshot, Notes | Schannel | Windows' |
+| VLC | GnuTLS | Windows' |
+| .NET's images, Files, Pinta | Schannel | Windows' |
+| PHP | OpenSSL | streams: Windows' (`openssl.cafile` isn't set). curl: its bundle, `extras\ssl\cacert.pem` (a known gap) |
+| Composer | PHP's | its own bundle, unless `SSL_CERT_FILE` names one (a known gap) |
+| PostgreSQL's libpq (psql, osm2pgsql) | OpenSSL | `sslrootcert`, by default `root.crt` in the app's data. `sslrootcert=system` finds no roots: OpenSSL looks where the build was, `B:\prefix\ssl` (a known gap) |
+| Perl | IO::Socket::SSL | Mozilla::CA's bundle, or `SSL_CERT_FILE`. Its image has no network |
+| BusyBox's `wget` | BusyBox's own | it doesn't check certificates at all. Its image has no network |
+
+The others (GDAL, TeX Live, ripgrep and the rest) make no TLS connections.
+
+- **Java has the machine's roots, not the user's.** `Windows-ROOT`, which
+  has both, can't be read at low integrity: the JDK opens the user's store
+  to write (`KeyStoreException: error 5`). A network's CA is the machine's.
+  In an AppContainer, reading the user's stores gave the machine's
+  certificates only anyway, to Java and to Node (Java: 57 roots there
+  against 58 outside, the 58th being in this account's own store).
+- **Java and Python trust only the roots Windows already has.** Windows
+  fetches a root it lacks when one of its own programs checks a chain;
+  Java and Python read the store, which doesn't. Java no longer has
+  `cacerts`'s other roots (decided knowing it): here, example.com's root
+  wasn't fetched yet, and Java and Python failed there where `cacerts` and
+  Node didn't. The 15 hosts checked from Java at low integrity verify,
+  Maven Central, Gradle's and GitHub's among them.
+- **Checked by [`tests/certs.sh`](../tests/certs.sh).** It makes a test CA
+  for the run, name-constrained to `localhost`, `127.0.0.0/8` and `::1`.
+  Every client must refuse its server until the CA is in the machine's
+  Trusted Root store, and then trust it under soft, low and appcontainer.
+  Adding it takes an administrator, so the trusted rows run on CI's
+  runners, which are elevated.
+
 ### Builds
 
 Unchanged. Enforcing no network would mean running build steps in an
@@ -237,9 +307,6 @@ initdb's `NUL` on Server 2025, and kpathsea's long names, among others.
 - Serving other machines.
 - Per-host rules (only `example.org`).
 - DNS.
-- Certificate trust. Each runtime has its own: Go, .NET, GLib and git with
-  Schannel use Windows' stores; OpenSSL and Node have their own. That's a
-  later audit, for networks that inspect TLS.
 
 ## Slices
 
@@ -254,7 +321,9 @@ initdb's `NUL` on Server 2025, and kpathsea's long names, among others.
 3. **Reaching this machine** (built in iteration 51): first the exemption,
    while the app's runs go, then forwards, with `uses` in recipes.
    Xdebug's and osm2pgsql's gaps closed.
-4. **Later:** AF_UNIX directories, and certificate trust.
+4. **AF_UNIX, and certificate trust** (built in iteration 52): AF_UNIX's
+   facts in the probe, for a design later, and the images that kept CAs of
+   their own trusting Windows' too.
 
 ## Decisions
 

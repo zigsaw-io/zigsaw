@@ -13,7 +13,7 @@
 # exempt from loopback isolation while it goes; without the network, or with
 # ZIGSAW_LOOPBACK_EXEMPTION=0, it doesn't; `repair` takes back a killed
 # run's exemption, and one you made stays. Last, the probe's report: what
-# this Windows lets AppContainers do on the loopback.
+# this Windows lets AppContainers do on the loopback, and over AF_UNIX.
 #
 #   bash tests/network.sh [path\to\zigsaw.exe]
 #

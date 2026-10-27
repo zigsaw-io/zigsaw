@@ -2065,7 +2065,7 @@ Both Java images set:
 
 ```json
 "JAVA_HOME": "${app}",
-"JAVA_TOOL_OPTIONS": "\"-Duser.home=${data}\\home\" -Dsun.font.layout.ffm=false"
+"JAVA_TOOL_OPTIONS": "\"-Duser.home=${data}\\home\" -Dsun.font.layout.ffm=false -Djavax.net.ssl.trustStoreType=Windows-ROOT-LOCALMACHINE"
 ```
 
 - `user.home`: Java takes it from `SHGetKnownFolderPath`, which a run's
@@ -2077,6 +2077,12 @@ Both Java images set:
 - `sun.font.layout.ffm=false`: JDK 25 shapes text with HarfBuzz through its
   foreign function interface, which can't find the C runtime in an
   AppContainer; this uses its other binding, through JNI, in every sandbox.
+- `javax.net.ssl.trustStoreType=Windows-ROOT-LOCALMACHINE`: TLS trusts the
+  machine's roots in Windows' store, as Windows' own programs do, rather
+  than Temurin's `cacerts`, so a root a network's administrators add is
+  trusted ([certificate trust](networking.md#certificate-trust)).
+  `Windows-ROOT`, which has the user's own roots too, can't be read at low
+  integrity: the JDK opens the user's store to write.
 
 Apps that keep settings with `java.util.prefs` keep them in
 `HKCU\Software\JavaSoft\Prefs\<their package>`: a recipe names that key in
@@ -2092,7 +2098,7 @@ windowless shim:
 ```json
 "command": "${java}\\bin\\java.exe",
 "args": ["-jar", "${app}\\pdfbox-app.jar"],
-"runtimes": { "java": "org.openjdk.java:25.0.5@sha256:..." },
+"runtimes": { "java": "org.openjdk.java:25.0.5_8@sha256:..." },
 "exports": {
   "pdfbox": { "command": "${java}\\bin\\java.exe", "args": ["-jar", "${app}\\pdfbox-app.jar"] },
   "pdfbox-debugger": { "command": "${java}\\bin\\javaw.exe", "args": ["-jar", "${app}\\pdfbox-app.jar", "debug"] }

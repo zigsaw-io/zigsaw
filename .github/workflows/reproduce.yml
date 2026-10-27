@@ -283,6 +283,17 @@ jobs:
           OSM2PGSQL_HOME: ${{ runner.temp }}\store
         run: bash tests/osm2pgsql.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/osm2pgsql.txt"
 
+      # Which apps trust a root CA added to Windows, as a network that
+      # inspects TLS adds one, in the seeded store: the suite makes a test CA
+      # for the run, and as the runner is elevated, adds it to
+      # LocalMachine\Root and takes it out after.
+      - name: tests/certs.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CERTS_HOME: ${{ runner.temp }}\store
+        run: bash tests/certs.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/certs.txt"
+
       # Last, in the seeded store, whose apps it runs: it changes their data.
       - name: tests/matrix.sh
         if: ${{ !cancelled() }}

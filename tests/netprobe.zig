@@ -30,6 +30,27 @@
 //!                           handed in: the container connects it to the
 //!                           host, which is why zigsaw never hands one in
 //!
+//! Then AF_UNIX, each check in a directory of its own under TEMP, which
+//! gives containers nothing but what the check grants them (Modify, on the
+//! directory and what's made in it, unless it says read):
+//!
+//!   unix-host-to-container       a container connects to a host server's
+//!                                socket
+//!   unix-container-to-host       the host connects to a container's
+//!   unix-container-to-container  between two containers granted the
+//!                                directory, neither with a network
+//!                                capability
+//!   unix-not-granted             from a container that isn't granted it
+//!   unix-read-only               from one granted only read and execute:
+//!                                whether connecting needs more
+//!   unix-low-to-host             from a low-integrity process to a host
+//!                                server's socket, in a directory with no
+//!                                label of its own (medium)
+//!   unix-host-to-low             from the host to a low-integrity server's,
+//!                                in a directory labelled low
+//!   unix-path-107, unix-path-108 the host to itself at a path that many
+//!                                bytes long (sun_path has 108)
+//!
 //! Then the loopback exemption, on a third container (.c), which the probe
 //! exempts and takes back after:
 //!
@@ -74,7 +95,8 @@ pub fn main(init: std.process.Init) !u8 {
     defer out.flush() catch {};
 
     if (std.mem.eql(u8, mode, "report")) {
-        try report(arena, init.io, out);
+        const temp = init.environ_map.get("TEMP") orelse return error.NoTemp;
+        try report(arena, init.io, temp, out);
         return 0;
     }
     if (std.mem.eql(u8, mode, "serve") and args.len == 3) return serve(out, try port(args[2]));
@@ -98,6 +120,8 @@ pub fn main(init: std.process.Init) !u8 {
     if (args.len == 3 and std.mem.eql(u8, mode, "_accept")) return exitCode(acceptAndPong(try socket(args[2]), 2 * timeout_ms));
     if (args.len == 3 and std.mem.eql(u8, mode, "_ping")) return exitCode(ping(try socket(args[2])));
     if (args.len == 4 and std.mem.eql(u8, mode, "_connect-socket")) return exitCode(connectSocket(try socket(args[2]), try port(args[3])));
+    if (args.len == 3 and std.mem.eql(u8, mode, "_unix-listen")) return exitCode(unixListenAndPong(args[2]));
+    if (args.len == 3 and std.mem.eql(u8, mode, "_unix-connect")) return exitCode(unixConnectAndPing(args[2]));
     return usage();
 }
 
@@ -192,6 +216,34 @@ fn connectSocket(s: SOCKET, p: u16) c_int {
     return ping(s);
 }
 
+/// An AF_UNIX socket bound at `path` and listening, or the error.
+fn unixListenAndPong(path: []const u8) c_int {
+    const address = unixAddress(path) orelse return win32.WSAEINVAL;
+    const s = win32.WSASocketW(win32.AF_UNIX, win32.SOCK_STREAM, 0, null, 0, 0);
+    if (s == win32.INVALID_SOCKET) return win32.WSAGetLastError();
+    defer _ = win32.closesocket(s);
+    if (win32.bind(s, &address, @sizeOf(win32.sockaddr_un)) != 0) return win32.WSAGetLastError();
+    if (win32.listen(s, 1) != 0) return win32.WSAGetLastError();
+    return acceptAndPong(s, 2 * timeout_ms);
+}
+
+fn unixConnectAndPing(path: []const u8) c_int {
+    const address = unixAddress(path) orelse return win32.WSAEINVAL;
+    const s = win32.WSASocketW(win32.AF_UNIX, win32.SOCK_STREAM, 0, null, 0, 0);
+    if (s == win32.INVALID_SOCKET) return win32.WSAGetLastError();
+    defer _ = win32.closesocket(s);
+    if (win32.connect(s, &address, @sizeOf(win32.sockaddr_un)) != 0) return win32.WSAGetLastError();
+    return ping(s);
+}
+
+/// `path` as an address; null if it doesn't fit, NUL or not.
+fn unixAddress(path: []const u8) ?win32.sockaddr_un {
+    var a: win32.sockaddr_un = .{};
+    if (path.len > a.path.len) return null;
+    @memcpy(a.path[0..path.len], path);
+    return a;
+}
+
 /// The 4-byte message that came, or the error.
 fn receive4(s: SOCKET, buf: *[4]u8) c_int {
     const t: DWORD = timeout_ms;
@@ -227,10 +279,12 @@ fn pong(s: SOCKET) c_int {
 
 const Where = union(enum) {
     host,
+    /// The host's user at low integrity, as `--sandbox=low` runs.
+    low,
     container: struct { profile: usize, network: bool },
 };
 
-fn report(arena: std.mem.Allocator, io: std.Io, out: *std.Io.Writer) !void {
+fn report(arena: std.mem.Allocator, io: std.Io, temp: []const u8, out: *std.Io.Writer) !void {
     var sids: [profiles.len]win32.PSID = undefined;
     for (&sids, profiles) |*sid, name| sid.* = try profile(arena, name);
     defer for (profiles) |name| {
@@ -242,7 +296,7 @@ fn report(arena: std.mem.Allocator, io: std.Io, out: *std.Io.Writer) !void {
         if (win32.ConvertStringSidToSidW(try win32.wide(arena, s), &sid) == 0) return error.BadSid;
         c.* = .{ .Sid = sid.?, .Attributes = win32.SE_GROUP_ENABLED };
     }
-    const ctx: Spawner = .{ .arena = arena, .sids = &sids, .network_caps = &caps };
+    const ctx: Spawner = .{ .arena = arena, .sids = &sids, .network_caps = &caps, .low_token = try lowToken(arena) };
 
     const a: Where = .{ .container = .{ .profile = 0, .network = false } };
     const a_net: Where = .{ .container = .{ .profile = 0, .network = true } };
@@ -256,9 +310,101 @@ fn report(arena: std.mem.Allocator, io: std.Io, out: *std.Io.Writer) !void {
     try out.print("handed-connected {f}\n", .{try ctx.handedConnected(a)});
     try out.print("handed-unconnected {f}\n", .{try ctx.handedUnconnected(a)});
     try out.flush();
+    // A directory it couldn't make or grant leaves out the rows after, not
+    // the report's others.
+    unixRows(ctx, io, temp, out) catch |err| try out.print("unix rows stopped: {t}\n", .{err});
+    try out.flush();
     try exemptRows(ctx, io, out);
     try out.flush();
     try profileRace(arena, out);
+}
+
+/// The AF_UNIX rows, in directories under `temp` that it deletes after.
+fn unixRows(s: Spawner, io: std.Io, temp: []const u8, out: *std.Io.Writer) !void {
+    const base = try std.fmt.allocPrint(s.arena, "{s}\\zigsaw-netprobe-unix", .{temp});
+    std.Io.Dir.cwd().deleteTree(io, base) catch {};
+    try makeDir(s.arena, base);
+    defer std.Io.Dir.cwd().deleteTree(io, base) catch {};
+    const a: Where = .{ .container = .{ .profile = 0, .network = false } };
+    const b: Where = .{ .container = .{ .profile = 1, .network = false } };
+    const modify = win32.FILE_MODIFY | win32.FILE_GENERIC_READ_EXECUTE;
+    const read = win32.FILE_GENERIC_READ_EXECUTE;
+
+    try out.print("unix-host-to-container {f}\n", .{try s.unixPair(try s.unixDir(base, "1", &.{.{ 0, modify }}, false), .host, a)});
+    try out.print("unix-container-to-host {f}\n", .{try s.unixPair(try s.unixDir(base, "2", &.{.{ 0, modify }}, false), a, .host)});
+    try out.print("unix-container-to-container {f}\n", .{try s.unixPair(try s.unixDir(base, "3", &.{ .{ 0, modify }, .{ 1, modify } }, false), a, b)});
+    try out.print("unix-not-granted {f}\n", .{try s.unixPair(try s.unixDir(base, "4", &.{.{ 0, modify }}, false), a, b)});
+    try out.print("unix-read-only {f}\n", .{try s.unixPair(try s.unixDir(base, "5", &.{ .{ 0, modify }, .{ 1, read } }, false), a, b)});
+    try out.print("unix-low-to-host {f}\n", .{try s.unixPair(try s.unixDir(base, "6", &.{}, false), .host, .low)});
+    try out.print("unix-host-to-low {f}\n", .{try s.unixPair(try s.unixDir(base, "7", &.{}, true), .low, .host)});
+    const dir = try s.unixDir(base, "8", &.{}, false);
+    for ([_]usize{ 107, 108 }) |len| {
+        // `<dir>\` and a name of x's, `len` bytes in all.
+        if (dir.len + 2 > len) {
+            try out.print("unix-path-{d} not tried: TEMP is too long\n", .{len});
+            continue;
+        }
+        const name = try s.arena.alloc(u8, len - dir.len - 1);
+        @memset(name, 'x');
+        const at = try std.fmt.allocPrint(s.arena, "{s}\\{s}", .{ dir, name });
+        const outcome = try s.unixPairAt(at, .host, .host);
+        try out.print("unix-path-{d} {f}\n", .{ len, outcome });
+    }
+}
+
+fn makeDir(arena: std.mem.Allocator, path: []const u8) !void {
+    if (win32.CreateDirectoryW(try win32.wide(arena, path), null) == 0) return error.MakeDir;
+}
+
+/// Adds an allow ACE for `sid` to `path`'s DACL, which the directory's
+/// files and subdirectories inherit.
+fn grant(arena: std.mem.Allocator, path: []const u8, sid: win32.PSID, access: DWORD) !void {
+    const path_w = try win32.wide(arena, path);
+    var sd: ?*anyopaque = null;
+    var dacl: ?*win32.ACL = null;
+    if (win32.GetNamedSecurityInfoW(path_w, win32.SE_FILE_OBJECT, win32.DACL_SECURITY_INFORMATION, null, null, &dacl, null, &sd) != 0) return error.Acl;
+    defer _ = win32.LocalFree(sd);
+    var entries = [1]win32.EXPLICIT_ACCESS_W{.{
+        .grfAccessPermissions = access,
+        .grfAccessMode = win32.GRANT_ACCESS,
+        .grfInheritance = win32.SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+        .Trustee = .{ .ptstrName = sid },
+    }};
+    var new: ?*win32.ACL = null;
+    if (win32.SetEntriesInAclW(1, &entries, dacl, &new) != 0) return error.Acl;
+    defer _ = win32.LocalFree(new);
+    if (win32.SetNamedSecurityInfoW(path_w, win32.SE_FILE_OBJECT, win32.DACL_SECURITY_INFORMATION, null, null, new, null) != 0) return error.Acl;
+}
+
+/// Labels `path` low integrity, with NO_WRITE_UP, as `--sandbox=low` labels
+/// a writable grant; what's made in it inherits the label.
+fn labelLow(arena: std.mem.Allocator, path: []const u8) !void {
+    var low: ?win32.PSID = null;
+    if (win32.ConvertStringSidToSidW(try win32.wide(arena, win32.low_integrity_sid), &low) == 0) return error.BadSid;
+    const size = @sizeOf(win32.ACL) + @sizeOf(win32.ACCESS_ALLOWED_ACE) + win32.GetLengthSid(low.?);
+    const buf = try arena.alignedAlloc(u8, .of(u64), size);
+    const sacl: *win32.ACL = @ptrCast(buf.ptr);
+    if (win32.InitializeAcl(sacl, @intCast(size), win32.ACL_REVISION) == 0) return error.Acl;
+    const inherit = win32.OBJECT_INHERIT_ACE | win32.CONTAINER_INHERIT_ACE;
+    if (win32.AddMandatoryAce(sacl, win32.ACL_REVISION, inherit, win32.SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, low.?) == 0) return error.Acl;
+    if (win32.SetNamedSecurityInfoW(try win32.wide(arena, path), win32.SE_FILE_OBJECT, win32.LABEL_SECURITY_INFORMATION, null, null, null, sacl) != 0) return error.Acl;
+}
+
+/// A copy of our token at low integrity, as process.zig's
+/// lowIntegrityToken makes for `--sandbox=low`.
+fn lowToken(arena: std.mem.Allocator) !win32.HANDLE {
+    var own: ?win32.HANDLE = null;
+    const access = win32.TOKEN_ASSIGN_PRIMARY | win32.TOKEN_DUPLICATE | win32.TOKEN_QUERY | win32.TOKEN_ADJUST_DEFAULT;
+    if (win32.OpenProcessToken(win32.GetCurrentProcess(), access, &own) == 0) return error.Token;
+    defer _ = win32.CloseHandle(own.?);
+    var low: ?win32.HANDLE = null;
+    if (win32.DuplicateTokenEx(own.?, 0, null, win32.SecurityImpersonation, win32.TokenPrimary, &low) == 0) return error.Token;
+    var sid: ?win32.PSID = null;
+    if (win32.ConvertStringSidToSidW(try win32.wide(arena, win32.low_integrity_sid), &sid) == 0) return error.BadSid;
+    const label: win32.TOKEN_MANDATORY_LABEL = .{ .Label = .{ .Sid = sid.?, .Attributes = win32.SE_GROUP_INTEGRITY } };
+    if (win32.SetTokenInformation(low.?, win32.TokenIntegrityLevel, &label, @sizeOf(win32.TOKEN_MANDATORY_LABEL) + win32.GetLengthSid(sid.?)) == 0)
+        return error.Token;
+    return low.?;
 }
 
 /// The loopback exemption's rows, on container c, which ends as it started:
@@ -330,6 +476,34 @@ const Spawner = struct {
     arena: std.mem.Allocator,
     sids: []const win32.PSID,
     network_caps: []win32.SID_AND_ATTRIBUTES,
+    low_token: win32.HANDLE,
+
+    /// A container's profile, and what it's granted.
+    const Grant = struct { usize, DWORD };
+
+    /// `<base>\<name>`, made with `grants` for the profiles' containers, and
+    /// labelled low if `low`.
+    fn unixDir(s: Spawner, base: []const u8, name: []const u8, grants: []const Grant, low: bool) ![]const u8 {
+        const dir = try std.fmt.allocPrint(s.arena, "{s}\\{s}", .{ base, name });
+        try makeDir(s.arena, dir);
+        for (grants) |g| try grant(s.arena, dir, s.sids[g[0]], g[1]);
+        if (low) try labelLow(s.arena, dir);
+        return dir;
+    }
+
+    /// An AF_UNIX listener and connector, on a socket in `dir`.
+    fn unixPair(s: Spawner, dir: []const u8, listener_at: Where, connector_at: Where) !Outcome {
+        return s.unixPairAt(try std.fmt.allocPrint(s.arena, "{s}\\s", .{dir}), listener_at, connector_at);
+    }
+
+    fn unixPairAt(s: Spawner, path: []const u8, listener_at: Where, connector_at: Where) !Outcome {
+        const listener = try s.spawn(listener_at, null, try std.fmt.allocPrint(s.arena, "_unix-listen \"{s}\"", .{path}));
+        win32.Sleep(500);
+        const connector = try s.spawn(connector_at, null, try std.fmt.allocPrint(s.arena, "_unix-connect \"{s}\"", .{path}));
+        const code = finish(connector, 3 * timeout_ms);
+        _ = finish(listener, if (code == 0) timeout_ms else 0);
+        return .{ .code = code };
+    }
 
     /// A listener and a connector of their own: the connector's outcome.
     fn pair(s: Spawner, listener_at: Where, connector_at: Where) !Outcome {
@@ -392,8 +566,8 @@ const Spawner = struct {
         return .{ .code = code };
     }
 
-    /// Starts this program with `args`, on the host or in a container, with
-    /// `inherit` as its only inherited handle.
+    /// Starts this program with `args`, on the host, at low integrity or in
+    /// a container, with `inherit` as its only inherited handle.
     fn spawn(s: Spawner, at: Where, inherit: ?SOCKET, args: []const u8) !win32.HANDLE {
         const arena = s.arena;
         const self = try win32.selfExePath(arena);
@@ -406,7 +580,7 @@ const Spawner = struct {
         const attrs = try arena.alignedAlloc(u8, .of(usize), size);
         if (win32.InitializeProcThreadAttributeList(attrs.ptr, @max(attr_count, 1), 0, &size) == 0) return error.Spawn;
         switch (at) {
-            .host => {},
+            .host, .low => {},
             .container => |c| {
                 security = .{
                     .AppContainerSid = s.sids[c.profile],
@@ -429,7 +603,12 @@ const Spawner = struct {
             .lpAttributeList = attrs.ptr,
         };
         var info: win32.PROCESS_INFORMATION = undefined;
-        if (win32.CreateProcessW(null, command_line.ptr, null, null, @intFromBool(inherit != null), win32.EXTENDED_STARTUPINFO_PRESENT, null, null, &startup.StartupInfo, &info) == 0) {
+        const inherits = @intFromBool(inherit != null);
+        const started = if (at == .low)
+            win32.CreateProcessAsUserW(s.low_token, null, command_line.ptr, null, null, inherits, win32.EXTENDED_STARTUPINFO_PRESENT, null, null, &startup.StartupInfo, &info)
+        else
+            win32.CreateProcessW(null, command_line.ptr, null, null, inherits, win32.EXTENDED_STARTUPINFO_PRESENT, null, null, &startup.StartupInfo, &info);
+        if (started == 0) {
             std.debug.print("starting the probe in {t}: error {d}\n", .{ at, win32.GetLastError() });
             return error.Spawn;
         }

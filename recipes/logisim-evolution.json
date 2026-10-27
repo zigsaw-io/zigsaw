@@ -9,7 +9,7 @@
   "args": ["--enable-native-access=ALL-UNNAMED", "-jar", "${app}\\logisim-evolution.jar"],
   "permissions": { "filesystem": ["cwd", "desktop", "documents", "downloads"] },
   "registry": ["Software\\JavaSoft\\Prefs\\com\\cburch\\logisim"],
-  "runtimes": { "java": "org.openjdk.java:25.0.5_7-ea@sha256:4d05838bfe75a80fc0140a081fadf508a41504aa7dde26a9324b138f51217958" },
+  "runtimes": { "java": "org.openjdk.java:25.0.5_8@sha256:95555a36dec93c035655f66162ec5b557feaecb14c4cab3320a9181a93f1c823" },
   "exports": {
     "logisim": { "command": "${java}\\bin\\java.exe", "args": ["--enable-native-access=ALL-UNNAMED", "-jar", "${app}\\logisim-evolution.jar"] },
     "logisim-gui": { "command": "${java}\\bin\\javaw.exe", "args": ["--enable-native-access=ALL-UNNAMED", "-jar", "${app}\\logisim-evolution.jar"] }
@@ -21,7 +21,7 @@
     ".circ": { "command": "logisim-gui", "description": "Logisim circuit", "icon": "Logisim-evolution.ico" }
   },
   "sdk": {
-    "gradle": "org.gradle.gradle:9.8.1@sha256:3e65c987c3cc6c7bcb271f41984976197cf3a7770ca2ce5d6099dd20f4587912",
+    "gradle": "org.gradle.gradle:9.8.1@sha256:8050cb2afa977601b0969f067a1eb460c3f5fa147911bd599c89307136b843c8",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [
