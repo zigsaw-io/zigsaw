@@ -84,8 +84,13 @@ exit code. Closing the terminal gives the app the usual time to clean up.
 Whatever the app leaves running then ends with the run, even processes it
 started detached.
 
-**`--sandbox=low`** runs the app at low integrity, with a copy of your token
-that Windows lets any program make of its own. The app can then write only
+Which sandbox a run gets: the one its `--sandbox` names, else the app's
+overrides', else the store-wide overrides' (`override --global`), else the
+one the app's image asks for (`permissions.sandbox`), else `low`.
+`--sandbox=soft` enforces nothing beyond the environment above.
+
+**`--sandbox=low`**, the default, runs the app at low integrity, with a copy
+of your token that Windows lets any program make of its own. The app can then write only
 where the integrity label is low: zigsaw labels its data directory, and the
 host paths it may write (`cwd`, your folders and `--filesystem` paths without
 `:ro`). It
@@ -97,7 +102,13 @@ runs works this way, including git, npm and zig builds.
   program can write there, not only the app. Taking a label back keeps the
   labels other apps' runs need, and labels zigsaw didn't make.
 - zigsaw won't label a drive's root, your user profile, or a directory your
-  profile is in; grant a directory inside it, or read-only access.
+  profile is in. A run from one of them, of an app with `cwd`, gets its
+  working directory read-only, with a warning; a path granted with
+  `--filesystem` there is refused: grant a directory inside it, or
+  read-only access.
+- The data directory is labelled on the app's first low run, and stays so;
+  a working directory inside it, as a shortcut's (the app's home), needs
+  nothing more.
 - The first label of a large tree takes a while, as Windows labels every
   file below it: about 2 s for 20,000 files.
 
@@ -135,7 +146,8 @@ What a run is granted on host paths, low labels and ACL entries, stays only
 while a run of the app with nothing on its command line would be granted it
 again:
 
-- under the sandbox its overrides choose (`soft` grants nothing);
+- under the sandbox such a run gets ([above](#how-it-works)): its
+  overrides', or its image's, or `low` (`soft` grants nothing);
 - for the paths and folders its permissions and overrides name;
 - for each working directory such runs had, while it keeps `cwd`, so that a
   big project isn't granted again on every run.
@@ -149,7 +161,10 @@ last one ends. `zigsaw rm` takes back everything, and `zigsaw repair` what
 an earlier zigsaw kept until `rm`. A run that didn't end (zigsaw was killed)
 leaves its grants until the app's next run ends.
 
-So to keep a folder granted, save the sandbox too: `zigsaw override
---sandbox=low <app>`. A sandbox given only on the command line grants the
-app's folders afresh on each run, and takes them back after, which takes a
-while for a big folder.
+So a folder an app may write stays labelled low while the app is installed
+with the permission, and each directory it ran in while it keeps `cwd`: any
+low-integrity program may write there meanwhile. To keep an
+`appcontainer` grant, save that sandbox: `zigsaw override
+--sandbox=appcontainer <app>`. A sandbox given only on the command line
+grants the app's folders afresh on each run, and takes them back after,
+which takes a while for a big folder.

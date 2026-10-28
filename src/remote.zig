@@ -178,7 +178,7 @@ fn agree(ctx: *Context, manifest: oci.Manifest, cfg: oci.AppConfig, opts: FetchO
             return;
         }
         try w.print("{s} {s} may reach more than {s}:\n", .{ cfg.id, cfg.version, before.version });
-        if (added.permissions.network or added.permissions.filesystem.len > 0)
+        if (added.permissions.sandbox != null or added.permissions.network or added.permissions.filesystem.len > 0)
             try info.writeLine(w, "permits", try oci.describePermissions(arena, added.permissions));
         if (added.uses.len > 0)
             try info.writeLine(w, "uses", try oci.describeUses(arena, added.uses));

@@ -100,6 +100,9 @@ zigsaw logout <registry>               delete a registry's saved login
 zigsaw run [options] <app-id> [args]   run an installed app
 zigsaw list                            list installed apps, their commands and shortcuts,
                                        and the kinds of file they open
+zigsaw override [options] <app-id>     save run options that every run of the app gets;
+                                       --show shows them, --reset removes them
+zigsaw override [options] --global     the same for every app, below each app's own
 zigsaw update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
                                        one pulled again that may reach more asks first,
                                        unless given --yes
@@ -361,7 +364,7 @@ to finish.
 | Option | Effect |
 |---|---|
 | `--command=<name>` | Run one of the app's exported commands, or another executable or batch file from the app's PATH (its aliases included) or System32 (e.g. `--command=cmd`), or one of yours by its absolute path |
-| `--sandbox=soft\|low\|appcontainer` | `soft` (default) shapes the environment only; `low` also keeps the app from writing anywhere but its data directory and the paths granted; `appcontainer` enforces all permissions |
+| `--sandbox=soft\|low\|appcontainer` | `low` (the default, unless the app's image asks for another) keeps the app from writing anywhere but its data directory and the paths granted; `soft` shapes the environment only; `appcontainer` enforces all permissions ([sandboxes](#sandboxes)) |
 | `--filesystem=<location>[:ro]` | Grant access to a host location: `cwd`, an absolute path, or one of [your folders](#your-folders) (`desktop`, `documents`, `downloads`, `music`, `pictures`, `videos`); for a location the app has a permission for already, this one replaces it (`documents:ro`) |
 | `--nofilesystem=<location>` | Take away access that the app's permissions or its overrides give to a location |
 | `--file=<path>` | Have the app open a file of yours: grants it that file, to read and write, and adds the file's path to the app's arguments (see [below](#opening-a-file)) |
@@ -372,6 +375,40 @@ to finish.
 | `--ephemeral` | Use a fresh data directory, deleted after the run |
 | `-v`, `--verbose` | Print the resolved command, environment and grants |
 
+### Sandboxes
+
+Every run has the app's own environment and data directory. What else
+keeps it in is the run's sandbox:
+
+- **`low`**, the default: the app runs at low integrity, so it writes only
+  its data directory and what its permissions let it write, which zigsaw
+  labels low integrity (the first time takes a while for a big folder). It
+  reads what you can, and has the network whatever its permissions say.
+- **`soft`**: nothing is enforced; the app writes wherever you can.
+- **`appcontainer`**: every permission is enforced, reading and the network
+  too, in an AppContainer of the app's own.
+
+An image may ask for another sandbox than low: Kanboard's asks for `soft`,
+as PHP can't tell it may write its data at low integrity, which `pull` and
+`info` show. Your overrides choose over the image, and a run's `--sandbox`
+over both: `zigsaw override --sandbox=soft <app>` for one app, `zigsaw
+override --global --sandbox=soft` for every app ([below](#changing-an-apps-options)).
+
+Low integrity won't label your user profile, a folder that holds it, or a
+drive's root, as every low-integrity program could then write anywhere in
+it. An app that may write its working directory, run from one of those,
+gets it read-only for that run, with a warning: `node` from your home
+folder reads it, and `npm init` there can't write `package.json`. Run it
+from a folder inside, or with `--sandbox=soft`.
+
+What a low run labels stays labelled while the app may write it, so that
+its next runs don't label it again ([how long grants last](docs/how-it-works.md#how-long-grants-last)):
+each working directory of an app with `cwd`, and your folders that apps
+name, such as Documents. Any low-integrity program may write a labelled
+folder, not only the app; give the app the folder `:ro`, or take it away
+with `--nofilesystem`, if you'd rather not. [Known gaps](docs/gaps.md) has
+what doesn't work at low integrity.
+
 ### Opening a file
 
 `--file` is for handing an app one document, wherever it is, without giving
@@ -379,16 +416,17 @@ it the folder the document is in:
 
 ```powershell
 zigsaw run --file=notes.rnote com.github.flxzt.rnote
-zigsaw run --sandbox=low --file=D:\docs\todo.txt org.gnome.TextEditor
+zigsaw run --file=D:\docs\todo.txt org.gnome.TextEditor
 ```
 
 - The path may be relative to where you are; the app gets it absolute, after
   its other arguments, as its own working directory may be elsewhere.
-- Under `soft` nothing more happens. Under `low`, that file alone is
-  labelled low integrity, so the app can save it; under `appcontainer`, the
-  app is granted that file alone, until the app's last run ends: a second
-  run that hands the file to a first one, as Text Editor's does, leaves the
-  first able to save it ([how long grants last](#how-long-grants-last)).
+- Under `low`, that file alone is labelled low integrity, so the app can
+  save it; under `appcontainer`, the app is granted that file alone; under
+  `soft` nothing more happens. The label or grant lasts until the app's last
+  run ends: a second run that hands the file to a first one, as Text
+  Editor's does, leaves the first able to save it
+  ([how long grants last](docs/how-it-works.md#how-long-grants-last)).
 - The file has to exist, and be a file: `--filesystem` grants a directory.
 - With only the file, an app can't make other files next to it. One that
   saves by writing a temporary file there and renaming it has to fall back
@@ -473,12 +511,12 @@ zigsaw override --nofilesystem=documents org.gnome.TextEditor
   app's file dialogs, by its name, and pinned in their Quick access, which
   the dialogs keep in the app's profile. A folder it may not use isn't
   there at all, and its link goes when the permission does.
-- Under `soft` that's all. Under `low`, a folder the app may write is
-  labelled low integrity, and under `appcontainer` it's granted, as any
-  host path would be ([how it works](#how-it-works)): for everything in
-  it, while the app's permissions or overrides give it the folder under
-  that sandbox ([how long grants last](#how-long-grants-last)), and the
-  first time takes a while for a big folder.
+- Under `low`, a folder the app may write is labelled low integrity, and
+  under `appcontainer` it's granted, as any host path would be
+  ([how it works](docs/how-it-works.md)): for everything in it, while the
+  app's permissions or overrides give it the folder under that sandbox
+  ([how long grants last](docs/how-it-works.md#how-long-grants-last)), and
+  the first time takes a while for a big folder. Under `soft` that's all.
   A low label lets every low-integrity program write there, not only the
   app; if you'd rather not, give the app the folder `:ro`, or take it away
   with `--nofilesystem`.
@@ -682,8 +720,8 @@ including runs through its commands on PATH. It takes the same options as
 `run`, except `--command`:
 
 ```powershell
-zigsaw override --sandbox=appcontainer com.github.BurntSushi.ripgrep   # rg is always sandboxed
-zigsaw override --sandbox=low org.nodejs.node                          # node writes only its data and cwd
+zigsaw override --sandbox=appcontainer com.github.BurntSushi.ripgrep   # rg reads only what it may
+zigsaw override --sandbox=soft org.nodejs.node                         # node writes anywhere, as before 0.54
 zigsaw override --filesystem=D:\src org.nodejs.node                    # node can use D:\src
 zigsaw override --filesystem=documents:ro org.videolan.VLC             # VLC reads your Documents
 zigsaw override --nofilesystem=downloads org.videolan.VLC              # but not your Downloads
@@ -700,12 +738,23 @@ still win for that run. Overrides are kept when an app is updated, rebuilt or
 removed, and `zigsaw rm --delete-data` deletes them with the app's data.
 `zigsaw list` shows them.
 
+`--global` in place of an app saves options for every app, below each
+app's own overrides, and over what apps' images ask for:
+
+```powershell
+zigsaw override --global --sandbox=soft   # every app writes anywhere, as before 0.54
+zigsaw override --global                  # what's saved
+zigsaw override --global --reset          # remove them
+```
+
+They're kept in the store's `overrides.json`.
+
 ## Testing
 
 ```bash
 zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash, network)
-bash tests/sandbox.sh   # what the low and appcontainer sandboxes change on the host, how long it lasts, and rm undoes; --file; your folders (fake ones); registry keys kept with an app
+bash tests/sandbox.sh   # which sandbox a run gets (low by default, the image's, store-wide and app overrides); what the low and appcontainer sandboxes change on the host, how long it lasts, and rm undoes; a working directory low won't label, read-only; --file; your folders (fake ones); registry keys kept with an app
 bash tests/network.sh   # an app's service reached from the host in each sandbox, on its port, one --port or an override moves it to, and not after the run; in an AppContainer, an internal port the app's runs agree on and reach each other on without the network, and a port another program holds; an AppContainer run with the network exempt from loopback isolation while it goes (not without the network, nor with ZIGSAW_LOOPBACK_EXEMPTION=0), a killed run's exemption taken back by repair, one you made kept; a port the app uses reached directly, or through zigsaw's forward when not exempt, and --port moving it; proxy variables passed to runs with the network; eight first AppContainer runs at once; the probe's report of what Windows lets AppContainers do on the loopback and over AF_UNIX (tests/netprobe.zig)
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
@@ -716,7 +765,7 @@ bash tests/gtk3.sh      # a GTK 3 app built against GTK 3's SDK and GTK's, on bo
 bash tests/texlive.sh   # TeX Live: pdfLaTeX, XeLaTeX and LuaLaTeX with fonts found by name and formats made on first use in the data directory, BibTeX, MakeIndex, Biber, MetaPost, latexmk on Perl's image, epstopdf and ps2pdf on Ghostscript's, reproducible PDFs, at low integrity too; the AppContainer row is a known gap where Windows hides the drive root (needs TEXLIVE_HOME or BUILD_HOME)
 bash tests/postgresql.sh # PostgreSQL's server in each sandbox, its cluster made on first use with a password its clients find; TLS, pgcrypto, ICU collations, lz4 and zstd, XML, PL/Perl and PL/Python and errors raised through them, a dump restored, a zstd backup, pg_ctl stopping it from another run, plperl.on_init, the pgvector, pg_cron and PostGIS extension images joining (an HNSW index, a job every second, a point transformed with PROJ's proj.db, GEOS, GeoJSON, GML, a GiST index and a topology, and PostGIS's rasters on GDAL: values, statistics, a raster reprojected, GeoTIFF and PNG) and --noextension leaving one out; a client outside an AppContainer reaching it through its service (needs POSTGRES_HOME or BUILD_HOME with PostgreSQL and the three extensions)
 bash tests/gdal.sh      # GDAL's tools in each sandbox, from the directory they run in: PROJ's proj.db, a GeoTIFF made, read with statistics, warped and turned into a PNG, GeoJSON into a GeoPackage and KML, a clip with GEOS, the gdal command (needs GDAL_HOME or BUILD_HOME)
-bash tests/osm2pgsql.sh # osm2pgsql under soft and low, against PostgreSQL's server with PostGIS under soft, from the directory it runs in: the pgsql output with its default style, an update expiring tiles, the flex output with a Lua style requiring a module, from PBF with flat nodes and an area table in UTM, gzip and bzip2 input, -W reading the password, osm2pgsql-expire; reaching the server from an AppContainer is a known gap (needs OSM2PGSQL_HOME or BUILD_HOME with osm2pgsql, PostgreSQL and PostGIS)
+bash tests/osm2pgsql.sh # osm2pgsql under soft and low, against PostgreSQL's server with PostGIS under soft, from the directory it runs in: the pgsql output with its default style, an update expiring tiles, the flex output with a Lua style requiring a module, from PBF with flat nodes and an area table in UTM, gzip and bzip2 input, -W reading the password, osm2pgsql-expire; and in an AppContainer, reaching the server through its declared port (needs OSM2PGSQL_HOME or BUILD_HOME with osm2pgsql, PostgreSQL and PostGIS)
 bash tests/certs.sh     # which apps trust a root CA added to Windows: a test CA made for the run, which each client must refuse until it's in LocalMachine\Root, then trust in each sandbox (Python, Node, Java on the JDK and the JRE, MinGit, CMake, zig, psql, PHP); adding the CA takes an elevated shell, or CERTS_ELEVATE=1 for a UAC prompt (needs CERTS_HOME or BUILD_HOME with Python's image, and the clients' images)
 bash tests/qt.sh        # a Qt Widgets app built against Qt's SDK with CMake, on its runtime, in each sandbox: plugins found from the runtime, image formats, Schannel, translations; a Qt Quick window drawn with Direct3D 11 in each sandbox; the SDK's cmake without a recipe; the qml tool; Designer's and Linguist's windows, shims and shortcuts; Flameshot in each sandbox, and its full command saving a screenshot; Notes in each sandbox, its QML and database (needs QT_HOME or BUILD_HOME; opens windows)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)

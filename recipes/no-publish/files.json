@@ -8,6 +8,7 @@
   "command": "bin/Files.exe",
   "path": ["bin"],
   "permissions": {
+    "sandbox": "soft",
     "network": true,
     "filesystem": ["cwd", "desktop", "documents", "downloads", "music", "pictures", "videos"]
   },

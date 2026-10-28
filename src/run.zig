@@ -11,13 +11,14 @@
 //!   profile (see folders.zig);
 //! - a job object, so the whole process tree ends when the run ends.
 //!
-//! The `appcontainer` sandbox additionally runs the app under its AppContainer
-//! identity, which enforces the filesystem and network permissions. The `low`
-//! sandbox runs it at low integrity, with its data directory and the paths it
-//! may write labelled low, which keeps it from writing anywhere else; reading
-//! and the network stay open. The `soft` sandbox only shapes what the app
-//! sees; it enforces nothing. What the enforcing sandboxes change on host
-//! paths lasts as grants.zig says.
+//! The `low` sandbox, the default unless the app's image asks for another,
+//! runs it at low integrity, with its data directory and the paths it may
+//! write labelled low, which keeps it from writing anywhere else; reading and
+//! the network stay open. The `appcontainer` sandbox runs the app under its
+//! AppContainer identity instead, which enforces the filesystem and network
+//! permissions. The `soft` sandbox only shapes what the app sees; it enforces
+//! nothing. What the enforcing sandboxes change on host paths lasts as
+//! grants.zig says.
 
 const std = @import("std");
 const Io = std.Io;
@@ -69,10 +70,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const cfg = image.config;
 
     // Effective settings: the command line over the app's overrides, over the
-    // app's own permissions.
-    const saved = try override.load(ctx.store, arena, cfg.id);
+    // store-wide ones, over the app's own permissions.
+    const saved = try override.loadFor(ctx.store, arena, cfg.id);
     const settings = try override.Settings.merge(arena, saved, opts.settings);
-    const sandbox = settings.sandbox orelse .soft;
+    const sandbox = override.sandboxOf(settings, cfg.permissions);
     const network = settings.network orelse cfg.permissions.network;
     var host_grants: std.ArrayList(HostGrant) = .empty;
     var folder_grants: std.ArrayList(folders.Grant) = .empty;
@@ -244,7 +245,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             .runtime_dirs = try std.mem.concat(arena, []const u8, &.{ image.runtime_dirs, try extensionDirs(arena, found.loaded) }),
             .alias_dir = if (app_aliases) |a| a.dir else null,
             .relay_dir = if (relay_exe) |r| std.fs.path.dirname(r).? else null,
-            .roots_dir = if (roots_file) |r| std.fs.path.dirname(r).? else null,
+            .roots_file = roots_file,
             .data_dir = data_dir,
             .local_app_data = profile.local,
             .host_cwd = host_cwd,
@@ -268,16 +269,19 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // ports it forwards at once.
     const job = try process.newJob();
     if (relay_exe) |r| startRelay(ctx, cfg.id, job, r, published, forwards, security.?, env_block);
-    const child: process.Child = .{ .job = job, .process = try process.startIn(arena, job, .{
-        .exe = exe,
-        .command_line = command_line,
-        .env_block = env_block,
-        .cwd = cwd,
-        .security = if (security) |*s| s else null,
-        .token = token,
-        // Set by a shim that a shortcut started (see shim.zig).
-        .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
-    }) };
+    const child: process.Child = .{
+        .job = job,
+        .process = try process.startIn(arena, job, .{
+            .exe = exe,
+            .command_line = command_line,
+            .env_block = env_block,
+            .cwd = cwd,
+            .security = if (security) |*s| s else null,
+            .token = token,
+            // Set by a shim that a shortcut started (see shim.zig).
+            .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
+        }),
+    };
     const code = try child.wait();
     // Commands the run installed, as `npm install -g` does, get shims. An
     // --ephemeral run's are gone with its data directory.
@@ -463,8 +467,11 @@ const AppContainerSetup = struct {
     alias_dir: ?[]const u8,
     /// The store's copies of the relay, if the run publishes services.
     relay_dir: ?[]const u8,
-    /// The store's files of Windows' roots, if the run names one.
-    roots_dir: ?[]const u8,
+    /// The store's file of Windows' roots, if the run names it. Granted
+    /// itself, not its directory: a file renamed into a directory keeps the
+    /// ACL it had, and the directory's grant reaches only the files there
+    /// when it's made.
+    roots_file: ?[]const u8,
     data_dir: []const u8,
     /// The run's LOCALAPPDATA, in its data directory.
     local_app_data: []const u8,
@@ -488,7 +495,7 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     for (setup.runtime_dirs) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     if (setup.alias_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     if (setup.relay_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
-    if (setup.roots_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
+    if (setup.roots_file) |file| try wanted.append(arena, .{ .path = file, .access = .read_execute, .host = false });
     try wanted.append(arena, .{ .path = setup.data_dir, .access = .full, .host = false });
     for (setup.grants) |g| try wanted.append(arena, .{
         .path = g.path orelse setup.host_cwd,
@@ -501,6 +508,9 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     var changes: ?Store.Lock = null;
     defer if (changes) |l| l.release(ctx.io);
     for (wanted.items) |w| {
+        // Granted with the data directory: a shortcut starts the app in its
+        // home.
+        if (w.host and isWithin(w.path, setup.data_dir)) continue;
         // Record host grants before changing anything, so that they're
         // undone even if a later step fails.
         if (w.host) {
@@ -602,20 +612,34 @@ fn setUpLow(ctx: *Context, id: []const u8, setup: LowSetup) !win32.HANDLE {
     // The app's next AppContainer run grants its capability instead.
     const package = try appcontainer.packageSid(arena, id);
     _ = try acl.revoke(arena, setup.data_dir, .package_sids);
-    _ = try acl.labelLow(arena, setup.data_dir);
+    // Once for each app, but a large data directory takes seconds, as an
+    // app's first low run after zigsaw 0.54 made low the default may.
+    const data_start = Io.Timestamp.now(ctx.io, .awake);
+    if (try acl.labelLow(arena, setup.data_dir)) {
+        const ms = data_start.untilNow(ctx.io, .awake).toMilliseconds();
+        if (ms >= 1000 or ctx.verbose) note("labelled {s} low integrity ({d} ms)", .{ setup.data_dir, ms });
+    }
 
     // Host paths change under grants.lock (see grants.zig).
     const changes: ?Store.Lock = if (setup.grants.len > 0) try ctx.store.lockGrantChanges(arena) else null;
     defer if (changes) |l| l.release(ctx.io);
     for (setup.grants) |g| {
         const p = g.path orelse setup.host_cwd;
+        // Labelled with the data directory: a shortcut starts the app in its
+        // home.
+        if (isWithin(p, setup.data_dir)) continue;
         _ = try acl.revoke(arena, p, .{ .sids = &.{package} });
         // Low integrity reads what the user can.
         if (g.read_only) continue;
         if (labelRefusal(p, ctx.env.get("USERPROFILE"))) |why| {
+            // A working directory is wherever you are: the app runs, and may
+            // only read it.
+            if (g.path == null) {
+                note("warning: {s} is read-only for this run, as {s}: run the app from a folder inside it to let it write there, or with --sandbox=soft", .{ p, why });
+                continue;
+            }
             // The app's own permissions can't be taken back, only added to.
-            const instead = if (g.path == null) "run it from a directory inside it" else "grant a directory inside it, or read-only access (:ro)";
-            return fail("--sandbox=low won't label {s} low integrity: {s}, and every low-integrity process could then write anywhere in it; {s}", .{ p, why, instead });
+            return fail("--sandbox=low won't label {s} low integrity: {s}, and every low-integrity process could then write anywhere in it; grant a directory inside it, or read-only access (:ro)", .{ p, why });
         }
         const label: Store.Grant = .{ .kind = .low, .path = p };
         if (try acl.ownLabel(arena, p)) |rid| if (rid <= win32.SECURITY_MANDATORY_LOW_RID) {
@@ -660,6 +684,14 @@ fn trimSeparators(path: []const u8) []const u8 {
     return std.mem.trimEnd(u8, path, "\\/");
 }
 
+/// Whether `path` is `dir` or inside it.
+fn isWithin(path: []const u8, dir: []const u8) bool {
+    const p = trimSeparators(path);
+    const d = trimSeparators(dir);
+    if (p.len < d.len or !eqlPathPrefix(p[0..d.len], d)) return false;
+    return p.len == d.len or p[d.len] == '\\' or p[d.len] == '/';
+}
+
 /// Equal ignoring ASCII case, with '/' and '\' alike.
 fn eqlPathPrefix(a: []const u8, b: []const u8) bool {
     for (a, b) |x, y| {
@@ -681,6 +713,12 @@ test labelRefusal {
     for ([_][]const u8{ "C:\\Users\\Ann\\src", "C:\\Users\\Anna", "C:\\Users\\An", "D:\\src", "\\\\server\\share\\dir" }) |ok|
         try std.testing.expectEqual(null, labelRefusal(ok, home));
     try std.testing.expectEqual(null, labelRefusal("C:\\Users", null));
+}
+
+test isWithin {
+    const data = "D:\\zs\\data\\org.example.app";
+    for ([_][]const u8{ data, data ++ "\\", "d:/zs/DATA/org.example.app/home" }) |in| try std.testing.expect(isWithin(in, data));
+    for ([_][]const u8{ "D:\\zs\\data\\org.example.app2", "D:\\zs\\data", "D:\\zs\\data\\org.example" }) |out| try std.testing.expect(!isWithin(out, data));
 }
 
 // ---------------------------------------------------------------------------

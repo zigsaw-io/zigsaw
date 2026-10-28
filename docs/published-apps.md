@@ -142,8 +142,10 @@ and as an SDK gives builds a `composer` command: Kanboard's recipe installs
 its dependencies with it, from their lock file. Kanboard is a web app:
 `kanboard` serves it with PHP's built-in web server on `127.0.0.1:8471` and
 opens it in your browser (its Start menu shortcut does that too), with its
-database in the app's data. It's a [service](recipes.md#services), so it's
-there under `--sandbox=appcontainer` too, and `--port=http=9090` moves it.
+database in the app's data. Its image asks for the `soft` sandbox, as PHP
+can't tell it may write its data at low integrity. It's a
+[service](recipes.md#services), so it's there under
+`--sandbox=appcontainer` too, and `--port=http=9090` moves it.
 [Java](recipes.md#java)'s images are Eclipse Temurin's builds of
 OpenJDK 25: Java apps run on its JRE, and its JDK builds them, with Maven or
 Gradle, whose images run on it and whose dependencies a recipe pins with a
@@ -218,9 +220,9 @@ store. Explorer offers it for images (`.ora`, `.png`, `.jpg`, `.bmp`,
 WinUI 3, runs on .NET's runtime, patched to run without the MSIX package
 it's made for ([Files](recipes.md#files)). Its window and Start menu
 shortcut say "Files - Zigsaw build", so as not to pass for the Files its
-project publishes. It works in the default `soft` sandbox only: at low
-integrity and in an AppContainer it starts, but shows no drives and asks
-for a permission it can't be given.
+project publishes. It works in the `soft` sandbox only, which its image
+asks for: at low integrity and in an AppContainer it starts, but shows no
+drives and asks for a permission it can't be given.
 
 ## Reproducibility
 

@@ -4,7 +4,7 @@
   "command": "echo-args.cmd",
   "path": ["."],
   "env": {},
-  "permissions": { "network": false, "filesystem": [] },
+  "permissions": { "sandbox": "soft", "network": false, "filesystem": [] },
   "exports": {
     "echo-args": { "command": "echo-args.cmd" },
     "echo-args-pre": { "command": "echo-args.cmd", "args": ["${app}", "a b", "%PATH%"] }

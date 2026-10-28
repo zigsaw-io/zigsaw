@@ -15,7 +15,7 @@
 #
 # Like tests/matrix.sh, each row states the intended result per sandbox:
 # "ok", "fails", or "gap" for "ok is intended, but zigsaw doesn't manage it
-# yet" (see the README's known gaps and docs/findings.md); a gap is reported
+# yet" (see docs/gaps.md and docs/findings.md); a gap is reported
 # and doesn't fail the suite, so only changes do.
 #
 # Needs Git Bash; opens windows on the desktop for a moment; not run in CI.
@@ -135,7 +135,8 @@ wav() {
 le32() { printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' $(($1 & 255)) $(($1 >> 8 & 255)) $(($1 >> 16 & 255)) $(($1 >> 24 & 255)))"; }
 wav 60 "$docs\\zigsaw-tone.wav"
 wav 1 "$work\\zigsaw-short.wav"
-(cd "$docs" && "$zigsaw" run $SEVENZIP a -bd zigsaw-archive.7z zigsaw-note.txt >/dev/null 2>&1)
+# Under soft: a low run would label the directory, which no run is to be granted.
+(cd "$docs" && "$zigsaw" run --sandbox=soft $SEVENZIP a -bd zigsaw-archive.7z zigsaw-note.txt >/dev/null 2>&1)
 
 # Where these apps would keep settings outside zigsaw. Only what isn't there
 # before the suite counts, and only that is removed afterwards: someone may

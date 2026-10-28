@@ -38,6 +38,9 @@ work=$(cygpath -w "$(mktemp -d)")
 # Apps that may use the user's folders, such as Documents, find none here,
 # rather than yours.
 export ZIGSAW_USER_FOLDERS="$work\\no-folders"
+# Low runs (the default) label the working directory of an app with cwd: the
+# runs go from a scratch one, not the repository.
+cd "$work" || exit 1
 logs=${LOG_DIR:-$work\\logs}
 mkdir -p "$logs"
 pull_store="$work\\pulled"
@@ -373,6 +376,8 @@ if [ ${#published_versions[@]} -gt 0 ]; then
     }
     check "the catalog describes each app by its recipe's name" named
 fi
+
+check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
 # Installed apps are protected against deletion, so remove them through zigsaw.
 for id in "${ids[@]}"; do zp rm --delete-data "$id" >/dev/null 2>&1; done

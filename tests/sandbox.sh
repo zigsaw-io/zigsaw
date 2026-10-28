@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # End-to-end checks for what the enforcing sandboxes change on the host, how
 # long it lasts, and what `zigsaw rm` undoes: low integrity labels on the
-# paths a --sandbox=low run may write, access granted to an app's
-# AppContainer, and what each lets a run write. What a run's command line
-# asks for lasts until the app's last run ends; what its permissions and
+# paths a low run (the default) may write, access granted to an app's
+# AppContainer, and what each lets a run write; which sandbox a run gets
+# (the image's, the overrides', the command line's). What a run's command
+# line asks for lasts until the app's last run ends; what its permissions and
 # saved overrides give stays (src/grants.zig). Busybox apps; tests/matrix.sh
 # runs real tools.
 #
@@ -143,6 +144,68 @@ else
     check "  and unlabelled after it, with its ACL as it was" sh -c "[ \"\$(icacls '$work\\modify\\rw' | grep -v '^Successfully')\" = \"\$0\" ]" "$acl_before"
 fi
 
+# --- The default sandbox ----------------------------------------------------------
+#
+# Low, unless the app's image asks for another, or an override or the command
+# line chooses one: the app's overrides over the store-wide ones (--global).
+
+SOFT=test.sandbox.soft
+sed -e "s/\"net.frippery.busybox\"/\"$SOFT\"/" \
+    -e 's/"command": "busybox.exe",/&\n  "permissions": { "sandbox": "soft" },/' \
+    "$root/recipes/busybox.json" >"$work\\soft.json"
+soft_built=$("$zigsaw" build "$work\\soft.json" 2>&1 </dev/null) || { echo "building the soft app failed: $soft_built"; exit 1; }
+mkdir -p "$work\\global"
+# from <dir> <run options and app...>: a run that may write its working
+# directory tries to, from <dir>; prints what zigsaw said.
+from() {
+    local d=$1
+    shift
+    (cd "$d" && "$zigsaw" run --filesystem=cwd "$@" sh -c 'ls >/dev/null && echo x > zigsaw-sandbox-test' </dev/null 2>&1)
+}
+# read_only_cwd <dir>: a low run from there goes on, with its working
+# directory read-only, and says so; nothing is written or labelled.
+read_only_cwd() {
+    local out
+    out=$(from "$1" $BB) && return 1
+    grep -q "is read-only for this run, as $2: run the app from a folder inside it" <<<"$out" || { echo "$out"; return 1; }
+    [ ! -e "$1\\zigsaw-sandbox-test" ] && fails low_label "$1" && fails granted $BB "low $1"
+}
+drive=${work:0:3}
+home_run_quiet() {
+    local home="$ZIGSAW_HOME\\data\\$BB\\home" out
+    out=$(from "$home" $BB) || { echo "$out"; return 1; }
+    ! grep -q labelled <<<"$out" && fails granted $BB "low $home" && [ ! -e "$ZIGSAW_HOME\\grants\\$BB.cwd" ]
+}
+global_shown() { [ "$("$zigsaw" override --global </dev/null | tr -d '\r')" = "--sandbox=appcontainer" ]; }
+global_reset() {
+    "$zigsaw" override --global --reset 2>&1 </dev/null | grep -q 'no store-wide overrides now' && writes $SOFT soft "$work\\outside\\soft4" &&
+        z run $SOFT sh -c "echo x > '$work\\outside\\soft5'"
+}
+global_grant_back() {
+    "$zigsaw" override --global --sandbox=low --filesystem="$work\\global" >/dev/null 2>&1 || return 1
+    z run $BB sh -c "echo x > '$work\\global\\f'" && low_label "$work\\global" && granted $BB "low $work\\global" || return 1
+    local out
+    out=$("$zigsaw" override --global --reset 2>&1 </dev/null)
+    grep -q 'removed the low integrity label' <<<"$out" || { echo "$out"; return 1; }
+    no_label "$work\\global" && fails granted $BB "low $work\\global"
+}
+check "a run without --sandbox is low: it writes its data directory" z run $BB sh -c 'echo x > "$APPDATA/default"'
+check "  and can't write elsewhere" fails z run $BB sh -c "echo x > '$work\\outside\\default'"
+check "low: from your user profile, the app runs with its working directory read-only" read_only_cwd "$USERPROFILE" "it's your user profile"
+check "low: from a drive's root, too" read_only_cwd "$drive" "it's the root of a drive"
+check "low: from the app's own home, as a shortcut starts it, nothing is labelled or recorded" home_run_quiet
+check "an image that asks for soft says so when installed" grep -q 'permits  whatever you can write (it asks for the soft sandbox)' <<<"$soft_built"
+check "  and its runs write elsewhere" z run $SOFT sh -c "echo x > '$work\\outside\\soft1'"
+check "  unless the store-wide overrides choose another sandbox" sh -c "\"\$0\" override --global --sandbox=appcontainer >/dev/null 2>&1 </dev/null && ! \"\$0\" run $SOFT sh -c \"echo x > '$work\\outside\\soft2'\" </dev/null 2>/dev/null" "$zigsaw"
+check "  which override --global shows" global_shown
+check "  the app's own overrides go over them" sh -c "\"\$0\" override --sandbox=soft $SOFT >/dev/null 2>&1 </dev/null && \"\$0\" run $SOFT sh -c \"echo x > '$work\\outside\\soft3'\" </dev/null" "$zigsaw"
+check "  and the command line over those" fails writes $SOFT low "$work\\outside\\soft6"
+"$zigsaw" override --reset $SOFT >/dev/null 2>&1 </dev/null
+check "override --global --reset removes them" global_reset
+check "the store-wide overrides' grants stand, and go when they no longer give them" global_grant_back
+check "override takes an app or --global, not both" fails z override --global --sandbox=low $BB
+"$zigsaw" rm $SOFT >/dev/null 2>&1 </dev/null
+
 # --- AppContainer grants, and a low run after one ------------------------------
 
 capability_in_run() {
@@ -176,7 +239,7 @@ alone_labelled_in_run() {
 check "soft: --file gives the app the file's path, to read and write" rewrites soft "$work\\docs\\soft.txt"
 relative_file() {
     local got
-    got=$(cd "$work\\docs" && z run --file=soft.txt $BB sh -c 'echo "$1"' sh | tr -d '\r' | tr '/' '\\')
+    got=$(cd "$work\\docs" && z run --sandbox=soft --file=soft.txt $BB sh -c 'echo "$1"' sh | tr -d '\r' | tr '/' '\\')
     [ "$got" = "$work\\docs\\soft.txt" ] || { echo "$got"; return 1; }
 }
 check "  a relative one is the caller's, whatever the app's working directory" relative_file
@@ -198,7 +261,7 @@ check "override doesn't take --file" sh -c "\"\$0\" override --file=x $BB 2>&1 |
 # does, leaves the first able to open it.
 
 held_keeps_file() {
-    hold "$work" $BB || return 1
+    hold "$work" $BB --sandbox=soft || return 1
     rewrites low "$work\\docs\\held.txt" && file_low "$work\\docs\\held.txt"
     local status=$?
     release
@@ -345,6 +408,8 @@ update_takes_back() {
     fails has_ace "$folders\\Documents" 'S-1-15-' && fails granted $FOLD "$folders\\Documents"
 }
 
+# Under soft, which store-wide overrides choose until the low rows.
+"$zigsaw" override --global --sandbox=soft >/dev/null 2>&1
 check "soft: an app's declared folder is linked into its home" z run $FOLD sh -c 'grep -q mine "$USERPROFILE/Documents/mine.txt"'
 check "  as a junction" is_junction "$home\\Documents"
 check "  a permission this zigsaw doesn't know is left out, with a warning" warns_unknown
@@ -355,6 +420,7 @@ check "  and its link, not what it pointed to" link_gone
 check "override --nofilesystem too, until the command line grants it again" override_nofilesystem
 check "a home Documents with the app's own files is kept" keeps_own_documents
 is_junction "$home\\Documents" || rm -rf "$home\\Documents"
+"$zigsaw" override --global --reset >/dev/null 2>&1
 "$zigsaw" override --sandbox=low $FOLD >/dev/null 2>&1
 check "low: writes the folder through the link" z run $FOLD sh -c 'echo x > "$USERPROFILE/Documents/low.txt"'
 check "  which stays labelled low, as the app's overrides choose low" low_label "$folders\\Documents"

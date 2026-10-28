@@ -106,7 +106,7 @@ drew() {
     grep -q '^GTK 4\.24\.1$' <<<"$out" && grep -q '^drew a frame with Gsk' <<<"$out" || { echo "got: $out"; return 1; }
 }
 check "it runs on GTK's runtime: opens a window and draws a frame" drew
-check "with --sandbox=low" drew --sandbox=low
+check "with --sandbox=soft" drew --sandbox=soft
 check "with --sandbox=appcontainer" drew --sandbox=appcontainer
 adwaita() { timeout 120 "$zigsaw" run $APP 2>&1 | tr -d '\r' | grep -q '^libadwaita 1\.10\.0$'; }
 check "the runtime has libadwaita 1.10.0" adwaita
@@ -139,10 +139,22 @@ xdg() {
 check "GLib keeps its files in the app's data directory, and settings in a key file there" xdg
 
 # libsoup, with GIO's TLS from glib-networking's OpenSSL module, which trusts
-# Windows' root certificates. ghcr.io answers 401 to anonymous requests.
-# badssl.com's host with an untrusted root sometimes drops the connection
-# before TLS says anything: then the run is tried once more.
-untrusted=${SOUP_UNTRUSTED:-https://untrusted-root.badssl.com/}
+# Windows' root certificates. ghcr.io answers 401 to anonymous requests. The
+# untrusted root is a certificate made for the run, which Git Bash's openssl
+# serves on the loopback (an AppContainer run with the network reaches it
+# while its container is exempt), or SOUP_UNTRUSTED's URL; a host there that
+# drops the connection before TLS says anything gets the run tried once more.
+soup_server=
+if [ -n "${SOUP_UNTRUSTED:-}" ]; then
+    untrusted=$SOUP_UNTRUSTED
+else
+    soup_port=$((46000 + RANDOM % 900))
+    untrusted="https://127.0.0.1:$soup_port/"
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout "$work\\untrusted.key" -out "$work\\untrusted.crt" -days 1 \
+        -subj "/CN=zigsaw tests gtk.sh $RANDOM$RANDOM" -addext "subjectAltName=IP:127.0.0.1" >/dev/null 2>&1 || echo "making the untrusted certificate failed"
+    openssl s_server -accept 127.0.0.1:$soup_port -cert "$work\\untrusted.crt" -key "$work\\untrusted.key" -www -quiet </dev/null >"$work\\untrusted.out" 2>&1 &
+    soup_server=$!
+fi
 soup() {
     local out try
     for try in 1 2; do
@@ -155,8 +167,9 @@ soup() {
         grep -qF "GET $untrusted: error: Unacceptable TLS certificate" <<<"$out" || { echo "got: $out"; return 1; }
 }
 check "libsoup 3.8.0 gets an HTTPS URL over HTTP/2, trusting Windows' root certificates, and refuses an untrusted root" soup
-check "with --sandbox=low" soup --sandbox=low
+check "with --sandbox=soft" soup --sandbox=soft
 check "with --sandbox=appcontainer" soup --sandbox=appcontainer
+[ -z "$soup_server" ] || { kill "$soup_server" 2>/dev/null; wait "$soup_server" 2>/dev/null; }
 psl() { timeout 60 "$zigsaw" run --command=bin/soup-get.exe $APP 2>&1 | tr -d '\r' | grep -q '^base domain of www\.example\.co\.uk is example\.co\.uk$'; }
 check "libsoup knows the Public Suffix List (libpsl)" psl
 # An SVG through GdkPixbuf, as GtkBuilder loads images: librsvg's loader.
@@ -193,7 +206,7 @@ font_file() {
     grep -q '^drew [1-9][0-9]*x[1-9][0-9]* with Consolas$' <<<"$out" && ! grep -q 'HarfBuzz does not have' <<<"$out" || { echo "got: $out"; return 1; }
 }
 check "Pango adds a font file without warning, and pangocairo draws with it" font_file --env=G_DEBUG=fatal-warnings
-check "with --sandbox=low" font_file --env=G_DEBUG=fatal-warnings --sandbox=low
+check "with --sandbox=soft" font_file --env=G_DEBUG=fatal-warnings --sandbox=soft
 # (DirectWrite warns there about fonts installed for the user only.)
 check "with --sandbox=appcontainer, without Pango's warning" font_file --sandbox=appcontainer
 printf 'Hello, zigsaw \xd8\xa7\xd9\x84\xd8\xb9\xd8\xb1\xd8\xa8\xd9\x8a\xd8\xa9\n' >"$work\\text.txt"
@@ -203,7 +216,7 @@ pango_view() {
         head -c 8 "$work\\text.png" | od -A n -t x1 | tr -d ' \n' | grep -qx '89504e470d0a1a0a'
 }
 check "the runtime's pango-view draws text to a PNG" pango_view
-check "with --sandbox=low" pango_view --sandbox=low
+check "with --sandbox=soft" pango_view --sandbox=soft
 check "with --sandbox=appcontainer" pango_view --sandbox=appcontainer
 check "pango-list lists Windows' fonts" sh -c "timeout 60 \"\$0\" run --command=pango-list org.gtk.Gtk4 | tr -d '\r' | grep -q '^Segoe UI *$'" "$zigsaw"
 check "the runtime's gio runs" sh -c "timeout 60 \"\$0\" run --command=gio org.gtk.Gtk4 version | grep -q '^2\\.90\\.'" "$zigsaw"
@@ -232,7 +245,7 @@ spell() {
     grep -q '^winspell en_US: the ok, teh misspelled, suggests the$' <<<"$out" && grep -q '^default en_US: winspell$' <<<"$out" || { echo "got: $out"; return 1; }
 }
 check "enchant checks spelling with WinSpell and with hunspell's en_US" spell
-check "with --sandbox=low" spell --sandbox=low
+check "with --sandbox=soft" spell --sandbox=soft
 check "with --sandbox=appcontainer" spell --sandbox=appcontainer
 hunspell_only() {
     local out
@@ -264,7 +277,7 @@ dictionaries() {
     timeout 60 "$zigsaw" run "$@" --command=bin/spell.exe $APP en_US 2>&1 | tr -d '\r' | grep -q '^hunspell en_US: the ok, teh misspelled, suggests the$'
 }
 check "installed, the French and Vietnamese dictionaries join the runtime's runs, with its English" dictionaries
-check "with --sandbox=low" dictionaries --sandbox=low
+check "with --sandbox=soft" dictionaries --sandbox=soft
 check "with --sandbox=appcontainer" dictionaries --sandbox=appcontainer
 no_french() {
     local out
@@ -285,7 +298,7 @@ icon() {
     [ "$code" = 0 ] && grep -q '^icon test-gtk-icon found$' <<<"$out" && grep -q '^icon document-open-symbolic found$' <<<"$out" || { echo "got (exit $code): $(tr '\n' '|' <<<"$out")"; return 1; }
 }
 check "an icon an extension has is in GTK's icon theme, beside the runtime's" icon
-check "with --sandbox=low" icon --sandbox=low
+check "with --sandbox=soft" icon --sandbox=soft
 check "with --sandbox=appcontainer" icon --sandbox=appcontainer
 z rm --delete-data test.gtk.icons >/dev/null 2>&1
 check "removed, it isn't" sh -c "timeout 60 \"\$0\" run --command=bin/icon.exe $APP test-gtk-icon 2>&1 | tr -d '\r' | grep -q '^icon test-gtk-icon missing$'" "$zigsaw"
@@ -407,7 +420,7 @@ editor_version() { timeout 60 "$zigsaw" run $EDITOR --version | tr -d '\r' | gre
 check "Text Editor 51.0 is installed" editor_version
 check "it gets the windowless shim and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\gnome-text-editor.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\Text Editor.lnk'"
 check "it runs" stays_up 15 $EDITOR --standalone
-check "with --sandbox=low" stays_up 15 --sandbox=low $EDITOR --standalone
+check "with --sandbox=soft" stays_up 15 --sandbox=soft $EDITOR --standalone
 check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $EDITOR --standalone
 check "its shortcut has an icon made from its SVG" has_icon "Text Editor" org.gnome.TextEditor
 editor_opens() { for ext in .txt .md .log; do opens_with $EDITOR gnome-text-editor $ext org.gnome.TextEditor.ico || return 1; done; }
@@ -415,7 +428,7 @@ check "it's registered to open .txt, .md and .log files" editor_opens
 # As the shim of those does: the file granted, and nothing around it.
 echo "a note" >"$docs\\note.txt"
 check "it opens a file it's given with --file" stays_up 15 --command=gnome-text-editor --file="$docs\\note.txt" $EDITOR --standalone
-check "with --sandbox=low" stays_up 15 --sandbox=low --command=gnome-text-editor --file="$docs\\note.txt" $EDITOR --standalone
+check "with --sandbox=soft" stays_up 15 --sandbox=soft --command=gnome-text-editor --file="$docs\\note.txt" $EDITOR --standalone
 check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer --command=gnome-text-editor --file="$docs\\note.txt" $EDITOR --standalone
 
 # Gaphor (recipes/gaphor.json), a Python app on the runtime and PyGObject's,
@@ -449,7 +462,7 @@ gaphor_self_test() {
     [ "$(tr -d '\r' <"$work\\gaphor-self-test.txt" | grep -c 'selftest INFO test_[a-z_]*: passed$')" = 4 ] || { echo "got: $(tr -d '\r' <"$work\\gaphor-self-test.txt" | grep 'test_' | tr '\n' '|')"; return 1; }
 }
 check "its self-test passes, auto layout through Graphviz's dot included" gaphor_self_test
-check "with --sandbox=low" gaphor_self_test --sandbox=low
+check "with --sandbox=soft" gaphor_self_test --sandbox=soft
 # Python's tempfile makes its directories with mode 0o700, which an
 # AppContainer couldn't write in until PyGObject's sitecustomize.py.
 check "with --sandbox=appcontainer" gaphor_self_test --sandbox=appcontainer
@@ -489,7 +502,7 @@ rnote_cli() {
     grep -a -q '/BaseFont /[A-Z]*+Virgil3YOFF' "$work\\notes.pdf" && grep -a -q '/BaseFont /[A-Z]*+SegoeUI' "$work\\notes.pdf"
 }
 check "rnote-cli turns a Xournal++ document into a PDF, with text in Rnote's own font" rnote_cli
-check "with --sandbox=low" rnote_cli --sandbox=low
+check "with --sandbox=soft" rnote_cli --sandbox=soft
 check "with --sandbox=appcontainer" rnote_cli --sandbox=appcontainer
 # Each page drawn on one of rayon's threads, text through cairo's DirectWrite
 # backend, whose thread safety cairo 1.18.6 fixed (Rnote's own Windows build
@@ -507,13 +520,13 @@ rnote_pages() {
 }
 check "it draws 40 pages of text on rayon's threads, three times over" rnote_pages
 check "Rnote runs" stays_up 15 $RNOTE
-check "with --sandbox=low" stays_up 15 --sandbox=low $RNOTE
+check "with --sandbox=soft" stays_up 15 --sandbox=soft $RNOTE
 check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $RNOTE
 rnote_opens() { opens_with $RNOTE rnote .rnote rnote.exe && opens_with $RNOTE rnote .xopp rnote.exe; }
 check "it's registered to open .rnote and .xopp files, which show its icon" rnote_opens
 cp "$work\\notes.rnote" "$docs\\notes.rnote"
 check "it opens a document it's given with --file" stays_up 20 --command=rnote --file="$docs\\notes.rnote" $RNOTE
-check "with --sandbox=low" stays_up 20 --sandbox=low --command=rnote --file="$docs\\notes.rnote" $RNOTE
+check "with --sandbox=soft" stays_up 20 --sandbox=soft --command=rnote --file="$docs\\notes.rnote" $RNOTE
 check "with --sandbox=appcontainer" stays_up 20 --sandbox=appcontainer --command=rnote --file="$docs\\notes.rnote" $RNOTE
 
 # Pinta (recipes/no-publish/pinta.json), a C# app, on the runtime and .NET's,
@@ -546,14 +559,14 @@ check "its shortcut shows the icon in its executable" pinta_icon
 # its bin, as its own Windows build lays them out.
 check "it has its icons and translations in share" test -f "$pinta_dir\\share\\locale\\de\\LC_MESSAGES\\pinta.mo" -a -f "$pinta_dir\\share\\icons\\hicolor\\scalable\\actions\\tool-paintbrush-symbolic.svg"
 check "Pinta runs" stays_up 15 $PINTA
-check "with --sandbox=low" stays_up 15 --sandbox=low $PINTA
+check "with --sandbox=soft" stays_up 15 --sandbox=soft $PINTA
 check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $PINTA
 pinta_opens() { for ext in .ora .png .jpg .jpeg .bmp .tif .tiff; do opens_with $PINTA pinta $ext Pinta.exe || return 1; done; }
 check "it's registered to open .ora, .png, .jpg, .jpeg, .bmp, .tif and .tiff files" pinta_opens
 # A 4x4 PNG.
 printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR42mM4EaABRwzEcQASUhQB/GAXigAAAABJRU5ErkJggg==' | base64 -d >"$docs\\picture.png"
 check "it opens an image it's given with --file" stays_up 20 --command=pinta --file="$docs\\picture.png" $PINTA
-check "with --sandbox=low" stays_up 20 --sandbox=low --command=pinta --file="$docs\\picture.png" $PINTA
+check "with --sandbox=soft" stays_up 20 --sandbox=soft --command=pinta --file="$docs\\picture.png" $PINTA
 check "with --sandbox=appcontainer" stays_up 20 --sandbox=appcontainer --command=pinta --file="$docs\\picture.png" $PINTA
 check "the documents' directory was granted to none of the apps" sh -c "! icacls '$docs' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
@@ -570,7 +583,7 @@ if [ -f "$ZIGSAW_HOME\\refs\\$MSVC.json" ]; then
     }
     check "it has the Visual C++ runtime with it, and its demos bind all their imports" msvc_self_contained
     check "its demo runs" stays_up 15 $MSVC
-    check "with --sandbox=low" stays_up 15 --sandbox=low $MSVC
+    check "with --sandbox=soft" stays_up 15 --sandbox=soft $MSVC
     check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $MSVC
     check "its Adwaita demo runs" stays_up 15 --command=adwaita-1-demo-msvc $MSVC
 else

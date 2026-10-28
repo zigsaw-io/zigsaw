@@ -95,6 +95,25 @@ PATH entries in `${data}` are also where the app's runs install commands,
 which then get shims (see
 [commands installed while an app runs](#commands-installed-while-an-app-runs)).
 
+## Sandbox
+
+An app's runs are low integrity unless something chooses another sandbox
+([sandboxes](../README.md#sandboxes)). An app that can't work at low
+integrity asks for `soft` in its permissions, as Kanboard's recipe does (PHP
+tells it it can't write its data there):
+
+```json
+"permissions": { "sandbox": "soft", "network": true }
+```
+
+- `pull`, `update` and `info` show it as access ("whatever you can write"),
+  so an update that newly asks for it asks first.
+- Overrides and a run's `--sandbox` choose over it, as for any permission.
+- A recipe may ask for `appcontainer` too, or `low`, which is what no
+  `sandbox` means. Without it, the image's config has no `sandbox`, so
+  images that don't ask keep their digests.
+- A zigsaw before 0.54 ignores it, and runs every app under `soft`.
+
 ## Services
 
 An app that other programs on this machine connect to declares what it
@@ -1458,8 +1477,9 @@ runs `flameshot.exe` through cmd.exe, sizes its command line by
 `sizeof(std::wstring)`, about 80 characters, which a path in the store
 exceeds, so the image leaves it out; `zigsaw run` gives `flameshot.exe`
 the console's output already. Its settings are in an INI file in AppData,
-so in its data directory. Its "Launch at startup" writes your real
-`HKCU\...\Run` under `soft`, naming its deployment, not its shim.
+so in its data directory. Its "Launch at startup" does nothing at low
+integrity; under `soft` it writes your real `HKCU\...\Run`, naming its
+deployment, not its shim.
 
 ### Notes
 
@@ -2044,9 +2064,9 @@ takes 4. The image is 168 MB of files, 61 MB compressed.
 
 It declares `HKCU\Software\Files Community` as a key it keeps, and has the
 network, the working directory and the user's six folders. It runs in the
-`soft` sandbox only: at low integrity and in an AppContainer, Windows'
-storage APIs refuse a program without a package, and Files shows no drives
-([findings](findings.md#files)).
+`soft` sandbox only, which it asks for: at low integrity and in an
+AppContainer, Windows' storage APIs refuse a program without a package, and
+Files shows no drives ([findings](findings.md#files)).
 
 ## Java
 
@@ -2534,8 +2554,11 @@ installed one of the same id doesn't join:
 
 They're variables, so the PHP processes the app starts load the same
 extensions. The extensions work under the three sandboxes. Xdebug's step
-debugger connects to an IDE under `soft` and `low`; in an AppContainer it
-can't reach `127.0.0.1` ([known gaps](gaps.md)).
+debugger connects to an IDE in each: in an AppContainer through the port
+it declares it uses ([ports an app uses](#ports-an-app-uses)). Xdebug's
+`.ini` sends its traces and profiles to `${TEMP}`, the run's, in the data
+directory of the app PHP runs for: its default, `C:\Windows\Temp`, is one a
+low-integrity run can't write.
 
 ### Composer and PHP apps
 
@@ -2590,10 +2613,11 @@ outside the app's sandbox, and doesn't end with the server. Its Start menu
 shortcut runs it, with a console window for the server's log; closing it
 stops the server. `DATA_DIR` is the app's data, where Kanboard keeps its
 SQLite database and files; `PLUGINS_DIR` is `plugins` in it. `kanboard-cli`
-is Kanboard's command line (`kanboard-cli db:version`). It works under
-`soft` and `--sandbox=appcontainer`, where the browser reaches it through
-the service; at low integrity PHP's `is_writable()` says no to what the run
-may write, and Kanboard refuses its data directory ([known gaps](gaps.md)).
+is Kanboard's command line (`kanboard-cli db:version`). It asks for the
+`soft` sandbox, and works under `--sandbox=appcontainer` too, where the
+browser reaches it through the service; at low integrity PHP's
+`is_writable()` says no to what the run may write, and Kanboard refuses its
+data directory ([known gaps](gaps.md)).
 
 ### What zig needs to build for MSVC's PHP
 

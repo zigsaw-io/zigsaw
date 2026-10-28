@@ -134,7 +134,7 @@ drew() {
         grep -q '^loaded it at 48x48$' <<<"$out" && grep -q '^drew a frame$' <<<"$out" || { echo "got: $(tr '\n' '|' <<<"$out")"; return 1; }
 }
 check "it runs on both runtimes, with GTK 3's schemas and legacy icons, and draws its window" drew
-check "with --sandbox=low" drew --sandbox=low
+check "with --sandbox=soft" drew --sandbox=soft
 check "with --sandbox=appcontainer" drew --sandbox=appcontainer
 # GTK 4's runtime's variables, which GTK 3's apps have too.
 check "GLib keeps settings in a key file in the app's data" sh -c "timeout 60 \"\$0\" run $APP 2>&1 | grep -q '^settings in GKeyfileSettingsBackend'" "$zigsaw"
@@ -176,7 +176,7 @@ demo_shortcuts() {
 check "they get shortcuts, with icons made from their PNGs" demo_shortcuts
 check "GTK 3's demo runs" stays_up 10 $DEMO
 check "its widget factory runs, without critical warnings for want of a Desktop" stays_up 10 --command=gtk3-widget-factory $DEMO
-check "with --sandbox=low" stays_up 10 --sandbox=low --command=gtk3-widget-factory $DEMO
+check "with --sandbox=soft" stays_up 10 --sandbox=soft --command=gtk3-widget-factory $DEMO
 check "with --sandbox=appcontainer" stays_up 10 --sandbox=appcontainer --command=gtk3-widget-factory $DEMO
 
 # Gnumeric, on both runtimes. Built here unless the store has it, which
@@ -197,7 +197,7 @@ round_trip() {
     [ "$(tr -d '\r' <"$work\\back.csv" | tr '\n' '|')" = 'item,count,double|nails,21,42|' ] || { echo "got: $(cat "$work\\back.csv")"; return 1; }
 }
 check "ssconvert takes a spreadsheet from CSV to Excel to OpenDocument and back" round_trip
-check "with --sandbox=low" round_trip --sandbox=low
+check "with --sandbox=soft" round_trip --sandbox=soft
 check "with --sandbox=appcontainer" round_trip --sandbox=appcontainer
 # A line chart and a pie chart, drawn by goffice's plot plugins, which
 # ssconvert exports as PNGs.
@@ -243,7 +243,7 @@ check "it's registered to open .gnumeric, .xlsx, .xls, .ods and .csv files" gnum
 docs=$(cygpath -w "$(mktemp -d)")
 cp "$work\\sheet.xlsx" "$docs\\sheet.xlsx"
 check "Gnumeric opens a spreadsheet it's given with --file" stays_up 20 --command=gnumeric --file="$docs\\sheet.xlsx" $GNUMERIC
-check "with --sandbox=low" stays_up 20 --sandbox=low --command=gnumeric --file="$docs\\sheet.xlsx" $GNUMERIC
+check "with --sandbox=soft" stays_up 20 --sandbox=soft --command=gnumeric --file="$docs\\sheet.xlsx" $GNUMERIC
 check "with --sandbox=appcontainer" stays_up 20 --sandbox=appcontainer --command=gnumeric --file="$docs\\sheet.xlsx" $GNUMERIC
 check "the documents' directory was granted to none of the apps" sh -c "! icacls '$docs' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
@@ -281,7 +281,7 @@ python_says() {
 }
 check "PyGObject loads GTK 3 and GtkSourceView 4 through their typelibs" python_says gi3.py 'GTK 3 24 52|GtkSourceView Python|Pango 1.58.2'
 check "and GTK 4 and libadwaita, with pycairo" python_says gi4.py 'GTK 4 24 1|libadwaita 1 10|pycairo 1.29.2'
-check "with --sandbox=low" python_says gi3.py 'GTK 3 24 52|GtkSourceView Python|Pango 1.58.2' --sandbox=low
+check "with --sandbox=soft" python_says gi3.py 'GTK 3 24 52|GtkSourceView Python|Pango 1.58.2' --sandbox=soft
 check "with --sandbox=appcontainer" python_says gi3.py 'GTK 3 24 52|GtkSourceView Python|Pango 1.58.2' --sandbox=appcontainer
 meld_dir="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $MELD | cut -d: -f2)" | tail -1 | cut -d: -f2)"
 # Meld's command is pythonw.exe, which shows nothing: python.exe runs it here.
@@ -314,7 +314,7 @@ meld_logs() {
     cp "$ZIGSAW_HOME\\data\\$MELD\\share\\meld.log" "$LOG_DIR\\meld-$draws.log" 2>/dev/null
 }
 check "Meld compares two files and draws its window" meld_draws left.txt right.txt
-check "with --sandbox=low" meld_draws left.txt right.txt -- --sandbox=low
+check "with --sandbox=soft" meld_draws left.txt right.txt -- --sandbox=soft
 check_want "$(ac_if nul)" "with --sandbox=appcontainer" meld_draws left.txt right.txt -- --sandbox=appcontainer
 check "it compares two folders" meld_draws left right -- --sandbox=low
 # Meld's version control views run git, which MinGit's image, one of Meld's
@@ -336,7 +336,7 @@ printf '%s\n' 'import os, gi' 'gi.require_version("Gtk", "3.0")' \
     'for e in sorted(vc.get_entries(repo), key=lambda e: e.name): print(e.name, e.get_status())' >"$work\\vc.py"
 vc_says='found: ['"'"'Git'"'"']|a.txt Modified|b.txt Unversioned'
 check "Meld's git support finds the repository, and what's changed in it" python_says vc.py "$vc_says"
-check "with --sandbox=low" python_says vc.py "$vc_says" --sandbox=low
+check "with --sandbox=soft" python_says vc.py "$vc_says" --sandbox=soft
 check_want "$(ac_if nul)" "with --sandbox=appcontainer" python_says vc.py "$vc_says" --sandbox=appcontainer
 check "it shows the repository's changes in its window" meld_draws repo -- --sandbox=low
 check "its log has no Python traceback" sh -c "! grep -q Traceback '$ZIGSAW_HOME\\data\\$MELD\\share\\meld.log'"

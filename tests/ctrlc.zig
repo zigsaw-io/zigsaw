@@ -1,5 +1,5 @@
 //! Test driver for console events. It runs node alone, through `zigsaw run`
-//! (also with --sandbox=low) and through its shim, each in a pseudoconsole as
+//! (low, the default, and with --sandbox=soft) and through its shim, each in a pseudoconsole as
 //! a terminal hosts console programs, then presses Ctrl+C, sends Ctrl+Break or
 //! closes the console, and checks what the app and zigsaw do. It also runs
 //! node behind a batch file, alone and through `zigsaw run`, and answers
@@ -48,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
     // processes inherit that. Turn it back on for the apps, as a terminal would.
     _ = win32.SetConsoleCtrlHandler(null, win32.FALSE);
     // The apps run in the work directory: node may use its working
-    // directory, which a --sandbox=low run labels low.
+    // directory, which a low run labels low.
     if (SetCurrentDirectoryW(try win32.wide(arena, args[3])) == 0) return error.NoWorkDir;
     var t: Tester = .{
         .arena = arena,
@@ -91,8 +91,9 @@ const script = struct {
 
 const Way = enum {
     alone,
+    /// `zigsaw run --sandbox=soft`, which starts node with zigsaw's token.
     zigsaw_run,
-    /// `zigsaw run --sandbox=low`, which starts node with another token.
+    /// `zigsaw run`, low by default, which starts node with another token.
     zigsaw_run_low,
     shim,
     /// Node started by a batch file, which runs alone or through `zigsaw run --command`.
@@ -205,11 +206,11 @@ const Tester = struct {
             .alone => try appendArg(t.arena, &line, t.node),
             .zigsaw_run => {
                 try appendArg(t.arena, &line, t.zigsaw);
-                try line.appendSlice(t.arena, " run org.nodejs.node");
+                try line.appendSlice(t.arena, " run --sandbox=soft org.nodejs.node");
             },
             .zigsaw_run_low => {
                 try appendArg(t.arena, &line, t.zigsaw);
-                try line.appendSlice(t.arena, " run --sandbox=low org.nodejs.node");
+                try line.appendSlice(t.arena, " run org.nodejs.node");
             },
             .shim => try appendArg(t.arena, &line, try std.fs.path.join(t.arena, &.{ t.store, "bin", "node.exe" })),
             // Windows runs a batch file given as the program through cmd.exe /c.

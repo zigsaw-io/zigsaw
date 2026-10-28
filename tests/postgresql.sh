@@ -6,10 +6,10 @@
 # data on its first run and serves it in the foreground; psql, pg_dump,
 # pg_restore, pg_basebackup and pg_ctl, each a run of its own, reach it on
 # 127.0.0.1 with the password the cluster was made with, from the password
-# file in the app's data. Under soft: TLS (a test certificate), pgcrypto on
-# OpenSSL, ICU collations, lz4 and zstd compression, XML, PL/Perl and
-# PL/Python (with errors raised through them), a dump restored, a backup
-# made, and nothing written in the deployment. Under low and in an
+# file in the app's data. At low integrity, the default: TLS (a test
+# certificate), pgcrypto on OpenSSL, ICU collations, lz4 and zstd
+# compression, XML, PL/Perl and PL/Python (with errors raised through them),
+# a dump restored, a backup made, and nothing written in the deployment. Under soft and in an
 # AppContainer: a cluster made there, with the server's default settings,
 # and the procedural languages (plperl.on_init too). Every run gets the
 # test's port with --port: the server's service is published there, so a
@@ -18,7 +18,7 @@
 # HNSW index answers a nearest-neighbour query, pg_cron, which the server
 # preloads, runs a job every second, and PostGIS transforms a point with
 # PROJ's proj.db, buffers with GEOS, reads GeoJSON and GML and uses a GiST
-# index (and makes a topology, under soft), and its rasters, on GDAL's DLL,
+# index (and makes a topology, at low), and its rasters, on GDAL's DLL,
 # give a band's values and statistics, reproject, and go through GeoTIFF
 # and PNG; --noextension leaves pg_cron out.
 #
@@ -100,7 +100,7 @@ is() {
 # with zigsaw's run options in RUN_OPTIONS. check runs it in a subshell, so
 # the server's run leaves its exit code in a file, for stop.
 start() {
-    local log="$work\\server-${SANDBOX:-soft}${RUN_OPTIONS:+-options}.out" i
+    local log="$work\\server-${SANDBOX:-low}${RUN_OPTIONS:+-options}.out" i
     rm -rf "$data\\data" "$data\\pgpass.conf" "$work\\server.exit"
     (
         timeout 600 "$zigsaw" run ${SANDBOX:+--sandbox=$SANDBOX} ${RUN_OPTIONS:-} $on_port $APP "$@" >"$log" 2>&1
@@ -132,7 +132,7 @@ vectors() {
     grep -qx 3 <<<"$out" && grep -q 'Index Scan using items_v_idx' <<<"$out" || { echo "$out"; return 1; }
 }
 # postgis: PostGIS on GEOS, PROJ (with proj.db, found through PROJ_DATA),
-# json-c and libxml2, and a GiST index; topology in soft only.
+# json-c and libxml2, and a GiST index; topology in the first pass only.
 postgis() {
     local out
     out=$(sql "create extension postgis" \
@@ -261,7 +261,7 @@ check "  and preloads nothing, while pgvector still joins" is "|1" \
 check "  and pg_ctl stops it" stop
 unset RUN_OPTIONS
 
-for SANDBOX in low appcontainer; do
+for SANDBOX in soft appcontainer; do
     check "$SANDBOX: postgresql makes a cluster and serves it" start -c 'plperl.on_init=$main::booted = 47;'
     check "$SANDBOX: with the server's default settings" is "100|128MB" "select current_setting('max_connections') || '|' || current_setting('shared_buffers')"
     check "$SANDBOX: PL/Perl runs" is "perl 5.42.3" \

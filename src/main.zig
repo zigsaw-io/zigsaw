@@ -53,6 +53,7 @@ const usage =
     \\                                  and the kinds of file they open
     \\  override [options] <app-id>     save run options that every run of the app gets;
     \\                                  --show shows them, --reset removes them
+    \\  override [options] --global     the same for every app, below each app's own
     \\  update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
     \\                                  one pulled again that may reach more asks first,
     \\                                  unless given --yes
@@ -85,10 +86,11 @@ const usage =
     \\  --file=<path>                   have the app open a file of yours: grants it that
     \\                                  file for the run, and adds its path to the app's
     \\                                  arguments
-    \\  --sandbox=soft|low|appcontainer soft (default) shapes the environment; low also keeps
-    \\                                  the app from writing anywhere but its data directory
-    \\                                  and the paths granted; appcontainer enforces all of
-    \\                                  the app's permissions
+    \\  --sandbox=soft|low|appcontainer soft shapes the environment; low (the default, unless
+    \\                                  the app's image asks for another) also keeps the app
+    \\                                  from writing anywhere but its data directory and the
+    \\                                  paths granted; appcontainer enforces all of the app's
+    \\                                  permissions
     \\  --filesystem=<location>[:ro]    grant access to a host location: cwd, an absolute path,
     \\                                  or one of your folders: desktop, documents, downloads,
     \\                                  music, pictures, videos
@@ -104,7 +106,8 @@ const usage =
     \\
     \\What the low and appcontainer sandboxes grant on host paths stays while the app's
     \\permissions and overrides give it; what a command line adds goes when the app's
-    \\last run ends.
+    \\last run ends. At low integrity, a working directory that's your user profile, a
+    \\directory it's in, or a drive's root stays read-only.
     \\
     \\An app's services (`info` lists them) are on localhost, on the ports its config says
     \\or --port gives, in every sandbox.
@@ -458,13 +461,15 @@ fn parseLoginOptions(args: []const [:0]const u8) !credentials.LoginOptions {
 }
 
 /// `zigsaw override [options] <app-id>`: saves run options that every run of
-/// the app gets. New options are added to the saved ones; `--reset` removes
-/// them all. Without options, or with `--show`, prints what's saved.
+/// the app gets; with `--global` instead of an app, every app's runs, below
+/// each app's own. New options are added to the saved ones; `--reset`
+/// removes them all. Without options, or with `--show`, prints what's saved.
 fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
     const arena = ctx.arena;
     var settings: SettingsParser = .{};
     var id: ?[]const u8 = null;
     var reset = false;
+    var global = false;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (!std.mem.startsWith(u8, args[i], "--")) {
@@ -472,28 +477,33 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
             id = args[i];
             continue;
         }
-        const opt = try Option.read(args, &i, &(SettingsParser.flags ++ [_][]const u8{ "show", "reset" }));
+        const opt = try Option.read(args, &i, &(SettingsParser.flags ++ [_][]const u8{ "show", "reset", "global" }));
         if (opt.value == null and std.mem.eql(u8, opt.name, "reset")) {
             reset = true;
+        } else if (opt.value == null and std.mem.eql(u8, opt.name, "global")) {
+            global = true;
         } else if (opt.value == null and std.mem.eql(u8, opt.name, "show")) {
             // Showing is what happens anyway.
         } else if (!try settings.apply(arena, opt)) {
             return fail("--{s} can't be saved as an override", .{opt.name});
         }
     }
-    const app = id orelse return usageError();
+    // An app's overrides, or with --global (and no app) the store-wide ones.
+    if (global == (id != null)) return usageError();
+    const app: ?[]const u8 = id;
+    const whose = app orelse "every app";
     const new = settings.finish();
 
     if (reset) {
-        if (!new.isEmpty()) return fail("--reset removes all of {s}'s overrides; add new ones separately", .{app});
+        if (!new.isEmpty()) return fail("--reset removes all of {s}'s overrides; add new ones separately", .{whose});
         try override.delete(ctx.store, arena, app);
-        note("{s} has no overrides now", .{app});
+        if (app) |a| note("{s} has no overrides now", .{a}) else note("there are no store-wide overrides now", .{});
         return settleGrants(ctx, app);
     }
     const saved = try override.load(ctx.store, arena, app);
     if (new.isEmpty()) {
         if (saved.isEmpty()) {
-            note("{s} has no overrides", .{app});
+            if (app) |a| note("{s} has no overrides", .{a}) else note("there are no store-wide overrides", .{});
             return;
         }
         var buf: [4096]u8 = undefined;
@@ -502,20 +512,26 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
         try stdout.interface.flush();
         return;
     }
-    if (try ctx.store.readRef(arena, app) == null) return fail("{s} is not installed", .{app});
+    if (app) |a| if (try ctx.store.readRef(arena, a) == null) return fail("{s} is not installed", .{a});
     const merged = try override.Settings.merge(arena, saved, new);
     try override.save(ctx.store, arena, app, merged);
-    if (merged.isEmpty()) {
-        note("{s} has no overrides now", .{app});
-    } else note("{s} now runs with {f}", .{ app, merged });
+    if (app) |a| {
+        if (merged.isEmpty()) {
+            note("{s} has no overrides now", .{a});
+        } else note("{s} now runs with {f}", .{ a, merged });
+    } else if (merged.isEmpty()) {
+        note("there are no store-wide overrides now", .{});
+    } else note("every app now runs with {f}, unless its own overrides choose otherwise", .{merged});
     try settleGrants(ctx, app);
 }
 
 /// Takes back what the app's runs were granted that its overrides no longer
-/// give it (see grants.zig), now unless a run of it is going.
-fn settleGrants(ctx: *Context, id: []const u8) !void {
-    if (!try grants.settleUnlessRunning(ctx, id))
-        note("{s} is running: what the change takes back goes when its last run ends", .{id});
+/// give it (see grants.zig), now unless a run of it is going; with a null
+/// id, what any app's were, after the store-wide overrides changed.
+fn settleGrants(ctx: *Context, id: ?[]const u8) !void {
+    const ids = if (id) |a| &[_][]const u8{a} else try ctx.store.listGrantIds(ctx.arena);
+    for (ids) |a| if (!try grants.settleUnlessRunning(ctx, a))
+        note("{s} is running: what the change takes back goes when its last run ends", .{a});
 }
 
 fn list(ctx: *Context) !void {

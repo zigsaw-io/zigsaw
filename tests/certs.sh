@@ -139,12 +139,14 @@ composer_get() {
     return 1
 }
 # Perl's image has no network permission, which an AppContainer needs.
-perl_get() { says ok z "$1" --share=network $PERL -MHTTP::Tiny -e 'my $r = HTTP::Tiny->new(verify_SSL => 1)->get($ARGV[0]); print $r->{success} ? $r->{content} : "$r->{status} $r->{content}\n"' "$url/ok"; }
+# Perl's scripts are files (below): with -e, Perl opens nul, which an
+# AppContainer on Server 2025 can't (tests/acprobe.zig).
+perl_get() { says ok z "$1" --share=network $PERL get.pl "$url/ok"; }
 # The file of Windows' roots the images that take only a file are given
 # (SSL_CERT_FILE=${roots}): the run can read it, and it has some.
 roots_read() {
     local n
-    n=$(z "$1" $PERL -e 'open my $f, "<", $ENV{SSL_CERT_FILE} or die "$ENV{SSL_CERT_FILE}: $!\n"; print scalar(grep /^-----BEGIN CERTIFICATE-----/, <$f>), "\n"' 2>"$work\\stderr" | tr -d '\r')
+    n=$(z "$1" $PERL roots.pl 2>"$work\\stderr" | tr -d '\r')
     [ "$n" -gt 0 ] 2>/dev/null || { echo "got \"$n\"; $(tr -d '\r' <"$work\\stderr" | grep -v '^\s*$' | tail -1)"; return 1; }
 }
 
@@ -162,9 +164,7 @@ done
 want() {
     case $1/$2 in
     zig_get/low) echo gap ;; # zig's std opens the store to write: CertificateBundleLoadFailure
-    jre_get/appcontainer | git_get/appcontainer | cmake_get/appcontainer) ac_if self-path-dos nul ;;
-    php_*/appcontainer | composer_get/appcontainer | perl_get/appcontainer | roots_read/appcontainer) ac_if self-path-dos nul ;;
-    zig_get/appcontainer) ac_if self-path-dos ;;
+    jre_get/appcontainer | git_get/appcontainer) ac_if self-path-dos nul ;;
     *) echo ok ;;
     esac
 }
@@ -226,6 +226,10 @@ serial=$(openssl x509 -noout -serial -in ca.crt | sed 's/^serial=//')
 echo "The test CA's serial: $serial"
 
 cp "$root\\tests\\certs\\server.py" "$root\\tests\\certs\\Get.java" .
+printf '%s\n' 'use HTTP::Tiny;' 'my $r = HTTP::Tiny->new(verify_SSL => 1)->get($ARGV[0]);' \
+    'print $r->{success} ? $r->{content} : "$r->{status} $r->{content}\n";' >get.pl
+printf '%s\n' 'open my $f, "<", $ENV{SSL_CERT_FILE} or die "$ENV{SSL_CERT_FILE}: $!\n";' \
+    'print scalar(grep /^-----BEGIN CERTIFICATE-----/, <$f>), "\n";' >roots.pl
 # On a failure, curl's own reason (Schannel's lines of its log) last.
 printf '%s\n' 'file(DOWNLOAD "${URL}" STATUS status TLS_VERIFY ON LOG log)' 'list(GET status 0 code)' 'list(GET status 1 why)' \
     'message(STATUS "download ${code}")' 'if(code)' '  message(STATUS "${why}")' \
@@ -260,6 +264,12 @@ if has $PERL; then
     for sandbox in soft low appcontainer; do
         row "$(want roots_read $sandbox)" "$sandbox: a run reads Windows' roots from \${roots}" roots_read $sandbox
     done
+    # A file written after the app's AppContainer runs were granted the one
+    # before, as when Windows' roots change: it comes from the store's tmp\
+    # with the ACL it had there, so each run grants the file itself.
+    rm -f "$(cygpath -u "$ZIGSAW_HOME")"/certs/roots-*.pem
+    roots_read soft >/dev/null
+    row "$(want roots_read appcontainer)" "appcontainer: reads it too when it's written after the app's grant" roots_read appcontainer
 fi
 
 # --- Once it does ------------------------------------------------------------

@@ -60,8 +60,18 @@ pub const Manifest = struct {
     annotations: ?std.json.ArrayHashMap([]const u8) = null,
 };
 
+/// How a run keeps an app in (see run.zig): `soft` shapes its environment
+/// only; `low` also keeps it from writing anywhere but its data and what it
+/// may write, at low integrity; `appcontainer` enforces every permission.
+pub const Sandbox = enum { soft, low, appcontainer };
+
 /// What an app may reach outside its own files, like Flatpak's finish-args.
 pub const Permissions = struct {
+    /// The sandbox the app's runs get unless you choose another (`zigsaw
+    /// override`): absent for `low`, the default. An app that can't run at
+    /// low integrity asks for `soft`, which lets it write wherever you can.
+    /// A zigsaw before 0.54 ignores it, and runs every app under soft.
+    sandbox: ?Sandbox = null,
     /// Outbound network access.
     network: bool = false,
     /// Host locations the app may use: "cwd", one of the user's folders
@@ -812,6 +822,7 @@ fn isValidLicense(l: []const u8) bool {
 /// Downloads; C:\data (read-only)".
 pub fn describePermissions(arena: std.mem.Allocator, p: Permissions) ![]const u8 {
     var parts: std.ArrayList([]const u8) = .empty;
+    if (p.sandbox == .soft) try parts.append(arena, "whatever you can write (it asks for the soft sandbox)");
     if (p.network) try parts.append(arena, "the network");
     var folders: [2]std.ArrayList([]const u8) = .{ .empty, .empty };
     for (p.filesystem) |spec| {
@@ -866,7 +877,8 @@ pub const Access = struct {
     }
 
     pub fn isEmpty(a: Access) bool {
-        return !a.permissions.network and a.permissions.filesystem.len == 0 and a.uses.len == 0 and a.registry.len == 0;
+        return a.permissions.sandbox != .soft and !a.permissions.network and a.permissions.filesystem.len == 0 and
+            a.uses.len == 0 and a.registry.len == 0;
     }
 };
 
@@ -881,8 +893,8 @@ pub fn addUses(arena: std.mem.Allocator, list: *std.ArrayList(Use), more: []cons
 }
 
 /// What `after` lets an app reach that `before` didn't, which an update asks
-/// about: the network, a location it couldn't use, or could only read, a
-/// port it didn't use, and a key it didn't keep. A location or key inside
+/// about: the soft sandbox, the network, a location it couldn't use, or
+/// could only read, a port it didn't use, and a key it didn't keep. A location or key inside
 /// one it had counts as had.
 pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Access {
     var uses: std.ArrayList(Use) = .empty;
@@ -908,7 +920,11 @@ pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Acc
         if (!had) try keys.append(arena, key);
     }
     return .{
-        .permissions = .{ .network = after.permissions.network and !before.permissions.network, .filesystem = filesystem.items },
+        .permissions = .{
+            .sandbox = if (after.permissions.sandbox == .soft and before.permissions.sandbox != .soft) .soft else null,
+            .network = after.permissions.network and !before.permissions.network,
+            .filesystem = filesystem.items,
+        },
         .uses = uses.items,
         .registry = keys.items,
     };
@@ -959,6 +975,14 @@ test addedAccess {
     try std.testing.expectEqualStrings("C:\\Database", added.permissions.filesystem[3]);
     try std.testing.expectEqual(1, added.registry.len);
     try std.testing.expectEqualStrings("Software\\Other", added.registry[0]);
+    try std.testing.expectEqual(null, added.permissions.sandbox);
+
+    // Asking for the soft sandbox is access; asking for another isn't.
+    const soft: Access = .{ .permissions = .{ .sandbox = .soft } };
+    try std.testing.expectEqual(Sandbox.soft, (try addedAccess(arena, before, soft)).permissions.sandbox.?);
+    try std.testing.expect(!(try addedAccess(arena, before, soft)).isEmpty());
+    try std.testing.expect((try addedAccess(arena, soft, soft)).isEmpty());
+    try std.testing.expect((try addedAccess(arena, before, .{ .permissions = .{ .sandbox = .appcontainer } })).isEmpty());
 }
 
 test describePermissions {
@@ -966,6 +990,11 @@ test describePermissions {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     try std.testing.expectEqualStrings("nothing outside its own files", try describePermissions(arena, .{}));
+    try std.testing.expectEqualStrings("nothing outside its own files", try describePermissions(arena, .{ .sandbox = .appcontainer }));
+    try std.testing.expectEqualStrings(
+        "whatever you can write (it asks for the soft sandbox); the network",
+        try describePermissions(arena, .{ .sandbox = .soft, .network = true }),
+    );
     try std.testing.expectEqualStrings(
         "the network; the directory you run it from; C:\\data (read-only); \"xdg-later\", which this zigsaw doesn't know; your Desktop, Downloads and Videos; your Music (read-only)",
         try describePermissions(arena, .{ .network = true, .filesystem = &.{ "cwd", "desktop", "C:\\data:ro", "downloads:rw", "music:ro", "videos", "xdg-later" } }),
@@ -1516,6 +1545,22 @@ test "layers must match the runtimes" {
 
     try c.runtimes.map.put(arena, "node2", .{ .id = "org.nodejs.NODE", .version = "22", .image = digest, .layer = other });
     try std.testing.expectError(error.Failed, validateConfig("test", c));
+}
+
+test "permissions.sandbox: absent unless an image asks for one" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const c: AppConfig = .{ .id = "x", .version = "1", .command = "x.exe" };
+    // Absent, so the configs of images that don't ask stay as they were.
+    try std.testing.expect(std.mem.indexOf(u8, try toJson(arena, c), "sandbox") == null);
+    var soft = c;
+    soft.permissions.sandbox = .soft;
+    const json = try toJson(arena, soft);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"sandbox\": \"soft\"") != null);
+    const parsed = try parseConfig(arena, "test", media_type.config, json);
+    try std.testing.expectEqual(Sandbox.soft, parsed.permissions.sandbox.?);
+    try std.testing.expectError(error.Failed, parseConfig(arena, "test", media_type.config, "{\"id\": \"x\", \"version\": \"1\", \"command\": \"x.exe\", \"permissions\": {\"sandbox\": \"none\"}}"));
 }
 
 test "runtimes' aliases" {

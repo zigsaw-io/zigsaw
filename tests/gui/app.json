@@ -2,6 +2,7 @@
   "id": "test.shims.gui",
   "version": "1",
   "command": "gui.exe",
+  "permissions": { "sandbox": "soft" },
   "exports": {
     "gui-app": { "command": "gui.exe" },
     "console-app": { "command": "argv.exe" }

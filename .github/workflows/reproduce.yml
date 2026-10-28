@@ -275,7 +275,7 @@ jobs:
 
       # osm2pgsql as published, against PostgreSQL's server with PostGIS
       # under soft, in the seeded store: under soft and low, and in an
-      # AppContainer, where it can't reach the server (a known gap).
+      # AppContainer, through the port it declares it uses.
       - name: tests/osm2pgsql.sh
         if: ${{ !cancelled() }}
         shell: bash

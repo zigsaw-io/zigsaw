@@ -12,17 +12,27 @@
   sandbox.
 - What an app's runs are granted on host paths stays while its
   permissions and saved overrides give it
-  ([how long grants last](../README.md#how-long-grants-last)): every working
+  ([how long grants last](how-it-works.md#how-long-grants-last)): every working
   directory its runs had stays granted while it keeps `cwd`, as granting a
-  big one again on each run would take a while. A sandbox given only on the
-  command line grants the app's folders afresh on each run and takes them
-  back after, which takes a while for a big folder. `--nofilesystem` on a
+  big one again on each run would take a while. Under `low`, the default,
+  such labels pile up: each directory you ran an app with `cwd` in, and your
+  folders that installed apps may write, stay labelled low, and any
+  low-integrity program, not only the app, may write there meanwhile. A
+  sandbox given only on the command line grants the app's folders afresh
+  on each run and takes them back after, which takes a while for a big
+  folder. `--nofilesystem` on a
   run's command line doesn't take back a grant that stands for that run:
   an AppContainer run can still reach the path by its name. A run that
   didn't end (zigsaw was killed, or its console closed) leaves its grants
   until the app's next run ends, `zigsaw repair` or `zigsaw rm`. Two stores
   don't know each other's labels: taking one back for an app in one store
   takes it from an app of the other that needs it too.
+- At low integrity, an app with `cwd` run from your user profile, a folder
+  that holds it, or a drive's root gets its working directory read-only for
+  that run, with a warning, as labelling it would let every low-integrity
+  program write anywhere in it: a command that writes there fails (`npm
+  init` in your home folder). Run it from a folder inside, or with
+  `--sandbox=soft`.
 - `--sandbox=low` labels only paths whose permissions you may change, which
   you may for what you own. Labelling needs the right to change a path's
   owner, which a second drive whose root gives users only Modify (a fresh
@@ -33,7 +43,8 @@
   and use the network whatever its permissions say. At low integrity,
   writing to the registry fails outside `HKCU\Software\AppDataLow`, and the
   few directories Windows labels low itself, such as `AppData\LocalLow`, can
-  be written.
+  be written. System32's `ping` fails at low integrity (`transmit failed.
+  General failure.`): Windows' ICMP refuses it.
 - An app's services are on the loopback only: serving other machines takes
   a firewall rule, which takes an administrator. Under `soft` and `low`,
   nothing keeps an app from listening wherever it likes. Under
@@ -80,8 +91,12 @@
   revocation status is unknown` (CMake: `SSL connect error`), as a network
   whose CA doesn't publish one would make it. MinGit's git, on the same
   Schannel, lets it pass.
-- `zig fetch` doesn't work at low integrity: zig's std can't open Windows'
-  roots there, as it asks to write them (`CertificateBundleLoadFailure`).
+- `zig fetch` doesn't work at low integrity, zig's default sandbox since
+  zigsaw 0.54, so neither does `zig build` for a project whose
+  dependencies aren't fetched yet: zig's std can't open Windows' roots
+  there, as it asks to write them (`CertificateBundleLoadFailure`), and the
+  compiler has its std built in. `zigsaw override --sandbox=soft
+  org.ziglang.zig` lets it fetch.
   In an AppContainer, it needs `--share=network`, which zig's image
   doesn't have.
 - Java's images trust the machine's roots in Windows' store. That leaves
@@ -114,11 +129,12 @@
 - Installing an app with many files is limited by Defender scanning each new
   file: about 16 s for zig's 19.5k files, 3 s for Node.
 - The registry is kept apart only for the keys an app's image declares
-  (`registry`, as 7-Zip's does). Under `soft`, an app that writes other keys
-  in `HKEY_CURRENT_USER` writes the real registry, and leaves them behind
-  after `zigsaw rm`; at low integrity and in an AppContainer such writes
-  fail, and apps carry on without them. No override or run option adds a
-  key to an app's.
+  (`registry`, as 7-Zip's does). At low integrity, the default, and in an
+  AppContainer, an app's writes to other keys in `HKEY_CURRENT_USER` fail,
+  and apps carry on without them (Flameshot's "Launch at startup", Java's
+  preferences of an app whose image declares no key). Under `soft`, such an
+  app writes the real registry, and leaves the keys behind after `zigsaw
+  rm`. No override or run option adds a key to an app's.
 - The keys an app keeps are in the real HKCU while it runs. A copy of the app
   installed the usual way, running at the same time, sees the zigsaw app's
   settings instead of its own (which are aside), and what it saves meanwhile
@@ -145,9 +161,9 @@
   real ones, in every sandbox. Saved Games, Contacts, Favorites, Links and
   Searches, and the Public folders, can't be granted by name.
 - A folder is granted whole: there's no `documents/Notes` for one folder in
-  it. Under `--sandbox=low` a writable folder stays labelled low integrity
-  while the app's overrides choose low and it may write the folder, so any
-  low-integrity program can write in all of your Documents meanwhile.
+  it. Under `low`, the default, a writable folder stays labelled low
+  integrity while the app may write the folder, so any low-integrity
+  program can write in all of your Documents meanwhile.
   Granting a folder changes the ACL of every file in it, which takes a
   while for a big one, and so does taking it back.
 - A folder whose location Windows keeps as a path with a variable other
@@ -278,8 +294,9 @@
 - Pinta has no WebP: GTK's runtime has no WebP loader for GdkPixbuf, which
   Pinta's own Windows build brings. Its own strings follow Windows' display
   language only: `LANGUAGE` changes GTK's and libadwaita's, not Pinta's.
-- Files works in the `soft` sandbox only. At low integrity and in an
-  AppContainer, Windows' storage APIs refuse a program without a package:
+- Files works in the `soft` sandbox only, which its image asks for. At low
+  integrity and in an AppContainer, Windows' storage APIs refuse a program
+  without a package:
   Files starts and lists folders, but shows no drives, and a dialog asks for
   a permission only a package can have.
 - Files runs without the package it's made for, so what its package gives
@@ -387,7 +404,8 @@
   may write (its data, writable grants, `TEMP`): PHP leaves the integrity
   label out of its access check ([findings](findings.md#phps-is_writable-at-low-integrity)).
   PHP code that checks before it writes refuses: Kanboard doesn't start
-  under `--sandbox=low`. It works under `soft` and `--sandbox=appcontainer`.
+  under `--sandbox=low`, so its image asks for `soft`. It works under `soft`
+  and `--sandbox=appcontainer`.
 - Kanboard is served by PHP's built-in web server, which handles one
   request at a time and is meant for development: fine for one person on
   their own machine, not for a team. Its plugin installer is off, as
@@ -597,9 +615,10 @@
 - Qt's runtime is one image: an app that only uses Widgets, as Flameshot,
   gets QML and Qt Quick with it, 153 MB deployed (56 MB compressed) where
   the Widgets set alone was 75 (29).
-- Flameshot's "Launch at startup" writes your real `HKCU\...\Run` under
-  `soft`, naming the program in its deployment rather than its shim, so an
-  update leaves it pointing at the old version. Its `flameshot-cli.exe` isn't
+- Flameshot's "Launch at startup" does nothing at low integrity, its
+  default sandbox; under `soft` it writes your real `HKCU\...\Run`, naming
+  the program in its deployment rather than its shim, so an update leaves
+  it pointing at the old version. Its `flameshot-cli.exe` isn't
   in the image (it cuts commands off at about 80 characters); `zigsaw run`
   passes `flameshot.exe`'s output on instead.
 - CI checks Qt's family, like GTK's, on a push only when something it's

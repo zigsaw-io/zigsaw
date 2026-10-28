@@ -12,7 +12,7 @@
 # "fails" (exits non-zero). The soft sandbox doesn't enforce permissions, so
 # its intended outcome for a denied action is "ok"; the low sandbox enforces
 # only where the app may write. "gap" means "ok" is intended, but zigsaw
-# doesn't manage it yet (see the README's Known gaps and docs/findings.md): a
+# doesn't manage it yet (see docs/gaps.md and docs/findings.md): a
 # failure is reported, but isn't a mismatch, so the matrix fails only for
 # results that changed.
 #

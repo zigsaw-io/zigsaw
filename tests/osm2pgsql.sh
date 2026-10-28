@@ -70,7 +70,7 @@ gap() {
 pg() {
     local command=$1
     shift
-    timeout 120 "$zigsaw" run --command=$command $PG "$@"
+    timeout 120 "$zigsaw" run --sandbox=soft --command=$command $PG "$@"
 }
 # sql <database> <statement...>: psql's unaligned output, one line per row.
 sql() {
@@ -92,7 +92,7 @@ start() {
     local log="$work\\server.out" i
     rm -rf "$data\\data" "$data\\pgpass.conf" "$work\\server.exit"
     (
-        timeout 600 "$zigsaw" run $PG -p $port >"$log" 2>&1
+        timeout 600 "$zigsaw" run --sandbox=soft $PG -p $port >"$log" 2>&1
         echo $? >"$work\\server.exit"
     ) </dev/null >/dev/null 2>&1 &
     for i in $(seq 60); do

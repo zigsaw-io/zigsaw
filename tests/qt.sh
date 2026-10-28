@@ -97,7 +97,7 @@ painted() {
     grep -q '^Qt 6\.12\.0$' <<<"$out" && grep -q '^painted a window with windows$' <<<"$out" || { echo "got: $out"; return 1; }
 }
 check "it runs on Qt's runtime: opens a window and paints it" painted
-check "with --sandbox=low" painted --sandbox=low
+check "with --sandbox=soft" painted --sandbox=soft
 check "with --sandbox=appcontainer" painted --sandbox=appcontainer
 # say <label>: the line the app printed after the label, without a window.
 say() { timeout 60 "$zigsaw" run $APP --no-window 2>&1 | tr -d '\r' | sed -n "s/^$1 //p"; }
@@ -136,7 +136,7 @@ quick() {
     grep -q '^drew a frame with Direct3D11, corner #3a7bd5$' <<<"$out" || { echo "got: $out"; return 1; }
 }
 check "a Qt Quick app draws its window of Controls with Direct3D 11" quick
-check "with --sandbox=low" quick --sandbox=low
+check "with --sandbox=soft" quick --sandbox=soft
 check "with --sandbox=appcontainer" quick --sandbox=appcontainer
 quick_imports() {
     local qml
@@ -224,10 +224,10 @@ app_window() {
 designer_window() { app_window designer "Qt Widgets Designer" "$@" io.qt.Qt6; }
 linguist_window() { app_window linguist "Qt Linguist" "$@" --command=linguist io.qt.Qt6; }
 check "Designer opens its window" designer_window
-check "with --sandbox=low" designer_window --sandbox=low
+check "with --sandbox=soft" designer_window --sandbox=soft
 check "with --sandbox=appcontainer" designer_window --sandbox=appcontainer
 check "Linguist, on Qt Quick, opens its window" linguist_window
-check "with --sandbox=low" linguist_window --sandbox=low
+check "with --sandbox=soft" linguist_window --sandbox=soft
 check "with --sandbox=appcontainer" linguist_window --sandbox=appcontainer
 # Programs in the runtime's bin, beside Qt6Core.dll, would take bin for Qt's
 # prefix without its qt.conf (Qt looks for lib\libQt6Core.a to tell), and
@@ -246,7 +246,7 @@ fi
 check "Flameshot 14.0.0 is installed" sh -c "timeout 60 \"\$0\" run $FLAMESHOT --version 2>&1 | tr -d '\r' | grep -q 'Flameshot v14\\.0\\.0'" "$zigsaw"
 check "it gets the windowless shim and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\flameshot.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\Flameshot.lnk'"
 check "it runs, in the tray" stays_up 15 $FLAMESHOT
-check "with --sandbox=low" stays_up 15 --sandbox=low $FLAMESHOT
+check "with --sandbox=soft" stays_up 15 --sandbox=soft $FLAMESHOT
 check "with --sandbox=appcontainer" stays_up 15 --sandbox=appcontainer $FLAMESHOT
 # screenshot <zigsaw run arguments...>: `flameshot full` saves a PNG of the
 # whole screen in Pictures, which the app may use, and exits.
@@ -260,7 +260,7 @@ screenshot() {
     head -c 8 "$png" | od -A n -t x1 | grep -q '89 50 4e 47' || { echo "$png isn't a PNG"; return 1; }
 }
 check "its full command saves a screenshot in Pictures" screenshot
-check "with --sandbox=low" screenshot --sandbox=low
+check "with --sandbox=soft" screenshot --sandbox=soft
 check "with --sandbox=appcontainer" screenshot --sandbox=appcontainer
 
 # Notes (recipes/notes.json), on the runtime's Qt Quick: its window in each
@@ -277,7 +277,7 @@ fi
 check "Notes gets the windowless shim and a shortcut" sh -c "cmp -s '$ZIGSAW_HOME\\bin\\notes.exe' '$shim_dir\\zigsaw-shimw.exe' && test -f '$links\\Notes.lnk'"
 notes_window() { app_window Notes Notes "$@" $NOTES; }
 check "Notes opens its window" notes_window
-check "with --sandbox=low" notes_window --sandbox=low
+check "with --sandbox=soft" notes_window --sandbox=soft
 check "with --sandbox=appcontainer" notes_window --sandbox=appcontainer
 # Qt's messages go to stderr when it's told so; a QML error names its qrc:/
 # file.

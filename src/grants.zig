@@ -10,9 +10,9 @@
 //! takes milliseconds.
 //!
 //! A change to a path stays between runs only while a run of the app with
-//! nothing on its command line would make it again: under the sandbox the
-//! app's overrides choose, for the paths and user folders its permissions and
-//! overrides name, and for the working directories such runs had, while
+//! nothing on its command line would make it again: under the sandbox its
+//! overrides choose, or its image asks for, or low, for the paths and user
+//! folders its permissions and overrides name, and for the working directories such runs had, while
 //! the app keeps `cwd` (granting a large directory takes a while, so they
 //! aren't granted afresh on each run). What a run's command line asked for,
 //! with `--file`, `--filesystem` or `--sandbox`, goes when the app's last
@@ -228,21 +228,21 @@ fn millis(ctx: *Context, start: Io.Timestamp) i64 {
 
 /// What a run of the app with nothing on its command line would be given.
 const Standing = struct {
-    sandbox: override.Sandbox = .soft,
+    sandbox: override.Sandbox,
     paths: []const Path = &.{},
     /// The access its working directory would have, if it has `cwd`.
     cwd: ?acl.Access = null,
 
     const Path = struct { path: []const u8, access: acl.Access };
 
-    /// From the installed app's permissions and overrides. An app that
-    /// isn't installed would be given nothing.
+    /// From the installed app's permissions and overrides, as run.zig has
+    /// them. An app that isn't installed would be given nothing.
     fn of(ctx: *Context, id: []const u8) !Standing {
         const arena = ctx.arena;
-        const ref = try ctx.store.readRef(arena, id) orelse return .{};
+        const ref = try ctx.store.readRef(arena, id) orelse return .{ .sandbox = .soft };
         const image = try ctx.store.readImage(arena, id, ref.manifest);
-        const saved = try override.load(ctx.store, arena, id);
-        var s: Standing = .{ .sandbox = saved.sandbox orelse .soft };
+        const saved = try override.loadFor(ctx.store, arena, id);
+        var s: Standing = .{ .sandbox = override.sandboxOf(saved, image.config.permissions) };
         // A soft run changes no ACL.
         if (s.sandbox == .soft) return s;
         var paths: std.ArrayList(Path) = .empty;
@@ -353,7 +353,7 @@ test "Standing.keeps: under the saved sandbox, for what the app may reach withou
     const no_cwd: Standing = .{ .sandbox = .appcontainer, .paths = &paths };
     try std.testing.expectEqual(null, no_cwd.keeps(ac("D:\\proj"), true));
     // Nothing stands under soft, or for an app that isn't installed.
-    const soft: Standing = .{};
+    const soft: Standing = .{ .sandbox = .soft };
     try std.testing.expectEqual(null, soft.keeps(ac("D:\\rw"), true));
     try std.testing.expectEqual(null, soft.keeps(low("D:\\rw"), true));
     // The loopback exemption never does.

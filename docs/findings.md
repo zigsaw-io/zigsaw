@@ -1569,7 +1569,11 @@ use:
    Drive-letter conversion and `lstat("C:\\")` work at low integrity, and so
    does every tool tested ([iteration 8](#a-low-integrity-sandbox)), as long
    as the deployments' ACLs name no AppContainer. *Built in iteration 9 as
-   `--sandbox=low`* ([above](#the-low-sandbox)).
+   `--sandbox=low`* ([above](#the-low-sandbox)), *and the default since
+   iteration 54*: the matrix's low column had had no gap on Windows 11 and
+   Server 2025 since iteration 13, and a working directory low won't label
+   (your profile, a drive's root) became read-only for the run instead of
+   refused.
 3. **A one-time admin setup step.** Granting `ALL APPLICATION PACKAGES` read
    access to `C:\`'s attributes would fix the Node failures (restriction 2).
    Drive-letter conversion (restriction 1) would still fail, so this alone

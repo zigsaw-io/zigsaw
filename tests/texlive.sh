@@ -9,8 +9,9 @@
 # starts, latexmk runs on Perl's image (TeX Live's own Perl isn't in the
 # image), and epstopdf and ps2pdf on Ghostscript's. kpathsea's variable
 # trees are in the data directory; nothing is written in the deployment; a
-# PDF made twice with SOURCE_DATE_EPOCH is the same bytes. pdfLaTeX and
-# LuaLaTeX run at low integrity too, and pdfLaTeX in an AppContainer.
+# PDF made twice with SOURCE_DATE_EPOCH is the same bytes. All at low
+# integrity, the default; pdfLaTeX and LuaLaTeX under soft too, and pdfLaTeX
+# in an AppContainer.
 #
 # Where Windows denies AppContainers listing the drive root
 # (tests/acprobe.sh: self-long-name, as on Windows 11 26300), kpathsea can't
@@ -152,9 +153,9 @@ written() {
 }
 check "nothing was written in the deployment, which has no formats" written
 
-SANDBOX=low check "pdfLaTeX at low integrity" typeset pdflatex hello.tex low
-# A format made at low integrity, in the data directory as low runs see it.
-SANDBOX=low check "LuaLaTeX at low integrity" typeset lualatex fonts.tex lowlua
+SANDBOX=soft check "pdfLaTeX under soft" typeset pdflatex hello.tex soft
+# A format made at low integrity, in the data directory as soft runs see it.
+SANDBOX=soft check "LuaLaTeX under soft" typeset lualatex fonts.tex softlua
 SANDBOX=appcontainer check_want "$(ac_if self-long-name)" "pdfLaTeX in an AppContainer" typeset pdflatex hello.tex ac
 
 check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"

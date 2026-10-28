@@ -182,6 +182,16 @@ built_in_libs() {
     (cd "$work\\cwd" && z run $PHP --ri zstd 2>&1) | tr -d '\r' | grep -qx 'Zstd library => external' || { echo "zstd's library isn't the one its recipe built"; return 1; }
 }
 check "yaml and zstd work with the libraries their recipes built (zstd's external, not its bundled copy)" built_in_libs
+# Xdebug's traces and profiles go to the run's TEMP, in the app's data, which
+# a low-integrity run may write, unlike Xdebug's default, C:\Windows\Temp.
+traces() {
+    local sb out
+    for sb in soft low appcontainer; do
+        out=$(cd "$work\\cwd" && z run --sandbox=$sb --env=XDEBUG_MODE=trace $PHP -r '$f = xdebug_start_trace(); xdebug_stop_trace(); echo str_starts_with($f, ini_get("xdebug.output_dir")) && is_file($f) ? "ok" : "no trace in " . ini_get("xdebug.output_dir"), "\n";' 2>&1 | tr -d '\r' | grep -E '^(ok|no trace)')
+        [ "$out" = ok ] || { echo "$sb, got: $out"; return 1; }
+    done
+}
+check "Xdebug writes its traces to the run's TEMP, under soft, low and appcontainer" traces
 
 # APCu's tests, from its release tarball, which its build left in the
 # store's downloads.
@@ -217,9 +227,11 @@ xdebug_sources() {
     tar -xzf "$(cygpath -u "$xdebug_tgz")" -C "$(cygpath -u "$work\\xdebug")" --strip-components=1
 }
 check "Xdebug's tests come from its 3.5.3 tag" xdebug_sources
+# Under soft: its tests write logs where Xdebug's own CI may, such as
+# C:\Windows\Temp, which a low-integrity run can't.
 xdebug_suite() {
     local out
-    out=$(cd "$work\\xdebug" && z run --command=php-ext $SDK test --runner run-xdebug-tests.php "$@" --ext "$(deploy_of $XDEBUG)\\php_xdebug.dll" 2>&1 | tr -d '\r')
+    out=$(cd "$work\\xdebug" && z run --sandbox=soft --command=php-ext $SDK test --runner run-xdebug-tests.php "$@" --ext "$(deploy_of $XDEBUG)\\php_xdebug.dll" 2>&1 | tr -d '\r')
     passed "$out"
 }
 check "Xdebug passes its tests: base, coverage, develop, filter, gcstats, library, profiler, tracing" \

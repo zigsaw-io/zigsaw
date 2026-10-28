@@ -42,6 +42,8 @@ manifest="$ZIGSAW_HOME\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOM
 deploy="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$manifest" | tail -1 | cut -d: -f2)"
 
 # What cmd.exe would act on if it reached it unquoted, and the edge cases of quoting.
+# The app's image asks for the soft sandbox, so that a command an argument
+# ran could write this.
 injected="$work\\injected.txt"
 args=(
     plain "" " " "two words" 'C:\dir\' 'C:\dir with space\' 'a\b' '\\server\share\'

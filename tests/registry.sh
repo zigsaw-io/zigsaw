@@ -32,6 +32,9 @@ if ! curl -sf "http://${registry/localhost/127.0.0.1}/v2/" >/dev/null; then
 fi
 
 work=$(cygpath -w "$(mktemp -d)")
+# Low runs (the default) label the working directory of an app with cwd: the
+# runs go from a scratch one, not the repository.
+cd "$work" || exit 1
 repo="$registry/zigsaw-test-$RANDOM"
 # Docker's logins are the test's own (none, until the checks write some),
 # not those of whoever runs it.
@@ -574,6 +577,8 @@ if [ -n "${AUTH_REGISTRY:-}" ]; then
     docker_config '{}'
     za logout "$AUTH_REGISTRY" >/dev/null 2>&1
 fi
+
+check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
 # Installed apps are protected against deletion, so remove them through
 # zigsaw, and the images builds use with prune --downloads.

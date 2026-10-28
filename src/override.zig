@@ -1,6 +1,9 @@
-//! Per-app overrides: run options saved for an app, which every run of it
-//! gets, like `flatpak override`. Shims run apps through `zigsaw run`, so
-//! overrides reach them too. They are kept in <root>\overrides\<id>.json.
+//! Overrides: run options saved for an app, which every run of it gets, like
+//! `flatpak override`, and for every app at once (`--global`), below each
+//! app's own. Shims run apps through `zigsaw run`, so overrides reach them
+//! too. An app's are kept in <root>\overrides\<id>.json, the store-wide ones
+//! in <root>\overrides.json (an id needn't have a dot, so no name in
+//! overrides\ is free for them).
 
 const std = @import("std");
 const Io = std.Io;
@@ -10,11 +13,12 @@ const Store = @import("Store.zig");
 const oci = @import("oci.zig");
 const fail = Context.fail;
 
-pub const Sandbox = enum { soft, low, appcontainer };
+pub const Sandbox = oci.Sandbox;
 
 /// Run options that can be given on the command line or saved as overrides.
 /// Null or empty fields leave the choice to the layer below: the command line
-/// goes over overrides, and overrides over the app's own permissions.
+/// goes over the app's overrides, those over the store-wide ones, and those
+/// over the app's own permissions.
 pub const Settings = struct {
     sandbox: ?Sandbox = null,
     network: ?bool = null,
@@ -128,6 +132,12 @@ pub const Settings = struct {
     }
 };
 
+/// The sandbox a run with `s` gets: the one the settings choose, else the one
+/// the app's image asks for, else low.
+pub fn sandboxOf(s: Settings, permissions: oci.Permissions) Sandbox {
+    return s.sandbox orelse permissions.sandbox orelse .low;
+}
+
 /// A --port value, "NAME=PORT", as two parts; null if it isn't one.
 pub fn parsePort(value: []const u8) ?struct { name: []const u8, port: u16 } {
     const eq = std.mem.indexOfScalar(u8, value, '=') orelse return null;
@@ -180,31 +190,41 @@ fn envName(assignment: []const u8) []const u8 {
     return assignment[0 .. std.mem.indexOfScalar(u8, assignment, '=') orelse assignment.len];
 }
 
-fn filePath(store: Store, arena: Allocator, id: []const u8) ![]u8 {
-    if (!oci.isValidId(id)) return fail("\"{s}\" is not a valid app id", .{id});
-    return store.path(arena, &.{ "overrides", try std.fmt.allocPrint(arena, "{s}.json", .{id}) });
+/// Whose overrides: an app's, by id, or with null the store-wide ones.
+fn filePath(store: Store, arena: Allocator, id: ?[]const u8) ![]u8 {
+    const app = id orelse return store.path(arena, &.{"overrides.json"});
+    if (!oci.isValidId(app)) return fail("\"{s}\" is not a valid app id", .{app});
+    return store.path(arena, &.{ "overrides", try std.fmt.allocPrint(arena, "{s}.json", .{app}) });
 }
 
-/// The app's saved overrides; empty if it has none.
-pub fn load(store: Store, arena: Allocator, id: []const u8) !Settings {
+/// The app's saved overrides, or with a null id the store-wide ones; empty
+/// if there are none.
+pub fn load(store: Store, arena: Allocator, id: ?[]const u8) !Settings {
     const p = try filePath(store, arena, id);
     const bytes = Io.Dir.cwd().readFileAlloc(store.io, p, arena, .limited(1 << 20)) catch |err| switch (err) {
         error.FileNotFound => return .{},
         else => |e| return e,
     };
     return std.json.parseFromSliceLeaky(Settings, arena, bytes, .{}) catch |err|
-        fail("{s}: {t}; fix it, or remove it with `zigsaw override --reset {s}`", .{ p, err, id });
+        fail("{s}: {t}; fix it, or remove it with `zigsaw override --reset {s}`", .{ p, err, id orelse "--global" });
 }
 
-/// Replaces the app's saved overrides. Saving none deletes the file.
-pub fn save(store: Store, arena: Allocator, id: []const u8, s: Settings) !void {
+/// What the overrides give a run of the app: its own over the store-wide
+/// ones.
+pub fn loadFor(store: Store, arena: Allocator, id: []const u8) !Settings {
+    return Settings.merge(arena, try load(store, arena, null), try load(store, arena, id));
+}
+
+/// Replaces the app's saved overrides, or with a null id the store-wide
+/// ones. Saving none deletes the file.
+pub fn save(store: Store, arena: Allocator, id: ?[]const u8, s: Settings) !void {
     if (s.isEmpty()) return delete(store, arena, id);
     const tmp = try store.tmpPath(arena, "override");
     try Io.Dir.cwd().writeFile(store.io, .{ .sub_path = tmp, .data = try oci.toJson(arena, s) });
     try Io.Dir.rename(.cwd(), tmp, .cwd(), try filePath(store, arena, id), store.io);
 }
 
-pub fn delete(store: Store, arena: Allocator, id: []const u8) !void {
+pub fn delete(store: Store, arena: Allocator, id: ?[]const u8) !void {
     Io.Dir.cwd().deleteFile(store.io, try filePath(store, arena, id)) catch |err| switch (err) {
         error.FileNotFound => {},
         else => |e| return e,
@@ -309,6 +329,29 @@ test "Settings.merge: --port replaces a lower layer's for the same service" {
 
     // A zigsaw from before ports reads settings without them.
     try std.testing.expect(std.mem.indexOf(u8, try oci.toJson(arena, Settings{ .network = true }), "ports") == null);
+}
+
+test sandboxOf {
+    try std.testing.expectEqual(Sandbox.low, sandboxOf(.{}, .{}));
+    try std.testing.expectEqual(Sandbox.soft, sandboxOf(.{}, .{ .sandbox = .soft }));
+    try std.testing.expectEqual(Sandbox.appcontainer, sandboxOf(.{ .sandbox = .appcontainer }, .{ .sandbox = .soft }));
+    try std.testing.expectEqual(Sandbox.low, sandboxOf(.{ .sandbox = .low }, .{ .sandbox = .soft }));
+}
+
+test "Settings.merge: the layers, store-wide under the app's under the command line" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const global: Settings = .{ .sandbox = .soft, .env = &.{"A=global"}, .noextension = &.{"x.y"} };
+    const app: Settings = .{ .env = &.{"A=app"}, .extension = &.{"x.y"} };
+    const s = try Settings.merge(arena, global, app);
+    // The app's own sandbox isn't saved: the store-wide one holds.
+    try std.testing.expectEqual(Sandbox.soft, sandboxOf(s, .{ .sandbox = .appcontainer }));
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{"A=app"}), s.env);
+    // The app has an extension the store-wide overrides leave out join.
+    try std.testing.expectEqual(0, s.noextension.len);
+    const cli = try Settings.merge(arena, s, .{ .sandbox = .appcontainer });
+    try std.testing.expectEqual(Sandbox.appcontainer, sandboxOf(cli, .{}));
 }
 
 test "Settings round-trips through JSON" {

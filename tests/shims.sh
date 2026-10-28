@@ -60,6 +60,9 @@ via_cmd() {
 }
 
 (cd "$root" && zig build gui-fixture argv-echo) || { echo "building the test programs failed"; exit 1; }
+# Low runs label the working directories of apps with cwd: not the
+# repository's.
+cd "$work" || exit 1
 "$zigsaw" build "$root/recipes/node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
 
 check "node, npm and npx shims exist" \
@@ -151,21 +154,22 @@ check "rm removes the app's shims only" sh -c "\"\$0\" rm $NODE >/dev/null 2>&1 
 mkdir -p "$work\\outside"
 fails() { ! "$@"; }
 writes_outside() { via_cmd "other-tool sh -c \"echo x > '$work\\outside\\f'\""; }
-check "a shim writes anywhere by default (soft sandbox)" writes_outside
-"$zigsaw" override --sandbox=appcontainer "$OTHER" >/dev/null 2>&1
-check "an appcontainer override keeps the shim from writing there" fails writes_outside
-rebuild_keeps() { "$zigsaw" build "$work\\other.json" >/dev/null 2>&1 && ! writes_outside; }
+check "a shim keeps the app from writing elsewhere by default (low sandbox)" fails writes_outside
+"$zigsaw" override --sandbox=soft "$OTHER" >/dev/null 2>&1
+check "a soft override lets the shim write there" writes_outside
+rebuild_keeps() { "$zigsaw" build "$work\\other.json" >/dev/null 2>&1 && writes_outside; }
 check "the override survives a rebuild" rebuild_keeps
 "$zigsaw" override --reset "$OTHER" >/dev/null 2>&1
-check "after --reset, the shim writes there again" writes_outside
-"$zigsaw" override --sandbox=low "$OTHER" >/dev/null 2>&1
-check "a low override keeps the shim from writing there too" fails writes_outside
+check "after --reset, the shim can't write there again" fails writes_outside
+"$zigsaw" override --sandbox=appcontainer "$OTHER" >/dev/null 2>&1
+check "an appcontainer override keeps the shim from writing there too" fails writes_outside
 "$zigsaw" override --reset "$OTHER" >/dev/null 2>&1
 
 # GUI commands get zigsaw-shimw.exe, which opens no console. The test app
 # (tests/gui/app.json) exports a GUI program, tests/gui.zig, which records
 # whether its parent (zigsaw) has a console and exits with the code it's
-# given, and a console one, tests/argv.zig.
+# given, and a console one, tests/argv.zig. It records wherever it's told, so
+# its image asks for the soft sandbox.
 GUI=test.shims.gui
 shim_dir=$(dirname "$zigsaw")
 "$zigsaw" build "$root\\tests\\gui\\app.json" >/dev/null 2>&1 || echo "building the GUI test app failed"
@@ -371,6 +375,8 @@ unregistered_by_rm() {
 }
 check "rm removes what it registered, with its shims, and only that" unregistered_by_rm
 "$zigsaw" rm --delete-data "$GUI" >/dev/null 2>&1
+
+check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
 "$zigsaw" rm "$NODE" >/dev/null 2>&1
 "$zigsaw" rm "$OTHER" >/dev/null 2>&1

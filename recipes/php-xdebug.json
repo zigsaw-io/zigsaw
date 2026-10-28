@@ -23,7 +23,8 @@
       ],
       "build": [
         "php-ext build --with-xdebug --with-xdebug-compression",
-        "printf '%s\\n' '; Where the step debugger connects: XDEBUG_CLIENT_PORT, which zigsaw sets for its port dbgp.' 'xdebug.client_port=${XDEBUG_CLIENT_PORT:-9003}' >>\"$PREFIX/conf.d/xdebug.ini\""
+        "printf '%s\\n' '; Where the step debugger connects: XDEBUG_CLIENT_PORT, which zigsaw sets for its port dbgp.' 'xdebug.client_port=${XDEBUG_CLIENT_PORT:-9003}' >>\"$PREFIX/conf.d/xdebug.ini\"",
+        "printf '%s\\n' '; Where traces and profiles go: TEMP, in the data directory of the app PHP runs for, which every sandbox may write (C:\\Windows\\Temp, the default, a low-integrity run may not).' 'xdebug.output_dir=\"${TEMP}\"' >>\"$PREFIX/conf.d/xdebug.ini\""
       ]
     }
   ]
