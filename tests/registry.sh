@@ -33,8 +33,9 @@ fi
 
 work=$(cygpath -w "$(mktemp -d)")
 # Low runs (the default) label the working directory of an app with cwd: the
-# runs go from a scratch one, not the repository.
-cd "$work" || exit 1
+# runs go from a scratch one, not the repository, nor a folder that holds the
+# stores (their programs would then start at low integrity).
+mkdir -p "$work\\cwd" && cd "$work\\cwd" || exit 1
 repo="$registry/zigsaw-test-$RANDOM"
 # Docker's logins are the test's own (none, until the checks write some),
 # not those of whoever runs it.

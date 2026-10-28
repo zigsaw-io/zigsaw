@@ -642,6 +642,7 @@ test {
     _ = @import("Sidecar.zig");
     _ = @import("Store.zig");
     _ = @import("Tree.zig");
+    _ = @import("written.zig");
     _ = @import("zipfile.zig");
 }
 

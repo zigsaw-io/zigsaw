@@ -106,6 +106,19 @@ runs works this way, including git, npm and zig builds.
   working directory read-only, with a warning; a path granted with
   `--filesystem` there is refused: grant a directory inside it, or
   read-only access.
+- Nor will it label zigsaw's store, the folder `zigsaw.exe` is in, a
+  directory that holds either, or one inside them; nor will
+  `--sandbox=appcontainer` let an app write there. A label there would
+  reach every app's programs, and Windows starts a program whose file is
+  labelled low at low integrity, whoever starts it: an app that asks for
+  `soft` would run at low. A soft run of a program labelled low says so.
+- A program a run writes (`.exe`, `.com`, `.scr`) comes out labelled low:
+  it inherits the label of the folder, or a low-integrity process wrote it,
+  as an AppContainer's are. zigsaw watches the folders the run may write,
+  and when the app's runs have all ended, it gives each such program a
+  medium label of its own, so that it starts at medium integrity anywhere.
+  The app's next low or `appcontainer` run labels them low again while it
+  goes, so that the app may still write them.
 - The data directory is labelled on the app's first low run, and stays so;
   a working directory inside it, as a shortcut's (the app's home), needs
   nothing more.
@@ -158,8 +171,13 @@ another, as Text Editor's does, leaves it to that one. What the app's
 permissions or overrides no longer give goes as soon as `zigsaw override` or
 an update takes it away, unless a run of the app is going, and then when the
 last one ends. `zigsaw rm` takes back everything, and `zigsaw repair` what
-an earlier zigsaw kept until `rm`. A run that didn't end (zigsaw was killed)
-leaves its grants until the app's next run ends.
+an earlier zigsaw kept until `rm`, or a label on a folder that holds the
+store, which zigsaw no longer gives. A run that didn't end (zigsaw was
+killed) leaves its grants until the app's next run ends.
+
+The programs the app's runs wrote are listed in `grants\<id>.programs`:
+medium between runs, low while its low and `appcontainer` runs go. `zigsaw
+rm` forgets them, and they stay medium.
 
 So a folder an app may write stays labelled low while the app is installed
 with the permission, and each directory it ran in while it keeps `cwd`: any

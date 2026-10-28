@@ -87,6 +87,8 @@ release() {
     wait $held
 }
 
+(cd "$root" && zig build hostprobe) || { echo "building the host probe failed"; exit 1; }
+hostprobe="$root\\zig-out\\test\\zigsaw-hostprobe.exe"
 "$zigsaw" build "$root/recipes/busybox.json" >/dev/null 2>&1 || { echo "building busybox failed"; exit 1; }
 sed "s/\"net.frippery.busybox\"/\"$OTHER\"/" "$root/recipes/busybox.json" >"$work\\other.json"
 "$zigsaw" build "$work\\other.json" >/dev/null 2>&1 || { echo "building the second app failed"; exit 1; }
@@ -591,6 +593,84 @@ check "  removes its own labels" no_label "$work\\own"
 check "  and what was below them inherited" sh -c "! icacls '$work\\own\\f' | grep -q 'Mandatory Label'"
 check "  leaves a label it didn't make" low_label "$work\\mine"
 check "the second app's rm removes the shared label" sh -c "\"\$0\" rm $OTHER >/dev/null 2>&1 && ! icacls '$work\\rw' | grep -q 'Mandatory Label'" "$zigsaw"
+
+# --- Programs a run writes, and zigsaw's own folders ---------------------------
+#
+# Windows starts a program whose file is labelled low at low integrity, and
+# what a run writes comes out labelled low: zigsaw takes the label off the
+# programs once the app's runs end (src/written.zig). tests/hostprobe.zig is
+# the program: it prints its integrity level.
+
+PROG=test.sandbox.programs
+sed "s/\"net.frippery.busybox\"/\"$PROG\"/" "$root/recipes/busybox.json" >"$work\\programs.json"
+"$zigsaw" build "$work\\programs.json" >/dev/null 2>&1 || { echo "building the fourth app failed"; exit 1; }
+mkdir -p "$work\\prog" "$work\\progac" "$work\\lowexe"
+cp "$hostprobe" "$work\\prog\\src.bin" && cp "$hostprobe" "$work\\progac\\src.bin"
+"$zigsaw" override --sandbox=low --filesystem="$work\\prog" $PROG >/dev/null 2>&1
+
+# starts_at <level> <program>: its own integrity, and its label's.
+starts_at() {
+    local out
+    out=$("$2" 2>&1 | tr -d '\r' | grep '^# integrity')
+    [ "$out" = "# integrity $1" ] || { echo "$2: $out"; return 1; }
+}
+medium_program() { starts_at medium "$1" && icacls "$1" | grep -q 'Medium Mandatory Level:(NW)'; }
+recorded_program() { grep -qxF "$2" "$ZIGSAW_HOME\\grants\\$1.programs"; }
+writes_program() {
+    local app=$1 to=$2
+    shift 2
+    z run "$@" $app sh -c "cp '$(dirname "$to")\\src.bin' '$to'" >/dev/null 2>&1
+}
+rewrites_in_place() {
+    z run $PROG sh -c "cat '$work\\prog\\src.bin' > '$work\\prog\\p.exe'" && medium_program "$work\\prog\\p.exe"
+}
+held_stays_low() {
+    hold "$work\\prog" $PROG || return 1
+    writes_program $PROG "$work\\prog\\h.exe"
+    if ! starts_at low "$work\\prog\\h.exe"; then
+        release
+        return 1
+    fi
+    release
+    medium_program "$work\\prog\\h.exe"
+}
+rm_forgets() {
+    "$zigsaw" rm $PROG >/dev/null 2>&1 </dev/null || return 1
+    [ ! -e "$ZIGSAW_HOME\\grants\\$PROG.programs" ] && medium_program "$work\\prog\\p.exe"
+}
+store_parent=$(dirname "$ZIGSAW_HOME")
+refuses_store() {
+    local out
+    out=$(writes $PROG "$1" "$store_parent\\zigsaw-sandbox-test" --filesystem="$store_parent" 2>&1) && return 1
+    grep -q "zigsaw's store is in it" <<<"$out" || { echo "$out"; return 1; }
+    [ ! -e "$store_parent\\zigsaw-sandbox-test" ] && no_label "$store_parent" && fails has_ace "$store_parent" 'S-1-15-3-'
+}
+in_store_read_only() {
+    local d="$ZIGSAW_HOME\\cache" out
+    out=$(from "$d" $PROG) && return 1
+    grep -q "is read-only for this run, as it's in zigsaw's store: run the app from a folder elsewhere" <<<"$out" || { echo "$out"; return 1; }
+    [ ! -e "$d\\zigsaw-sandbox-test" ] && no_label "$d"
+}
+warns_low_program() {
+    icacls "$work\\lowexe" /setintegritylevel '(OI)(CI)L' >/dev/null && cp "$hostprobe" "$work\\lowexe\\probe.exe" || return 1
+    local out
+    out=$(z run --sandbox=soft --command="$work\\lowexe\\probe.exe" $PROG 2>&1)
+    grep -q 'is labelled low integrity, so Windows starts it, and this run, at low integrity' <<<"$out" || { echo "$out"; return 1; }
+}
+low_writes() { writes_program $PROG "$work\\prog\\p.exe" && medium_program "$work\\prog\\p.exe"; }
+soft_writes() { writes_program $PROG "$work\\prog\\s.exe" --sandbox=soft && medium_program "$work\\prog\\s.exe"; }
+ac_writes() { writes_program $PROG "$work\\progac\\a.exe" --sandbox=appcontainer --filesystem="$work\\progac" && medium_program "$work\\progac\\a.exe"; }
+check "low: a program a run writes where it may write starts at medium integrity after" low_writes
+check "  recorded" recorded_program $PROG "$work\\prog\\p.exe"
+check "  and the app's next low run rewrites it in place, and it's medium again" rewrites_in_place
+check "soft: a program written in a folder a low run labelled starts at medium too" soft_writes
+check "appcontainer: a program written in a granted path starts at medium too" ac_writes
+check "while another run of the app goes on, a program stays low until that one ends" held_stays_low
+check "low: from inside the store, the app runs with its working directory read-only" in_store_read_only
+check "low: won't label a folder that holds the store" refuses_store low
+check "appcontainer: won't let the app write a folder that holds the store" refuses_store appcontainer
+check "soft: a run of a program labelled low says it starts at low integrity" warns_low_program
+check "rm forgets the programs, which stay medium" rm_forgets
 
 rm -rf "$ZIGSAW_HOME" "$work"
 echo

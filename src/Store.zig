@@ -644,7 +644,11 @@ fn cwdGrantsPath(s: Store, arena: Allocator, id: []const u8) ![]u8 {
 
 /// The paths among the app's grants that were a run's working directory.
 pub fn readCwdGrants(s: Store, arena: Allocator, id: []const u8) ![]const []const u8 {
-    const bytes = Io.Dir.cwd().readFileAlloc(s.io, try s.cwdGrantsPath(arena, id), arena, .limited(1 << 20)) catch |err| switch (err) {
+    return s.readLines(arena, try s.cwdGrantsPath(arena, id));
+}
+
+fn readLines(s: Store, arena: Allocator, file: []const u8) ![]const []const u8 {
+    const bytes = Io.Dir.cwd().readFileAlloc(s.io, file, arena, .limited(1 << 20)) catch |err| switch (err) {
         error.FileNotFound => return &.{},
         else => |e| return e,
     };
@@ -652,6 +656,25 @@ pub fn readCwdGrants(s: Store, arena: Allocator, id: []const u8) ![]const []cons
     var it = std.mem.tokenizeAny(u8, bytes, "\r\n");
     while (it.next()) |line| try list.append(arena, line);
     return list.items;
+}
+
+// grants\<id>.programs lists the programs the app's runs wrote that came out
+// labelled low (see written.zig), one per line, whether zigsaw has taken the
+// label off yet or not. It changes under grants.lock.
+
+fn programsPath(s: Store, arena: Allocator, id: []const u8) ![]u8 {
+    return s.path(arena, &.{ "grants", try std.fmt.allocPrint(arena, "{s}.programs", .{id}) });
+}
+
+pub fn readPrograms(s: Store, arena: Allocator, id: []const u8) ![]const []const u8 {
+    return s.readLines(arena, try s.programsPath(arena, id));
+}
+
+/// Replaces the list; an empty one deletes the file.
+pub fn writePrograms(s: Store, arena: Allocator, id: []const u8, paths: []const []const u8) !void {
+    var out: std.ArrayList(u8) = .empty;
+    for (paths) |p| try out.print(arena, "{s}\n", .{p});
+    try s.replaceFile(arena, try s.programsPath(arena, id), out.items);
 }
 
 pub fn recordCwdGrant(s: Store, arena: Allocator, id: []const u8, p: []const u8) !void {
@@ -717,6 +740,7 @@ pub fn grantedToOthers(s: Store, arena: Allocator, id: []const u8, grant: Grant)
 pub fn deleteGrants(s: Store, arena: Allocator, id: []const u8) !void {
     try s.writeGrants(arena, id, &.{});
     try s.writeCwdGrants(arena, id, &.{});
+    try s.writePrograms(arena, id, &.{});
 }
 
 /// The ids of the apps with grants recorded, installed or not.
@@ -727,7 +751,7 @@ pub fn listGrantIds(s: Store, arena: Allocator) ![]const []const u8 {
     var it = dir.iterate();
     while (try it.next(s.io)) |entry| {
         if (entry.kind != .file) continue;
-        for ([_][]const u8{ ".txt", ".cwd" }) |ext| if (std.mem.endsWith(u8, entry.name, ext)) {
+        for ([_][]const u8{ ".txt", ".cwd", ".programs" }) |ext| if (std.mem.endsWith(u8, entry.name, ext)) {
             const id = entry.name[0 .. entry.name.len - ext.len];
             const seen = for (ids.items) |x| {
                 if (std.mem.eql(u8, x, id)) break true;

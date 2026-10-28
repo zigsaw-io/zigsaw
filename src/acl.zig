@@ -156,14 +156,63 @@ pub fn labelLow(arena: Allocator, path: []const u8) !bool {
 /// Removes the label of `path`'s own, and the copies inherited below it, so
 /// it's medium integrity again, as files are by default.
 pub fn unlabel(arena: Allocator, path: []const u8) !void {
+    // Below medium, Windows writes the process's own level instead of none,
+    // on the path and on everything in it.
+    if (try belowMedium()) return fail("zigsaw runs at low integrity here, and can't take back the label of {s}; `zigsaw repair` from a prompt that isn't will", .{path});
     var empty: win32.ACL = undefined;
     if (win32.InitializeAcl(&empty, @sizeOf(win32.ACL), win32.ACL_REVISION) == 0) return win32.lastErrorFail("InitializeAcl");
     try writeLabel(arena, path, &empty);
 }
 
+/// Gives the file `path` a label of its own, which its folder's doesn't
+/// replace: medium, so that Windows starts the program at medium integrity
+/// even in a folder labelled low; or low, so that low-integrity processes
+/// may write it again. Making it stop inheriting its folder's label instead
+/// (a protected SACL) would take a privilege (SeSecurityPrivilege).
+pub fn labelProgram(arena: Allocator, path: []const u8, level: enum { low, medium }) !void {
+    // Below medium, Windows would write the process's own level.
+    if (level == .medium and try belowMedium()) return fail("zigsaw runs at low integrity here, and can't take the label off {s}", .{path});
+    const sid = try integritySid(arena, switch (level) {
+        .low => win32.low_integrity_sid,
+        .medium => win32.medium_integrity_sid,
+    });
+    const size = @sizeOf(win32.ACL) + @sizeOf(win32.ACCESS_ALLOWED_ACE) + win32.GetLengthSid(sid);
+    const buf = try arena.alignedAlloc(u8, .of(u64), size);
+    const sacl: *win32.ACL = @ptrCast(buf.ptr);
+    if (win32.InitializeAcl(sacl, @intCast(size), win32.ACL_REVISION) == 0) return win32.lastErrorFail("InitializeAcl");
+    if (win32.AddMandatoryAce(sacl, win32.ACL_REVISION, 0, win32.SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, sid) == 0)
+        return win32.lastErrorFail("AddMandatoryAce");
+    try writeLabel(arena, path, sacl);
+}
+
+/// Whether zigsaw itself runs below medium integrity: a low run's shim
+/// started it, or Windows did, for a program file labelled low.
+pub fn belowMedium() !bool {
+    var token: ?win32.HANDLE = null;
+    if (win32.OpenProcessToken(win32.GetCurrentProcess(), win32.TOKEN_QUERY, &token) == 0) return win32.lastErrorFail("OpenProcessToken");
+    defer _ = win32.CloseHandle(token.?);
+    var buf: [64]u8 align(8) = undefined;
+    var len: win32.DWORD = 0;
+    if (win32.GetTokenInformation(token.?, win32.TokenIntegrityLevel, &buf, buf.len, &len) == 0) return win32.lastErrorFail("GetTokenInformation");
+    const label: *const win32.TOKEN_MANDATORY_LABEL = @ptrCast(&buf);
+    const sid = label.Label.Sid;
+    return win32.GetSidSubAuthority(sid, win32.GetSidSubAuthorityCount(sid).* - 1).* < win32.SECURITY_MANDATORY_MEDIUM_RID;
+}
+
 /// The integrity level (as its RID) of `path`'s own label; null when it has
 /// none, or only inherits one.
 pub fn ownLabel(arena: Allocator, path: []const u8) !?win32.DWORD {
+    return labelOf(arena, path, .own);
+}
+
+/// The integrity level (as its RID) of `path`'s label, its own or the one it
+/// inherits: what a process started from it gets at most. Null when it has
+/// none, so medium.
+pub fn effectiveLabel(arena: Allocator, path: []const u8) !?win32.DWORD {
+    return labelOf(arena, path, .inherited_too);
+}
+
+fn labelOf(arena: Allocator, path: []const u8, which: enum { own, inherited_too }) !?win32.DWORD {
     const path_w = try win32.wide(arena, path);
     var sd: ?*anyopaque = null;
     var sacl: ?*win32.ACL = null;
@@ -178,7 +227,7 @@ pub fn ownLabel(arena: Allocator, path: []const u8) !?win32.DWORD {
         // A mandatory label ACE has an allow ACE's layout.
         const ace: *win32.ACCESS_ALLOWED_ACE = @ptrCast(@alignCast(raw.?));
         if (ace.Header.AceType != win32.SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
-        if (ace.Header.AceFlags & win32.INHERITED_ACE != 0) continue;
+        if (which == .own and ace.Header.AceFlags & win32.INHERITED_ACE != 0) continue;
         const sid: win32.PSID = @ptrCast(&ace.SidStart);
         return win32.GetSidSubAuthority(sid, win32.GetSidSubAuthorityCount(sid).* - 1).*;
     }
@@ -308,8 +357,12 @@ fn keyObjectName(arena: Allocator, sub: []const u8) ![]u8 {
 }
 
 fn lowIntegritySid(arena: Allocator) !win32.PSID {
+    return integritySid(arena, win32.low_integrity_sid);
+}
+
+fn integritySid(arena: Allocator, string: []const u8) !win32.PSID {
     var sid: ?win32.PSID = null;
-    if (win32.ConvertStringSidToSidW(try win32.wide(arena, win32.low_integrity_sid), &sid) == 0)
+    if (win32.ConvertStringSidToSidW(try win32.wide(arena, string), &sid) == 0)
         return win32.lastErrorFail("ConvertStringSidToSidW");
     return sid.?;
 }

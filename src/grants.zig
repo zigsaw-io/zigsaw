@@ -2,7 +2,9 @@
 //! AppContainer is given to a path, and the low integrity labels its low
 //! runs need (see run.zig); and the loopback exemption of its container.
 //! Store.zig records them in grants\<id>.txt, and which of them were a
-//! run's working directory in grants\<id>.cwd.
+//! run's working directory in grants\<id>.cwd. The programs the app's runs
+//! wrote, which lose their low label as the app's last run ends, are in
+//! grants\<id>.programs (see written.zig).
 //!
 //! The loopback exemption (see appcontainer.loopback) lasts only while the
 //! app's runs go: an exempt container reaches this machine whatever its
@@ -36,7 +38,42 @@ const oci = @import("oci.zig");
 const override = @import("override.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const written = @import("written.zig");
 const note = Context.note;
+
+/// What no run may write, nor make writable to other programs: zigsaw's
+/// store, with every app's files, and the folder of the zigsaw running. A
+/// low label on a folder that holds them reaches them all, and Windows
+/// starts a program whose file is labelled low at low integrity, whoever
+/// starts it (php.exe in Kanboard's soft runs, in iteration 55's CI); write
+/// access for an AppContainer would let the app change other apps.
+pub const Own = struct {
+    store: []const u8,
+    self_dir: ?[]const u8,
+
+    pub fn of(ctx: *Context) !Own {
+        const store = Io.Dir.cwd().realPathFileAlloc(ctx.io, ctx.store.root, ctx.arena) catch ctx.store.root;
+        const self = win32.selfExePath(ctx.arena) catch null;
+        return .{ .store = store, .self_dir = if (self) |s| std.fs.path.dirname(s) else null };
+    }
+
+    /// Why no run may write `path`, if none may. A run's own data directory,
+    /// in the store, is the caller's to leave out.
+    pub fn refusal(own: Own, path: []const u8) ?[]const u8 {
+        if (isWithin(own.store, path)) return "zigsaw's store is in it";
+        if (isWithin(path, own.store)) return "it's in zigsaw's store";
+        const d = own.self_dir orelse return null;
+        if (isWithin(d, path)) return "zigsaw is in it";
+        if (isWithin(path, d)) return "it's in zigsaw's folder";
+        return null;
+    }
+
+    /// Whether `path` is in the store or zigsaw's folder, where no folder
+    /// will do.
+    pub fn contains(own: Own, path: []const u8) bool {
+        return isWithin(path, own.store) or (if (own.self_dir) |d| isWithin(path, d) else false);
+    }
+};
 
 /// A run's part among the app's runs.
 pub const Session = struct {
@@ -70,7 +107,8 @@ pub fn end(ctx: *Context, s: Session) void {
 /// false if one is, and the app has grants to settle.
 pub fn settleUnlessRunning(ctx: *Context, id: []const u8) !bool {
     const arena = ctx.arena;
-    if ((try ctx.store.readGrants(arena, id)).len == 0 and (try ctx.store.readCwdGrants(arena, id)).len == 0) return true;
+    if ((try ctx.store.readGrants(arena, id)).len == 0 and (try ctx.store.readCwdGrants(arena, id)).len == 0 and
+        (try ctx.store.readPrograms(arena, id)).len == 0) return true;
     const l = try Store.tryLock(ctx.io, try ctx.store.runsLockPath(arena, id), .exclusive) orelse return false;
     defer l.release(ctx.io);
     try settle(ctx, id);
@@ -95,10 +133,14 @@ pub fn settleAll(ctx: *Context) !usize {
 /// it may only read. The caller holds the runs' lock exclusively, so no run
 /// of the app is going.
 pub fn settle(ctx: *Context, id: []const u8) !void {
+    // A zigsaw below medium integrity (a low run's shim started it) leaves
+    // them to the next one that isn't: what it may change, it would make low.
+    if (try acl.belowMedium()) return;
     const arena = ctx.arena;
     const store = ctx.store;
     const changes = try store.lockGrantChanges(arena);
     defer changes.release(ctx.io);
+    try written.settle(ctx, id);
     const recorded = try store.readGrants(arena, id);
     const cwds = try store.readCwdGrants(arena, id);
     if (recorded.len == 0 and cwds.len == 0) return;
@@ -232,6 +274,9 @@ const Standing = struct {
     paths: []const Path = &.{},
     /// The access its working directory would have, if it has `cwd`.
     cwd: ?acl.Access = null,
+    /// What no run may write: a recorded change that lets the app write
+    /// there doesn't stand, as zigsaw from 0.56 on doesn't make it.
+    own: ?Own = null,
 
     const Path = struct { path: []const u8, access: acl.Access };
 
@@ -242,7 +287,7 @@ const Standing = struct {
         const ref = try ctx.store.readRef(arena, id) orelse return .{ .sandbox = .soft };
         const image = try ctx.store.readImage(arena, id, ref.manifest);
         const saved = try override.loadFor(ctx.store, arena, id);
-        var s: Standing = .{ .sandbox = override.sandboxOf(saved, image.config.permissions) };
+        var s: Standing = .{ .sandbox = override.sandboxOf(saved, image.config.permissions), .own = try .of(ctx) };
         // A soft run changes no ACL.
         if (s.sandbox == .soft) return s;
         var paths: std.ArrayList(Path) = .empty;
@@ -269,7 +314,10 @@ const Standing = struct {
         for (s.paths) |p| if (samePath(p.path, g.path)) {
             access = wider(access, p.access);
         };
-        const a = access orelse return null;
+        var a = access orelse return null;
+        if (s.own) |own| if (own.refusal(g.path) != null) {
+            a = .read_execute;
+        };
         return switch (g.kind) {
             .appcontainer => if (s.sandbox == .appcontainer) a else null,
             // Low runs label only what they may write.
@@ -296,6 +344,14 @@ fn samePath(a: []const u8, b: []const u8) bool {
         if (std.ascii.toLower(c) != std.ascii.toLower(d)) return false;
     }
     return true;
+}
+
+/// Whether `path` is `dir` or inside it, alike as samePath has them.
+pub fn isWithin(path: []const u8, dir: []const u8) bool {
+    const p = std.mem.trimEnd(u8, path, "\\/");
+    const d = std.mem.trimEnd(u8, dir, "\\/");
+    if (p.len < d.len or !samePath(p[0..d.len], d)) return false;
+    return p.len == d.len or p[d.len] == '\\' or p[d.len] == '/';
 }
 
 fn containsPath(list: []const []const u8, p: []const u8) bool {
@@ -358,4 +414,33 @@ test "Standing.keeps: under the saved sandbox, for what the app may reach withou
     try std.testing.expectEqual(null, soft.keeps(low("D:\\rw"), true));
     // The loopback exemption never does.
     try std.testing.expectEqual(null, saved_ac.keeps(.loopback, false));
+
+    // A folder that holds zigsaw's store: no label, and read access only.
+    const own: Own = .{ .store = "D:\\zs\\store", .self_dir = null };
+    const with_own: Standing = .{ .sandbox = .low, .paths = &paths, .cwd = .full, .own = own };
+    try std.testing.expectEqual(null, with_own.keeps(low("D:\\zs"), true));
+    try std.testing.expectEqual(.full, with_own.keeps(low("D:\\proj"), true).?);
+    const ac_own: Standing = .{ .sandbox = .appcontainer, .paths = &paths, .cwd = .full, .own = own };
+    try std.testing.expectEqual(.read_execute, ac_own.keeps(ac("D:\\zs"), true).?);
+}
+
+test "Own.refusal" {
+    const own: Own = .{ .store = "D:\\zs\\Store", .self_dir = "C:\\tools\\zigsaw" };
+    for ([_][]const u8{ "D:\\zs\\store", "d:/zs/STORE/", "D:\\zs", "D:\\" }) |p|
+        try std.testing.expectEqualStrings("zigsaw's store is in it", own.refusal(p).?);
+    try std.testing.expectEqualStrings("it's in zigsaw's store", own.refusal("D:\\zs\\Store\\deploy\\0123").?);
+    for ([_][]const u8{ "C:\\tools\\zigsaw", "C:\\tools" }) |p|
+        try std.testing.expectEqualStrings("zigsaw is in it", own.refusal(p).?);
+    try std.testing.expectEqualStrings("it's in zigsaw's folder", own.refusal("c:/tools/zigsaw/x").?);
+    for ([_][]const u8{ "D:\\zs\\store2", "D:\\z", "C:\\tools\\zigsaw2", "E:\\src" }) |p|
+        try std.testing.expectEqual(null, own.refusal(p));
+    // Where a folder inside the path would do, and where none would.
+    try std.testing.expect(own.contains("D:\\zs\\Store\\cache") and own.contains("C:\\tools\\zigsaw"));
+    try std.testing.expect(!own.contains("D:\\zs") and !own.contains("D:\\"));
+}
+
+test isWithin {
+    const data = "D:\\zs\\data\\org.example.app";
+    for ([_][]const u8{ data, data ++ "\\", "d:/zs/DATA/org.example.app/home" }) |in| try std.testing.expect(isWithin(in, data));
+    for ([_][]const u8{ "D:\\zs\\data\\org.example.app2", "D:\\zs\\data", "D:\\zs\\data\\org.example" }) |out| try std.testing.expect(!isWithin(out, data));
 }

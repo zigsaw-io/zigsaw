@@ -402,7 +402,13 @@ drive's root, as every low-integrity program could then write anywhere in
 it. An app that may write its working directory, run from one of those,
 gets it read-only for that run, with a warning: `7z` from your home folder
 reads it, and can't extract an archive there. Run it from a folder inside,
-or with `--sandbox=soft`.
+or with `--sandbox=soft`. Nor will any sandbox let an app write zigsaw's
+store, the folder `zigsaw.exe` is in, or a folder that holds either: every
+app's programs would then start at low integrity.
+
+A program a run writes comes out labelled low too: 7-Zip extracting one, or
+git checking one out. zigsaw takes the label off once the app's runs have
+ended, so that it starts at medium integrity, as any program you run does.
 
 What a low run labels stays labelled while the app may write it, so that
 its next runs don't label it again ([how long grants last](docs/how-it-works.md#how-long-grants-last)):

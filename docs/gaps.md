@@ -32,15 +32,34 @@
   that run, with a warning, as labelling it would let every low-integrity
   program write anywhere in it: a command that writes there fails (`npm
   init` in your home folder). Run it from a folder inside, or with
-  `--sandbox=soft`.
+  `--sandbox=soft`. The same goes for zigsaw's store, the folder
+  `zigsaw.exe` is in, a folder that holds either (the zigsaw repository,
+  with `zig-out\bin\zigsaw.exe`), and a folder inside them, under
+  `--sandbox=appcontainer` too.
 - Windows starts a program whose file is labelled low at low integrity,
-  whoever starts it. A low run labels the app's working directory and what's
-  in it, and what a low-integrity program writes is labelled low anyway: the
-  programs there then start at low integrity outside zigsaw too, until
-  `zigsaw rm` takes the label back. Toolchains' images (zig, Rust, Go, CMake,
-  make, Meson, Node, Python, the JDK, Maven, Gradle, and the GTK, Qt and PHP
-  SDKs) ask for soft for that. Others don't: 7-Zip extracting programs, or
-  MinGit checking them out, at low makes programs that start at low.
+  whoever starts it. zigsaw takes the low label off the programs a run
+  writes (`.exe`, `.com`, `.scr`) where it may write, but only once the
+  app's runs have all ended: one started meanwhile starts at low. It misses
+  programs by other names, those written while zigsaw wasn't watching (a
+  run that didn't end, a program left running after its run, any program
+  but the app's writing into a folder labelled for it), and the low-labelled
+  libraries, scripts and documents anything writes there. When changes come
+  faster than the watch takes them, zigsaw looks through the folder for
+  programs written during the run, up to 50,000 entries. Toolchains' images
+  (zig, Rust, Go, CMake, make, Meson, Node, Python, the JDK, Maven, Gradle,
+  and the GTK, Qt and PHP SDKs) still ask for soft, so that their builds
+  label nothing.
+- A program zigsaw took the label off has a medium label of its own, which
+  a low-integrity process can't write: the app's own low runs label it low
+  again while they go, but another app's can only replace it (delete and
+  write it again, or rename over it), not write into it, as 7-Zip
+  overwriting it would. After `zigsaw rm` the app's own can't either.
+- A zigsaw running at low integrity, as a shim a low run starts does, takes
+  back nothing when the app's runs end; the next zigsaw that isn't does. If
+  zigsaw's own program is labelled low, as a low run from a folder holding
+  it could make it before 0.56, it runs at low itself: taking a label back
+  then leaves a low label of its own on everything below the path, so
+  `zigsaw repair` refuses: run it from a `zigsaw.exe` elsewhere.
 - `--sandbox=low` labels only paths whose permissions you may change, which
   you may for what you own. Labelling needs the right to change a path's
   owner, which a second drive whose root gives users only Modify (a fresh

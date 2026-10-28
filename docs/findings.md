@@ -206,6 +206,43 @@ entry (read and execute, inherited) at a time, and run at low integrity
   entries from what they use: any package SID's from deployments and data
   directories, which only zigsaw grants, and the app's own from host paths.
 
+### Programs written at low integrity (iteration 56)
+
+Windows starts a program at the lower of the starting process's integrity
+and the program file's label. Probed on Windows 11 26300, unelevated, with
+BusyBox copying a program (tests/hostprobe.zig, which prints its own
+level) in each sandbox, and `icacls` for the labels:
+
+| The program | Its label | Starts at |
+|---|---|---|
+| written at low into an `(OI)(CI)` low folder | `Low:(I)(NW)`, inherited | low |
+| written in an AppContainer into a granted, unlabelled folder | `Low:(NW)`, its own | low |
+| either, given an own medium label (`AddMandatoryAce`, no flags) | `Medium:(NW)` | medium |
+| the same, after its folder is labelled `(OI)(CI)` low again | `Medium:(NW)`, kept | medium |
+
+- **Making a file stop inheriting its label takes a privilege**:
+  `SetNamedSecurityInfoW` with `PROTECTED_SACL_SECURITY_INFORMATION` or
+  `UNPROTECTED_SACL_SECURITY_INFORMATION` fails with 1314
+  (`ERROR_PRIVILEGE_NOT_HELD`, SeSecurityPrivilege), even for the file's
+  owner. An own label needs only WRITE_OWNER, and an own medium label beats
+  an inherited low one.
+- **A low process can't write into a file with an own medium label**, but
+  can delete it, or rename another over it, through its low folder's
+  FILE_DELETE_CHILD. An own low label lets it write again; so does clearing
+  the own label, where the folder's is inherited.
+- **ReadDirectoryChangesW** from the medium zigsaw sees what low and
+  AppContainer processes write, in subfolders too, including a file renamed
+  into place (actions 1, 3, 4 and 5).
+- **A process at low integrity that takes a label back makes it worse**:
+  writing an empty label SACL from a low-integrity zigsaw (its own program
+  was labelled low) left an own low label on the folder and on everything
+  below it. A low-integrity process can only set its own level.
+- **How CI's Kanboard ran at low** (iterations 54 and 55):
+  tests/published.sh ran its smoke runs from its scratch folder, which held
+  the pull store. MinGit, low with `cwd`, labelled that folder, the label
+  reached every deployment, and php.exe started at low under Kanboard's
+  soft run, where PHP's `is_writable()` says no ([below](#phps-is_writable-at-low-integrity)).
+
 ### The matrix
 
 `tests/matrix.sh` runs each check in `soft`, then `appcontainer`, then

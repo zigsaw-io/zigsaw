@@ -317,6 +317,7 @@ pub const SE_GROUP_INTEGRITY: DWORD = 0x00000020;
 /// The low integrity level's SID, and the RID that ends it.
 pub const low_integrity_sid = "S-1-16-4096";
 pub const SECURITY_MANDATORY_LOW_RID: DWORD = 0x1000;
+pub const SECURITY_MANDATORY_MEDIUM_RID: DWORD = 0x2000;
 
 pub const TOKEN_MANDATORY_LABEL = extern struct {
     Label: SID_AND_ATTRIBUTES,
@@ -610,6 +611,47 @@ pub extern "advapi32" fn RegLoadAppKeyW(file: LPCWSTR, result: *HKEY, access: DW
 pub const KEY_ALL_ACCESS: DWORD = 0xF003F;
 /// For GetNamedSecurityInfoW and the like: "CURRENT_USER\\Software\\...".
 pub const SE_REGISTRY_KEY: c_int = 4;
+
+// ---------------------------------------------------------------------------
+// Watching folders for the programs a run writes (written.zig)
+
+pub const FILE_LIST_DIRECTORY: DWORD = 0x1;
+pub const FILE_FLAG_OVERLAPPED: DWORD = 0x40000000;
+pub const FILE_NOTIFY_CHANGE_FILE_NAME: DWORD = 0x1;
+pub const FILE_NOTIFY_CHANGE_LAST_WRITE: DWORD = 0x10;
+pub const FILE_ACTION_ADDED: DWORD = 1;
+pub const FILE_ACTION_MODIFIED: DWORD = 3;
+pub const FILE_ACTION_RENAMED_NEW_NAME: DWORD = 5;
+
+pub const OVERLAPPED = extern struct {
+    Internal: usize,
+    InternalHigh: usize,
+    Offset: DWORD,
+    OffsetHigh: DWORD,
+    hEvent: ?HANDLE,
+};
+
+pub const FILE_NOTIFY_INFORMATION = extern struct {
+    NextEntryOffset: DWORD,
+    Action: DWORD,
+    FileNameLength: DWORD,
+    FileName: [1]u16,
+};
+
+pub extern "kernel32" fn ReadDirectoryChangesW(
+    dir: HANDLE,
+    buffer: *anyopaque,
+    length: DWORD,
+    watch_subtree: BOOL,
+    filter: DWORD,
+    returned: ?*DWORD,
+    overlapped: ?*OVERLAPPED,
+    completion: ?*anyopaque,
+) callconv(.winapi) BOOL;
+pub extern "kernel32" fn CreateIoCompletionPort(file: HANDLE, existing: ?HANDLE, key: usize, threads: DWORD) callconv(.winapi) ?HANDLE;
+pub extern "kernel32" fn GetQueuedCompletionStatus(port: HANDLE, bytes: *DWORD, key: *usize, overlapped: *?*OVERLAPPED, ms: DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn PostQueuedCompletionStatus(port: HANDLE, bytes: DWORD, key: usize, overlapped: ?*OVERLAPPED) callconv(.winapi) BOOL;
+pub extern "kernel32" fn CancelIoEx(file: HANDLE, overlapped: ?*OVERLAPPED) callconv(.winapi) BOOL;
 
 // ---------------------------------------------------------------------------
 // Directory junctions: the user's folders in an app's home (folders.zig)

@@ -41,8 +41,10 @@ const override = @import("override.zig");
 const process = @import("process.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
+const written = @import("written.zig");
 const fail = Context.fail;
 const note = Context.note;
+const isWithin = grants.isWithin;
 
 pub const Options = struct {
     id: []const u8,
@@ -227,6 +229,12 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const forwards: ?forward.Forwards = if (forwarding) try forwardsOf(arena, targets) else null;
     const relay_exe = if (published != null or forwards != null) try services.relayExe(ctx) else null;
 
+    // Windows starts a program whose file is labelled low at low integrity,
+    // whoever starts it: this soft run would go at low, unasked.
+    if (sandbox == .soft) if (acl.effectiveLabel(arena, exe) catch null) |rid| if (rid <= win32.SECURITY_MANDATORY_LOW_RID)
+        note("warning: {s} is labelled low integrity, so Windows starts it, and this run, at low integrity; `zigsaw repair` takes back a label zigsaw gave a folder it's in", .{exe});
+
+    const own: grants.Own = try .of(ctx);
     var security: ?win32.SECURITY_CAPABILITIES = null;
     var token: ?win32.HANDLE = null;
     switch (sandbox) {
@@ -239,6 +247,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             .host_cwd = host_cwd,
             .grants = host_grants.items,
             .network = network,
+            .own = own,
         }),
         .appcontainer => security = try setUpAppContainer(ctx, cfg.id, .{
             .deploy_dir = image.deploy_dir,
@@ -251,8 +260,13 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             .host_cwd = host_cwd,
             .grants = host_grants.items,
             .network = network,
+            .own = own,
         }),
     }
+    // The programs the app's runs wrote are medium between runs, and low
+    // during low and AppContainer ones, so that they may write them (see
+    // written.zig).
+    if (sandbox != .soft) try written.relabel(ctx, cfg.id);
 
     // The keys the app keeps in HKCU, there for the run (see hkcu.zig), and
     // taken back before an --ephemeral run's data directory goes.
@@ -269,6 +283,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // ports it forwards at once.
     const job = try process.newJob();
     if (relay_exe) |r| startRelay(ctx, cfg.id, job, r, published, forwards, security.?, env_block);
+    const watcher = written.Watcher.start(arena, ctx.io, try watchedDirs(arena, sandbox, host_grants.items, host_cwd, data_dir, ctx.env.get("USERPROFILE"), own));
     const child: process.Child = .{
         .job = job,
         .process = try process.startIn(arena, job, .{
@@ -283,6 +298,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         }),
     };
     const code = try child.wait();
+    if (watcher) |w| written.finish(ctx, cfg.id, w);
     // Commands the run installed, as `npm install -g` does, get shims. An
     // --ephemeral run's are gone with its data directory.
     if (run_dir == null and exports.hasCommandDirs(cfg)) exports.syncAfterRun(ctx, cfg.id);
@@ -410,8 +426,8 @@ fn syncAliases(ctx: *Context, image: Store.Image) !?AppAliases {
     const l = try ctx.store.lockAliases(arena, cfg.id);
     defer l.release(ctx.io);
     const start = ctx.now();
-    const written = try aliases.sync(ctx, dir, resolved);
-    if (written > 0) ctx.timed(start, "update {d} alias file(s)", .{written});
+    const changed = try aliases.sync(ctx, dir, resolved);
+    if (changed > 0) ctx.timed(start, "update {d} alias file(s)", .{changed});
     return .{ .dir = dir, .names = try aliases.names(arena, resolved) };
 }
 
@@ -478,6 +494,7 @@ const AppContainerSetup = struct {
     host_cwd: []const u8,
     grants: []const HostGrant,
     network: bool,
+    own: grants.Own,
 };
 
 fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !win32.SECURITY_CAPABILITIES {
@@ -497,12 +514,18 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     if (setup.relay_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     if (setup.roots_file) |file| try wanted.append(arena, .{ .path = file, .access = .read_execute, .host = false });
     try wanted.append(arena, .{ .path = setup.data_dir, .access = .full, .host = false });
-    for (setup.grants) |g| try wanted.append(arena, .{
-        .path = g.path orelse setup.host_cwd,
-        .access = if (g.read_only) .read_execute else .full,
-        .host = true,
-        .cwd = g.path == null,
-    });
+    for (setup.grants) |g| {
+        const p = g.path orelse setup.host_cwd;
+        var access: acl.Access = if (g.read_only) .read_execute else .full;
+        if (access == .full and !isWithin(p, setup.data_dir)) if (setup.own.refusal(p)) |why| {
+            const elsewhere = if (setup.own.contains(p)) "elsewhere" else "inside it";
+            if (g.path != null)
+                return fail("--sandbox=appcontainer won't let {s} write {s}: {s}, and the app could then change every app's files; grant a directory {s}, or read-only access (:ro)", .{ id, p, why, elsewhere });
+            note("warning: {s} is read-only for this run, as {s}: run the app from a folder {s} to let it write there, or with --sandbox=soft", .{ p, why, elsewhere });
+            access = .read_execute;
+        };
+        try wanted.append(arena, .{ .path = p, .access = access, .host = true, .cwd = g.path == null });
+    }
 
     // Host paths last, under grants.lock (see grants.zig).
     var changes: ?Store.Lock = null;
@@ -601,6 +624,7 @@ const LowSetup = struct {
     host_cwd: []const u8,
     grants: []const HostGrant,
     network: bool,
+    own: grants.Own,
 };
 
 /// Labels the data directory and the host paths the app may write low
@@ -631,15 +655,17 @@ fn setUpLow(ctx: *Context, id: []const u8, setup: LowSetup) !win32.HANDLE {
         _ = try acl.revoke(arena, p, .{ .sids = &.{package} });
         // Low integrity reads what the user can.
         if (g.read_only) continue;
-        if (labelRefusal(p, ctx.env.get("USERPROFILE"))) |why| {
+        if (labelRefusal(p, ctx.env.get("USERPROFILE"), setup.own)) |why| {
+            // Inside zigsaw's store or folder, no folder in it will do.
+            const elsewhere = if (setup.own.contains(p)) "elsewhere" else "inside it";
             // A working directory is wherever you are: the app runs, and may
             // only read it.
             if (g.path == null) {
-                note("warning: {s} is read-only for this run, as {s}: run the app from a folder inside it to let it write there, or with --sandbox=soft", .{ p, why });
+                note("warning: {s} is read-only for this run, as {s}: run the app from a folder {s} to let it write there, or with --sandbox=soft", .{ p, why, elsewhere });
                 continue;
             }
             // The app's own permissions can't be taken back, only added to.
-            return fail("--sandbox=low won't label {s} low integrity: {s}, and every low-integrity process could then write anywhere in it; grant a directory inside it, or read-only access (:ro)", .{ p, why });
+            return fail("--sandbox=low won't label {s} low integrity: {s}, and every low-integrity process could then write anywhere in it; grant a directory {s}, or read-only access (:ro)", .{ p, why, elsewhere });
         }
         const label: Store.Grant = .{ .kind = .low, .path = p };
         if (try acl.ownLabel(arena, p)) |rid| if (rid <= win32.SECURITY_MANDATORY_LOW_RID) {
@@ -668,57 +694,61 @@ fn recordLabel(ctx: *Context, id: []const u8, label: Store.Grant, cwd: bool) !vo
     if (cwd) try ctx.store.recordCwdGrant(ctx.arena, id, label.path);
 }
 
-/// Why zigsaw won't label `path` low for a run, if it won't: it's a drive's
-/// root, the user's profile, or a directory the profile is in.
-fn labelRefusal(path: []const u8, user_profile: ?[]const u8) ?[]const u8 {
-    const p = trimSeparators(path);
-    if (std.fs.path.dirnameWindows(p) == null) return "it's the root of a drive";
-    const profile = trimSeparators(user_profile orelse return null);
-    if (profile.len < p.len or !eqlPathPrefix(profile[0..p.len], p)) return null;
-    if (profile.len == p.len) return "it's your user profile";
-    if (profile[p.len] == '\\' or profile[p.len] == '/') return "your user profile is in it";
-    return null;
-}
-
-fn trimSeparators(path: []const u8) []const u8 {
-    return std.mem.trimEnd(u8, path, "\\/");
-}
-
-/// Whether `path` is `dir` or inside it.
-fn isWithin(path: []const u8, dir: []const u8) bool {
-    const p = trimSeparators(path);
-    const d = trimSeparators(dir);
-    if (p.len < d.len or !eqlPathPrefix(p[0..d.len], d)) return false;
-    return p.len == d.len or p[d.len] == '\\' or p[d.len] == '/';
-}
-
-/// Equal ignoring ASCII case, with '/' and '\' alike.
-fn eqlPathPrefix(a: []const u8, b: []const u8) bool {
-    for (a, b) |x, y| {
-        const sx = x == '/' or x == '\\';
-        const sy = y == '/' or y == '\\';
-        if (sx and sy) continue;
-        if (std.ascii.toLower(x) != std.ascii.toLower(y)) return false;
+/// The host folders the run may write, where the programs it writes come out
+/// labelled low (see written.zig): under soft, only those labelled low
+/// already. Not its data directory, nor what the run may only read after
+/// all.
+fn watchedDirs(
+    arena: Allocator,
+    sandbox: override.Sandbox,
+    host_grants: []const HostGrant,
+    host_cwd: []const u8,
+    data_dir: []const u8,
+    user_profile: ?[]const u8,
+    own: grants.Own,
+) ![]const []const u8 {
+    var dirs: std.ArrayList([]const u8) = .empty;
+    next: for (host_grants) |g| {
+        if (g.read_only) continue;
+        const p = g.path orelse host_cwd;
+        if (isWithin(p, data_dir)) continue;
+        const read_only = switch (sandbox) {
+            .low => labelRefusal(p, user_profile, own) != null,
+            .appcontainer => own.refusal(p) != null,
+            .soft => own.refusal(p) != null or
+                ((acl.effectiveLabel(arena, p) catch null) orelse continue) > win32.SECURITY_MANDATORY_LOW_RID,
+        };
+        if (read_only) continue;
+        const attrs = win32.GetFileAttributesW(try win32.wide(arena, p));
+        if (attrs == win32.INVALID_FILE_ATTRIBUTES or attrs & win32.FILE_ATTRIBUTE_DIRECTORY == 0) continue;
+        for (dirs.items) |d| if (isWithin(p, d)) continue :next;
+        try dirs.append(arena, p);
     }
-    return true;
+    return dirs.items;
+}
+
+/// Why zigsaw won't label `path` low for a run, if it won't: it's a drive's
+/// root, the user's profile, or a directory the profile is in; or zigsaw's
+/// store or folder is in it, or it's in them (see grants.Own).
+fn labelRefusal(path: []const u8, user_profile: ?[]const u8, own: grants.Own) ?[]const u8 {
+    if (std.fs.path.dirnameWindows(std.mem.trimEnd(u8, path, "\\/")) == null) return "it's the root of a drive";
+    if (user_profile) |profile| if (isWithin(profile, path))
+        return if (isWithin(path, profile)) "it's your user profile" else "your user profile is in it";
+    return own.refusal(path);
 }
 
 test labelRefusal {
     const home = "C:\\Users\\Ann";
+    const own: grants.Own = .{ .store = "C:\\Users\\Ann\\AppData\\Local\\zigsaw", .self_dir = "C:\\Users\\Ann\\AppData\\Local\\zigsaw\\bin" };
     for ([_][]const u8{ "C:\\", "C:", "D:\\", "d:/", "\\\\server\\share\\" }) |root|
-        try std.testing.expectEqualStrings("it's the root of a drive", labelRefusal(root, home).?);
-    try std.testing.expectEqualStrings("it's your user profile", labelRefusal("c:\\users\\ann\\", home).?);
-    try std.testing.expectEqualStrings("it's your user profile", labelRefusal("C:/Users/Ann", home ++ "\\").?);
-    try std.testing.expectEqualStrings("your user profile is in it", labelRefusal("C:\\Users", home).?);
+        try std.testing.expectEqualStrings("it's the root of a drive", labelRefusal(root, home, own).?);
+    try std.testing.expectEqualStrings("it's your user profile", labelRefusal("c:\\users\\ann\\", home, own).?);
+    try std.testing.expectEqualStrings("it's your user profile", labelRefusal("C:/Users/Ann", home ++ "\\", own).?);
+    try std.testing.expectEqualStrings("your user profile is in it", labelRefusal("C:\\Users", home, own).?);
+    try std.testing.expectEqualStrings("zigsaw's store is in it", labelRefusal("C:\\Users\\Ann\\AppData", home, own).?);
     for ([_][]const u8{ "C:\\Users\\Ann\\src", "C:\\Users\\Anna", "C:\\Users\\An", "D:\\src", "\\\\server\\share\\dir" }) |ok|
-        try std.testing.expectEqual(null, labelRefusal(ok, home));
-    try std.testing.expectEqual(null, labelRefusal("C:\\Users", null));
-}
-
-test isWithin {
-    const data = "D:\\zs\\data\\org.example.app";
-    for ([_][]const u8{ data, data ++ "\\", "d:/zs/DATA/org.example.app/home" }) |in| try std.testing.expect(isWithin(in, data));
-    for ([_][]const u8{ "D:\\zs\\data\\org.example.app2", "D:\\zs\\data", "D:\\zs\\data\\org.example" }) |out| try std.testing.expect(!isWithin(out, data));
+        try std.testing.expectEqual(null, labelRefusal(ok, home, own));
+    try std.testing.expectEqualStrings("zigsaw's store is in it", labelRefusal("C:\\Users", null, own).?);
 }
 
 // ---------------------------------------------------------------------------
