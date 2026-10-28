@@ -20,10 +20,10 @@
     "Files - Zigsaw build": { "command": "files", "description": "Browse and organize your files and folders" }
   },
   "runtimes": {
-    "dotnet": "com.microsoft.dotnet:10.0.13@sha256:02a480d6f4386234410f88a2942d5264b4ffd355faed02003fc0431b3ce69b64"
+    "dotnet": "com.microsoft.dotnet:10.0.13@sha256:a9e05a1fe615515ed8e890187690c9bfc55193305cc103b4a340a8782b5a9c0a"
   },
   "sdk": {
-    "dotnetsdk": "com.microsoft.dotnet.Sdk:10.0.402@sha256:af8d05f19b602a7c8784524b6c0108231932cec7123d5a7ba7dc1d08ae32a2e2",
+    "dotnetsdk": "com.microsoft.dotnet.Sdk:10.0.402@sha256:7687b4c6ce4f2fc43cf123426b5cf31fbe1b253978281ce56fe4fa36b1b28240",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "cleanup": ["*.pdb"],

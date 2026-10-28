@@ -13,7 +13,7 @@
   "modules": [
     {
       "name": "dotnet",
-      "sources": [{ "image": "com.microsoft.dotnet.Sdk:10.0.402@sha256:af8d05f19b602a7c8784524b6c0108231932cec7123d5a7ba7dc1d08ae32a2e2" }]
+      "sources": [{ "image": "com.microsoft.dotnet.Sdk:10.0.402@sha256:7687b4c6ce4f2fc43cf123426b5cf31fbe1b253978281ce56fe4fa36b1b28240" }]
     }
   ]
 }

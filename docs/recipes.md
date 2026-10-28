@@ -100,7 +100,10 @@ which then get shims (see
 An app's runs are low integrity unless something chooses another sandbox
 ([sandboxes](../README.md#sandboxes)). An app that can't work at low
 integrity asks for `soft` in its permissions, as Kanboard's recipe does (PHP
-tells it it can't write its data there):
+tells it it can't write its data there). So does a toolchain's, one that
+builds or installs programs where it's run (zig's, Rust's, Node's, the
+SDKs'): Windows starts a program whose file is labelled low at low
+integrity, and what a low-integrity program writes is labelled low.
 
 ```json
 "permissions": { "sandbox": "soft", "network": true }

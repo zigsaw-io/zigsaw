@@ -11,7 +11,7 @@
     "CMAKE_PREFIX_PATH": "${app}",
     "RC": "rc /:auto-includes gnu"
   },
-  "permissions": { "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "filesystem": ["cwd"] },
   "exports": {
     "cc": { "command": "${zig}/zig.exe", "args": ["cc", "-target", "x86_64-windows-gnu"] },
     "c++": { "command": "${zig}/zig.exe", "args": ["c++", "-target", "x86_64-windows-gnu"] },

@@ -6,7 +6,7 @@
   "homepage": "https://www.python.org/",
   "license": "PSF-2.0",
   "command": "python.exe",
-  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "network": true, "filesystem": ["cwd"] },
   "modules": [
     {
       "name": "python",

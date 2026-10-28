@@ -7,7 +7,7 @@
   "license": "GPL-3.0-or-later",
   "command": "bin/make.exe",
   "path": ["bin"],
-  "permissions": { "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "filesystem": ["cwd"] },
   "exports": {},
   "aliases": {
     "make": { "command": "bin/make.exe" },

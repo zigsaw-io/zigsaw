@@ -13,7 +13,7 @@
     "GOTOOLCHAIN": "local",
     "GOFLAGS": "-trimpath -modcacherw"
   },
-  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "network": true, "filesystem": ["cwd"] },
   "exports": {
     "go": { "command": "bin/go.exe" },
     "gofmt": { "command": "bin/gofmt.exe" }

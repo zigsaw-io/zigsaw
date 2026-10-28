@@ -388,18 +388,21 @@ keeps it in is the run's sandbox:
 - **`appcontainer`**: every permission is enforced, reading and the network
   too, in an AppContainer of the app's own.
 
-An image may ask for another sandbox than low: Kanboard's asks for `soft`,
-as PHP can't tell it may write its data at low integrity, which `pull` and
-`info` show. Your overrides choose over the image, and a run's `--sandbox`
+An image may ask for another sandbox than low, which `pull` and `info`
+show. Kanboard's asks for `soft`, as PHP can't tell it may write its data at
+low integrity. So do toolchains' (zig, Rust, Go, CMake, make, Meson, Node,
+Python, the JDK, Maven, Gradle, and the GTK, Qt and PHP SDKs): Windows
+starts a program labelled low at low integrity wherever it's started from,
+and what a low-integrity compiler writes is labelled low. Your overrides choose over the image, and a run's `--sandbox`
 over both: `zigsaw override --sandbox=soft <app>` for one app, `zigsaw
 override --global --sandbox=soft` for every app ([below](#changing-an-apps-options)).
 
 Low integrity won't label your user profile, a folder that holds it, or a
 drive's root, as every low-integrity program could then write anywhere in
 it. An app that may write its working directory, run from one of those,
-gets it read-only for that run, with a warning: `node` from your home
-folder reads it, and `npm init` there can't write `package.json`. Run it
-from a folder inside, or with `--sandbox=soft`.
+gets it read-only for that run, with a warning: `7z` from your home folder
+reads it, and can't extract an archive there. Run it from a folder inside,
+or with `--sandbox=soft`.
 
 What a low run labels stays labelled while the app may write it, so that
 its next runs don't label it again ([how long grants last](docs/how-it-works.md#how-long-grants-last)):
@@ -721,7 +724,7 @@ including runs through its commands on PATH. It takes the same options as
 
 ```powershell
 zigsaw override --sandbox=appcontainer com.github.BurntSushi.ripgrep   # rg reads only what it may
-zigsaw override --sandbox=soft org.nodejs.node                         # node writes anywhere, as before 0.54
+zigsaw override --sandbox=soft org.7_zip.7zip                          # 7z writes anywhere, as before 0.54
 zigsaw override --filesystem=D:\src org.nodejs.node                    # node can use D:\src
 zigsaw override --filesystem=documents:ro org.videolan.VLC             # VLC reads your Documents
 zigsaw override --nofilesystem=downloads org.videolan.VLC              # but not your Downloads

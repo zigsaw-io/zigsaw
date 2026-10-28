@@ -7,10 +7,11 @@
 #
 #   scripts/check-pins.sh [recipe.json...]   (default: those in published-recipes.txt)
 #
-# It fails if anything is missing. It warns about a runtime pin that isn't
-# what its tag points to now: an app on an older build of a runtime than the
-# one published under the same version, so a store with it and the runtime's
-# other apps deploys the runtime twice. Older SDK pins don't warn.
+# It fails if anything is missing. It warns about a runtime pin whose layers
+# aren't those of what its tag points to now: an app on an older build of a
+# runtime than the one published under the same version, so a store with it
+# and the runtime's other apps deploys the runtime twice. A pin whose image
+# differs only in its config doesn't warn. Older SDK pins don't warn.
 #
 # The registry is the default one (ghcr.io/zigsaw-io) or ZIGSAW_REGISTRY's,
 # read anonymously. Needs curl and Git Bash, not zigsaw.
@@ -75,6 +76,16 @@ head_manifest() {
     esac
 }
 
+# layers_of <repository> <digest>: the manifest's layer digests, one a line.
+# (head_manifest first, for the token.)
+layers_of() {
+    head_manifest "$1" "$2"
+    local auth=()
+    [ -n "${tokens[$1]:-}" ] && auth=(-H "Authorization: Bearer ${tokens[$1]}")
+    curl -sS -H "Accept: $accept" "${auth[@]}" "$scheme://$host/v2/$1/manifests/$2" |
+        tr -d ' \r\n' | sed 's/.*"layers"://' | grep -o 'sha256:[0-9a-f]\{64\}'
+}
+
 repo_of() { echo "$namespace$1" | tr '[:upper:]' '[:lower:]'; }
 short() { echo "${1#sha256:}" | cut -c1-8; }
 
@@ -111,6 +122,8 @@ while read -r tid tversion tdigest; do tag_digest[$tid:$tversion]=$tdigest; done
     done | sort -u | xargs -P 8 -n 2 bash "$0" --tag
 )
 
+tmp_pinned=$(mktemp) tmp_now=$(mktemp)
+trap 'rm -f "$tmp_pinned" "$tmp_now"' EXIT
 missing=0
 older=0
 pins=0
@@ -150,6 +163,12 @@ for recipe in "$@"; do
         if [ -z "$now" ]; then
             echo "warning: $name's runtime $ref@$(short "$digest") is on $registry, but no tag $pversion is"
         elif [ "$now" != "$digest" ]; then
+            # Only its config may differ (as when an image asks for another
+            # sandbox, which only an app's own image decides): the same
+            # layers deploy once.
+            layers_of "$(repo_of "$pid")" "$digest" >"$tmp_pinned"
+            layers_of "$(repo_of "$pid")" "$now" >"$tmp_now"
+            [ -s "$tmp_pinned" ] && cmp -s "$tmp_pinned" "$tmp_now" && continue
             echo "warning: $name pins an older runtime $ref (@$(short "$digest"); the tag is @$(short "$now"))"
             older=$((older + 1))
         fi

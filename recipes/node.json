@@ -12,7 +12,7 @@
     "NODE_OPTIONS": "--preserve-symlinks --preserve-symlinks-main",
     "NODE_USE_SYSTEM_CA": "1"
   },
-  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "network": true, "filesystem": ["cwd"] },
   "exports": {
     "node": { "command": "node.exe" },
     "npm": { "command": "node.exe", "args": ["${app}\\node_modules\\npm\\bin\\npm-cli.js"] },

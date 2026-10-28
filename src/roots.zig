@@ -187,7 +187,8 @@ test "Windows' roots export as PEM that zig's std reads back" {
     try std.testing.expect(std.mem.endsWith(u8, pem, "-----END CERTIFICATE-----\n"));
     // The same file each time.
     try std.testing.expectEqualStrings(pem, try exportPem(arena));
-    // Each certificate parses, and they're all different.
+    // Each certificate parses, but for one whose algorithms zig's std doesn't
+    // know, which its own bundle skips too (a runner's roots have one).
     var count: usize = 0;
     var it = std.mem.splitSequence(u8, pem, "-----END CERTIFICATE-----\n");
     while (it.next()) |block| {
@@ -195,7 +196,10 @@ test "Windows' roots export as PEM that zig's std reads back" {
         const b64 = try std.mem.replaceOwned(u8, arena, block["-----BEGIN CERTIFICATE-----\n".len..], "\n", "");
         const der = try arena.alloc(u8, try std.base64.standard.Decoder.calcSizeForSlice(b64));
         try std.base64.standard.Decoder.decode(der, b64);
-        _ = try std.crypto.Certificate.parse(.{ .buffer = der, .index = 0 });
+        _ = std.crypto.Certificate.parse(.{ .buffer = der, .index = 0 }) catch |err| switch (err) {
+            error.CertificateHasUnrecognizedObjectId => continue,
+            else => |e| return e,
+        };
         count += 1;
     }
     try std.testing.expect(count > 0);

@@ -24,7 +24,7 @@
     "rc": { "command": "zig.exe", "args": ["rc"] },
     "as": { "command": "zig.exe", "args": ["cc", "-target", "x86_64-windows-gnu", "-c", "-x", "assembler"], "drop": ["--64"] }
   },
-  "permissions": { "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "filesystem": ["cwd"] },
   "modules": [
     {
       "name": "zig",

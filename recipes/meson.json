@@ -3,7 +3,7 @@
   "version": "1.12.1",
   "command": "python.exe",
   "args": ["${app}\\meson\\meson.py"],
-  "permissions": { "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "filesystem": ["cwd"] },
   "exports": {
     "meson": { "command": "python.exe", "args": ["${app}\\meson\\meson.py"] }
   },

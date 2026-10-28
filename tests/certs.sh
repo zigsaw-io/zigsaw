@@ -133,9 +133,14 @@ composer_get() {
     out=$(z "$1" $COMPOSER update --dry-run --no-interaction --no-plugins --no-scripts 2>&1 | tr -d '\r')
     grep -q 'Locking zigsaw/certs (1.0.0)' <<<"$out" && return 0
     # Its error, which Composer wraps over lines (and follows with the
-    # command's usage), on one.
-    grep -A3 'curl error' <<<"$out" | grep -v '^update \[' | sed 's/^ *//;s/ *$//' | tr -d '\n'
-    echo
+    # command's usage), on one; any other error, as it is.
+    if grep -q 'curl error' <<<"$out"; then
+        grep -A3 'curl error' <<<"$out" | grep -v '^update \[' | sed 's/^ *//;s/ *$//' | tr -d '\n'
+        echo
+    else
+        grep -v '^\s*$' <<<"$out" | grep -v '^update \[' | tail -3 | tr '\n' ' '
+        echo
+    fi
     return 1
 }
 # Perl's image has no network permission, which an AppContainer needs.
@@ -165,6 +170,9 @@ want() {
     case $1/$2 in
     zig_get/low) echo gap ;; # zig's std opens the store to write: CertificateBundleLoadFailure
     jre_get/appcontainer | git_get/appcontainer) ac_if self-path-dos nul ;;
+    # Composer starts its subprocesses (git, to guess the project's version)
+    # through Symfony's Process, whose pipes on Windows open NUL.
+    composer_get/appcontainer) ac_if nul ;;
     *) echo ok ;;
     esac
 }

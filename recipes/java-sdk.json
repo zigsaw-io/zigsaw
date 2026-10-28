@@ -11,7 +11,7 @@
     "JAVA_HOME": "${app}",
     "JAVA_TOOL_OPTIONS": "\"-Duser.home=${data}\\home\" -Dsun.font.layout.ffm=false -Djavax.net.ssl.trustStoreType=Windows-ROOT-LOCALMACHINE"
   },
-  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "network": true, "filesystem": ["cwd"] },
   "exports": {
     "java": { "command": "bin/java.exe" },
     "javaw": { "command": "bin/javaw.exe" },

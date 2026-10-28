@@ -12,7 +12,7 @@
     "-Dorg.gradle.appname=gradle", "-Dorg.gradle.daemon=false",
     "-jar", "${app}\\lib\\gradle-gradle-cli-main-9.8.1.jar"
   ],
-  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "network": true, "filesystem": ["cwd"] },
   "runtimes": { "java": "org.openjdk.java.Sdk:25.0.5_8@sha256:e0e6bf207799725067178eca9c1df29a564d47a618319aae46b23ee72e821418" },
   "exports": {
     "gradle": {

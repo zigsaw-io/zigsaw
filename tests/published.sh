@@ -128,7 +128,11 @@ serves() {
     done
     kill $server 2>/dev/null
     wait $server 2>/dev/null
-    grep -q 'name="csrf_token"' <<<"$page" || { echo "no login page on port $port: $(last_line "$out")"; return 1; }
+    grep -q 'name="csrf_token"' <<<"$page" && return 0
+    # What it served instead, kept with the logs.
+    printf '%s' "$page" >"$logs\\$1.page.html"
+    echo "no login page on port $port, but \"$(grep -o '<title>[^<]*' <<<"$page" | cut -c8- | head -1)\" ($1.page.html): $(last_line "$out")"
+    return 1
 }
 smoke() { ZIGSAW_HOME="$pull_store" timeout 120 "$zigsaw" run "$@" </dev/null; }
 ref_digest() { grep -o 'sha256:[0-9a-f]*' "$1\\refs\\$2.json"; }

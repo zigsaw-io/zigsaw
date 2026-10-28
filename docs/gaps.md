@@ -33,6 +33,14 @@
   program write anywhere in it: a command that writes there fails (`npm
   init` in your home folder). Run it from a folder inside, or with
   `--sandbox=soft`.
+- Windows starts a program whose file is labelled low at low integrity,
+  whoever starts it. A low run labels the app's working directory and what's
+  in it, and what a low-integrity program writes is labelled low anyway: the
+  programs there then start at low integrity outside zigsaw too, until
+  `zigsaw rm` takes the label back. Toolchains' images (zig, Rust, Go, CMake,
+  make, Meson, Node, Python, the JDK, Maven, Gradle, and the GTK, Qt and PHP
+  SDKs) ask for soft for that. Others don't: 7-Zip extracting programs, or
+  MinGit checking them out, at low makes programs that start at low.
 - `--sandbox=low` labels only paths whose permissions you may change, which
   you may for what you own. Labelling needs the right to change a path's
   owner, which a second drive whose root gives users only Modify (a fresh
@@ -91,14 +99,12 @@
   revocation status is unknown` (CMake: `SSL connect error`), as a network
   whose CA doesn't publish one would make it. MinGit's git, on the same
   Schannel, lets it pass.
-- `zig fetch` doesn't work at low integrity, zig's default sandbox since
-  zigsaw 0.54, so neither does `zig build` for a project whose
-  dependencies aren't fetched yet: zig's std can't open Windows' roots
-  there, as it asks to write them (`CertificateBundleLoadFailure`), and the
-  compiler has its std built in. `zigsaw override --sandbox=soft
-  org.ziglang.zig` lets it fetch.
-  In an AppContainer, it needs `--share=network`, which zig's image
-  doesn't have.
+- `zig fetch` doesn't work at low integrity, so neither does `zig build`
+  for a project whose dependencies aren't fetched yet: zig's std can't open
+  Windows' roots there, as it asks to write them
+  (`CertificateBundleLoadFailure`), and the compiler has its std built in.
+  zig's image asks for soft, so only `--sandbox=low` meets this. In an
+  AppContainer, it needs `--share=network`, which zig's image doesn't have.
 - Java's images trust the machine's roots in Windows' store. That leaves
   out a root added for this user only, and a root Windows hasn't fetched
   yet, which Temurin's `cacerts` (no longer used) may have had. Windows

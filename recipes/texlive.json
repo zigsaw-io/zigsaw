@@ -615,6 +615,8 @@
         "cd \"$PREFIX\" && ! grep -l -E ' [0-9]{2}:[0-9]{2}:[0-9]{2} [0-9]{4}' texmf-dist/web2c/fmtutil.cnf texmf-dist/web2c/updmap.cfg texmf-var/tex/generic/config/language.dat texmf-var/tex/generic/config/language.def texmf-var/tex/generic/config/language.dat.lua tlpkg/texlive.profile",
         "sed -i -e 's/^    require Win32::Shortcut;$/    eval { require Win32::Shortcut;/' -e 's/^    Win32::Shortcut->import( qw( SW_SHOWNORMAL SW_SHOWMINNOACTIVE ) );$/    Win32::Shortcut->import( qw( SW_SHOWNORMAL SW_SHOWMINNOACTIVE ) ) };/' \"$PREFIX/tlpkg/TeXLive/TLWinGoo.pm\"",
         "grep -q '^    eval { require Win32::Shortcut;$' \"$PREFIX/tlpkg/TeXLive/TLWinGoo.pm\"",
+        "sed -i 's|^  \\$is_admin = 0 unless Win32::IsAdminUser();$|  $is_admin = 0 unless Win32::IsAdminUser() and $Registry->Open(\"LMachine/system/currentcontrolset/control/session manager/Environment/\", {Access => KEY_WRITE() \\| KEY_READ()});|' \"$PREFIX/tlpkg/TeXLive/TLWinGoo.pm\"",
+        "grep -q '^  \\$is_admin = 0 unless Win32::IsAdminUser() and \\$Registry->Open(' \"$PREFIX/tlpkg/TeXLive/TLWinGoo.pm\"",
         "sed -i -e 's/\\$switchit = 1 if (-w \"\\$TEXMFSYSVAR\\/web2c\");/$switchit = 1 if (dir_writable(\"$TEXMFSYSVAR\\/web2c\"));/' -e 's/} elsif (-d \\$TEXMFSYSVAR && -w \\$TEXMFSYSVAR) {/} elsif (-d $TEXMFSYSVAR \\&\\& dir_writable($TEXMFSYSVAR)) {/' \"$PREFIX/tlpkg/TeXLive/TLUtils.pm\"",
         "test \"$(grep -c -e 'dir_writable(\"$TEXMFSYSVAR/web2c\")' -e 'dir_writable($TEXMFSYSVAR)) {' \"$PREFIX/tlpkg/TeXLive/TLUtils.pm\")\" = 2",
         "cp \"$PREFIX/texmf-dist/scripts/texlive/fmtutil.pl\" \"$PREFIX/texmf-dist/scripts/texlive/mktexfmt.pl\" && cp \"$PREFIX/bin/windows/runscript.exe\" \"$PREFIX/bin/windows/mktexfmt.exe\"",

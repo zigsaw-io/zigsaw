@@ -3,7 +3,7 @@
   "version": "0.10.25",
   "command": "bin/cargo-cbuild.exe",
   "path": ["bin"],
-  "permissions": { "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "filesystem": ["cwd"] },
   "exports": {
     "cargo-cbuild": { "command": "bin/cargo-cbuild.exe" },
     "cargo-cinstall": { "command": "bin/cargo-cinstall.exe" }

@@ -39,6 +39,16 @@ fi
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
 data="$ZIGSAW_HOME\\data\\$APP"
+# First use is what's checked: the formats, fontconfig's cache and
+# luaotfload's names are made in an empty data directory. One the store had
+# is set aside, and put back at the end.
+kept=
+if [ -e "$data" ]; then
+    kept="$data.texlive-sh"
+    rm -rf "$kept" && mv "$data" "$kept" || { echo "setting $data aside failed"; exit 1; }
+fi
+put_back() { [ -z "$kept" ] || { rm -rf "$data" && mv "$kept" "$data"; }; }
+trap put_back EXIT
 
 failures=0
 gaps=0

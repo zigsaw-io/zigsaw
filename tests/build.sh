@@ -71,6 +71,10 @@ export ZIGSAW_USER_FOLDERS="$work\\no-folders"
 # tests/imports.zig: whether the loader binds every import of a program.
 (cd "$root" && zig build imports) || { echo "building the import checker failed"; exit 1; }
 imports="$root\\zig-out\\test\\zigsaw-imports.exe"
+# Apps run from the work directory: a low run labels the directory of an app
+# with cwd, and the repository's programs, zigsaw too, would start at low
+# integrity after that.
+cd "$work" || exit 1
 
 # seed <store>: puts SEED_DOWNLOADS's files into the store's download cache,
 # as hard links if it's on the same drive.
@@ -665,6 +669,14 @@ start=$SECONDS
 check "a rebuild with zig's kept cache makes the same image" warm_hello
 printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$hello_time"
 check "zig run as an app has its cache in its data directory" sh -c "\"\$0\" run org.ziglang.zig env | grep '\.global_cache_dir' | grep -qF 'data\\\\org.ziglang.zig\\\\cache\"'" "$zigsaw"
+# A toolchain's image asks for soft: at low, what it built would be labelled
+# low, and Windows starts a program labelled low at low integrity, wherever
+# it's started from.
+zig_soft() {
+    z -v run org.ziglang.zig version 2>&1 | grep -q '^sandbox  soft' || { echo "zig's run isn't soft"; return 1; }
+    ! icacls "$work" | grep -q 'Mandatory Label' || { echo "it labelled its working directory"; return 1; }
+}
+check "zig's image runs under soft unless told otherwise, and labels nothing" zig_soft
 
 # A tool of our own whose image declares a cache: each build sees what
 # earlier ones left there. It also gives builds a command, greet, which
@@ -1304,10 +1316,11 @@ check "built again, the extension's image is the same" phpext_again
 # Installed, it extends PHP's runtime: PHP loads it without listing it.
 zprobe_joins() {
     local php='echo extension_loaded("zprobe") ? zprobe_libs() : "not loaded", "\n";' out
-    out=$(cd "$work\\phpcwd" && z run net.php.php -r "$php" 2>&1 | tr -d '\r')
-    [ "$out" = "zlib 1.3.2 crc 3610a686, from libxml2, OpenSSL 3.5.8" ] || { echo "installed: $out"; return 1; }
-    out=$(cd "$work\\phpcwd" && z run --noextension=$PHPEXT net.php.php -r "$php" 2>&1 | tr -d '\r')
-    [ "$out" = "not loaded" ] || { echo "left out: $out"; return 1; }
+    # (What zigsaw notes, as a first low run's label, goes to stderr.)
+    out=$(cd "$work\\phpcwd" && z run net.php.php -r "$php" 2>"$work\\stderr" | tr -d '\r')
+    [ "$out" = "zlib 1.3.2 crc 3610a686, from libxml2, OpenSSL 3.5.8" ] || { echo "installed: $out $(tr '\r\n' '  ' <"$work\\stderr")"; return 1; }
+    out=$(cd "$work\\phpcwd" && z run --noextension=$PHPEXT net.php.php -r "$php" 2>"$work\\stderr" | tr -d '\r')
+    [ "$out" = "not loaded" ] || { echo "left out: $out $(tr '\r\n' '  ' <"$work\\stderr")"; return 1; }
 }
 check "installed, PHP's runs load it through PHP's extension point, unless left out" zprobe_joins
 # Without a recipe: the SDK's php-ext in the extension's directory, and PHP's
@@ -1316,8 +1329,9 @@ mkdir -p "$work\\phpdir" && cp -r "$(cygpath -u "$root")"/tests/build/php/zprobe
 php_ext_no_recipe() {
     local out
     out=$(cd "$work\\phpdir" && z run --command=php-ext net.php.php.Sdk build 2>&1) || { echo "$out" | tail -2; return 1; }
-    out=$(cd "$work\\phpdir" && z run --noextension=$PHPEXT net.php.php -d "extension=$work\\phpdir\\php_zprobe.dll" -r 'echo zprobe_config(), "\n";' 2>&1 | tr -d '\r')
-    [ "$out" = "hello from config.w32, version info: yes" ] || { echo "got: $out"; return 1; }
+    # (The SDK runs under soft: PHP's run labels the directory, and says so.)
+    out=$(cd "$work\\phpdir" && z run --noextension=$PHPEXT net.php.php -d "extension=$work\\phpdir\\php_zprobe.dll" -r 'echo zprobe_config(), "\n";' 2>"$work\\stderr" | tr -d '\r')
+    [ "$out" = "hello from config.w32, version info: yes" ] || { echo "got: $out $(tr '\r\n' '  ' <"$work\\stderr")"; return 1; }
 }
 check "php-ext builds it in its directory without a recipe, and PHP's runtime loads it" php_ext_no_recipe
 fi
@@ -1329,7 +1343,9 @@ for id in $(ls "$ZIGSAW_HOME\\refs" | sed 's/\.json$//'); do z rm --delete-data 
 check "every app is removed" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\refs')\" ]"
 z prune --downloads --data >/dev/null 2>&1
 check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
-rm -rf "$ZIGSAW_HOME" "$work"
+cd / && rm -rf "$ZIGSAW_HOME" "$work"
+check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
+
 echo
 echo "$failures check(s) failed${GROUP:+ in group $GROUP}."
 exit $((failures > 0))

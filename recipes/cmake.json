@@ -6,7 +6,7 @@
   "env": {
     "CMAKE_GENERATOR": "Ninja"
   },
-  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "permissions": { "sandbox": "soft", "network": true, "filesystem": ["cwd"] },
   "exports": {
     "cmake": { "command": "bin/cmake.exe" },
     "ctest": { "command": "bin/ctest.exe" },
