@@ -618,6 +618,7 @@ test {
     _ = @import("regkey.zig");
     _ = @import("Registry.zig");
     _ = @import("remote.zig");
+    _ = @import("roots.zig");
     _ = @import("layer.zig");
     _ = @import("run.zig");
     _ = @import("services.zig");

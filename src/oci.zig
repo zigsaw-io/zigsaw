@@ -148,6 +148,8 @@ pub const Association = struct {
 ///   ${data}     the app's data directory, or the fresh one of an --ephemeral run
 ///   ${cache}    a directory for caches that are safe to keep: <data>\cache in
 ///               runs, and one kept between builds when a build uses the app
+///   ${roots}    a PEM file of Windows' trusted roots, for programs that take
+///               only a file (see roots.zig)
 ///   ${<alias>}  the directory of the runtime the app calls <alias>
 ///   ${listen:<name>}  the port the app listens on for its service <name>,
 ///               where its own runs connect too (see services.zig)
@@ -158,6 +160,8 @@ pub const Placeholders = struct {
     data: []const u8,
     /// Null where caches don't apply; "${cache}" is then kept as is.
     cache: ?[]const u8 = null,
+    /// Null unless something the run or build has names it (usesRoots).
+    roots: ?[]const u8 = null,
     runtimes: []const Dir = &.{},
     /// The app's services, in its own runs only; elsewhere their
     /// placeholders are kept as they are.
@@ -205,6 +209,7 @@ pub const Placeholders = struct {
         if (std.mem.eql(u8, name, "app")) return p.app;
         if (std.mem.eql(u8, name, "data")) return p.data;
         if (std.mem.eql(u8, name, "cache")) return p.cache;
+        if (std.mem.eql(u8, name, "roots")) return p.roots;
         for (p.runtimes) |r| if (std.mem.eql(u8, r.alias, name)) return r.path;
         if (servicePlaceholder(name)) |s| for (p.services) |ports| if (std.mem.eql(u8, ports.name, s.service))
             return if (s.listen) ports.listen else ports.port;
@@ -272,6 +277,14 @@ fn undeclaredService(template: []const u8, services: []const Service) ?[]const u
 pub fn usesCache(path: []const []const u8, env: std.json.ArrayHashMap([]const u8)) bool {
     for (path) |p| if (std.mem.indexOf(u8, p, "${cache}") != null) return true;
     for (env.map.values()) |v| if (std.mem.indexOf(u8, v, "${cache}") != null) return true;
+    return false;
+}
+
+/// Whether variables or arguments name ${roots}, whose file is then made
+/// for the run or build.
+pub fn usesRoots(env: std.json.ArrayHashMap([]const u8), args: []const []const u8) bool {
+    for (env.map.values()) |v| if (std.mem.indexOf(u8, v, "${roots}") != null) return true;
+    for (args) |a| if (std.mem.indexOf(u8, a, "${roots}") != null) return true;
     return false;
 }
 
@@ -1101,7 +1114,7 @@ pub fn isValidAlias(name: []const u8) bool {
         'a'...'z', '0'...'9', '-', '_' => {},
         else => return false,
     };
-    for ([_][]const u8{ "app", "data", "cache" }) |reserved| {
+    for ([_][]const u8{ "app", "data", "cache", "roots" }) |reserved| {
         if (std.mem.eql(u8, name, reserved)) return false;
     }
     return true;
@@ -1275,6 +1288,20 @@ test "Placeholders.expand" {
     var with_cache = p;
     with_cache.cache = "B:\\cache\\org.ziglang.zig";
     try std.testing.expectEqualStrings("B:\\cache\\org.ziglang.zig", try with_cache.expand(arena, "${cache}"));
+    // ${roots} too, until the run has the file.
+    try std.testing.expectEqualStrings("${roots}", try p.expand(arena, "${roots}"));
+    var with_roots = p;
+    with_roots.roots = "C:\\z\\certs\\roots-0123456789abcdef.pem";
+    try std.testing.expectEqualStrings("C:\\z\\certs\\roots-0123456789abcdef.pem", try with_roots.expand(arena, "${roots}"));
+}
+
+test "usesRoots" {
+    var env: std.json.ArrayHashMap([]const u8) = .{};
+    defer env.map.deinit(std.testing.allocator);
+    try std.testing.expect(!usesRoots(env, &.{"${app}\\x"}));
+    try std.testing.expect(usesRoots(env, &.{ "-f", "--ca=${roots}" }));
+    try env.map.put(std.testing.allocator, "SSL_CERT_FILE", "${roots}");
+    try std.testing.expect(usesRoots(env, &.{}));
 }
 
 test "Placeholders.expand services" {
@@ -1450,6 +1477,7 @@ test isValidAlias {
     try std.testing.expect(!isValidAlias("app"));
     try std.testing.expect(!isValidAlias("data"));
     try std.testing.expect(!isValidAlias("cache"));
+    try std.testing.expect(!isValidAlias("roots"));
     try std.testing.expect(!isValidAlias("Node"));
     try std.testing.expect(!isValidAlias("3d"));
     try std.testing.expect(!isValidAlias("a.b"));

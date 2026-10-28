@@ -4,21 +4,22 @@
 #
 # Each run makes a test CA with Git Bash's openssl, name-constrained to
 # localhost, 127.0.0.0/8 and ::1 and valid for a day, and a certificate for
-# localhost, with which tests/certs/server.py serves HTTPS on Python's image
-# and PostgreSQL's server its TLS. While Windows doesn't trust the CA, every
-# client must refuse them, under soft (so each one verifies). Then with the
-# CA in the machine's Trusted Root store (LocalMachine\Root), each client
-# under soft, low and appcontainer: Python's urllib, Node's fetch, Java's
-# HttpClient on the JDK and the JRE, MinGit's ls-remote, CMake's
-# file(DOWNLOAD), zig fetch, psql with sslrootcert=system, and PHP's streams
-# and curl if the store has PHP. Apps that keep a bundle of CAs of their own
-# are known gaps.
+# localhost that names the CA's CRL, with which tests/certs/server.py serves
+# HTTPS on Python's image (and the CRL over HTTP), and PostgreSQL's server
+# its TLS. While Windows doesn't trust the CA, every client must refuse them,
+# under soft (so each one verifies). Then with the CA in the machine's
+# Trusted Root store (LocalMachine\Root), each client under soft, low and
+# appcontainer: Python's urllib, Node's fetch, Java's HttpClient on the JDK
+# and the JRE, MinGit's ls-remote, CMake's file(DOWNLOAD), zig fetch, psql
+# with sslrootcert=system, PHP's streams and curl, Composer, and Perl's
+# HTTP::Tiny. The last four, and psql, read the file of Windows' roots
+# zigsaw writes (${roots}), which each sandbox's runs must be able to read.
 #
 #   CERTS_HOME=path\to\store bash tests/certs.sh [path\to\zigsaw.exe]
 #
 # The store (CERTS_HOME, or BUILD_HOME) needs Python's image; each other
 # client is skipped, saying so, if the store hasn't its image (CI's suites
-# store has them all but PHP's). Adding the CA to LocalMachine\Root takes an
+# store has them all). Adding the CA to LocalMachine\Root takes an
 # elevated shell, which CI's runners are. Elsewhere, CERTS_ELEVATE=1 runs
 # certutil through a UAC prompt, once to add the CA and once to take it out;
 # without either, only the rows from before it's trusted run. The CA is
@@ -41,6 +42,8 @@ CMAKE=org.cmake.cmake
 ZIG=org.ziglang.zig
 PG=org.postgresql.PostgreSQL
 PHP=net.php.php
+COMPOSER=org.getcomposer.composer
+PERL=org.perl.perl
 has() { [ -f "$ZIGSAW_HOME\\refs\\$1.json" ]; }
 if [ -z "$ZIGSAW_HOME" ] || ! has $PY; then
     echo "tests/certs.sh needs a store with $PY in CERTS_HOME or BUILD_HOME"
@@ -50,6 +53,7 @@ export ZIGSAW_HOME
 command -v openssl >/dev/null || { echo "tests/certs.sh needs openssl (Git Bash has it)"; exit 1; }
 work=$(cygpath -w "$(mktemp -d)")
 port=$((47000 + RANDOM % 900))
+crlport=$((port + 900))
 pgport=$((port + 1000))
 url="https://localhost:$port"
 pgdata="$ZIGSAW_HOME\\data\\$PG"
@@ -77,7 +81,7 @@ row() {
     ok/0) printf 'ok    %s\n' "$label" ;;
     gap/0) printf 'ok    %s  (a known gap that passes now)\n' "$label" ;;
     gap/*)
-        printf 'gap   %s  (known gap)\n' "$label"
+        printf 'gap   %s  (known gap)\n      %s\n' "$label" "$(grep -v '^\s*$' <<<"$out" | tail -1 | cut -c1-110)"
         gaps=$((gaps + 1))
         ;;
     *)
@@ -123,12 +127,32 @@ psql_get() { says 1 z "$1" --command=psql $PG "host=localhost port=$pgport dbnam
 # (A handler of its own, too, as an installed Xdebug adds its stack to them.)
 php_stream_get() { says ok z "$1" $PHP -r "\$w = []; set_error_handler(function (\$n, \$m) use (&\$w) { \$w[] = \$m; return true; }); \$r = file_get_contents('$url/ok'); echo \$r === false ? implode(' / ', \$w) : trim(\$r), PHP_EOL;"; }
 php_curl_get() { says ok z "$1" $PHP -r "\$c = curl_init('$url/ok'); curl_setopt(\$c, CURLOPT_RETURNTRANSFER, true); \$r = curl_exec(\$c); echo \$r === false ? curl_error(\$c) : trim(\$r), PHP_EOL;"; }
+# Composer resolves zigsaw/certs from the server's repository (composer.json).
+composer_get() {
+    local out
+    out=$(z "$1" $COMPOSER update --dry-run --no-interaction --no-plugins --no-scripts 2>&1 | tr -d '\r')
+    grep -q 'Locking zigsaw/certs (1.0.0)' <<<"$out" && return 0
+    # Its error, which Composer wraps over lines (and follows with the
+    # command's usage), on one.
+    grep -A3 'curl error' <<<"$out" | grep -v '^update \[' | sed 's/^ *//;s/ *$//' | tr -d '\n'
+    echo
+    return 1
+}
+# Perl's image has no network permission, which an AppContainer needs.
+perl_get() { says ok z "$1" --share=network $PERL -MHTTP::Tiny -e 'my $r = HTTP::Tiny->new(verify_SSL => 1)->get($ARGV[0]); print $r->{success} ? $r->{content} : "$r->{status} $r->{content}\n"' "$url/ok"; }
+# The file of Windows' roots the images that take only a file are given
+# (SSL_CERT_FILE=${roots}): the run can read it, and it has some.
+roots_read() {
+    local n
+    n=$(z "$1" $PERL -e 'open my $f, "<", $ENV{SSL_CERT_FILE} or die "$ENV{SSL_CERT_FILE}: $!\n"; print scalar(grep /^-----BEGIN CERTIFICATE-----/, <$f>), "\n"' 2>"$work\\stderr" | tr -d '\r')
+    [ "$n" -gt 0 ] 2>/dev/null || { echo "got \"$n\"; $(tr -d '\r' <"$work\\stderr" | grep -v '^\s*$' | tail -1)"; return 1; }
+}
 
 # The clients the store has: "<image> <function> <name>".
 clients=()
 for c in "$PY python_get Python" "$NODE node_get Node" "$JDK jdk_get Java_on_the_JDK" "$JRE jre_get Java_on_the_JRE" \
     "$GIT git_get MinGit" "$CMAKE cmake_get CMake" "$ZIG zig_get zig" "$PG psql_get psql" \
-    "$PHP php_stream_get PHP's_streams" "$PHP php_curl_get PHP's_curl"; do
+    "$PHP php_stream_get PHP's_streams" "$PHP php_curl_get PHP's_curl" "$COMPOSER composer_get Composer" "$PERL perl_get Perl"; do
     set -- $c
     if has "$1"; then clients+=("$c"); else echo "skip  ${3//_/ }: the store hasn't $1"; fi
 done
@@ -137,11 +161,9 @@ done
 # keeps from running there (tests/acprobe.zig) are known gaps there.
 want() {
     case $1/$2 in
-    php_curl_get/*) echo gap ;; # its own bundle, extras\ssl\cacert.pem
-    psql_get/*) echo gap ;;     # OpenSSL's default paths, under B:\prefix\ssl, where the build was
-    zig_get/low) echo gap ;;    # zig's std opens the store to write: CertificateBundleLoadFailure
-    node_get/appcontainer) ac_if final-path-dos self-path-dos nul ;;
-    jdk_get/appcontainer | jre_get/appcontainer | git_get/appcontainer | cmake_get/appcontainer) ac_if self-path-dos nul ;;
+    zig_get/low) echo gap ;; # zig's std opens the store to write: CertificateBundleLoadFailure
+    jre_get/appcontainer | git_get/appcontainer | cmake_get/appcontainer) ac_if self-path-dos nul ;;
+    php_*/appcontainer | composer_get/appcontainer | perl_get/appcontainer | roots_read/appcontainer) ac_if self-path-dos nul ;;
     zig_get/appcontainer) ac_if self-path-dos ;;
     *) echo ok ;;
     esac
@@ -186,8 +208,17 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.crt -days 1 \
     -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" \
     -addext "nameConstraints=critical,permitted;DNS:localhost,permitted;IP:127.0.0.0/255.0.0.0,permitted;IP:::1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" \
     >/dev/null 2>&1 || { echo "making the test CA failed"; exit 1; }
+# Its CRL, which the server's certificate names: curl over Schannel (CMake's)
+# refuses a certificate whose revocation it can't check.
+printf '%s\n' '[ca]' 'default_ca = test' '[test]' 'database = index.txt' 'crlnumber = crlnumber' \
+    'default_md = sha256' 'default_crl_days = 1' >ca.cnf
+: >index.txt
+echo 01 >crlnumber
+openssl ca -config ca.cnf -gencrl -keyfile ca.key -cert ca.crt -out ca.crl.pem >/dev/null 2>&1 &&
+    openssl crl -in ca.crl.pem -outform DER -out ca.crl || { echo "making the test CA's CRL failed"; exit 1; }
 printf '%s\n' "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1" "basicConstraints=critical,CA:FALSE" \
-    "keyUsage=critical,digitalSignature,keyEncipherment" "extendedKeyUsage=serverAuth" >leaf.ext
+    "keyUsage=critical,digitalSignature,keyEncipherment" "extendedKeyUsage=serverAuth" \
+    "crlDistributionPoints=URI:http://localhost:$crlport/ca.crl" >leaf.ext
 openssl req -newkey rsa:2048 -nodes -keyout leaf.key -out leaf.csr -subj "/CN=localhost" >/dev/null 2>&1 &&
     openssl x509 -req -in leaf.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 1 -extfile leaf.ext -out leaf.crt >/dev/null 2>&1 ||
     { echo "making the server's certificate failed"; exit 1; }
@@ -195,13 +226,18 @@ serial=$(openssl x509 -noout -serial -in ca.crt | sed 's/^serial=//')
 echo "The test CA's serial: $serial"
 
 cp "$root\\tests\\certs\\server.py" "$root\\tests\\certs\\Get.java" .
-printf '%s\n' 'file(DOWNLOAD "${URL}" STATUS status TLS_VERIFY ON)' 'list(GET status 0 code)' 'list(GET status 1 why)' \
-    'message(STATUS "download ${code}")' 'if(code)' '  message(STATUS "${why}")' 'endif()' >download.cmake
+# On a failure, curl's own reason (Schannel's lines of its log) last.
+printf '%s\n' 'file(DOWNLOAD "${URL}" STATUS status TLS_VERIFY ON LOG log)' 'list(GET status 0 code)' 'list(GET status 1 why)' \
+    'message(STATUS "download ${code}")' 'if(code)' '  message(STATUS "${why}")' \
+    '  string(REGEX MATCHALL "schannel: [^\n]*" lines "${log}")' '  foreach(l IN LISTS lines)' '    message(STATUS "${l}")' '  endforeach()' \
+    'endif()' >download.cmake
 # zig fetch looks for a build.zig.
 printf '%s\n' 'pub fn build(_: *@import("std").Build) void {}' >build.zig
+# Composer's project: zigsaw/certs, from the server's repository only.
+printf '{"repositories": [{"type": "composer", "url": "%s"}, {"packagist.org": false}], "require": {"zigsaw/certs": "1.0.0"}}\n' "$url" >composer.json
 if has $JDK; then z soft --command=javac $JDK -d classes Get.java >/dev/null 2>&1 || echo "compiling Get.java failed"; fi
 
-"$zigsaw" run $PY server.py $port leaf.crt leaf.key ready >server.out 2>&1 &
+"$zigsaw" run $PY server.py $port leaf.crt leaf.key ready $crlport ca.crl >server.out 2>&1 &
 server=$!
 for i in $(seq 30); do [ -e ready ] && break; sleep 1; done
 [ -e ready ] || { echo "the HTTPS server didn't start:"; tail -5 server.out; exit 1; }
@@ -220,6 +256,11 @@ for c in "${clients[@]}"; do
     set -- $c
     row refuses "${3//_/ } refuses the server while Windows doesn't trust its CA" $2 soft
 done
+if has $PERL; then
+    for sandbox in soft low appcontainer; do
+        row "$(want roots_read $sandbox)" "$sandbox: a run reads Windows' roots from \${roots}" roots_read $sandbox
+    done
+fi
 
 # --- Once it does ------------------------------------------------------------
 

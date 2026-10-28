@@ -119,7 +119,12 @@ if [ -n "$gpus" ] || gl_frame; then
 else
     printf 'gap   %s  (known gap: no GPU)\n' "with GDK_DEBUG=dcomp, GTK draws with OpenGL"
 fi
-settings() { timeout 60 "$zigsaw" run --command=gtk4-query-settings org.gtk.Gtk4 | grep -q 'gtk-theme-name: "Default"'; }
+settings() {
+    local out rc
+    out=$(timeout 60 "$zigsaw" run --command=gtk4-query-settings org.gtk.Gtk4 2>&1)
+    rc=$?
+    grep -q 'gtk-theme-name: "Default"' <<<"$out" || { echo "exit status $rc, $(wc -l <<<"$out") lines: $(tr -d '\r' <<<"$out" | tail -3)"; return 1; }
+}
 check "the runtime's gtk4-query-settings reads GTK's settings" settings
 check "its gtk4-demo is GTK 4.24.1" sh -c "timeout 60 \"\$0\" run --command=gtk4-demo org.gtk.Gtk4 --version | grep -q 'gtk4-demo.exe 4.24.1'" "$zigsaw"
 # The runtime's variables keep GLib's files and settings in the app's data

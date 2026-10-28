@@ -188,7 +188,7 @@ jobs:
           ZIGSAW_HOME: ${{ runner.temp }}\store
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
-          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls texlive gdal postgresql postgresql-pgvector postgresql-pg-cron postgresql-postgis osm2pgsql 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
+          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls texlive gdal postgresql postgresql-pgvector postgresql-pg-cron postgresql-postgis osm2pgsql perl php composer 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
 
       # The suites run whether or not the steps before them passed.
       - name: tests/store.sh

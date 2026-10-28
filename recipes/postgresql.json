@@ -12,7 +12,8 @@
     "PGPASSFILE": "${data}\\pgpass.conf",
     "PGUSER": "postgres",
     "PGHOST": "localhost",
-    "PGPORT": "${listen:postgresql}"
+    "PGPORT": "${listen:postgresql}",
+    "SSL_CERT_FILE": "${roots}"
   },
   "permissions": {
     "network": true,
@@ -45,7 +46,7 @@
     "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:c685eda60e9225e3f0c91471a988518a76c85e931527892ad4853ffb461ea289"
   },
   "runtimes": {
-    "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85",
+    "perl": "org.perl.perl:5.42.3.1@sha256:4bf63dc4d73c1094335f85767629736c3d01276dc3e46be04bfba985b70e25df",
     "python": "org.python.python:3.14.7@sha256:fa12bbaf83e7ba1ad30551c90eb85b3655e8ecea933ea9ee6b1728de02fe809d"
   },
   "cleanup": ["/include", "/lib/cmake", "/lib/pkgconfig", "*.a", "/share/doc", "/share/man", "/bin/xml2-config", "/bin/xmllint.exe", "/bin/xmlcatalog.exe", "/bin/test_cloexec.exe", "/lib/postgresql/pgxs"],

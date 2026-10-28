@@ -81,6 +81,16 @@ and their commands on its PATH:
 "env": { "NPM_CONFIG_PREFIX": "${data}\\npm" }
 ```
 
+`env` values and arguments can also name `${roots}`: a PEM file of the roots
+Windows trusts, which zigsaw writes for runs and builds that name it, for
+programs that take only a file of roots, as OpenSSL's does through
+`SSL_CERT_FILE` ([certificate trust](networking.md#certificate-trust)).
+Perl's recipe has it:
+
+```json
+"env": { "SSL_CERT_FILE": "${roots}" }
+```
+
 PATH entries in `${data}` are also where the app's runs install commands,
 which then get shims (see
 [commands installed while an app runs](#commands-installed-while-an-app-runs)).

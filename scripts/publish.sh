@@ -99,21 +99,6 @@ if [ -n "$changed" ]; then
             if grep -qxF -e "recipes/$path" <<<"$changed" || grep -q "^recipes/$path/" <<<"$changed"; then pick[$recipe]=git; fi
         done
     done
-    more=true
-    while $more; do
-        more=false
-        for recipe in "$@"; do
-            [ -n "${pick[$recipe]:-}" ] && continue
-            for other in "$@"; do
-                [ -n "${pick[$other]:-}" ] && [ "$other" != "$recipe" ] || continue
-                if grep -qF "\"${ids[$other]}:" "$recipe"; then
-                    pick[$recipe]="uses ${ids[$other]}"
-                    more=true
-                    break
-                fi
-            done
-        done
-    done
     todo=()
     for recipe in "$@"; do
         if [ -n "${pick[$recipe]:-}" ]; then todo+=("$recipe"); else skipped+=("${ids[$recipe]}"); fi

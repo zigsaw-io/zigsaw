@@ -10,6 +10,7 @@ const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const oci = @import("oci.zig");
+const roots = @import("roots.zig");
 const services = @import("services.zig");
 const note = Context.note;
 
@@ -186,6 +187,8 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         const ids = try arena.alloc([]const u8, refs.len);
         for (ids, refs) |*i, r| i.* = r.id;
         try services.prune(ctx, ids);
+        // And files of Windows' roots older runs had.
+        try roots.prune(ctx);
     }
 
     // Report.

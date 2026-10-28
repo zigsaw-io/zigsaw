@@ -17,7 +17,7 @@
     "network": true,
     "services": [{ "name": "http", "port": 8471, "command": "kanboard" }]
   },
-  "runtimes": { "php": "net.php.php:8.5.11@sha256:04d03b791cf0f75048aecc06560521266e756258a3720a5551a132fe8e56f7a4" },
+  "runtimes": { "php": "net.php.php:8.5.11@sha256:d4136222cbfcb35d3c16a890aaa20737c9b4d977bab04875a4baab67a6a2cf20" },
   "exports": {
     "kanboard": { "command": "${php}\\php.exe", "args": ["${app}\\serve.php"] },
     "kanboard-cli": { "command": "${php}\\php.exe", "args": ["${app}\\kanboard\\cli"] }
@@ -26,7 +26,7 @@
     "Kanboard": { "command": "kanboard", "description": "Serve Kanboard and open it in your browser", "icon": "kanboard\\favicon.ico" }
   },
   "sdk": {
-    "composer": "org.getcomposer.composer:2.10.3@sha256:5f65e42beb89159c6f30479417020780c5c27390be17988a63a30360e1ee4e90",
+    "composer": "org.getcomposer.composer:2.10.3@sha256:11b4f09c538147145e4c8b5f3301099098773eaba2241bd77a6420e20d941743",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [

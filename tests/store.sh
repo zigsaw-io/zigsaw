@@ -129,6 +129,9 @@ check "prune --data deletes it" sh -c "\"\$0\" prune --data >/dev/null 2>&1 && [
 downloads() { find "$ZIGSAW_HOME/cache/downloads" -type f | wc -l; }
 prune_downloads() { z prune --downloads >/dev/null 2>&1 && expect_count downloads 0; }
 check "prune --downloads clears the download cache" prune_downloads
+# Files of Windows' roots that earlier runs had (${roots}, src/roots.zig).
+stale_roots() { : >"$ZIGSAW_HOME\\certs\\roots-0000000000000000.pem" && z prune >/dev/null 2>&1 && [ ! -e "$ZIGSAW_HOME\\certs\\roots-0000000000000000.pem" ]; }
+check "prune deletes files of Windows' roots that aren't today's" stale_roots
 
 # --- the store lock --------------------------------------------------------------
 

@@ -95,7 +95,7 @@ runtime_runs() {
 }
 check "the runtime runs PHP with its php.ini and extensions, under soft, low and appcontainer" runtime_runs
 runtime_files() {
-    [ -f "$php_dir\\php.exe" ] && [ -f "$php_dir\\ext\\php_curl.dll" ] && [ -f "$php_dir\\extras\\ssl\\cacert.pem" ] || { echo "missing PHP's files"; return 1; }
+    [ -f "$php_dir\\php.exe" ] && [ -f "$php_dir\\ext\\php_curl.dll" ] || { echo "missing PHP's files"; return 1; }
     [ ! -e "$php_dir\\dev" ] || { echo "has the SDK's dev"; return 1; }
 }
 check "it has PHP's files, without the SDK's headers and php-ext" runtime_files
@@ -105,7 +105,17 @@ https_works() {
     [ "$out" = "curl ok
 stream ok" ] || { echo "got: $out"; return 1; }
 }
-check "HTTPS works through curl (curl.se's certificates) and through streams (Windows' stores)" https_works
+check "HTTPS works through curl (Windows' roots, in the file \${roots} names) and through streams (Windows' stores)" https_works
+# curl's roots are that file's: with another one, whose root isn't
+# php.net's (a self-signed certificate of Git Bash's openssl), it refuses.
+curl_roots() {
+    local out
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout "$work\\other.key" -out "$work\\cwd\\other.pem" -days 1 -subj "/CN=zigsaw php.sh" >/dev/null 2>&1 ||
+        { echo "openssl (Git Bash's) made no certificate"; return 1; }
+    out=$(cd "$work\\cwd" && z run "--env=SSL_CERT_FILE=$work\\cwd\\other.pem" $PHP -r '$c = curl_init("https://www.php.net/"); curl_setopt($c, CURLOPT_RETURNTRANSFER, true); echo curl_exec($c) === false ? curl_error($c) : "curl ok", "\n";' 2>&1 | tr -d '\r')
+    grep -q 'SSL certificate' <<<"$out" || { echo "got: $out"; return 1; }
+}
+check "curl's roots are the ones SSL_CERT_FILE names" curl_roots
 
 # --- the extension images ------------------------------------------------------
 

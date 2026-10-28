@@ -1,8 +1,13 @@
 {
   "id": "org.perl.perl",
   "version": "5.42.3.1",
+  "name": "Perl",
+  "summary": "The Perl programming language, as Strawberry Perl's portable distribution",
+  "homepage": "https://strawberryperl.com/",
+  "license": "Artistic-1.0-Perl OR GPL-1.0-or-later",
   "command": "perl/bin/perl.exe",
   "path": ["perl/bin"],
+  "env": { "SSL_CERT_FILE": "${roots}" },
   "permissions": { "filesystem": ["cwd"] },
   "exports": {
     "perl": { "command": "perl/bin/perl.exe" }

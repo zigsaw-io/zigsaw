@@ -38,6 +38,7 @@ const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
+const roots = @import("roots.zig");
 const services = @import("services.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -116,6 +117,8 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
 
     const cache_dir = try std.fs.path.join(arena, &.{ data_dir, "cache" });
     if (usesCache(cfg, found.loaded)) try Io.Dir.cwd().createDirPath(io, cache_dir);
+    // Windows' roots as a file, for the programs that take only one.
+    const roots_file = if (usesRoots(cfg, found.loaded)) try roots.file(ctx) else null;
 
     const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
     // The ports the run uses, its extensions' too, and where it reaches them.
@@ -129,11 +132,12 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const forwarding = reach == .isolated and targets.len > 0;
     if (forwarding) try services.forwardThrough(ctx, targets, service_ports);
     const uses = try services.usePlaceholders(arena, targets);
-    const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir, cache_dir, uses);
+    const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir, cache_dir, roots_file, uses);
     const placeholders: oci.Placeholders = .{
         .app = image.deploy_dir,
         .data = data_dir,
         .cache = cache_dir,
+        .roots = roots_file,
         .runtimes = runtimes.dirs,
         .services = try services.placeholders(arena, service_ports),
         .uses = uses,
@@ -147,7 +151,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // Then the extensions', as runtimes the app didn't list; in them, ${app}
     // is the extension's directory.
     const ext_own = try arena.alloc(oci.Placeholders, found.loaded.len);
-    for (ext_own, found.loaded) |*p, e| p.* = .{ .app = e.dir, .data = data_dir, .cache = cache_dir, .uses = uses };
+    for (ext_own, found.loaded) |*p, e| p.* = .{ .app = e.dir, .data = data_dir, .cache = cache_dir, .roots = roots_file, .uses = uses };
     for (ext_own, found.loaded) |p, e| try app_path.appendSlice(arena, try environment.pathDirs(arena, p, e.config.path));
     const command = try resolveCommand(io, arena, placeholders, cfg, opts.command, app_path.items, system_root);
     const args = try std.mem.concat(arena, []const u8, &.{ command.args, opts.args, files });
@@ -240,6 +244,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             .runtime_dirs = try std.mem.concat(arena, []const u8, &.{ image.runtime_dirs, try extensionDirs(arena, found.loaded) }),
             .alias_dir = if (app_aliases) |a| a.dir else null,
             .relay_dir = if (relay_exe) |r| std.fs.path.dirname(r).? else null,
+            .roots_dir = if (roots_file) |r| std.fs.path.dirname(r).? else null,
             .data_dir = data_dir,
             .local_app_data = profile.local,
             .host_cwd = host_cwd,
@@ -458,6 +463,8 @@ const AppContainerSetup = struct {
     alias_dir: ?[]const u8,
     /// The store's copies of the relay, if the run publishes services.
     relay_dir: ?[]const u8,
+    /// The store's files of Windows' roots, if the run names one.
+    roots_dir: ?[]const u8,
     data_dir: []const u8,
     /// The run's LOCALAPPDATA, in its data directory.
     local_app_data: []const u8,
@@ -481,6 +488,7 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     for (setup.runtime_dirs) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     if (setup.alias_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     if (setup.relay_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
+    if (setup.roots_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     try wanted.append(arena, .{ .path = setup.data_dir, .access = .full, .host = false });
     for (setup.grants) |g| try wanted.append(arena, .{
         .path = g.path orelse setup.host_cwd,
@@ -693,13 +701,14 @@ fn runtimeDirs(
     dirs: []const []const u8,
     data_dir: []const u8,
     cache_dir: []const u8,
+    roots_file: ?[]const u8,
     uses: []const oci.Placeholders.UsedPort,
 ) !Runtimes {
     const named = try arena.alloc(oci.Placeholders.Dir, dirs.len);
     const own = try arena.alloc(oci.Placeholders, dirs.len);
     for (cfg.runtimes.map.keys(), dirs, named, own) |alias, dir, *n, *o| {
         n.* = .{ .alias = alias, .path = dir };
-        o.* = .{ .app = dir, .data = data_dir, .cache = cache_dir, .uses = uses };
+        o.* = .{ .app = dir, .data = data_dir, .cache = cache_dir, .roots = roots_file, .uses = uses };
     }
     return .{ .dirs = named, .own = own };
 }
@@ -710,6 +719,16 @@ fn usesCache(cfg: oci.AppConfig, exts: []const extensions.Extension) bool {
     if (oci.usesCache(cfg.path, cfg.env)) return true;
     for (cfg.runtimes.map.values()) |r| if (oci.usesCache(r.path, r.env)) return true;
     for (exts) |e| if (oci.usesCache(e.config.path, e.config.env)) return true;
+    return false;
+}
+
+/// Whether the app's variables, arguments or exports, or its runtimes' or
+/// extensions' variables, name ${roots}.
+fn usesRoots(cfg: oci.AppConfig, exts: []const extensions.Extension) bool {
+    if (oci.usesRoots(cfg.env, cfg.args)) return true;
+    for (cfg.exports.map.values()) |e| if (oci.usesRoots(.{}, e.args)) return true;
+    for (cfg.runtimes.map.values()) |r| if (oci.usesRoots(r.env, &.{})) return true;
+    for (exts) |e| if (oci.usesRoots(e.config.env, e.config.args)) return true;
     return false;
 }
 

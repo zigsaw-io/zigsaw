@@ -60,14 +60,26 @@
   zigsaws changing the list at the same moment could undo each other's
   change, as the lock zigsaw takes for it is per session.
 - Apps trust the roots in Windows' certificate stores
-  ([certificate trust](networking.md#certificate-trust)), but not all of
-  them do:
-  - PHP's curl keeps its own bundle (`extras\ssl\cacert.pem`);
-  - Composer keeps its own, unless `SSL_CERT_FILE` names one;
-  - Perl keeps Mozilla::CA's;
-  - libpq's `sslrootcert=system` finds no roots at all, as OpenSSL looks
-    where PostgreSQL's SDK was built: name a file instead;
-  - BusyBox's `wget` doesn't check certificates.
+  ([certificate trust](networking.md#certificate-trust)), but BusyBox's
+  `wget` doesn't check certificates at all.
+- PHP's curl, Composer, Perl and libpq read Windows' roots from the file
+  zigsaw writes of them when the run starts (`${roots}`): a root added to
+  Windows during a run reaches their later runs only. Once Windows' roots
+  change, `zigsaw prune` deletes the file a running app's run was given,
+  unless it's open just then: an app that reads it again later, as PHP's
+  curl does for each request, then fails until it's started again. A
+  zigsaw older than
+  0.53 leaves `${roots}` as it is: PHP's curl then refuses every
+  connection (`error adding trust anchors from file: ${roots}`), Composer
+  and Perl fall
+  back to their own bundles, and libpq's `sslrootcert=system` finds no
+  roots. PHP's, Composer's, Kanboard's, Perl's, PostgreSQL's and
+  osm2pgsql's images from then on need 0.53 for that.
+- curl over Schannel, CMake's and cargo's, checks revocation strictly: a
+  certificate that names no CRL or OCSP responder is refused, saying `the
+  revocation status is unknown` (CMake: `SSL connect error`), as a network
+  whose CA doesn't publish one would make it. MinGit's git, on the same
+  Schannel, lets it pass.
 - `zig fetch` doesn't work at low integrity: zig's std can't open Windows'
   roots there, as it asks to write them (`CertificateBundleLoadFailure`).
   In an AppContainer, it needs `--share=network`, which zig's image
@@ -76,7 +88,9 @@
   out a root added for this user only, and a root Windows hasn't fetched
   yet, which Temurin's `cacerts` (no longer used) may have had. Windows
   fetches a missing root when its own programs check a chain, not when
-  Java or Python reads the store, as both do. On 2026-10-28, Java and
+  Java or Python reads the store, as both do, and as zigsaw does for
+  `${roots}` (which then lacks it too, where curl.se's bundle and
+  Mozilla::CA's, no longer used, may have had it). On 2026-10-28, Java and
   Python here failed on example.com, whose root (SSL.com TLS ECC Root CA
   2022) Windows hadn't fetched, until a Windows program checks its chain
   (Edge, or Windows' `curl.exe`). With `cacerts`, Java reached it. Node
@@ -119,11 +133,11 @@
   other "remotes". The catalog lists the apps `scripts/publish.sh` publishes,
   as they were when it was made: an app pushed later without
   `push --catalog` isn't in it, or is at its older version. It has no icons
-  or screenshots. Ten runtimes and SDKs have no name or summary in it yet,
-  only their commands: busybox, zig, Rust, CMake, Meson, Perl, cargo-c,
-  gettext and GTK's SDK and runtime. Naming any of them changes its digest,
-  and the GTK SDK pins them all, so they get one at their next version
-  (Node and Go got theirs in iteration 22).
+  or screenshots. Nine runtimes and SDKs have no name or summary in it yet,
+  only their commands: busybox, zig, Rust, CMake, Meson, cargo-c, gettext
+  and GTK's SDK and runtime. Naming any of them changes its digest, and the
+  GTK SDK pins them all, so they get one at their next version (Node and Go
+  got theirs in iteration 22, Perl in 53).
 - An app sees only the user's folders its permissions name (Desktop,
   Documents, Downloads, Music, Pictures, Videos), linked into its profile;
   others don't exist there, and an app that asks for one to save in gets

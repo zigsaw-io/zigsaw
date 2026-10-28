@@ -6,7 +6,7 @@
   "homepage": "https://www.php.net/",
   "license": "PHP-3.01",
   "command": "php.exe",
-  "env": { "PHPRC": "${app}" },
+  "env": { "PHPRC": "${app}", "SSL_CERT_FILE": "${roots}" },
   "permissions": { "network": true, "filesystem": ["cwd"] },
   "runtimes": {
     "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
@@ -60,11 +60,6 @@
         {
           "url": "https://downloads.php.net/~windows/releases/archives/php-8.5.11-nts-Win32-vs17-x64.zip",
           "sha256": "0ea96e0d2b9b737a6036f05cf4e95c49313faa6d0f27bd97edb2742503f0c043"
-        },
-        {
-          "url": "https://curl.se/ca/cacert-2026-09-25.pem",
-          "sha256": "a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505",
-          "dest": "extras/ssl/cacert.pem"
         }
       ]
     },

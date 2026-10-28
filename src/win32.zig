@@ -767,6 +767,43 @@ pub extern "kernel32" fn AcquireSRWLockExclusive(lock: *SRWLOCK) callconv(.winap
 pub extern "kernel32" fn ReleaseSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) void;
 
 // ---------------------------------------------------------------------------
+// Certificates (roots.zig)
+
+pub const HCERTSTORE = *opaque {};
+pub const CERT_CONTEXT = extern struct {
+    encoding: DWORD,
+    encoded: [*]const u8,
+    encoded_len: DWORD,
+    info: *anyopaque,
+    store: HCERTSTORE,
+};
+pub const CERT_ENHKEY_USAGE = extern struct {
+    count: DWORD,
+    identifiers: ?[*]const [*:0]const u8,
+};
+/// CertOpenStore's provider names are small integers in a pointer.
+pub const CERT_STORE_PROV_SYSTEM_W: usize = 10;
+pub const CERT_STORE_READONLY_FLAG: DWORD = 0x00008000;
+/// A system store's location, in CertOpenStore's flags.
+pub fn certSystemStore(location: DWORD) DWORD {
+    return location << 16;
+}
+pub const CERT_SYSTEM_STORE_CURRENT_USER_ID: DWORD = 1;
+pub const CERT_SYSTEM_STORE_LOCAL_MACHINE_ID: DWORD = 2;
+pub const CERT_SYSTEM_STORE_SERVICES_ID: DWORD = 5;
+pub const CERT_SYSTEM_STORE_USERS_ID: DWORD = 6;
+pub const CERT_SYSTEM_STORE_CURRENT_USER_GROUP_POLICY_ID: DWORD = 7;
+pub const CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY_ID: DWORD = 8;
+pub const CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE_ID: DWORD = 9;
+pub const CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG: DWORD = 0x2;
+pub const CERT_FIND_PROP_ONLY_ENHKEY_USAGE_FLAG: DWORD = 0x4;
+pub const CRYPT_E_NOT_FOUND: DWORD = 0x80092004;
+pub extern "crypt32" fn CertOpenStore(provider: usize, encoding: DWORD, prov: usize, flags: DWORD, para: ?*const anyopaque) callconv(.winapi) ?HCERTSTORE;
+pub extern "crypt32" fn CertCloseStore(store: HCERTSTORE, flags: DWORD) callconv(.winapi) BOOL;
+pub extern "crypt32" fn CertEnumCertificatesInStore(store: HCERTSTORE, prev: ?*const CERT_CONTEXT) callconv(.winapi) ?*const CERT_CONTEXT;
+pub extern "crypt32" fn CertGetEnhancedKeyUsage(cert: *const CERT_CONTEXT, flags: DWORD, usage: ?*CERT_ENHKEY_USAGE, size: *DWORD) callconv(.winapi) BOOL;
+
+// ---------------------------------------------------------------------------
 // Helpers
 
 /// Converts a WTF-8 string (what Zig uses for Windows paths) to a

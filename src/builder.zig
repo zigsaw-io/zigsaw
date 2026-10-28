@@ -42,6 +42,7 @@ const oci = @import("oci.zig");
 const process = @import("process.zig");
 const project = @import("project.zig");
 const recipe = @import("recipe.zig");
+const roots = @import("roots.zig");
 const Store = @import("Store.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
@@ -359,14 +360,16 @@ const Tool = struct {
     }
 
     /// What its own entries' placeholders stand for in a build: ${app} is
-    /// its directory, ${data} where the build keeps runtimes' data, and
-    /// ${cache} its cache, if it uses one.
-    fn placeholders(t: Tool, arena: Allocator) !oci.Placeholders {
+    /// its directory, ${data} where the build keeps runtimes' data,
+    /// ${cache} its cache, if it uses one, and ${roots} the build's file of
+    /// Windows' roots, if a tool names it.
+    fn placeholders(t: Tool, arena: Allocator, roots_file: ?[]const u8) !oci.Placeholders {
         const cache = oci.usesCache(t.path, t.env);
         return .{
             .app = t.dir,
             .data = BuildRoot.letter ++ "\\data",
             .cache = if (cache) try std.fmt.allocPrint(arena, "{s}\\cache\\{s}", .{ BuildRoot.letter, t.id }) else null,
+            .roots = roots_file,
             .runtimes = t.runtimes,
         };
     }
@@ -396,12 +399,12 @@ const Tools = struct {
 
 /// The tools' variables. Later tools' win, but an SDK's own win over its
 /// runtimes', as in its runs.
-fn toolVars(arena: Allocator, tools: []const Tool) !std.ArrayList(environment.Var) {
+fn toolVars(arena: Allocator, tools: []const Tool, roots_file: ?[]const u8) !std.ArrayList(environment.Var) {
     var vars: std.ArrayList(environment.Var) = .empty;
     var i: usize = 0;
     while (i < tools.len) : (i += 1 + tools[i].brings) {
-        for (tools[i + 1 ..][0..tools[i].brings]) |rt| try environment.expand(arena, &vars, try rt.placeholders(arena), rt.env, &.{});
-        try environment.expand(arena, &vars, try tools[i].placeholders(arena), tools[i].env, &.{});
+        for (tools[i + 1 ..][0..tools[i].brings]) |rt| try environment.expand(arena, &vars, try rt.placeholders(arena, roots_file), rt.env, &.{});
+        try environment.expand(arena, &vars, try tools[i].placeholders(arena, roots_file), tools[i].env, &.{});
     }
     return vars;
 }
@@ -444,11 +447,15 @@ const BuildRoot = struct {
         const profile: environment.Profile = try .init(arena, letter ++ "\\");
 
         var path_dirs: std.ArrayList([]const u8) = .empty;
-        var tool_vars = try toolVars(arena, tools);
+        // Windows' roots as a file, for the tools that take only one.
+        const roots_file = for (tools) |t| {
+            if (oci.usesRoots(t.env, &.{})) break try roots.file(ctx);
+        } else null;
+        var tool_vars = try toolVars(arena, tools, roots_file);
         var caches: std.ArrayList([]const u8) = .empty;
         var providers: std.ArrayList(aliases.Provider) = .empty;
         for (tools) |t| {
-            const p = try t.placeholders(arena);
+            const p = try t.placeholders(arena, roots_file);
             if (p.cache != null and !containsIgnoreCase(caches.items, t.id)) try caches.append(arena, t.id);
             try path_dirs.appendSlice(arena, try environment.pathDirs(arena, p, t.path));
             try providers.append(arena, .{ .id = t.id, .dir = t.dir, .aliases = t.aliases, .runtimes = t.runtimes });
@@ -963,13 +970,13 @@ test "tool variables: later tools win, but an SDK over its runtimes" {
         }
     }.of;
     // Two plain tools: the later wins.
-    var vars = try toolVars(arena, &.{ try tool(arena, "a", "a", 0), try tool(arena, "b", "b", 0) });
+    var vars = try toolVars(arena, &.{ try tool(arena, "a", "a", 0), try tool(arena, "b", "b", 0) }, null);
     try std.testing.expectEqualStrings("b", get(vars.items, "X"));
     // An SDK and the runtime it brings, then another tool.
-    vars = try toolVars(arena, &.{ try tool(arena, "sdk", "sdk", 1), try tool(arena, "rt", "rt", 0) });
+    vars = try toolVars(arena, &.{ try tool(arena, "sdk", "sdk", 1), try tool(arena, "rt", "rt", 0) }, null);
     try std.testing.expectEqualStrings("sdk", get(vars.items, "X"));
     try std.testing.expectEqualStrings("rt", get(vars.items, "rt"));
-    vars = try toolVars(arena, &.{ try tool(arena, "sdk", "sdk", 1), try tool(arena, "rt", "rt", 0), try tool(arena, "c", "c", 0) });
+    vars = try toolVars(arena, &.{ try tool(arena, "sdk", "sdk", 1), try tool(arena, "rt", "rt", 0), try tool(arena, "c", "c", 0) }, null);
     try std.testing.expectEqualStrings("c", get(vars.items, "X"));
 }
 

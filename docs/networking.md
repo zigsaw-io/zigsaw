@@ -250,10 +250,13 @@ today: Meld's git push, for one.
 
 ### Certificate trust
 
-Built in iteration 52. A network that inspects TLS has a root CA of its
-own, which its administrators add to Windows' trusted roots, for the
-machine. **Apps trust what Windows trusts.** Most images' TLS reads Windows'
-stores already; three images that didn't now do.
+Built in iteration 52, and finished in 53. A network that inspects TLS has
+a root CA of its own, which its administrators add to Windows' trusted
+roots, for the machine. **Apps trust what Windows trusts.** Most images' TLS
+reads Windows' stores already; three images that didn't now do (iteration
+52). The programs that take only a file of roots get one: **`${roots}`**,
+a placeholder for a PEM file of Windows' roots that zigsaw writes
+(iteration 53).
 
 | image | TLS | trusts |
 |---|---|---|
@@ -264,14 +267,14 @@ stores already; three images that didn't now do.
 | Node, and Prettier | OpenSSL | its own list, and **now** Windows' too: `NODE_USE_SYSTEM_CA=1` in its image |
 | Java's images, and the apps on them | JSSE | **now** the machine's roots in Windows' store (`-Djavax.net.ssl.trustStoreType=Windows-ROOT-LOCALMACHINE`), instead of Temurin's `cacerts` |
 | Go, and zot | Go | Windows' |
-| Rust (cargo), CMake | curl, with Schannel | Windows' |
+| Rust (cargo), CMake | curl, with Schannel | Windows'. curl checks revocation strictly: a certificate that names no CRL or OCSP responder is refused (`the revocation status is unknown`), which git, on the same Schannel, lets pass |
 | Qt's runtime, Flameshot, Notes | Schannel | Windows' |
 | VLC | GnuTLS | Windows' |
 | .NET's images, Files, Pinta | Schannel | Windows' |
-| PHP | OpenSSL | streams: Windows' (`openssl.cafile` isn't set). curl: its bundle, `extras\ssl\cacert.pem` (a known gap) |
-| Composer | PHP's | its own bundle, unless `SSL_CERT_FILE` names one (a known gap) |
-| PostgreSQL's libpq (psql, osm2pgsql) | OpenSSL | `sslrootcert`, by default `root.crt` in the app's data. `sslrootcert=system` finds no roots: OpenSSL looks where the build was, `B:\prefix\ssl` (a known gap) |
-| Perl | IO::Socket::SSL | Mozilla::CA's bundle, or `SSL_CERT_FILE`. Its image has no network |
+| PHP | OpenSSL | streams: Windows' (`openssl.cafile` isn't set). curl: **now** `${roots}`, through `curl.cainfo = "${SSL_CERT_FILE}"` in its `php.ini`, instead of curl.se's bundle |
+| Composer | PHP's | **now** `${roots}`: it reads `SSL_CERT_FILE`, which PHP's runtime sets, before its own bundle |
+| PostgreSQL's libpq (psql, osm2pgsql) | OpenSSL | `sslrootcert`, by default `root.crt` in the app's data. `sslrootcert=system`, OpenSSL's default paths, is **now** `${roots}`, through `SSL_CERT_FILE` (it found no roots before: OpenSSL looked where the build was, `B:\prefix\ssl`) |
+| Perl | IO::Socket::SSL | **now** `${roots}`, through `SSL_CERT_FILE`, before Mozilla::CA's bundle. Its image has no network |
 | BusyBox's `wget` | BusyBox's own | it doesn't check certificates at all. Its image has no network |
 
 The others (GDAL, TeX Live, ripgrep and the rest) make no TLS connections.
@@ -282,17 +285,36 @@ The others (GDAL, TeX Live, ripgrep and the rest) make no TLS connections.
   In an AppContainer, reading the user's stores gave the machine's
   certificates only anyway, to Java and to Node (Java: 57 roots there
   against 58 outside, the 58th being in this account's own store).
-- **Java and Python trust only the roots Windows already has.** Windows
-  fetches a root it lacks when one of its own programs checks a chain;
-  Java and Python read the store, which doesn't. Java no longer has
+- **Java, Python and `${roots}` have only the roots Windows already has.**
+  Windows fetches a root it lacks when one of its own programs checks a
+  chain; Java, Python and zigsaw read the store, which doesn't. Java no
+  longer has
   `cacerts`'s other roots (decided knowing it): here, example.com's root
   wasn't fetched yet, and Java and Python failed there where `cacerts` and
   Node didn't. The 15 hosts checked from Java at low integrity verify,
   Maven Central, Gradle's and GitHub's among them.
+- **`${roots}` is Windows' roots when the run starts.** zigsaw reads the
+  stores as Python's `ssl` does: the `ROOT` and `CA` stores of each
+  location, opened read-only, keeping what Windows trusts to identify
+  servers. It reads them itself, outside the run's sandbox, so an
+  AppContainer's file has the user's roots too. The file is
+  `<store>\certs\roots-<hash>.pem`, named by its contents, so a run that
+  has one open never sees it change; `zigsaw prune` deletes the others. A
+  run gets one only if its image, a runtime or an extension names
+  `${roots}`, and a build only if a tool's variables do.
+- **Why not OpenSSL's own reading of the store.** OpenSSL 3.5 can read
+  Windows' roots (`org.openssl.winstore:`), but its default paths don't
+  include it, nothing but code turns it on, and it opens the store to
+  write, which fails at low integrity, as zig's does. PHP's curl could
+  also use Schannel (`CURL_SSL_BACKEND=schannel`), but Schannel's strict
+  revocation check refuses the certificates of networks whose CA names no
+  CRL, as CMake does.
 - **Checked by [`tests/certs.sh`](../tests/certs.sh).** It makes a test CA
   for the run, name-constrained to `localhost`, `127.0.0.0/8` and `::1`.
-  Every client must refuse its server until the CA is in the machine's
-  Trusted Root store, and then trust it under soft, low and appcontainer.
+  Its server certificate names the CA's CRL, which the test server serves
+  over HTTP, as a well-run CA's does. Every client must refuse its server
+  until the CA is in the machine's Trusted Root store, and then trust it
+  under soft, low and appcontainer.
   Adding it takes an administrator, so the trusted rows run on CI's
   runners, which are elevated.
 
@@ -324,6 +346,8 @@ initdb's `NUL` on Server 2025, and kpathsea's long names, among others.
 4. **AF_UNIX, and certificate trust** (built in iteration 52): AF_UNIX's
    facts in the probe, for a design later, and the images that kept CAs of
    their own trusting Windows' too.
+5. **The programs that take a file of roots** (built in iteration 53):
+   `${roots}` for PHP's curl, Composer, Perl and libpq.
 
 ## Decisions
 
