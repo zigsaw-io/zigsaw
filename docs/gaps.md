@@ -653,3 +653,15 @@
   differ in speed by half again: the base took 34 and 49 minutes on two of
   them, and the SDK before its unity build 70 and 109, so the jobs'
   timeout is 180 minutes.
+- In an AppContainer, ORAS can't pull into a folder, nor skopeo copy into
+  one (`oci:`, `dir:`): both resolve the path with Go's
+  `filepath.EvalSymlinks`, which opens each folder from the drive's root
+  down, and the container can't open those above what it's granted. Pushing
+  from a folder, and registry to registry, work there. cosign, which only
+  reads and writes its key files by name, works.
+- skopeo has no `containers-storage:` transport on Windows, cosign no
+  PKCS#11 tokens or PIV keys (they need cgo), and cosign's signing without a
+  key (OIDC, Fulcio and Rekor) hasn't been tried. The OCI tools don't see
+  zigsaw's logins nor Docker's: each logs in for itself, and keeps the
+  password unencrypted in its data, where zigsaw keeps its own in Windows'
+  Credential Manager.

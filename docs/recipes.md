@@ -1852,6 +1852,48 @@ looking for an object file that `-###` never makes, so Go hashes the error
 instead, which names a temporary file and the store. Without a build ID, the
 executable is the same from any store.
 
+### The OCI tools
+
+[`recipes/oras.json`](recipes/oras.json),
+[`recipes/skopeo.json`](recipes/skopeo.json) and
+[`recipes/cosign.json`](recipes/cosign.json) build ORAS, skopeo and cosign
+as fzf is built, from their module zips, with cgo off, and the version
+details their own release builds stamp in: ORAS's commit, cosign's version,
+commit and build date (the tag's commit's date, so that the image is the same
+whenever it's built). [tests/oci.sh](../tests/oci.sh) runs all three against
+the tests' zot registries.
+
+- **skopeo** builds with the tags its Makefile uses without cgo,
+  `exclude_graphdriver_btrfs containers_image_openpgp`: signatures are
+  checked with a Go OpenPGP library instead of GPGME, and there's no
+  `containers-storage:` transport, which is Linux's. It won't copy an image
+  without a policy, which it looks for in `%APPDATA%\containers\policy.json`
+  and then `C:\ProgramData\containers\policy.json`, so its image brings one
+  that accepts any image, as Linux distributions' packages do, and its
+  `CONTAINERS_POLICY_JSON` names it. `--policy` gives another. It takes
+  zigsaw's images, whose config is zigsaw's own rather than an image config,
+  for artifacts: `inspect` refuses them, `inspect --raw` and `copy` don't.
+  On Windows its `oci:` transport takes a tag only after an absolute path
+  (`oci:C:\images\layout:1`); `oci:layout` without one works.
+- **skopeo's and cosign's vendor steps keep only what their command builds
+  from**, as zot's does: skopeo's 32 MB of 46, cosign's 103 MB of 130
+  (cosign's cloud key services are most of what remains). ORAS's is
+  `go mod vendor`'s 12 MB.
+- **cosign 3 signs with a key without the internet** given a signing config
+  that names no services, which `cosign signing-config create --out
+  signing-config.json` makes; otherwise it fetches Sigstore's from its TUF
+  repository. `--tlog-upload=false` alone is refused now. Verifying with the
+  key needs `--insecure-ignore-tlog`. Its signatures go to the registry as
+  OCI referrers, not `sha256-....sig` tags, and zigsaw pulls a signed image
+  as before. PKCS#11 tokens and PIV keys need cgo, so they're left out.
+- **Logins are each app's own.** ORAS and cosign keep them in
+  `.docker\config.json` and skopeo in `.config\containers\auth.json`, in the
+  app's home, its data: not zigsaw's logins, nor Docker's. With no
+  credential helper on their PATH, they keep the password there unencrypted
+  (base64), as Docker does without one. cosign has no `logout`:
+  `cosign login` writes the same file as Docker's, and removing the
+  registry's entry there logs it out.
+
 ## .NET
 
 Microsoft's .NET binaries for Windows come under the .NET Library License,

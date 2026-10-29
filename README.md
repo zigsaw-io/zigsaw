@@ -786,6 +786,7 @@ bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the 
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing
 bash tests/registry.sh  # push, pull, update, mounts, chunked uploads that break off, multi-platform indexes, logins (zigsaw's and Docker's), sources next to images, the catalog, search and info, through local registries (see its header)
+bash tests/oci.sh       # ORAS, skopeo and cosign against local registries, under tests/zot.sh: a file pushed and pulled, an image zigsaw pushed listed, copied to the registry that wants a login and into an OCI layout, signed with a key pair without the internet and verified, each tool's own login; a few runs in an AppContainer (needs OCI_HOME or BUILD_HOME, or builds them)
 bash tests/published.sh # fresh builds have the published digests; anonymous pulls, latest, redirects, the catalog
 GROUP=java bash tests/published.sh # only one group of scripts/published-groups.txt, as a CI job does
 ```

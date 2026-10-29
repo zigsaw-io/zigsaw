@@ -101,7 +101,7 @@ smoke_args() {
     net.frippery.busybox) printf '%s\n' true ;;
     org.nodejs.node) printf '%s\n' '-e 0' ;;
     org.python.python) printf '%s\n' '-c pass' ;;
-    org.ziglang.zig | org.golang.go | org.apache.pdfbox) printf '%s\n' version ;;
+    org.ziglang.zig | org.golang.go | org.apache.pdfbox | land.oras.oras | dev.sigstore.cosign) printf '%s\n' version ;;
     org.7_zip.7zip) printf '%s\n' i ;;
     org.videolan.VLC) printf '%s\n' '-I dummy vlc://quit' ;;
     *) printf '%s\n' --version ;;

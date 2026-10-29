@@ -22,8 +22,9 @@
 
 # zig 0.7, SQLite 1.7, CMake 0.2, zstd 6.9, Meson 1.5, ZLS (about 2)
 c: busybox.json zig.json sqlite.json cmake.json zstd.json meson.json zls.json
-# Rust 1.1, ripgrep 1.4, bat 5.5, Go 0.4, fzf 0.3, zot 4.1
-rust-go: rust.json ripgrep.json bat.json go.json fzf.json zot.json
+# Rust 1.1, ripgrep 1.4, bat 5.5, Go 0.4, fzf 0.3, zot 4.1; ORAS, skopeo and
+# cosign (0.3, 0.4 and 1.5 here, with their vendor steps cached)
+rust-go: rust.json ripgrep.json bat.json go.json fzf.json zot.json oras.json skopeo.json cosign.json
 # prebuilt apps and runtimes 1.5, PHP's images 2.3, Kanboard 0.2
 apps: mingit.json node.json prettier.json python.json
 apps: 7zip.json notepad-plus-plus.json sumatrapdf.json vlc.json

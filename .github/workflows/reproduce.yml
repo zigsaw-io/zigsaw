@@ -188,7 +188,7 @@ jobs:
           ZIGSAW_HOME: ${{ runner.temp }}\store
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
-          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls texlive gdal postgresql postgresql-pgvector postgresql-pg-cron postgresql-postgis osm2pgsql perl php composer 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
+          bash tests/seed-store.sh --build busybox node --pull zig rust ripgrep bat go fzf zot oras skopeo cosign cmake zstd mingit python java-sdk java maven gradle pdfbox plantuml zls texlive gdal postgresql postgresql-pgvector postgresql-pg-cron postgresql-postgis osm2pgsql perl php composer 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
 
       # The suites run whether or not the steps before them passed.
       - name: tests/store.sh
@@ -236,6 +236,15 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: bash tests/zot.sh bash tests/registry.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/registry.txt"
+
+      # ORAS, skopeo and cosign as published, in the seeded store, against
+      # two local zot registries again.
+      - name: tests/oci.sh, against two local zot registries
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          OCI_HOME: ${{ runner.temp }}\store
+        run: bash tests/zot.sh bash tests/oci.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/oci.txt"
 
       # ZLS as published (which a published job checks), in the seeded store.
       - name: tests/zls.sh

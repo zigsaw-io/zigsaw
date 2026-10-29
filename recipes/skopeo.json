@@ -1,0 +1,48 @@
+{
+  "id": "io.podman.skopeo",
+  "version": "1.24.1",
+  "name": "skopeo",
+  "summary": "Copies, inspects and deletes container images in registries and on disk",
+  "homepage": "https://github.com/containers/skopeo",
+  "license": "Apache-2.0",
+  "command": "skopeo.exe",
+  "env": { "CONTAINERS_POLICY_JSON": "${app}\\etc\\containers\\policy.json" },
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "sdk": {
+    "go": "org.golang.go:1.27.1@sha256:f8192fc2cb2be9c04e1ee833a8d135bd292c122f9fb9907dbc8d7d62a134cb8c",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "skopeo",
+      "sources": [
+        {
+          "url": "https://proxy.golang.org/go.podman.io/skopeo/@v/v1.24.1.zip",
+          "sha256": "1058922bb267ae88cc0a607f7d47e582180da64a1c26de4a73c5a29465202de9",
+          "strip": 2
+        },
+        { "path": "skopeo/policy.json", "dest": "zigsaw/policy.json" }
+      ],
+      "env": { "CGO_ENABLED": "0" },
+      "vendor": {
+        "commands": [
+          "go mod vendor",
+          "go list -tags 'exclude_graphdriver_btrfs containers_image_openpgp' -deps -f '{{if and .Module (not .Module.Main)}}{{.ImportPath}}{{end}}' ./cmd/skopeo >packages.txt",
+          "go list -tags 'exclude_graphdriver_btrfs containers_image_openpgp' -deps -f '{{if and .Module (not .Module.Main)}}{{range .EmbedFiles}}{{$.ImportPath}}/{{.}} {{end}}{{end}}' ./cmd/skopeo | tr ' ' '\\n' | grep . >embeds.txt || true",
+          "for p in $(cat packages.txt); do for f in vendor/$p/*; do [ -f \"$f\" ] && echo \"$f\"; done; done >files.txt",
+          "sed 's|^|vendor/|' embeds.txt >>files.txt",
+          "mkdir minimal && tar -cf - vendor/modules.txt -T files.txt | tar -xf - -C minimal",
+          "rm -rf vendor packages.txt embeds.txt files.txt && mv minimal/vendor vendor && rmdir minimal"
+        ],
+        "dir": "vendor",
+        "sha256": "aa8bcafc9bb5a641b3fc1c049234bdcdbea1f58f188d8621dd1b3f4ffb9ccbae"
+      },
+      "build": [
+        "go build -mod=vendor -tags 'exclude_graphdriver_btrfs containers_image_openpgp' -ldflags '-s -w' -o \"$PREFIX/skopeo.exe\" ./cmd/skopeo",
+        "mkdir -p \"$PREFIX/etc/containers\"",
+        "cp zigsaw/policy.json \"$PREFIX/etc/containers/\"",
+        "cp LICENSE README.md \"$PREFIX/\""
+      ]
+    }
+  ]
+}

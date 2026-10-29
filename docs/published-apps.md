@@ -21,6 +21,9 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Go | `org.golang.go` | 1.27.1 | `go`, `gofmt` |
 | fzf (built from source) | `com.github.junegunn.fzf` | 0.74.4 | `fzf` |
 | zot, minimal (built from source) | `dev.zotregistry.zot` | 2.1.21 | `zot` |
+| ORAS, files and artifacts in OCI registries (built from source) | `land.oras.oras` | 1.3.6 | `oras` |
+| skopeo, container images in registries and on disk (built from source) | `io.podman.skopeo` | 1.24.1 | `skopeo` |
+| cosign, signatures for container images (built from source) | `dev.sigstore.cosign` | 3.1.4 | `cosign` |
 | CMake, with Ninja 1.13.2 | `org.cmake.cmake` | 4.4.4 | `cmake`, `ctest`, `cpack`, `ninja` |
 | zstd (built from source) | `com.github.facebook.zstd` | 1.5.7 | `zstd`, `unzstd`, `zstdcat` |
 | Meson, with Ninja and pkgconf | `com.mesonbuild.meson` | 1.12.1 | `meson` |
@@ -85,9 +88,9 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
-zot and zstd are [built from source](#building-from-source): SQLite with zig
-and BusyBox, ripgrep and bat with [Rust](#rust), zig and BusyBox, fzf and
-zot with [Go](#go) and BusyBox, zstd with [CMake](#cmake), zig and BusyBox,
+zot, the OCI tools and zstd are [built from source](#building-from-source): SQLite with zig
+and BusyBox, ripgrep and bat with [Rust](#rust), zig and BusyBox, fzf,
+zot, ORAS, skopeo and cosign with [Go](#go) and BusyBox, zstd with [CMake](#cmake), zig and BusyBox,
 whose images are their SDK. bat's C libraries (oniguruma, libgit2, zlib) are
 compiled by zig. Pulling them doesn't need those. ZLS, the language server
 for Zig, is built with `zig build`, its packages fetched in a
@@ -181,6 +184,18 @@ it's run from into a PostGIS database: `osm2pgsql -U postgres -W -d <db>
 data (`pgpass.conf`); osm2pgsql can't read that, as it's another app's. It
 reaches a server running under soft or low, or on another machine, but not
 one on this machine from an AppContainer.
+The [OCI tools](recipes.md#the-oci-tools) work with registries, zigsaw's
+included: ORAS pushes and pulls files as artifacts, skopeo copies and
+inspects images between registries and folders (`oci:`, `dir:`), and cosign
+signs images and verifies their signatures. Each keeps its own logins
+(`oras login`, `skopeo login`, `cosign login`) in its own data: they don't
+see zigsaw's logins nor Docker's. skopeo's image brings a policy that
+accepts any image, which it needs to copy one; `--policy` gives it another.
+cosign signs with a key pair (`cosign generate-key-pair`, its password from
+`--env=COSIGN_PASSWORD=...` or typed); signing without a key, through
+Sigstore's public services, hasn't been tried. In an AppContainer they
+reach registries, on this machine too, but ORAS can't pull into a folder,
+nor skopeo copy into one ([known gaps](gaps.md)).
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.

@@ -14,6 +14,9 @@ bat.json
 go.json
 fzf.json
 zot.json
+oras.json
+skopeo.json
+cosign.json
 cmake.json
 zstd.json
 meson.json

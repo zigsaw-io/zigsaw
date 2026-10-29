@@ -1,0 +1,36 @@
+{
+  "id": "land.oras.oras",
+  "version": "1.3.6",
+  "name": "ORAS",
+  "summary": "Pushes and pulls files and other artifacts to and from OCI registries",
+  "homepage": "https://oras.land/",
+  "license": "Apache-2.0",
+  "command": "oras.exe",
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "sdk": {
+    "go": "org.golang.go:1.27.1@sha256:f8192fc2cb2be9c04e1ee833a8d135bd292c122f9fb9907dbc8d7d62a134cb8c",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "oras",
+      "sources": [
+        {
+          "url": "https://proxy.golang.org/oras.land/oras/@v/v1.3.6.zip",
+          "sha256": "8d8aceae90dcec197637b7e90d44527037d0689537d31099c3e810408b0781bc",
+          "strip": 2
+        }
+      ],
+      "env": { "CGO_ENABLED": "0" },
+      "vendor": {
+        "commands": ["go mod vendor"],
+        "dir": "vendor",
+        "sha256": "da7d25c2d9bb26ebb88dcd01484572e59cd5bab4acb43967ef9ca35b99b4e0ca"
+      },
+      "build": [
+        "go build -mod=vendor -ldflags '-s -w -X oras.land/oras/internal/version.BuildMetadata= -X oras.land/oras/internal/version.GitCommit=9b1fc815f6b7fba743f08b9b5c5846639cc11d3c -X oras.land/oras/internal/version.GitTreeState=clean' -o \"$PREFIX/oras.exe\" ./cmd/oras",
+        "cp LICENSE README.md \"$PREFIX/\""
+      ]
+    }
+  ]
+}

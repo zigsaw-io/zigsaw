@@ -1,0 +1,44 @@
+{
+  "id": "dev.sigstore.cosign",
+  "version": "3.1.4",
+  "name": "cosign",
+  "summary": "Signs and verifies container images and other artifacts in OCI registries",
+  "homepage": "https://github.com/sigstore/cosign",
+  "license": "Apache-2.0",
+  "command": "cosign.exe",
+  "permissions": { "network": true, "filesystem": ["cwd"] },
+  "sdk": {
+    "go": "org.golang.go:1.27.1@sha256:f8192fc2cb2be9c04e1ee833a8d135bd292c122f9fb9907dbc8d7d62a134cb8c",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "modules": [
+    {
+      "name": "cosign",
+      "sources": [
+        {
+          "url": "https://proxy.golang.org/github.com/sigstore/cosign/v3/@v/v3.1.4.zip",
+          "sha256": "98b7e685c7f7c3567a895d0cc7393747174419b4751855df6c9e4c52c9e94720",
+          "strip": 4
+        }
+      ],
+      "env": { "CGO_ENABLED": "0" },
+      "vendor": {
+        "commands": [
+          "go mod vendor",
+          "go list -deps -f '{{if and .Module (not .Module.Main)}}{{.ImportPath}}{{end}}' ./cmd/cosign >packages.txt",
+          "go list -deps -f '{{if and .Module (not .Module.Main)}}{{range .EmbedFiles}}{{$.ImportPath}}/{{.}} {{end}}{{end}}' ./cmd/cosign | tr ' ' '\\n' | grep . >embeds.txt || true",
+          "for p in $(cat packages.txt); do for f in vendor/$p/*; do [ -f \"$f\" ] && echo \"$f\"; done; done >files.txt",
+          "sed 's|^|vendor/|' embeds.txt >>files.txt",
+          "mkdir minimal && tar -cf - vendor/modules.txt -T files.txt | tar -xf - -C minimal",
+          "rm -rf vendor packages.txt embeds.txt files.txt && mv minimal/vendor vendor && rmdir minimal"
+        ],
+        "dir": "vendor",
+        "sha256": "95a09a66a9b053f22e70245a2aecc3fd4e4acebcd6dd23e269f004c8e9f4ca16"
+      },
+      "build": [
+        "go build -mod=vendor -ldflags '-s -w -buildid= -X sigs.k8s.io/release-utils/version.gitVersion=v3.1.4 -X sigs.k8s.io/release-utils/version.gitCommit=0e48502cf5ef34e2e60bbd3617aa19945712f705 -X sigs.k8s.io/release-utils/version.gitTreeState=clean -X sigs.k8s.io/release-utils/version.buildDate=2026-10-20T17:33:02Z' -o \"$PREFIX/cosign.exe\" ./cmd/cosign",
+        "cp LICENSE README.md \"$PREFIX/\""
+      ]
+    }
+  ]
+}

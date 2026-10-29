@@ -1587,6 +1587,47 @@ JDK's image, and compiled on the JRE's):
 - **pg_basebackup waits for a spread checkpoint** by default: after a few
   writes, longer than a test's two minutes. `--checkpoint=fast` doesn't wait.
 
+## The OCI tools (iteration 57)
+
+ORAS 1.3.6, skopeo 1.24.1 and cosign 3.1.4, built with Go 1.27.1 and cgo
+off, probed against tests/zot.sh's registries on Windows 11 26300:
+
+- **All three build for Windows as they are.** skopeo's module is
+  `go.podman.io/skopeo` now; its Makefile's tags without cgo
+  (`exclude_graphdriver_btrfs containers_image_openpgp`) are enough. cosign
+  needs Go 1.27 (`go 1.27` in its go.mod), and is 106 MB stripped.
+- **`go mod vendor`**: ORAS 12 MB (772 files), skopeo 46 MB, cosign 130 MB
+  (10,554 files). Keeping only what `go list -deps` names, as zot's recipe
+  does, leaves skopeo 32 MB and cosign 103 MB: cosign's command imports the
+  AWS, Azure, Google Cloud and Vault key services.
+- **skopeo looks for its policy in `%APPDATA%\containers\policy.json`, then
+  `C:\ProgramData\containers\policy.json`**, and refuses to copy without
+  one. `CONTAINERS_POLICY_JSON` comes before both (go.podman.io/storage's
+  `configfile`), `--policy` before it. Its logins go to
+  `%USERPROFILE%\.config\containers\auth.json`.
+- **skopeo calls zigsaw's images artifacts**: their config's media type is
+  `application/vnd.zigsaw.app.config.v2+json`, so `inspect` says
+  "unsupported image-specific operation on artifact"; `inspect --raw`,
+  `list-tags` and `copy` work.
+- **skopeo's `oci:` transport on Windows splits off a tag only after
+  `X:\`** (`^([a-zA-Z]:\\.+?):(.*)$`): `oci:layout:1` is taken as a path
+  with a colon, and fails; `oci:layout` and `oci:D:\...\layout:1` work.
+- **cosign 3 refuses `--tlog-upload=false`** unless signing configs are
+  off (`--use-signing-config=false`, deprecated); by default it fetches
+  Sigstore's signing config through TUF. A signing config with no services
+  (`cosign signing-config create --out x.json`, no flags) signs with the key
+  and nothing else, with the internet cut off by a proxy that goes nowhere.
+  `verify --key ... --insecure-ignore-tlog` works offline too. The
+  signatures are OCI referrers (zot answers the referrers API), with no
+  `sha256-....sig` tag, and `zigsaw pull` of the signed image works.
+- **In an AppContainer, a path to write is resolved through the folders
+  above it.** ORAS's file store (oras-go's `checkSymlinkEscape`, new against
+  symlinks out of the output folder) and skopeo's `oci:` and `dir:` call
+  `filepath.EvalSymlinks`, which on Windows opens each folder from the
+  drive's root: "CreateFile D:\zs: Access is denied". The same restriction
+  as Node's realpath and initdb's `pg_mkdir_p`. Pushing a file, registries,
+  the loopback (the exemption) and cosign's key files work there.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.
