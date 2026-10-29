@@ -105,6 +105,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // (see extensions.zig).
     const found = try extensions.find(ctx.store, arena, cfg, settings.noextension);
     for (found.skipped) |s| if (s.warn or ctx.verbose) note("note: {s} doesn't join this run: {s}", .{ s.id, s.reason });
+    if (sandbox == .soft and run_dir == null) try unlabelData(ctx, cfg.id);
     // One of the app's runs from here on: the last to end takes back what
     // its command line asked for, and what no longer stands.
     const runs = try grants.begin(ctx, cfg.id);
@@ -627,6 +628,32 @@ const LowSetup = struct {
     network: bool,
     own: grants.Own,
 };
+
+/// Takes the label a low run gave the app's data directory off, for a soft
+/// run: what's written there inherits it, and Windows starts a program whose
+/// file is labelled low at low integrity, whoever starts it (zig 0.17's
+/// Maker, in its cache; a command installed there). The app's next low run
+/// labels it again. Not while another run of the app goes on, which may be a
+/// low one.
+fn unlabelData(ctx: *Context, id: []const u8) !void {
+    const arena = ctx.arena;
+    const data_dir = try ctx.store.path(arena, &.{ "data", id });
+    const rid = (acl.ownLabel(arena, data_dir) catch return) orelse return;
+    if (rid > win32.SECURITY_MANDATORY_LOW_RID) return;
+    const below = try acl.belowMedium();
+    const lock = if (below) null else try Store.tryLock(ctx.io, try ctx.store.runsLockPath(arena, id), .exclusive);
+    if (lock == null) {
+        note("warning: {s}'s data folder stays labelled low integrity, as {s}: programs this run writes there start at low integrity", .{
+            id, if (below) "zigsaw runs at low integrity here" else "another run of it is going",
+        });
+        return;
+    }
+    defer lock.?.release(ctx.io);
+    const start = Io.Timestamp.now(ctx.io, .awake);
+    try acl.unlabel(arena, data_dir);
+    const ms = start.untilNow(ctx.io, .awake).toMilliseconds();
+    if (ms >= 1000 or ctx.verbose) note("took the low integrity label off {s} ({d} ms)", .{ data_dir, ms });
+}
 
 /// Labels the data directory and the host paths the app may write low
 /// integrity, and returns the token the app runs with.

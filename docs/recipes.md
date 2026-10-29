@@ -652,9 +652,14 @@ from the directory as it is then.
 
 A Zig project builds with `zig build` from [zig's image](#building-from-source),
 which the recipe lists as an SDK, or as a runtime if the app runs zig too
-(both are on the build's PATH). Two options keep its image the same
+(both are on the build's PATH). Three options keep its image the same
 wherever it's built:
 
+- **`-Dtarget=x86_64-windows-gnu`**: `zig build` targets the build
+  machine's own Windows by default, and zig 0.17 writes its version into
+  the program (ZLS 0.17.0 built on Windows 11 and on CI's Server 2025
+  differed in those bytes only). A target named gives zig's own range
+  instead. zigsaw's build.zig names the OS itself.
 - **`-Dcpu=baseline`**: `zig build` targets the build machine's own CPU by
   default, so the program, and the image, would depend on where it was
   built (and might not run on an older CPU). zigsaw's own releases are
@@ -670,7 +675,7 @@ wherever it's built:
   "dir": "zig-pkg",
   "sha256": "4f200d86b78e8b6b..."
 },
-"build": ["zig build --system zig-pkg -Doptimize=ReleaseSafe -Dcpu=baseline -p \"$PREFIX\""]
+"build": ["zig build --system zig-pkg -Doptimize=ReleaseSafe -Dtarget=x86_64-windows-gnu -Dcpu=baseline -p \"$PREFIX\""]
 ```
 
 `--fetch` leaves out lazy dependencies the build doesn't need;

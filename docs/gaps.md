@@ -124,6 +124,11 @@
   (`CertificateBundleLoadFailure`), and the compiler has its std built in.
   zig's image asks for soft, so only `--sandbox=low` meets this. In an
   AppContainer, it needs `--share=network`, which zig's image doesn't have.
+- zig 0.17 runs `zig init`, `zig fetch` and `zig build` in Maker, a
+  program it builds into its cache when first asked (a minute). On Windows
+  Server 2025, in an AppContainer, building it needs zig's own path, which
+  zig can't find there (as for `zig env`), so all three fail there; on
+  Windows 11 26300 they work.
 - Java's images trust the machine's roots in Windows' store. That leaves
   out a root added for this user only, and a root Windows hasn't fetched
   yet, which Temurin's `cacerts` (no longer used) may have had. Windows

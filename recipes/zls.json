@@ -28,7 +28,7 @@
         "sha256": "5c386b57f41d785402e5ec5a5d99845d87ef326df25182e061aea88ed1185151"
       },
       "build": [
-        "zig build --system zig-pkg -Doptimize=ReleaseSafe -Dcpu=baseline -Dstrip -Dversion-string=0.17.0 -p \"$PREFIX\"",
+        "zig build --system zig-pkg -Doptimize=ReleaseSafe -Dtarget=x86_64-windows-gnu -Dcpu=baseline -Dstrip -Dversion-string=0.17.0 -p \"$PREFIX\"",
         "cp LICENSE \"$PREFIX/\""
       ]
     }

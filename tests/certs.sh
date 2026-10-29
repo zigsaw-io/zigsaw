@@ -117,10 +117,14 @@ git_get() {
 }
 cmake_get() { says "-- download 0" z "$1" $CMAKE "-DURL=$url/ok" -P download.cmake; }
 # zig's image has no network permission, which zig fetch needs in an
-# AppContainer.
+# AppContainer. zig 0.17 fetches in Maker, a program of its own, and says
+# which command failed after Maker's error: its error is the first.
 zig_get() {
     local out
-    out=$(z "$1" --share=network $ZIG fetch "$url/pkg.tar.gz" 2>&1) || { grep -v '^\s*$' <<<"$out" | tail -1; return 1; }
+    out=$(z "$1" --share=network $ZIG fetch "$url/pkg.tar.gz" 2>&1) || {
+        grep -m1 '^error:' <<<"$out" || grep -v '^\s*$' <<<"$out" | tail -1
+        return 1
+    }
 }
 psql_get() { says 1 z "$1" --command=psql $PG "host=localhost port=$pgport dbname=postgres user=postgres sslmode=verify-full sslrootcert=system" -XAt -c "select 1"; }
 # Its warnings on one line: the TLS one comes before "Failed to open stream".
@@ -170,6 +174,8 @@ want() {
     case $1/$2 in
     zig_get/low) echo gap ;; # zig's std opens the store to write: CertificateBundleLoadFailure
     jre_get/appcontainer | git_get/appcontainer) ac_if self-path-dos nul ;;
+    # zig 0.17 builds Maker in its cache first, which needs zig's own path.
+    zig_get/appcontainer) ac_if self-path-dos ;;
     # Composer starts its subprocesses (git, to guess the project's version)
     # through Symfony's Process, whose pipes on Windows open NUL.
     composer_get/appcontainer) ac_if nul ;;
