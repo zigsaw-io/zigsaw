@@ -1628,6 +1628,44 @@ off, probed against tests/zot.sh's registries on Windows 11 26300:
   as Node's realpath and initdb's `pg_mkdir_p`. Pushing a file, registries,
   the loopback (the exemption) and cosign's key files work there.
 
+## Zig 0.17 (iteration 58)
+
+Zig 0.17.0 (LLVM and Clang 22.1.8) against 0.16.0, on Windows 11 26300,
+before moving zigsaw and the zig image to it (scratch `D:\zs\i58`):
+
+- **Its deflate makes 0.16.0's bytes.** A program compressing as
+  `writeLayerFile` does (layer.zig's level 6, 64 KiB buffers), built with
+  each, gave the same gzip for four published layers, plain: zig's
+  (378 MB), MinGit's, GTK's SDK's and TeX Live's (532 MB), and each was the
+  published layer's digest. zigsaw 0.58.0, built with 0.17, then rebuilt zig
+  0.16.0's image as published, manifest and all (`f8310e4e`). A unit test
+  now pins the bytes of a small layer and of a MiB of mixed words.
+- **`zig rc` stays, and makes 0.16's bytes**, but it's no longer in the
+  compiler: the first `zig rc` builds resinator from zig's library into the
+  global cache, offline, which took 41 s here; later ones are instant. A
+  build's tool cache keeps it, so that's once a store.
+- **`zig cc -O2 -s -Wl,-Brepro` still makes the same bytes from two
+  folders**; setjmp and longjmp work; `ar`, `ranlib`, `cc -c -x assembler`
+  (the `as` alias) and `dlltool` work as before. `zig cc -###` still exits 1,
+  so cgo builds still need `-buildid=`.
+- **What zigsaw's code needed**: `a ** n` is gone (31 places, all tests; a
+  `repeat` helper, as std's `@splat` of arrays is long-winded),
+  `Allocator.dupeZ` is `dupeSentinel(T, x, 0)`, `std.meta.fields` and an
+  enum's `.fields` are `field_names` with `field_types` or `field_values`,
+  `std.ascii.indexOfIgnoreCase` is `findIgnoreCase`, `std.builtin.OptimizeMode`
+  is `std.lang.Optimize` (`.debug`, `.safe`, `.small`), and `b.args` is
+  `run_cmd.addPassthruArgs()`. `std.fmt.allocPrint` is deprecated, not gone.
+  All 17 `@bitCast`s are between integers of one size, which 0.17's new
+  meaning doesn't change. `-Doptimize=` takes the old names and the new.
+- **zigsaw builds itself the same in the zig 0.17.0 image as outside it**,
+  and the same from another folder with a cold cache.
+- **ZLS 0.17.0 needs zig 0.17.0**, and builds as 0.16.1 did:
+  `zig build --fetch` puts the same three packages in `zig-pkg` (tracy is
+  lazy), and `zig build --system zig-pkg` builds offline, in about 3 minutes.
+- **build.sh's fixtures build with zig 0.17.0's image as with 0.16's**: C
+  and C++ with `rc`, SQLite, CMake, Meson and make, Rust with GNU dlltool and
+  zig's `as`, and cgo; 0 failed in the zig, cmake-meson, langs and base groups.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

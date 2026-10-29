@@ -9,8 +9,8 @@
 # Compares with a `zig build -Dstrip` of the checkout, or, when PACKAGE_DIR
 # names the directory scripts/package.sh made, with the programs in its zip,
 # which then build it too, as the Release workflow checks. Needs Git Bash,
-# Zig 0.16.0 (without PACKAGE_DIR) and network access, for zig's image
-# (88 MB from ghcr.io). Uses a temporary store, and deletes it afterwards.
+# Zig 0.17.0 (without PACKAGE_DIR) and network access, for zig's image
+# (91 MB from ghcr.io). Uses a temporary store, and deletes it afterwards.
 # Then builds a copy of the checkout's files three times: once, after a
 # change in the work directory the first build left, and with --clean.
 # About 6 minutes.

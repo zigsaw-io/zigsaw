@@ -42,6 +42,7 @@ const process = @import("process.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
 const written = @import("written.zig");
+const repeat = @import("testing.zig").repeat;
 const fail = Context.fail;
 const note = Context.note;
 const isWithin = grants.isWithin;
@@ -447,7 +448,7 @@ test aliasProviders {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const digest = "sha256:" ++ "a" ** 64;
+    const digest = "sha256:" ++ repeat("a", 64);
     var cfg: oci.AppConfig = .{ .id = "app", .version = "1", .command = "x.exe" };
     try cfg.runtimes.map.put(arena, "b", .{ .id = "rt.b", .version = "1", .image = digest, .layer = digest });
     try cfg.runtimes.map.put(arena, "a", .{ .id = "rt.a", .version = "1", .image = digest, .layer = digest });

@@ -31,6 +31,7 @@ const oci = @import("oci.zig");
 const override = @import("override.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const repeat = @import("testing.zig").repeat;
 const fail = Context.fail;
 const note = Context.note;
 
@@ -131,7 +132,7 @@ test usedBy {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const digest = "sha256:" ++ "a" ** 64;
+    const digest = "sha256:" ++ repeat("a", 64);
     var cfg: oci.AppConfig = .{ .id = "app", .version = "1", .command = "x.exe" };
     cfg.permissions.uses = &.{.{ .name = "db", .port = 5432 }};
     try cfg.runtimes.map.put(arena, "php", .{ .id = "php", .version = "1", .image = digest, .layer = digest, .uses = &.{

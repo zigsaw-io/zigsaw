@@ -82,7 +82,7 @@ fn query(arena: Allocator) !?[:0]const u16 {
     }
     // The result is a list of null-terminated strings; the first is current.
     const first = std.mem.indexOfScalar(u16, buf[0..len], 0) orelse len;
-    return try arena.dupeZ(u16, buf[0..first]);
+    return try arena.dupeSentinel(u16, buf[0..first], 0);
 }
 
 /// Whether a mapping's target, such as "\??\C:\...\tmp\zigsaw-build-1f2e",

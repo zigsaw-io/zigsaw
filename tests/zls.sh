@@ -77,7 +77,7 @@ acprobe_run "$zigsaw" "$root" "$work"
 # has the cwd permission, which low runs label and AppContainer runs grant.
 cd "$work" || exit 1
 
-check "zls --version says 0.16.1" sh -c "[ \"\$(\"\$0\" run $ZLS --version | tr -d '\r')\" = 0.16.1 ]" "$zigsaw"
+check "zls --version says 0.17.0" sh -c "[ \"\$(\"\$0\" run $ZLS --version | tr -d '\r')\" = 0.17.0 ]" "$zigsaw"
 caches_in_data() {
     local dir
     dir=$(z run $ZLS env | tr -d '\r' | grep '"global_cache_dir"' | sed -e 's/.*: "//' -e 's/",*$//' -e 's/\\\\/\\/g')
@@ -166,7 +166,7 @@ for sb in soft low appcontainer; do
     check "  told to, it exits, with 0" test $? -eq 0
 done
 
-check "its shim runs it, as an editor would" sh -c "[ \"\$(\"$ZIGSAW_HOME\\\\bin\\\\zls.exe\" --version | tr -d '\r')\" = 0.16.1 ]"
+check "its shim runs it, as an editor would" sh -c "[ \"\$(\"$ZIGSAW_HOME\\\\bin\\\\zls.exe\" --version | tr -d '\r')\" = 0.17.0 ]"
 check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
 cd "$root" || exit 1

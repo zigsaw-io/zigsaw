@@ -1,6 +1,6 @@
 {
   "id": "org.zigtools.zls",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "name": "ZLS",
   "summary": "The Zig language server: completions, hover, go to definition and diagnostics for Zig in your editor",
   "homepage": "https://github.com/zigtools/zls",
@@ -8,7 +8,7 @@
   "command": "bin\\zls.exe",
   "path": ["${zig}"],
   "permissions": { "filesystem": ["cwd"] },
-  "runtimes": { "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355" },
+  "runtimes": { "zig": "org.ziglang.zig:0.17.0@sha256:93ec2b6b36708ae80ffac87872e70dafaee350cd2d49a95dd2fa5847d0a10449" },
   "sdk": {
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
@@ -17,18 +17,18 @@
       "name": "zls",
       "sources": [
         {
-          "url": "https://github.com/zigtools/zls/archive/refs/tags/0.16.1.tar.gz",
-          "sha256": "5cf982551d492780be9e33da860094286ee87a08145e08d5f3dd69a204772ba8",
+          "url": "https://github.com/zigtools/zls/archive/refs/tags/0.17.0.tar.gz",
+          "sha256": "f77940720768daf67c01802ea3cf3029dfd8a74afd7b68b39676c4f814dd992e",
           "strip": 1
         }
       ],
       "vendor": {
         "commands": ["zig build --fetch"],
         "dir": "zig-pkg",
-        "sha256": "4f200d86b78e8b6be46308350103c430dad4b87e5a82b12a6a099fb0f6b8efdb"
+        "sha256": "5c386b57f41d785402e5ec5a5d99845d87ef326df25182e061aea88ed1185151"
       },
       "build": [
-        "zig build --system zig-pkg -Doptimize=ReleaseSafe -Dcpu=baseline -Dstrip -Dversion-string=0.16.1 -p \"$PREFIX\"",
+        "zig build --system zig-pkg -Doptimize=ReleaseSafe -Dcpu=baseline -Dstrip -Dversion-string=0.17.0 -p \"$PREFIX\"",
         "cp LICENSE \"$PREFIX/\""
       ]
     }

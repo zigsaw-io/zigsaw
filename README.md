@@ -29,7 +29,7 @@ shows what one is and may reach before you install it (see
 PATH is searched in order, so if another copy of a command comes earlier (say
 an installed Node), that one wins. `where node` shows which is found first.
 
-To build zigsaw yourself instead, with Zig 0.16:
+To build zigsaw yourself instead, with Zig 0.17:
 
 ```powershell
 zig build                # ReleaseSafe by default; -Doptimize=Debug for a quicker compile
@@ -69,7 +69,8 @@ when a `v<version>` tag is pushed. Their programs are built with
 `zig build -Dstrip`, which leaves out the debug information that would name
 the directory they were built in, for the x86-64 baseline, whatever CPU
 builds them (`build.zig`'s default target), so a build of the same tag with
-Zig 0.16.0 gives the same bytes anywhere, and runs on any x64 CPU; the
+its Zig (0.17.0 from 0.58.0, 0.16.0 before) gives the same bytes anywhere,
+and runs on any x64 CPU; the
 release notes list their SHA-256. (0.18.0's were built for the CPU of
 GitHub's runner, and need AVX2, BMI2 and the SHA instructions.) A build
 of 0.19.0, 0.20.0 and 0.21.0 here gave their releases' bytes. From 0.22.0
@@ -162,7 +163,7 @@ Its source is the project itself: a `path` that names a directory, here the
 recipe's own:
 
 ```json
-"sdk": { "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac..." },
+"sdk": { "zig": "org.ziglang.zig:0.17.0@sha256:93ec2b6b36708ae8..." },
 "modules": [
   { "name": "hello", "sources": [{ "path": "." }], "shell": "cmd", "build": ["zig build -Doptimize=ReleaseSafe -p %PREFIX%"] }
 ]

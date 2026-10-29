@@ -133,7 +133,7 @@ fn visit(window: HWND, param: LPARAM) callconv(.winapi) BOOL {
     const len = GetWindowTextW(window, &wide, wide.len);
     if (len <= 0) return 1;
     const n = std.unicode.wtf16LeToWtf8(&buf, wide[0..@intCast(len)]);
-    if (!std.mem.startsWith(u8, search.want, "class:") and std.ascii.indexOfIgnoreCase(buf[0..n], search.want) == null) return 1;
+    if (!std.mem.startsWith(u8, search.want, "class:") and std.ascii.findIgnoreCase(buf[0..n], search.want) == null) return 1;
     search.found = window;
     search.title_len = @min(n, search.title.len);
     @memcpy(search.title[0..search.title_len], buf[0..search.title_len]);

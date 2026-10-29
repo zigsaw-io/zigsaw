@@ -7,6 +7,7 @@ const Allocator = std.mem.Allocator;
 const zip = std.zip;
 const flate = std.compress.flate;
 const oci = @import("oci.zig");
+const repeat = @import("testing.zig").repeat;
 
 pub const Entry = struct {
     /// Path inside the archive: '/'-separated, no trailing slash.
@@ -97,7 +98,7 @@ test "list and read entries" {
     try std.testing.expect(entries[0].is_dir);
 
     var content: Content = undefined;
-    for (entries[1..], [_][]const u8{ "deflated " ** 20, "stored\n" }) |e, want| {
+    for (entries[1..], [_][]const u8{ repeat("deflated ", 20), "stored\n" }) |e, want| {
         const r = try content.open(&reader, e);
         const got = try r.readAlloc(arena, @intCast(e.size));
         try std.testing.expectEqualStrings(want, got);

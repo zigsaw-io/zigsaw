@@ -13,7 +13,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Node.js | `org.nodejs.node` | 24.21.0 | `node`, `npm`, `npx` |
 | Prettier (on Node.js) | `io.prettier.prettier` | 3.9.9 | `prettier` |
 | Python | `org.python.python` | 3.14.7 | `python` |
-| zig | `org.ziglang.zig` | 0.16.0 | `zig` |
+| zig | `org.ziglang.zig` | 0.17.0 (and 0.16.0, which the recipes building with zig before iteration 58 pin) | `zig` |
 | SQLite (built from source) | `org.sqlite.sqlite3` | 3.53.4 | `sqlite3` |
 | Rust (windows-gnu) | `org.rust-lang.rust` | 1.99.0 | `cargo`, `rustc` |
 | ripgrep (built from source) | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
@@ -27,7 +27,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | CMake, with Ninja 1.13.2 | `org.cmake.cmake` | 4.4.4 | `cmake`, `ctest`, `cpack`, `ninja` |
 | zstd (built from source) | `com.github.facebook.zstd` | 1.5.7 | `zstd`, `unzstd`, `zstdcat` |
 | Meson, with Ninja and pkgconf | `com.mesonbuild.meson` | 1.12.1 | `meson` |
-| ZLS, the Zig language server (built from source with zig, on zig) | `org.zigtools.zls` | 0.16.1 | `zls` |
+| ZLS, the Zig language server (built from source with zig, on zig) | `org.zigtools.zls` | 0.17.0 | `zls` |
 | Perl (Strawberry Perl, for building OpenSSL and Gnumeric) | `org.perl.perl` | 5.42.3.1 | `perl` |
 | cargo-c (for building librsvg) | `com.github.lu-zero.cargo-c` | 0.10.25 | `cargo-cbuild`, `cargo-cinstall` |
 | GNU gettext, with libiconv (built from source, for GTK's SDK) | `org.gnu.gettext` | 1.0 | `gettext`, `ngettext`, `msgfmt`, `msgmerge`, `msginit`, `msgcat`, `msgunfmt`, `xgettext`, `iconv` |

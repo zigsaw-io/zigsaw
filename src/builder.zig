@@ -44,6 +44,7 @@ const project = @import("project.zig");
 const recipe = @import("recipe.zig");
 const roots = @import("roots.zig");
 const Store = @import("Store.zig");
+const repeat = @import("testing.zig").repeat;
 const win32 = @import("win32.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -936,8 +937,8 @@ test "a build's tools: each image once, one version of each app" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const a = "sha256:" ++ "a" ** 64;
-    const b = "sha256:" ++ "b" ** 64;
+    const a = "sha256:" ++ repeat("a", 64);
+    const b = "sha256:" ++ repeat("b", 64);
     const tool = struct {
         fn of(what: []const u8, image: []const u8, id: []const u8) Tool {
             return .{ .image = image, .id = id, .version = "1", .what = what, .dir = "C:\\d", .path = &.{}, .env = .{}, .aliases = null };

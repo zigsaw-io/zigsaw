@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const Context = @import("Context.zig");
+const repeat = @import("testing.zig").repeat;
 const fail = Context.fail;
 
 pub const media_type = struct {
@@ -787,7 +788,7 @@ test "extension points and extends" {
     // Runs that an extension joins wouldn't have its runtimes.
     c = ok;
     c.extends = .{ .point = "p", .version = "1" };
-    const digest = "sha256:" ++ "a" ** 64;
+    const digest = "sha256:" ++ repeat("a", 64);
     try c.runtimes.map.put(std.testing.allocator, "r", .{ .id = "r", .version = "1", .image = digest, .layer = digest });
     defer c.runtimes.map.deinit(std.testing.allocator);
     try std.testing.expectError(error.Failed, validateConfig("t", c));
@@ -1065,7 +1066,7 @@ pub fn isValidExtension(ext: []const u8) bool {
 test isValidExtension {
     for ([_][]const u8{ ".rnote", ".xopp", ".TXT", ".c++", ".tar-gz", ".7z" }) |ok|
         try std.testing.expect(isValidExtension(ok));
-    for ([_][]const u8{ "", ".", "rnote", "..x", ".a.b", ".a b", ".a\\b", ".é", "." ++ "x" ** 33 }) |bad|
+    for ([_][]const u8{ "", ".", "rnote", "..x", ".a.b", ".a b", ".a\\b", ".é", "." ++ repeat("x", 33) }) |bad|
         try std.testing.expect(!isValidExtension(bad));
 }
 
@@ -1194,8 +1195,9 @@ pub const UserFolder = enum {
     pub const list = "desktop, documents, downloads, music, pictures, videos";
 
     pub fn parse(name: []const u8) ?UserFolder {
-        inline for (@typeInfo(UserFolder).@"enum".fields) |f| {
-            if (std.ascii.eqlIgnoreCase(name, f.name)) return @enumFromInt(f.value);
+        const info = @typeInfo(UserFolder).@"enum";
+        inline for (info.field_names, info.field_values) |field_name, value| {
+            if (std.ascii.eqlIgnoreCase(name, field_name)) return @enumFromInt(value);
         }
         return null;
     }
@@ -1258,7 +1260,7 @@ test isValidId {
     try std.testing.expect(!isValidId(".hidden"));
     try std.testing.expect(!isValidId("has space"));
     try std.testing.expect(!isValidId("a/b"));
-    try std.testing.expect(!isValidId("x" ** 58));
+    try std.testing.expect(!isValidId(repeat("x", 58)));
 }
 
 test isValidShortcutName {
@@ -1266,7 +1268,7 @@ test isValidShortcutName {
         try std.testing.expect(isValidShortcutName(ok));
     for ([_][]const u8{ "", " lead", "trail ", "dot.", ".dot", "a/b", "a\\b", "a:b", "what?", "tab\there", "con", "Nul.txt", "COM1", "lpt9", "\xff" }) |bad|
         try std.testing.expect(!isValidShortcutName(bad));
-    try std.testing.expect(!isValidShortcutName("x" ** 65));
+    try std.testing.expect(!isValidShortcutName(repeat("x", 65)));
 }
 
 test isValidExportName {
@@ -1395,7 +1397,7 @@ test "uses: names, ports, and the placeholders that name them" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const digest = "sha256:" ++ "a" ** 64;
+    const digest = "sha256:" ++ repeat("a", 64);
     var c: AppConfig = .{ .id = "app", .version = "1", .command = "app.exe" };
     try c.env.map.put(arena, "PGPORT", "${uses:postgresql}");
     // Nothing uses it.
@@ -1443,7 +1445,7 @@ test "Access: the runtimes' uses, and a new port counted as added" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const digest = "sha256:" ++ "a" ** 64;
+    const digest = "sha256:" ++ repeat("a", 64);
     var c: AppConfig = .{ .id = "app", .version = "1", .command = "app.exe" };
     c.permissions.uses = &.{.{ .name = "db", .port = 5432 }};
     try c.runtimes.map.put(arena, "x", .{ .id = "x", .version = "1", .image = digest, .layer = digest, .uses = &.{
@@ -1517,8 +1519,8 @@ test "layers must match the runtimes" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const digest = "sha256:" ++ "a" ** 64;
-    const other = "sha256:" ++ "b" ** 64;
+    const digest = "sha256:" ++ repeat("a", 64);
+    const other = "sha256:" ++ repeat("b", 64);
     const layer = struct {
         fn of(d: []const u8) Descriptor {
             return .{ .mediaType = media_type.layer_tar, .digest = d, .size = 1 };
@@ -1567,7 +1569,7 @@ test "runtimes' aliases" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const digest = "sha256:" ++ "a" ** 64;
+    const digest = "sha256:" ++ repeat("a", 64);
     var c: AppConfig = .{ .id = "x", .version = "1", .command = "x.exe" };
     try c.runtimes.map.put(arena, "zig", .{ .id = "org.ziglang.zig", .version = "1", .image = digest, .layer = digest });
     // Without aliases a runtime's JSON is as before, so configs don't change.
@@ -1610,7 +1612,7 @@ test "an image's aliases may run its runtimes' files" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const digest = "sha256:" ++ "a" ** 64;
+    const digest = "sha256:" ++ repeat("a", 64);
     var c: AppConfig = .{ .id = "x", .version = "1", .command = "x.exe" };
     try c.runtimes.map.put(arena, "php", .{ .id = "net.php.php", .version = "1", .image = digest, .layer = digest });
     var a: std.json.ArrayHashMap(Export) = .{};
@@ -1648,8 +1650,8 @@ test parseFsGrant {
 test sourcesTag {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
-    const tag = try sourcesTag(arena_state.allocator(), "sha256:" ++ "ab" ** 32);
-    try std.testing.expectEqualStrings("sha256-" ++ "ab" ** 32 ++ ".sources", tag);
+    const tag = try sourcesTag(arena_state.allocator(), "sha256:" ++ repeat("ab", 32));
+    try std.testing.expectEqualStrings("sha256-" ++ repeat("ab", 32) ++ ".sources", tag);
     try std.testing.expect(tag.len <= 128);
 }
 

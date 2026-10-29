@@ -8,13 +8,14 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const flate = std.compress.flate;
 const oci = @import("oci.zig");
+const repeat = @import("testing.zig").repeat;
 
 /// zlib's default level. On zig's 378 MB layer it makes 88 MB in 9 s;
 /// level 9 saves another 1% and takes 2.4 times as long.
 ///
 /// The compressed bytes, and so every image digest, are what this version
 /// of Zig's deflate makes: a Zig whose deflate changes would make other
-/// bytes from the same files.
+/// bytes from the same files. A test pins them; 0.16 and 0.17 make the same.
 pub const gzip_options: flate.Compress.Options = .level_6;
 
 /// A gzip compressor writing to `out`: write the layer to its `writer`, then
@@ -242,7 +243,40 @@ test "gzip layers: the same bytes every time, and inflated, the plain layer" {
     const dest = try std.fs.path.join(arena, &.{ base, "out" });
     try extract(io, arena, tar_path, dest);
     const got = try Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ dest, "bin", "tool.exe" }), arena, .unlimited);
-    try std.testing.expectEqualStrings("MZ " ++ "fake " ** 1000, got);
+    try std.testing.expectEqualStrings("MZ " ++ repeat("fake ", 1000), got);
+}
+
+test "gzip layers: the bytes this Zig's deflate makes" {
+    // Every image's digest is what deflate makes of its layer. If this fails
+    // after a change of Zig, every layer zigsaw builds would get a new digest,
+    // and no published image would reproduce.
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try expectSha256("73328f9013587c5ac268810fea2afaa3f7c14c595d7d95d81c9bfe81ceab55da", try testLayer(arena, .gzip));
+
+    // A MiB of words in an order picked by a fixed LCG (not std.Random, whose
+    // output a new Zig could change too), so deflate finds matches of all
+    // lengths and distances, as in real files.
+    const words = [_][]const u8{ "zig ", "saw ", "layer ", "image ", "manifest ", "\n", "tar ", "0x7f ", "{}", "MZ\x90\x00", "\x00\x00\x00\x00" };
+    var data: Io.Writer.Allocating = try .initCapacity(arena, 1 << 20);
+    var x: u32 = 1;
+    while (data.written().len < 1 << 20) {
+        x = x *% 1664525 +% 1013904223;
+        try data.writer.writeAll(words[(x >> 16) % words.len]);
+    }
+    var out: Io.Writer.Allocating = try .initCapacity(arena, 1 << 20);
+    const gz = try gzip(arena, &out.writer);
+    try gz.writer.writeAll(data.written());
+    try gz.finish();
+    try expectSha256("b3c3a2e286e4d45591e9e29bac9f9027ec91abdf4f3767fdd206fb2fb1fe0f1b", out.written());
+}
+
+fn expectSha256(want: []const u8, bytes: []const u8) !void {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    try std.testing.expectEqualStrings(want, &std.fmt.bytesToHex(digest, .lower));
 }
 
 /// A small layer, compressed as asked.
@@ -251,7 +285,7 @@ fn testLayer(arena: Allocator, compression: oci.Compression) ![]const u8 {
     const gz = if (compression == .gzip) try gzip(arena, &out.writer) else null;
     var w: Writer = .init(if (gz) |c| &c.writer else &out.writer);
     try w.addDir("bin");
-    const content = "MZ " ++ "fake " ** 1000;
+    const content = "MZ " ++ repeat("fake ", 1000);
     var reader: Io.Reader = .fixed(content);
     try w.addFile("bin/tool.exe", content.len, &reader);
     try w.finish();

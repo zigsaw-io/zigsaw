@@ -74,16 +74,17 @@ pub const Settings = struct {
     /// reads it.
     pub fn jsonStringify(s: Settings, jw: anytype) !void {
         try jw.beginObject();
-        inline for (std.meta.fields(Settings)) |f| {
-            const v = @field(s, f.name);
-            const later_list = comptime std.mem.eql(u8, f.name, "noextension") or std.mem.eql(u8, f.name, "extension") or
-                std.mem.eql(u8, f.name, "ports");
-            const skip = switch (@typeInfo(f.type)) {
+        const info = @typeInfo(Settings).@"struct";
+        inline for (info.field_names, info.field_types) |name, T| {
+            const v = @field(s, name);
+            const later_list = comptime std.mem.eql(u8, name, "noextension") or std.mem.eql(u8, name, "extension") or
+                std.mem.eql(u8, name, "ports");
+            const skip = switch (@typeInfo(T)) {
                 .optional => v == null,
                 else => if (later_list) v.len == 0 else false,
             };
             if (!skip) {
-                try jw.objectField(f.name);
+                try jw.objectField(name);
                 try jw.write(v);
             }
         }

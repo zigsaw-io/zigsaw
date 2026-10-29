@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const oci = @import("oci.zig");
 const Store = @import("Store.zig");
 const Context = @import("Context.zig");
+const repeat = @import("testing.zig").repeat;
 
 /// An extension point a run has.
 pub const Point = struct {
@@ -233,7 +234,7 @@ test points {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const digest = "sha256:" ++ "a" ** 64;
+    const digest = "sha256:" ++ repeat("a", 64);
     var own: std.json.ArrayHashMap(oci.ExtensionPoint) = .{};
     try own.map.put(arena, "p", .{ .version = "app's" });
     var rt: std.json.ArrayHashMap(oci.ExtensionPoint) = .{};

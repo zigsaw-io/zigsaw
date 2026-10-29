@@ -9,8 +9,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{
         .default_target = .{ .cpu_arch = .x86_64, .os_tag = .windows },
     });
-    const chosen = b.option(std.builtin.OptimizeMode, "optimize", "Prioritize performance, safety, or binary size (default: ReleaseSafe for zigsaw.exe, Debug otherwise)");
-    const optimize = chosen orelse .Debug;
+    const chosen = b.option(std.lang.Optimize, "optimize", "Prioritize performance, safety, or binary size (default: safe for zigsaw.exe, debug otherwise)");
+    const optimize = chosen orelse .debug;
 
     // zigsaw compresses, hashes and unpacks layers of hundreds of MB, which
     // takes about 8 times as long in Debug: 74 s instead of 9 s to compress
@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
     // Debug information names the directory zigsaw was built in, so releases
     // leave it out: zigsaw.exe then builds the same anywhere.
     const strip = b.option(bool, "strip", "Omit debug information from zigsaw.exe, as releases do");
-    const exe_mod = zigsawModule(b, target, chosen orelse .ReleaseSafe, strip);
+    const exe_mod = zigsawModule(b, target, chosen orelse .safe, strip);
 
     const exe = b.addExecutable(.{
         .name = "zigsaw",
@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
     for ([_]bool{ false, true }) |gui| {
         const shim = b.addExecutable(.{
             .name = if (gui) "zigsaw-shimw" else "zigsaw-shim",
-            .root_module = shimModule(b, target, .ReleaseSmall, gui),
+            .root_module = shimModule(b, target, .small, gui),
         });
         if (gui) shim.subsystem = .windows;
         addWindowsResources(b, shim, if (gui) "zigsaw GUI command shim" else "zigsaw command shim");
@@ -44,14 +44,14 @@ pub fn build(b: *std.Build) void {
     // in the store; small too. zigsaw expects it next to zigsaw.exe.
     const relay = b.addExecutable(.{
         .name = "zigsaw-relay",
-        .root_module = relayModule(b, target, .ReleaseSmall),
+        .root_module = relayModule(b, target, .small),
     });
     addWindowsResources(b, relay, "zigsaw service relay");
     b.installArtifact(relay);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run zigsaw");
     run_step.dependOn(&run_cmd.step);
 
@@ -197,12 +197,12 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = relayModule(b, target, optimize) })).step);
 }
 
-fn relayModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+fn relayModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Module {
     return b.createModule(.{
         .root_source_file = b.path("src/relay.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = if (optimize == .ReleaseSmall) true else null,
+        .strip = if (optimize == .small) true else null,
     });
 }
 
@@ -226,12 +226,12 @@ fn addWindowsResources(b: *std.Build, exe: *std.Build.Step.Compile, description:
     exe.win32_manifest = b.path("src/windows/zigsaw.manifest");
 }
 
-fn shimModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, gui: bool) *std.Build.Module {
+fn shimModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, gui: bool) *std.Build.Module {
     const mod = b.createModule(.{
         .root_source_file = b.path("src/shim.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = if (optimize == .ReleaseSmall) true else null,
+        .strip = if (optimize == .small) true else null,
     });
     const options = b.addOptions();
     options.addOption(bool, "gui", gui);
@@ -239,7 +239,7 @@ fn shimModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
     return mod;
 }
 
-fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, strip: ?bool) *std.Build.Module {
+fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, strip: ?bool) *std.Build.Module {
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,

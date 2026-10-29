@@ -20,6 +20,7 @@ const oci = @import("oci.zig");
 const pe = @import("pe.zig");
 const shortcuts = @import("shortcuts.zig");
 const associations = @import("associations.zig");
+const repeat = @import("testing.zig").repeat;
 const win32 = @import("win32.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -432,8 +433,8 @@ test commandDirs {
     try c.runtimes.map.put(arena, "node", .{
         .id = "org.nodejs.node",
         .version = "24",
-        .image = "sha256:" ++ "a" ** 64,
-        .layer = "sha256:" ++ "b" ** 64,
+        .image = "sha256:" ++ repeat("a", 64),
+        .layer = "sha256:" ++ repeat("b", 64),
         .path = &.{ ".", "${data}/cargo/bin", "${data}\\npm" },
     });
     const dirs = try commandDirs(arena, c, "C:\\z\\data\\x");

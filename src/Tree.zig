@@ -20,6 +20,7 @@ const oci = @import("oci.zig");
 const recipe = @import("recipe.zig");
 const Store = @import("Store.zig");
 const zipfile = @import("zipfile.zig");
+const repeat = @import("testing.zig").repeat;
 const fail = Context.fail;
 
 /// Keyed by lowercased path: Windows paths are case-insensitive, so paths
@@ -670,7 +671,7 @@ test "zip sources stream into a layer" {
     const dest = try std.fs.path.join(arena, &.{ base, "out" });
     try layer.extract(io, arena, try std.fs.path.join(arena, &.{ base, "layer.tar" }), dest);
 
-    try std.testing.expectEqualStrings("deflated " ** 20, try readTestFile(arena, dest, "app/a.txt"));
+    try std.testing.expectEqualStrings(repeat("deflated ", 20), try readTestFile(arena, dest, "app/a.txt"));
     try std.testing.expectEqualStrings("stored\n", try readTestFile(arena, dest, "app/sub/b.txt"));
     try std.testing.expect(!try tree.isFile(arena, "top/a.txt"));
 }
@@ -711,7 +712,7 @@ test "tar sources stream into a layer" {
         const dest = try std.fs.path.join(arena, &.{ base, try std.fmt.allocPrint(arena, "{s}.out", .{name}) });
         try layer.extract(io, arena, try std.fs.path.join(arena, &.{ base, layer_name }), dest);
 
-        try std.testing.expectEqualStrings("deflated " ** 20, try readTestFile(arena, dest, "lib/x/a.txt"));
+        try std.testing.expectEqualStrings(repeat("deflated ", 20), try readTestFile(arena, dest, "lib/x/a.txt"));
         try std.testing.expect(!try tree.isFile(arena, "lib/x/sub/b.txt"));
         try std.testing.expect(!try Store.exists(io, try std.fs.path.join(arena, &.{ dest, "lib", "x", "sub" })));
     }

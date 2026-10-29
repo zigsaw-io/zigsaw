@@ -18,6 +18,7 @@ const info = @import("info.zig");
 const install = @import("install.zig");
 const oci = @import("oci.zig");
 const prompt = @import("prompt.zig");
+const repeat = @import("testing.zig").repeat;
 const fail = Context.fail;
 const note = Context.note;
 
@@ -559,8 +560,8 @@ test "indexes: the image for windows/amd64, or the platforms there are" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const ref = try Registry.Reference.parse("ghcr.io/a/b:1");
-    const d = "sha256:" ++ "a" ** 64;
-    const w = "sha256:" ++ "b" ** 64;
+    const d = "sha256:" ++ repeat("a", 64);
+    const w = "sha256:" ++ repeat("b", 64);
 
     // Docker's manifest list, with an attestation, as buildx makes them.
     const list = "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.docker.distribution.manifest.list.v2+json\",\"manifests\":[" ++
@@ -590,9 +591,9 @@ test mountSources {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const node_layer = "sha256:" ++ "a" ** 64;
-    const own_layer = "sha256:" ++ "b" ** 64;
-    const config_digest = "sha256:" ++ "c" ** 64;
+    const node_layer = "sha256:" ++ repeat("a", 64);
+    const own_layer = "sha256:" ++ repeat("b", 64);
+    const config_digest = "sha256:" ++ repeat("c", 64);
     const layer = struct {
         fn of(d: []const u8) oci.Descriptor {
             return .{ .mediaType = oci.media_type.layer_tar_gzip, .digest = d, .size = 1 };
@@ -603,7 +604,7 @@ test mountSources {
         .layers = &.{ layer(node_layer), layer(own_layer) },
     };
     var config: oci.AppConfig = .{ .id = "io.prettier.prettier", .version = "3", .command = "${node}\\node.exe" };
-    try config.runtimes.map.put(arena, "node", .{ .id = "org.nodejs.node", .version = "24", .image = "sha256:" ++ "d" ** 64, .layer = node_layer });
+    try config.runtimes.map.put(arena, "node", .{ .id = "org.nodejs.node", .version = "24", .image = "sha256:" ++ repeat("d", 64), .layer = node_layer });
     const target = try Registry.Reference.parse("ghcr.io/zigsaw-io/io.prettier.prettier:3");
 
     // Built here: the runtime's layer, from the runtime's repository next to the target.

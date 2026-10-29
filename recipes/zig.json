@@ -1,6 +1,6 @@
 {
   "id": "org.ziglang.zig",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "command": "zig.exe",
   "env": {
     "ZIG_GLOBAL_CACHE_DIR": "${cache}",
@@ -30,8 +30,8 @@
       "name": "zig",
       "sources": [
         {
-          "url": "https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip",
-          "sha256": "68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e",
+          "url": "https://ziglang.org/download/0.17.0/zig-x86_64-windows-0.17.0.zip",
+          "sha256": "b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428",
           "strip": 1
         }
       ]

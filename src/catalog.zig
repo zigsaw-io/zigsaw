@@ -17,6 +17,7 @@ const Registry = @import("Registry.zig");
 const Store = @import("Store.zig");
 const oci = @import("oci.zig");
 const remote = @import("remote.zig");
+const repeat = @import("testing.zig").repeat;
 const fail = Context.fail;
 const note = Context.note;
 
@@ -298,7 +299,7 @@ fn rankOf(arena: Allocator, e: Entry, words: []const []const u8) !?u8 {
 }
 
 fn containsAny(fields: []const []const u8, word: []const u8) bool {
-    for (fields) |f| if (std.ascii.indexOfIgnoreCase(f, word) != null) return true;
+    for (fields) |f| if (std.ascii.findIgnoreCase(f, word) != null) return true;
     return false;
 }
 
@@ -323,7 +324,7 @@ test "a catalog's JSON round-trips, and leaves out what an app doesn't have" {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const entry: Entry = .{ .id = "org.ziglang.zig", .version = "0.16.0", .manifest = "sha256:" ++ "a" ** 64, .download = 88, .commands = &.{"zig"} };
+    const entry: Entry = .{ .id = "org.ziglang.zig", .version = "0.16.0", .manifest = "sha256:" ++ repeat("a", 64), .download = 88, .commands = &.{"zig"} };
     const json = try oci.toJson(arena, Catalog{ .registry = "ghcr.io/zigsaw-io", .apps = &.{entry} });
     try std.testing.expect(std.mem.indexOf(u8, json, "\"name\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"registry\": \"ghcr.io/zigsaw-io\"") != null);

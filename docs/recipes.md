@@ -552,7 +552,7 @@ directory, a `path` that names a directory, `.` here. This repository's
 [`zigsaw.json`](../zigsaw.json) builds zigsaw:
 
 ```json
-"sdk": { "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac..." },
+"sdk": { "zig": "org.ziglang.zig:0.17.0@sha256:93ec2b6b36708ae8..." },
 "modules": [
   {
     "name": "zigsaw",
@@ -681,16 +681,17 @@ build looks in `zig-pkg`, and only the step's `dir` is pinned.
 
 ### ZLS
 
-[ZLS](recipes/zls.json) 0.16.1, the Zig language server, is built from its
-GitHub tag this way: its three packages (known-folders, diffz, lsp-kit) are
-fetched by the vendor step, and `-Dversion-string=0.16.1` saves its build a
+[ZLS](recipes/zls.json) 0.17.0, the Zig language server, is built from its
+GitHub tag this way, with zig 0.17.0: its three packages (known-folders,
+diffz, lsp-kit) are fetched by the vendor step, and
+`-Dversion-string=0.17.0` saves its build a
 `git describe`, which a tarball can't answer.
 
 - **zig's image is its runtime**, with `${zig}` on its PATH. ZLS finds
   `zig.exe` there, and zig's library beside it, for the standard library's
   completions and documentation, and runs zig to learn the modules and
   packages a project's `build.zig` declares. zig's version must be one ZLS
-  supports: 0.16.x for ZLS 0.16.
+  supports: 0.17.x for ZLS 0.17.
 - **It has the working directory**, which editors start it in, as the
   project's folder. For files elsewhere, `zigsaw override
   --filesystem=<dir> org.zigtools.zls`, as the editor starts it through its

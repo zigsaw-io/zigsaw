@@ -249,7 +249,8 @@
   bigger blob.
 - A layer's compressed bytes, and so every image's digest, are what the
   deflate of the Zig that zigsaw is built with makes. A Zig whose deflate
-  changed would make other digests from the same files; CI pins Zig 0.16.0.
+  changed would make other digests from the same files; CI pins Zig 0.17.0,
+  whose deflate makes 0.16.0's bytes, and a unit test pins them.
 - Build steps are kept off the network by convention (proxy variables), not
   enforced: a tool that ignores them can still download.
 - Builds need `B:` free, and run one at a time.
