@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GDAL end to end (recipes/gdal.json: GDAL's tools, built with zig on its
+# GDAL end to end (recipes/gdal.json: GDAL's tools, built with Clang (llvm-mingw) on its
 # SDK's GEOS, PROJ, SQLite, json-c and expat, with its internal TIFF, PNG and
 # JPEG), from a work directory the app may use (its cwd permission): the
 # versions, PROJ's proj.db through PROJ_DATA (an SRS, a point transformed),

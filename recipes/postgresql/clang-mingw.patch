@@ -1,0 +1,48 @@
+PostgreSQL's MinGW build with Clang (zigsaw):
+
+- clang's __builtin_setjmp and __builtin_longjmp, which c.h uses for
+  MinGW-64 (for GCC's sake), left a backend crashing after some errors;
+  with clang it uses MinGW's setjmp and longjmp.
+- No __int128: clang for MinGW lays a struct with an int128 member out on
+  16 bytes, though c.h's typedef asks for 8, and copies it with movaps,
+  which crashes on the 8-byte boundaries palloc gives (parallel avg() and
+  variance() of int8, in int8_avg_combine).
+
+diff --git a/meson.build b/meson.build
+--- a/meson.build
++++ b/meson.build
+@@ -1828,6 +1828,15 @@
+ 
+   buggy_int128 = false
+ 
++  # zigsaw: not with clang for MinGW, which lays a struct with an int128
++  # member out on 16 bytes despite the typedef's aligned(8): copying
++  # palloc'd aggregate states (int8_avg_combine) used movaps on 8-byte
++  # boundaries, and crashed parallel aggregates.
++  if host_system == 'windows' and cc.get_id() == 'clang'
++    buggy_int128 = true
++    message('__int128 disabled: clang lays out structs with it on 16 bytes')
++  endif
++
+   # Use of non-default alignment with __int128 tickles bugs in some compilers.
+   # If not cross-compiling, we can test for bugs and disable use of __int128
+   # with buggy compilers.  If cross-compiling, hope for the best.
+diff --git a/src/include/c.h b/src/include/c.h
+--- a/src/include/c.h
++++ b/src/include/c.h
+@@ -1345,7 +1345,14 @@ extern int	fdatasync(int fildes);
+  * so on that toolchain we cheat and use gcc's builtins.
+  */
+ #ifdef WIN32
+-#ifdef __MINGW64__
++/*
++ * zigsaw: not with clang. With its builtins, a backend crashed after some
++ * errors (a DO block in a language that doesn't exist), calling a bad
++ * portal's cleanup in MarkPortalFailed() once longjmp was back in
++ * PortalRun(). clang gives every function the SEH unwind data that MinGW's
++ * own longjmp needs.
++ */
++#if defined(__MINGW64__) && !defined(__clang__)
+ typedef intptr_t sigjmp_buf[5];
+ #define sigsetjmp(x,y) __builtin_setjmp(x)
+ #define siglongjmp __builtin_longjmp

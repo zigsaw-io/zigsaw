@@ -69,6 +69,7 @@ flameshot.json
 notes.json
 ghostscript.json
 texlive.json
+llvm-mingw.json
 gdal-sdk.json
 gdal.json
 make.json

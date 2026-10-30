@@ -13,7 +13,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Node.js | `org.nodejs.node` | 24.21.0 | `node`, `npm`, `npx` |
 | Prettier (on Node.js) | `io.prettier.prettier` | 3.9.9 | `prettier` |
 | Python | `org.python.python` | 3.14.7 | `python` |
-| zig | `org.ziglang.zig` | 0.17.0 (and 0.16.0, which GTK's, Qt's, gettext's, GDAL's and PostgreSQL's chains still pin; SQLite, ripgrep, bat and zstd build on 0.17.0 from iteration 59, and Meson, make, cargo-c, Ghostscript and PHP's SDK, with the extensions it builds, from iteration 60) | `zig` |
+| zig | `org.ziglang.zig` | 0.17.0 (and 0.16.0, which GTK's, Qt's and gettext's chains still pin; SQLite, ripgrep, bat and zstd build on 0.17.0 from iteration 59, and Meson, make, cargo-c, Ghostscript and PHP's SDK, with the extensions it builds, from iteration 60) | `zig` |
 | SQLite (built from source) | `org.sqlite.sqlite3` | 3.53.4 | `sqlite3` |
 | Rust (windows-gnu) | `org.rust-lang.rust` | 1.99.0 | `cargo`, `rustc` |
 | ripgrep (built from source) | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
@@ -25,6 +25,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | skopeo, container images in registries and on disk (built from source) | `io.podman.skopeo` | 1.24.1 | `skopeo` |
 | cosign, signatures for container images (built from source) | `dev.sigstore.cosign` | 3.1.4 | `cosign` |
 | CMake, with Ninja 1.13.2 | `org.cmake.cmake` | 4.4.4 | `cmake`, `ctest`, `cpack`, `ninja` |
+| llvm-mingw: LLVM's Clang and lld with mingw-w64 (UCRT), libc++ and compiler-rt, as a C and C++ toolchain for builds | `com.github.mstorsjo.llvm-mingw` | 20261020 (LLVM 23.1.4) | `clang` |
 | zstd (built from source) | `com.github.facebook.zstd` | 1.5.7 | `zstd`, `unzstd`, `zstdcat` |
 | Meson, with Ninja and pkgconf | `com.mesonbuild.meson` | 1.12.1 | `meson` |
 | ZLS, the Zig language server (built from source with zig, on zig) | `org.zigtools.zls` | 0.17.0 | `zls` |
@@ -77,14 +78,14 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Ghostscript (built from source) | `com.artifex.Ghostscript` | 10.08.0 | `gs`, `gswin64c` |
 | TeX Live, its small scheme (on Perl and Ghostscript; packages from tlnet) | `org.tug.texlive` | 2026.80721 | `latexmk`, `pdflatex`, `xelatex`, `lualatex`, `latex`, `tex`, `bibtex`, `biber`, `makeindex`, `mpost`, `kpsewhich`, `dvips`, `dvipdfmx`, `epstopdf`, `ps2pdf` and 116 more |
 | GNU Make (built from source, for builds) | `org.gnu.make` | 4.4.1 | |
-| PostgreSQL SDK: PostgreSQL built from source with zig, with headers, libraries and pgxs | `org.postgresql.PostgreSQL.Sdk` | 18.6 | `pg_config` |
+| PostgreSQL SDK: PostgreSQL built from source with Clang (llvm-mingw), with headers, libraries and pgxs | `org.postgresql.PostgreSQL.Sdk` | 18.6 | `pg_config` |
 | PostgreSQL, with PL/Perl and PL/Python (from its SDK; on Perl and Python) | `org.postgresql.PostgreSQL` | 18.6 | `postgresql`, `postgres`, `initdb`, `pg_ctl`, `psql`, `pg_dump`, `pg_dumpall`, `pg_restore`, `pg_basebackup`, `pg_isready`, `createdb`, `dropdb`, `createuser`, `dropuser`, `vacuumdb`, `reindexdb`, `clusterdb`, `pgbench` |
 | pgvector, extending PostgreSQL (built from source with pgxs) | `org.postgresql.PostgreSQL.pgvector` | 0.8.7 | |
 | pg_cron, extending PostgreSQL (built from source with pgxs) | `org.postgresql.PostgreSQL.pg_cron` | 1.6.8 | |
-| GDAL SDK: GDAL built from source with zig, with GEOS, PROJ, SQLite, json-c and expat as static libraries | `org.gdal.GDAL.Sdk` | 3.13.3 | |
+| GDAL SDK: GDAL built from source with Clang (llvm-mingw), with GEOS, PROJ, SQLite, json-c and expat as static libraries | `org.gdal.GDAL.Sdk` | 3.13.3 | |
 | GDAL, its raster and vector tools (from its SDK) | `org.gdal.GDAL` | 3.13.3 | `gdal`, `gdalinfo`, `gdal_translate`, `gdalwarp`, `ogr2ogr`, `ogrinfo`, `gdalsrsinfo`, `gdaltransform`, `gdal_create` and 20 more |
 | PostGIS, extending PostgreSQL (built from source, on GDAL's SDK; with rasters) | `org.postgresql.PostgreSQL.PostGIS` | 3.6.4 | |
-| osm2pgsql, which imports OpenStreetMap data into PostGIS (built from source with zig, on PostgreSQL's and GDAL's SDKs) | `org.osm2pgsql.osm2pgsql` | 2.3.1 | `osm2pgsql`, `osm2pgsql-expire` |
+| osm2pgsql, which imports OpenStreetMap data into PostGIS (built from source with Clang, on PostgreSQL's and GDAL's SDKs) | `org.osm2pgsql.osm2pgsql` | 2.3.1 | `osm2pgsql`, `osm2pgsql-expire` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,

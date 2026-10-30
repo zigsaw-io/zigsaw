@@ -708,6 +708,42 @@ diffz, lsp-kit) are fetched by the vendor step, and
   (with `zig.zls.enabled` on). It talks over stdin and stdout, which the
   shim passes straight through.
 
+## Clang (llvm-mingw)
+
+[llvm-mingw's image](recipes/llvm-mingw.json) is the other C and C++
+toolchain: LLVM's own Clang and lld (23.1.4), with mingw-w64's headers and
+CRT for the UCRT, libc++ and compiler-rt, as Martin Storsjö's llvm-mingw
+builds them for x86_64 Windows. A recipe lists it as an SDK where it would
+list zig's, and nothing else changes: the image gives the same aliases
+(`cc`, `c++`, `ar`, `ranlib`, `nm`, `strip`, `objdump`, `windres`,
+`dlltool`; not `rc` or `as`) and the same variables, `CC=cc`, `CXX=c++`, `RC=windres`
+and `LDFLAGS=-s`, and its `bin` is on the build's PATH, with the
+`x86_64-w64-mingw32-*` tools that configure scripts look for with `--host`.
+GDAL's and PostgreSQL's images, and what's built on them, build with it.
+
+- **Objects and links are reproducible without a flag**: Clang writes the
+  time it compiled an object into its header, which static libraries keep,
+  and lld the time it linked into a program's. The image adds
+  `-mno-incremental-linker-compatible` and `-Wl,--no-insert-timestamp` to
+  Clang's own configuration file (`bin/mingw32-common.cfg`), so they apply
+  whatever a recipe's `CFLAGS` and `LDFLAGS` say, and say nothing under
+  `-Werror`. lld's MinGW driver doesn't take zig's `-Wl,-Brepro`.
+- **libc++, libunwind and winpthreads link in**: the image has their
+  static libraries only, so a C++ program or DLL needs none of llvm-mingw's
+  DLLs, as with zig's libc++. Two extensions with their own C++ can't load
+  two libc++ DLLs into one process.
+- **It's lld, as GNU ld behaves**: `--export-all-symbols` (which leaves
+  the CRT's symbols out), `--allow-multiple-definition`, `-lX` finding
+  `libX.dll.a`, and compiler-rt's `__cpu_model` for
+  `__builtin_cpu_supports`, none of which zig's linker has. A link takes a
+  few MB, where one with zig 0.17's `cc` takes some 900.
+- **Set `WINDRES` for autotools** (`"WINDRES": "windres"`): a configure
+  script finds a tool on PATH only with `PATH_SEPARATOR=;`, as B:'s colon
+  confuses its search otherwise; `RC` comes from the image.
+- **Clang 23 is newer than zig 0.16's Clang 21**, and stricter: code that
+  passes a pointer to another type is an error (`-Wno-error=` lets it
+  through, as MSVC and GCC only warn).
+
 ## CMake
 
 The CMake image, [`org.cmake.cmake`](recipes/cmake.json), is Kitware's
@@ -2816,8 +2852,8 @@ image answer.
 ## PostgreSQL
 
 [`org.postgresql.PostgreSQL`](recipes/postgresql.json) is PostgreSQL 18
-built from its release tarball with Meson and zig, as PostgreSQL's MinGW
-build. As GTK's runtime does, it takes its files from an SDK,
+built from its release tarball with Meson and
+[Clang (llvm-mingw)](#clang-llvm-mingw), as PostgreSQL's MinGW build. As GTK's runtime does, it takes its files from an SDK,
 [`org.postgresql.PostgreSQL.Sdk`](recipes/postgresql-sdk.json), which builds
 PostgreSQL and keeps what extensions are built with (see
 [Extensions](#postgresql-extensions)); the runtime's cleanup leaves those
@@ -2831,34 +2867,29 @@ that DLL exports, and links mingw-w64's import library for it (`-licu`),
 through two `.pc` files of its own. PL/Perl and PL/Python are linked against
 Perl's image's `perl542.dll` and Python 3.14's `python314.dll` (headers and
 import library from Python's NuGet package, at build time), and those images
-are the app's runtimes, so their DLLs are on PATH. Its layer is 33 MB.
+are the app's runtimes, so their DLLs are on PATH. Its layer is 29 MB (33 with zig).
 
-What PostgreSQL's MinGW build needs from zig
-([`zig-mingw.patch`](recipes/postgresql/zig-mingw.patch)):
+What PostgreSQL's MinGW build needs from Clang
+([`clang-mingw.patch`](recipes/postgresql/clang-mingw.patch)); the rest,
+`postgres.exe`'s exports for extensions (`--export-all-symbols`) and its
+import library, is upstream's MinGW build as lld runs it:
 
-- **A .def file for `postgres.exe`.** Extensions link against the server's
-  import library, which a MinGW build makes with `--export-all-symbols`; zig's
-  linker takes that flag and ignores it, so the server exported only the
-  variables marked `PGDLLIMPORT`, and every extension linked with undefined
-  symbols. As with MSVC, the build now writes `postgres.def`, of everything
-  the backend's libraries define:
-  [`mingw_gendef.pl`](recipes/postgresql/mingw_gendef.pl) reads it from
-  GTK's SDK's `nm`, built by the recipe, and the member lists of Meson's thin
-  archives, which that `nm` doesn't read. zig's cc takes a `.def` file as an
-  input.
-- **No `--allow-multiple-definition` or `--disable-auto-import`**, which
-  zig's linker refuses. The first let PostgreSQL's getopt replace mingw's:
-  on Windows, its getopt now keeps its own variables too, as mingw's are in
-  the object that has mingw's getopt.
 - **MinGW's setjmp and longjmp, not GCC's builtins**, which PostgreSQL uses
   for MinGW-64: with clang's, a backend crashed after some errors (a `DO`
   block in a language that doesn't exist), on a bad portal once longjmp was
   back in `PortalRun()`. clang gives every function the unwind data that
   MinGW's longjmp needs; errors raised through PL/Perl and PL/Python, both
   ways, unwind too.
-- **A windres.** Meson takes `RC` for windres, so the module's `RC` is GTK's
-  SDK's [`windres.c`](recipes/gtk4-sdk/windres.c) over zig's rc, and
-  PostgreSQL's `rcgen` passes it the input before the output.
+- **No `__int128`.** PostgreSQL asks for its `int128` on 8-byte boundaries,
+  which palloc gives, with an `aligned(8)` typedef; Clang for MinGW lays a
+  struct holding one out on 16 anyway, and copied aggregate state with
+  `movaps`, which crashed parallel `avg()` and `variance()` of `int8`.
+  PostgreSQL's arithmetic then does without, as with MSVC
+  ([findings](findings.md#gdal-and-postgresql-on-llvm-mingw-iteration-61)).
+
+Until iteration 61 it built with zig's `cc`, whose linker ignores
+`--export-all-symbols` (so the recipe wrote a `postgres.def` with an `nm` of
+its own), refuses `--allow-multiple-definition`, and had no windres.
 
 Besides: PostgreSQL 17 and later don't ship their bison and flex output, so
 winflexbison builds it; zlib's CMake names its static library `libzs.a`; and
@@ -2934,7 +2965,7 @@ than the SDK's read-only deployment:
 ```json
 "extends": { "point": "org.postgresql.PostgreSQL", "version": "18" },
 "env": { "PG_EXTENSION_DIRS": "${app}" },
-"sdk": { "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:...", "make": "org.gnu.make:4.4.1@sha256:...", "zig": "...", "busybox": "..." },
+"sdk": { "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:...", "make": "org.gnu.make:4.4.1@sha256:...", "llvm": "...", "busybox": "..." },
 "modules": [
   {
     "name": "pgvector",
@@ -2947,23 +2978,20 @@ than the SDK's read-only deployment:
 ]
 ```
 
-What the SDK does for that: zig's linker looks for `-lpq` only as
-`libpq.a`, not as `libpq.dll.a`, so the import libraries of PostgreSQL's
-DLLs are named `lib<name>.a` in place of the static ones (pg_cron linked
-libpq's static library, LDAP and all, before); pgxs's `Makefile.global`
-names tools by name rather than by the build's or the store's paths (Perl's
-path in it made each store's SDK differ), and links without the build's
-`noexport.o` (extensions mark what they export, so nothing else is);
-pkg-config files are relocatable, as Qt's are. `pg_config` prints long
+What the SDK does for that: the import libraries of PostgreSQL's DLLs are
+named `lib<name>.a` in place of the static ones, which lld finds as it would
+`libpq.dll.a`, and zig's linker, which looks for no other name, finds too
+(pg_cron linked libpq's static library, LDAP and all, before); pgxs's
+`Makefile.global` names tools by name rather than by the build's or the
+store's paths (Perl's path in it made each store's SDK differ, and Meson
+notes the `strip` alias's); pkg-config files are relocatable, as Qt's are.
+An extension builds with the same toolchain image as the SDK, llvm-mingw's;
+one in C only would link with zig's too. `pg_config` prints long
 paths ([`pg-config-long.patch`](recipes/postgresql/pg-config-long.patch)):
 PostgreSQL turns every path it works out into its 8.3 short name where the
 volume has those (`include/POSTGR~1/server`), which depends on the volume and
 on the order directories were made in, and the DLLs pgxs built kept them, so
-pgvector's differed between this machine and a runner. Its static libraries are
-compiled with `CFLAGS=-s`: zig's cc otherwise writes debug info into each
-object, with clang's command line naming the store's zig and a random
-temporary file, so the libraries differed between stores (programs linked
-with `-s` don't keep it). An extension's build maps the SDK's directory away
+pgvector's differed between this machine and a runner. An extension's build maps the SDK's directory away
 (`COPT=-fmacro-prefix-map=...`, as GTK 3's SDK does with GTK's): PostgreSQL's
 headers' `__FILE__`s would otherwise put the SDK's path in the store into
 the DLL.
@@ -2971,8 +2999,7 @@ the DLL.
 - [`org.postgresql.PostgreSQL.pgvector`](recipes/postgresql-pgvector.json),
   pgvector 0.8.7: `OPTFLAGS=` drops pgvector's default `-march=native`,
   which would make the image depend on the building machine's CPU; its
-  AVX-512 functions are still chosen at run time, once zig's clang has the
-  `evex512` it wants beside `avx512f` (a `sed`).
+  AVX-512 functions are still chosen at run time.
 - [`org.postgresql.PostgreSQL.pg_cron`](recipes/postgresql-pg-cron.json),
   pg_cron 1.6.8, preloaded (`PG_PRELOAD_LIBRARIES=pg_cron`), in the
   `postgres` database. Its jobs connect to the server with libpq by
@@ -2994,9 +3021,9 @@ the DLL.
   and make under BusyBox: `PATH_SEPARATOR=;` (as Ghostscript's), `perl`
   and `pg_config` given as full paths (configure looks for programs without
   `.exe`), the SQL preprocessor as `cc -E -x c -traditional-cpp`,
-  FlatGeobuf's C++ with `c++ -O2` (zig's `cc -x c++` has no C++ headers, and
-  without `-O` zig builds debug code, with UBSan), its archive named `.a`
-  (it was `.la`, which zig's linker refuses), and functions declared
+  FlatGeobuf's C++ with `c++ -O2` (configure's `cc -x c++` found no C++
+  headers with zig's `cc`, which built it until iteration 61), its archive
+  named `.a` (it was `.la`, a libtool script the linker refuses), and functions declared
   `PGDLLEXPORT` before their use (clang refuses to add `dllexport` to a
   function already used, where `PG_FUNCTION_INFO_V1` does). `utils`, whose
   make ran two makes in `raster/rt_pg` at once that both wrote
@@ -3005,7 +3032,7 @@ the DLL.
   loaders (`shp2pgsql`, `pgsql2shp`, `raster2pgsql`) are left out, as
   extensions export no commands; so are the upgrade scripts from earlier
   PostGIS versions, which this image never had (the `…--ANY.sql` stubs,
-  links in the build, are copies). Its layer is 29 MB (12 MB without
+  links in the build, are copies). Its layer is 30 MB (12 MB without
   raster); GDAL's DLL is 42 MB of the files it unpacks.
 
 PostgreSQL's regression suites pass on the build: regress (231 tests),
@@ -3019,7 +3046,8 @@ tools: the `gdal` command and its subcommands, `gdalinfo`,
 `gdal_translate`, `gdalwarp`, `ogr2ogr`, `ogrinfo` and the rest, exported,
 with the `cwd` permission. As PostgreSQL's image does, it takes its files
 from an SDK, [`org.gdal.GDAL.Sdk`](recipes/gdal-sdk.json), which builds
-GDAL with CMake and zig and keeps what other builds link with: headers,
+GDAL with CMake and [Clang (llvm-mingw)](#clang-llvm-mingw) and keeps what
+other builds link with: headers,
 `gdal-config`, the import library, and static libraries of what GDAL is
 built on, which are modules of its recipe: GEOS 3.15.0, PROJ 9.9.0 (with
 `proj.db`), SQLite (with its R-tree, which GDAL's GeoPackage driver
@@ -3032,25 +3060,26 @@ them (see [extensions](#postgresql-extensions)).
   it should use turned on by name, so nothing else it might find in a
   build is used). No curl, so no drivers for web services; no Python, Java
   or C# bindings.
-- [`cpu-model.patch`](recipes/gdal/cpu-model.patch): GDAL asks whether the
-  CPU has AVX2 and FMA with `__builtin_cpu_supports()`, which reads
-  compiler-rt's `__cpu_model`, and zig's compiler-rt has none for Windows:
-  the DLL didn't link. The patch asks CPUID instead, through `<cpuid.h>`.
-- The DLL links with the [`crt-noexport`](#building-without-a-recipe)
-  object, as GTK's and PostgreSQL's SDKs' do: it otherwise exported the C
-  runtime's `atexit`, which the tools linking it then defined twice.
+- LLVM 23's libc++ includes less than zig 0.16's did: GEOS and GDAL get the
+  five `#include`s they lack (`sed`s, each checked), json-c builds without
+  its own `-Werror` (`DISABLE_WERROR`), which Clang 23's newer warnings
+  fail, and GDAL's libopencad doesn't put its `dwg` folder on the include
+  path, as its `io.h` there was found for mingw-w64's.
+- The build checks that the DLL exports nothing of the C runtime's
+  (`atexit`, which the tools linking it would define twice); lld leaves it
+  out, where zig's linker needed a `crt-noexport` object.
 - `-DXML_STATIC`, as expat is a static library (its header otherwise
   declares its functions `dllimport`).
-- The import library is named `libgdal.a`, as zig's linker never looks for
-  `libgdal.dll.a`; `gdal-config` and `geos-config` work out their prefix
+- The import library is named `libgdal.a`, which lld and zig's linker both
+  find; `gdal-config` and `geos-config` work out their prefix
   from where they are, and the pkg-config files from `${pcfiledir}`, so they
   work from the SDK's deployment, wherever a store puts it (the build fails
   if one still names a drive).
 - The image sets `GDAL_DATA` and `PROJ_DATA` to its `share\gdal` and
   `share\proj`.
 
-The SDK takes 16 minutes here, 7 of them GDAL's 1,500 compiles, and its
-layer is 39 MB; the tools' image is 25 MB. [`tests/gdal.sh`](tests/gdal.sh)
+The SDK takes 12 minutes here, 4.5 of them GDAL's 1,400 compiles, and its
+layer is 43 MB; the tools' image is 29 MB. [`tests/gdal.sh`](tests/gdal.sh)
 runs the tools in each sandbox, in about 10 s.
 
 ## osm2pgsql
@@ -3060,7 +3089,8 @@ which imports OpenStreetMap data into PostgreSQL with PostGIS. It exports
 `osm2pgsql` and `osm2pgsql-expire`, with the `network` and `cwd`
 permissions. It's an app of its own, not a PostgreSQL extension, since it's
 a client: it reaches a server anywhere, except a local one from an
-AppContainer ([gaps](gaps.md)). It's built with CMake and zig on two SDKs:
+AppContainer ([gaps](gaps.md)). It's built with CMake and Clang
+(llvm-mingw) on two SDKs:
 
 - **PostgreSQL's** for libpq (its import library, and `libpq.dll`, which
   the image carries; OpenSSL is linked into it) and zlib.

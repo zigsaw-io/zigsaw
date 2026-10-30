@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# osm2pgsql end to end (recipes/osm2pgsql.json: osm2pgsql built with zig, with
+# osm2pgsql end to end (recipes/osm2pgsql.json: osm2pgsql built with Clang, with
 # Lua, PROJ from GDAL's SDK and libpq from PostgreSQL's), against PostgreSQL
 # with PostGIS, whose server runs under soft on a port of its own. From a work
 # directory the app may use (its cwd permission), under soft and at low

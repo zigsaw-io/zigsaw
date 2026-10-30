@@ -2,7 +2,7 @@
   "id": "org.postgresql.PostgreSQL.Sdk",
   "version": "18.6",
   "name": "PostgreSQL SDK",
-  "summary": "PostgreSQL built with zig, with headers, libraries, pg_config and pgxs for building extensions; PostgreSQL's image takes its files from it",
+  "summary": "PostgreSQL built with Clang (llvm-mingw), with headers, libraries, pg_config and pgxs for building extensions; PostgreSQL's image takes its files from it",
   "homepage": "https://www.postgresql.org/",
   "license": "PostgreSQL",
   "command": "bin/pg_config.exe",
@@ -13,20 +13,13 @@
   "sdk": {
     "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
-    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:1fd5d6d8ada26770ad03d85e375e007e4b3bfcfa6d07201e93f5ad01a72c025e",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d",
     "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85",
     "python": "org.python.python:3.14.7@sha256:fa12bbaf83e7ba1ad30551c90eb85b3655e8ecea933ea9ee6b1728de02fe809d"
   },
   "cleanup": ["/lib/cmake", "/share/doc", "/share/man", "/bin/xml2-config", "/bin/xmllint.exe", "/bin/xmlcatalog.exe", "/bin/test_cloexec.exe"],
   "modules": [
-    {
-      "name": "crt-noexport",
-      "build": [
-        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
-        "cc -c noexport.s -o noexport.o"
-      ]
-    },
     {
       "name": "flex-bison",
       "sources": [
@@ -38,18 +31,7 @@
       "build": ["./win_flex.exe --version && ./win_bison.exe --version"]
     },
     {
-      "name": "windres",
-      "sources": [{ "path": "gtk4-sdk/windres.c" }],
-      "build": ["cc -O2 -s -municode windres.c -o windres.exe"]
-    },
-    {
-      "name": "nm",
-      "sources": [{ "path": "gtk4-sdk/nm.c" }],
-      "build": ["cc -O2 -s nm.c -o nm.exe"]
-    },
-    {
       "name": "zlib",
-      "env": { "CFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz",
@@ -67,7 +49,6 @@
     },
     {
       "name": "lz4",
-      "env": { "CFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz",
@@ -84,7 +65,6 @@
     },
     {
       "name": "zstd",
-      "env": { "CFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
@@ -101,7 +81,6 @@
     },
     {
       "name": "libxml2",
-      "env": { "CFLAGS": "-s" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz",
@@ -122,7 +101,7 @@
     {
       "name": "openssl",
       "env": {
-        "CFLAGS": "-s -O2",
+        "CFLAGS": "-O2",
         "PERL": "perl",
         "PERL5OPT": "-IB:/src/openssl/zigsaw -Munixspec"
       },
@@ -176,11 +155,6 @@
     },
     {
       "name": "postgresql",
-      "env": {
-        "CFLAGS": "-s",
-        "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o",
-        "RC": "B:/src/windres/windres.exe"
-      },
       "sources": [
         {
           "url": "https://ftp.postgresql.org/pub/source/v18.6/postgresql-18.6.tar.gz",
@@ -188,20 +162,21 @@
           "strip": 1
         },
         { "path": "postgresql/signal-pipes.patch", "dest": "zigsaw/signal-pipes.patch" },
-        { "path": "postgresql/zig-mingw.patch", "dest": "zigsaw/zig-mingw.patch" },
+        { "path": "postgresql/clang-mingw.patch", "dest": "zigsaw/clang-mingw.patch" },
         { "path": "postgresql/initdb-nul.patch", "dest": "zigsaw/initdb-nul.patch" },
         { "path": "postgresql/plperl-nul.patch", "dest": "zigsaw/plperl-nul.patch" },
-        { "path": "postgresql/pg-config-long.patch", "dest": "zigsaw/pg-config-long.patch" },
-        { "path": "postgresql/mingw_gendef.pl", "dest": "src/tools/mingw_gendef.pl" }
+        { "path": "postgresql/pg-config-long.patch", "dest": "zigsaw/pg-config-long.patch" }
       ],
       "build": [
         "patch -p1 < zigsaw/signal-pipes.patch",
-        "patch -p1 < zigsaw/zig-mingw.patch",
+        "patch -p1 < zigsaw/clang-mingw.patch",
         "patch -p1 < zigsaw/initdb-nul.patch",
         "patch -p1 < zigsaw/plperl-nul.patch",
         "patch -p1 < zigsaw/pg-config-long.patch",
-        "PATH=\"B:/src/flex-bison;B:/src/nm;$PATH\" meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dauto_features=disabled -Dssl=openssl -Dzlib=enabled -Dlz4=enabled -Dzstd=enabled -Dicu=enabled -Dlibxml=enabled -Dldap=enabled -Dplperl=enabled -Dplpython=enabled -Dtap_tests=disabled -Ddocs=disabled -Ddocs_pdf=disabled -DPYTHON=B:/src/python-dev/nupkg/tools/python.exe",
-        "PATH=\"B:/src/nm;$PATH\" meson install -C out",
+        "PATH=\"B:/src/flex-bison;$PATH\" meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dauto_features=disabled -Dssl=openssl -Dzlib=enabled -Dlz4=enabled -Dzstd=enabled -Dicu=enabled -Dlibxml=enabled -Dldap=enabled -Dplperl=enabled -Dplpython=enabled -Dtap_tests=disabled -Ddocs=disabled -Ddocs_pdf=disabled -DPYTHON=B:/src/python-dev/nupkg/tools/python.exe",
+        "! grep -q PG_INT128_TYPE out/src/include/pg_config.h",
+        "meson install -C out",
+        "! objdump -p \"$PREFIX/bin/postgres.exe\" | grep -wE 'atexit|_CRT_INIT|__mingw_module_is_dll'",
         "cmp src/pl/plperl/plc_perlboot.pl \"$PREFIX/share/postgresql/plperl_boot.pl\"",
         "cp COPYRIGHT \"$PREFIX/COPYRIGHT\""
       ]
@@ -210,7 +185,7 @@
       "name": "pg-server",
       "sources": [{ "path": "postgresql/pg-server.c" }],
       "build": [
-        "cc -O2 -s -Wl,-Brepro -I B:/src/postgresql/src/include -I B:/src/postgresql/out/src/include -I B:/src/postgresql/src/include/port/win32 -D_POSIX_C_SOURCE -o \"$PREFIX/bin/pg-server.exe\" pg-server.c B:/src/postgresql/out/src/common/libpgcommon.a B:/src/postgresql/out/src/port/libpgport.a -lws2_32 -lsecur32 -lbcrypt -ladvapi32",
+        "cc -O2 $LDFLAGS -I B:/src/postgresql/src/include -I B:/src/postgresql/out/src/include -I B:/src/postgresql/src/include/port/win32 -D_POSIX_C_SOURCE -o \"$PREFIX/bin/pg-server.exe\" pg-server.c B:/src/postgresql/out/src/common/libpgcommon.a B:/src/postgresql/out/src/port/libpgport.a -lws2_32 -lsecur32 -lbcrypt -ladvapi32",
         "\"$PREFIX/bin/pg-server.exe\" --version"
       ]
     },
@@ -219,7 +194,7 @@
       "build": [
         "for f in \"$PREFIX\"/lib/*.dll.a; do mv \"$f\" \"${f%.dll.a}.a\"; done",
         "sed -i 's|B:/prefix|${pcfiledir}/../..|g' \"$PREFIX\"/lib/pkgconfig/*.pc",
-        "sed -i -e 's| B:/src/crt-noexport/noexport.o||' -e 's|^\\(PERL\\s*=\\).*|\\1 perl|' -e 's|^\\(PROVE\\s*=\\).*|\\1 prove|' -e 's|^\\(PYTHON\\s*=\\).*|\\1 python|' -e 's|^\\(BISON\\s*=\\).*|\\1 bison|' -e 's|^\\(FLEX\\s*=\\).*|\\1 flex|' -e 's|^\\(AR\\s*=\\).*|\\1 ar|' -e 's|^\\(WINDRES\\s*=\\).*|\\1 windres|' -e 's|^\\(TAR\\s*=\\).*|\\1 tar|' \"$PREFIX/lib/postgresql/pgxs/src/Makefile.global\"",
+        "sed -i -e 's|^\\(PERL\\s*=\\).*|\\1 perl|' -e 's|^\\(PROVE\\s*=\\).*|\\1 prove|' -e 's|^\\(PYTHON\\s*=\\).*|\\1 python|' -e 's|^\\(BISON\\s*=\\).*|\\1 bison|' -e 's|^\\(FLEX\\s*=\\).*|\\1 flex|' -e 's|^\\(AR\\s*=\\).*|\\1 ar|' -e 's|^\\(WINDRES\\s*=\\).*|\\1 windres|' -e 's|^\\(TAR\\s*=\\).*|\\1 tar|' -e 's|^\\(STRIP\\s*=\\).*|\\1 strip|' -e 's|^\\(STRIP_STATIC_LIB\\s*=\\).*|\\1 strip --strip-unneeded|' -e 's|^\\(STRIP_SHARED_LIB\\s*=\\).*|\\1 strip --strip-unneeded|' \"$PREFIX/lib/postgresql/pgxs/src/Makefile.global\"",
         "! grep -rlE 'B:/src|B:/bin|[Dd]eploy[/\\\\]' \"$PREFIX/lib/postgresql/pgxs\" \"$PREFIX/lib/pkgconfig\"",
         "! grep -nE '^[A-Z_0-9]+[[:space:]]*:?=[[:space:]]*[A-Za-z]:' \"$PREFIX/lib/postgresql/pgxs/src/Makefile.global\""
       ]

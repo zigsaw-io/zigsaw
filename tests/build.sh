@@ -37,7 +37,7 @@ export MSYS_NO_PATHCONV=1
 groups=(
     "base: runtimes images extensions aliases projects prettier msvc sevenzip" # 2
     "zig: commands sqlite"                                                     # 7
-    "cmake-meson: cmake meson make"                                            # 7
+    "cmake-meson: cmake llvm meson make"                                       # 7
     "langs: rust go dotnet java php"                                           # 9
 )
 if [ "${1:-}" = --groups ]; then
@@ -895,6 +895,39 @@ cmake_hermetic() {
         grep -qx 'python=FALSE' <<<"$found" || { echo "$found"; return 1; }
 }
 check "CMake searches no Program Files, package registries or registry Pythons" cmake_hermetic
+fi
+
+# --- llvm-mingw -------------------------------------------------------------------
+
+if section llvm; then
+# The CMake project again, with llvm-mingw's image instead of zig's: its
+# Clang and lld, through aliases of the same names and the same variables.
+# Its program links libc++ and libunwind in, and neither it nor the static
+# library the image keeps changes with the time it's built at.
+LLVMAPP=test.build.cmake-llvm
+check "llvm-mingw.json builds llvm-mingw's image" z build "$root\\recipes\\llvm-mingw.json"
+[ -f "$ZIGSAW_HOME\\refs\\org.cmake.cmake.json" ] || z build "$root\\recipes\\cmake.json" >/dev/null 2>&1
+mkdir -p "$work\\cmake-llvm" && cp "$(cygpath -u "$root")"/tests/build/c/*.{c,h,cpp,rc} "$(cygpath -u "$root")"/tests/build/cmake/CMakeLists.txt "$(cygpath -u "$work")/cmake-llvm/" &&
+    sed -e "s/\"test.build.cmake\"/\"$LLVMAPP\"/" -e "s/\"zig\": \"org.ziglang.zig@@ZIG@\"/\"llvm\": \"com.github.mstorsjo.llvm-mingw@$(manifest_of com.github.mstorsjo.llvm-mingw)\"/" \
+        -e 's|"cleanup": \["/include", "/lib"\],|"cleanup": ["/include"],|' \
+        -e "s/@CMAKE@/$(manifest_of org.cmake.cmake)/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\cmake\\hello.json.in" >"$work\\cmake-llvm\\hello.json"
+check "a CMake project of C, C++ and resources builds with CMake's and llvm-mingw's images" z build "$work\\cmake-llvm\\hello.json"
+llvm_app_digest=$(manifest_of $LLVMAPP)
+llvm_runs() {
+    local out exe
+    out=$(z run $LLVMAPP zigsaw | tr -d '\r')
+    [ "$out" = "hello, zigsaw
+built from B:/src/hello/main.c
+twice 21 is 42
+a string from its resources" ] || { echo "got: $out"; return 1; }
+    exe="$ZIGSAW_HOME\\deploy\\$(own_layer $LLVMAPP)\\bin\\hello.exe"
+    ! grep -aqiE 'lib(c\+\+|unwind|winpthread-1)\.dll' "$exe" || { echo "hello.exe imports a DLL of llvm-mingw's"; return 1; }
+    [ -f "$ZIGSAW_HOME\\deploy\\$(own_layer $LLVMAPP)\\lib\\libgreet.a" ] || { echo "the image has no libgreet.a"; return 1; }
+}
+check "it runs, with libc++ linked in" llvm_runs
+llvm_again() { [ "$(rebuilt_manifest "$work\\cmake-llvm\\hello.json")" = "$llvm_app_digest" ]; }
+check "built again a moment later, it's the same image" llvm_again
 fi
 
 # --- Meson --------------------------------------------------------------------------

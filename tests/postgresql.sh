@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PostgreSQL end to end (recipes/postgresql.json: PostgreSQL built with zig,
+# PostgreSQL end to end (recipes/postgresql.json: PostgreSQL built with Clang,
 # with OpenSSL, zlib, lz4, zstd and libxml2 built in, ICU from Windows'
 # icu.dll, and PL/Perl and PL/Python on the Perl and Python images as
 # runtimes). Under each sandbox, `postgresql` makes a cluster in the app's

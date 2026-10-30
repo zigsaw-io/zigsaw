@@ -2,7 +2,7 @@
   "id": "org.postgresql.PostgreSQL",
   "version": "18.6",
   "name": "PostgreSQL",
-  "summary": "The PostgreSQL database server and its client programs, built with zig, with PL/Perl and PL/Python",
+  "summary": "The PostgreSQL database server and its client programs, built with Clang (llvm-mingw), with PL/Perl and PL/Python",
   "homepage": "https://www.postgresql.org/",
   "license": "PostgreSQL",
   "command": "bin/pg-server.exe",
@@ -43,7 +43,7 @@
     "pgbench": { "command": "bin/pgbench.exe" }
   },
   "sdk": {
-    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:c685eda60e9225e3f0c91471a988518a76c85e931527892ad4853ffb461ea289"
+    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:36d028ea9861f2dc6b5e636684399f4d18815e086601d5537d7370fa9bdd72db"
   },
   "runtimes": {
     "perl": "org.perl.perl:5.42.3.1@sha256:4bf63dc4d73c1094335f85767629736c3d01276dc3e46be04bfba985b70e25df",
@@ -53,7 +53,7 @@
   "modules": [
     {
       "name": "postgresql",
-      "sources": [{ "image": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:c685eda60e9225e3f0c91471a988518a76c85e931527892ad4853ffb461ea289" }]
+      "sources": [{ "image": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:36d028ea9861f2dc6b5e636684399f4d18815e086601d5537d7370fa9bdd72db" }]
     }
   ]
 }

@@ -2,7 +2,7 @@
   "id": "org.osm2pgsql.osm2pgsql",
   "version": "2.3.1",
   "name": "osm2pgsql",
-  "summary": "Imports OpenStreetMap data into a PostgreSQL database with PostGIS (osm2pgsql and osm2pgsql-expire), with Lua styles, built with zig on PROJ and libpq",
+  "summary": "Imports OpenStreetMap data into a PostgreSQL database with PostGIS (osm2pgsql and osm2pgsql-expire), with Lua styles, built with Clang on PROJ and libpq",
   "homepage": "https://osm2pgsql.org/",
   "license": "GPL-2.0-or-later AND MIT AND BSL-1.0 AND bzip2-1.0.6 AND blessing AND Zlib AND PostgreSQL AND Apache-2.0",
   "command": "bin/osm2pgsql.exe",
@@ -14,10 +14,10 @@
     "osm2pgsql-expire": { "command": "bin/osm2pgsql-expire.exe" }
   },
   "sdk": {
-    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:c685eda60e9225e3f0c91471a988518a76c85e931527892ad4853ffb461ea289",
-    "gdalsdk": "org.gdal.GDAL.Sdk:3.13.3@sha256:4e13cd0a2a0187c5c04f23d9b6428586e2c49f2129245ce60ae217f8d2f2b51d",
+    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:36d028ea9861f2dc6b5e636684399f4d18815e086601d5537d7370fa9bdd72db",
+    "gdalsdk": "org.gdal.GDAL.Sdk:3.13.3@sha256:1aa20e94671119a31afeb0938c2574b5cf729b2205c441a21b9e833c2b1e6675",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fa7efc2e143063055620628a8867dbd904bb0464a36f6a44943f7dba50a8bcd0",
-    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:1fd5d6d8ada26770ad03d85e375e007e4b3bfcfa6d07201e93f5ad01a72c025e",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "cleanup": ["/include", "/lib", "*.a", "/share/doc", "/share/man", "/bin/osm2pgsql-replication"],
@@ -33,7 +33,7 @@
       ],
       "build": [
         "mkdir -p \"$PREFIX/include\" \"$PREFIX/lib\" \"$PREFIX/licenses\"",
-        "for f in blocksort huffman crctable randtable compress decompress bzlib; do cc -O2 -s -c \"$f.c\" -o \"$f.o\" || exit 1; done",
+        "for f in blocksort huffman crctable randtable compress decompress bzlib; do cc -O2 -c \"$f.c\" -o \"$f.o\" || exit 1; done",
         "ar rcs \"$PREFIX/lib/libbz2.a\" blocksort.o huffman.o crctable.o randtable.o compress.o decompress.o bzlib.o",
         "cp bzlib.h \"$PREFIX/include/\" && cp LICENSE \"$PREFIX/licenses/bzip2.txt\""
       ]
@@ -48,7 +48,7 @@
         }
       ],
       "build": [
-        "cd src && for f in *.c; do case $f in lua.c|luac.c) ;; *) cc -O2 -s -c \"$f\" -o \"${f%.c}.o\" || exit 1 ;; esac; done",
+        "cd src && for f in *.c; do case $f in lua.c|luac.c) ;; *) cc -O2 -c \"$f\" -o \"${f%.c}.o\" || exit 1 ;; esac; done",
         "cd src && ar rcs \"$PREFIX/lib/liblua.a\" *.o && cp lua.h luaconf.h lualib.h lauxlib.h lua.hpp \"$PREFIX/include/\"",
         "sed -n '/Copyright (C) 1994/,/\\*\\//p' src/lua.h > \"$PREFIX/licenses/lua.txt\" && grep -q 'MIT\\|Permission is hereby granted' \"$PREFIX/licenses/lua.txt\""
       ]
@@ -85,7 +85,7 @@
     },
     {
       "name": "osm2pgsql",
-      "env": { "CFLAGS": "-s", "CXXFLAGS": "-s -DXML_STATIC -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_POSIX_THREAD_SAFE_FUNCTIONS=200112L" },
+      "env": { "CXXFLAGS": "-DXML_STATIC -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_POSIX_THREAD_SAFE_FUNCTIONS=200112L" },
       "sources": [
         {
           "url": "https://github.com/osm2pgsql-dev/osm2pgsql/archive/refs/tags/2.3.1.tar.gz",
@@ -96,7 +96,7 @@
       ],
       "build": [
         "patch -p1 < zigsaw/default-style.patch && grep -q GetModuleFileNameW src/osm2pgsql.cpp",
-        "g=$(dirname \"$(dirname \"$(command -v gdalinfo)\")\") && sdk=$(dirname \"$(pg_config --bindir)\") && LDFLAGS=\"-s -Wl,-Brepro -L$g/lib\" cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=B:/prefix \"-DCMAKE_PREFIX_PATH=B:/prefix;$g;$sdk\" \"-DCMAKE_CXX_FLAGS_INIT=-fmacro-prefix-map=$sdk=pgsdk -fmacro-prefix-map=$g=gdalsdk\" \"-DCMAKE_CXX_STANDARD_LIBRARIES=-lsqlite3 -lshell32 -lole32\" -DBUILD_TESTS=OFF -DWITH_LUAJIT=OFF > configure.log 2>&1 || { tail -80 configure.log; exit 1; }",
+        "g=$(dirname \"$(dirname \"$(command -v gdalinfo)\")\") && sdk=$(dirname \"$(pg_config --bindir)\") && LDFLAGS=\"$LDFLAGS -L$g/lib\" cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=B:/prefix \"-DCMAKE_PREFIX_PATH=B:/prefix;$g;$sdk\" \"-DCMAKE_CXX_FLAGS_INIT=-fmacro-prefix-map=$sdk=pgsdk -fmacro-prefix-map=$g=gdalsdk\" \"-DCMAKE_CXX_STANDARD_LIBRARIES=-lsqlite3 -lshell32 -lole32\" -DBUILD_TESTS=OFF -DWITH_LUAJIT=OFF > configure.log 2>&1 || { tail -80 configure.log; exit 1; }",
         "grep -E 'Found|Building|Libraries used|Not building|osm2pgsql-gen' configure.log || true",
         "cmake --build out",
         "cmake --install out > install.log 2>&1 || { tail -40 install.log; exit 1; }",

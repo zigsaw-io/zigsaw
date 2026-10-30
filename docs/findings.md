@@ -1697,6 +1697,68 @@ Moving the recipes that build with zig 0.16's image onto 0.17.0's (scratch
   files are the official build's. Its config names the SDK it was taken
   from, so its digest, and Composer's and Kanboard's, which pin it, change.
 
+## GDAL and PostgreSQL on llvm-mingw (iteration 61)
+
+GDAL's and PostgreSQL's chains moved from zig 0.16's `cc` to
+[llvm-mingw](https://github.com/mstorsjo/llvm-mingw) 20261020 (LLVM 23.1.4,
+UCRT), as the image `com.github.mstorsjo.llvm-mingw` (scratch `D:\zs\i61`,
+the same machine as iteration 60):
+
+| | with zig 0.16 | with llvm-mingw |
+|---|---|---|
+| GDAL's SDK, here | 16 to 21 min | 11.7 min |
+| PostgreSQL's SDK, here | 15 min | 7 min |
+| a hello-world link, peak private memory | 425 MB (0.17: 906) | about 10 MB |
+| least free commit during GDAL's SDK, 18 jobs | ran out with 0.17 | 6.9 GB |
+| GDAL's SDK layer / GDAL's | 39 / 25 MB | 42.8 / 29 MB |
+| PostgreSQL's regress / isolation / PL suites | 231 / 122 / 50 | 231 / 122 / 50 |
+
+- **The toolchain's own image is 108 MB** (417 MB deployed) once the other
+  targets' sysroots and wrappers, lldb and its Python, clangd and
+  clang-tidy are left out: 736 MB as released.
+- **Clang and lld write the time** into each object's COFF header and each
+  program's, where zig's `cc` wrote none. A program linked twice showed it,
+  but the first image's builds differed between two stores only in their
+  static libraries (two bytes an object): lld doesn't copy an object's
+  time into what it links. `-mno-incremental-linker-compatible` and
+  `-Wl,--no-insert-timestamp` (lld's MinGW driver refuses `-Brepro`) in
+  Clang's configuration file leave both out, `CFLAGS` and `LDFLAGS` or
+  not, and say nothing under `-Werror`; the image's build checks an object
+  and a program compiled 2 s apart.
+- **llvm-mingw's `x86_64-w64-mingw32-as` links** what it's given rather
+  than assembling it, so the image has no `as` alias.
+- **Without libc++'s, libunwind's and winpthreads' import libraries**
+  (`.dll.a`), a C++ program with threads and exceptions links them in and
+  imports only Windows' DLLs; Clang itself still needs `bin\libc++.dll`.
+- **What zig's linker made recipes work around, lld does**: GNU ld's
+  `--export-all-symbols` (leaving the CRT's `atexit` and `_CRT_INIT` out, so
+  no `crt-noexport` object), `--allow-multiple-definition`, `-lX` finding
+  `libX.dll.a`, and compiler-rt's `__cpu_model`. PostgreSQL builds with
+  upstream's own MinGW path (`export_dynamic`, an import library), with no
+  `postgres.def`, nm or windres of our own; GDAL without its CPUID patch.
+- **LLVM 23's libc++ includes less**: GEOS 3.15.0 uses `std::add_const` and
+  `std::lower_bound` without `<type_traits>` and `<algorithm>`, GDAL 3.13.3
+  `std::strtoull` and `std::atomic` without `<cstdlib>` and `<atomic>`.
+  PROJ 9.9.0 needed nothing.
+- **Clang 23 warns of more**: json-c's own `-Werror` fails on the new
+  `-Wunused-but-set-global` (`-DDISABLE_WERROR=ON`), and pgvector's
+  `evex512` target feature, which Clang 21 needed, is gone.
+- **mingw-w64's newer `wchar.h` includes `sys/stat.h`, which includes
+  `<io.h>`**: libopencad, inside GDAL, puts its `dwg` folder, which has an
+  `io.h`, on the include path, and that one was found instead.
+- **Clang for MinGW lays a struct with an under-aligned `__int128` out on 16
+  bytes**: PostgreSQL's `int128` is `__int128 __attribute__((aligned(8)))`,
+  `_Alignof(int128)` is 8, but a struct of it is 16-aligned, so copying
+  palloc'd aggregate state uses `movaps` on 8-byte boundaries.
+  PostgreSQL's configure finds `__int128` with llvm-mingw (with zig it
+  didn't), and parallel `avg()` and `variance()` of `int8` crashed the
+  backend (0xC0000005 in `int8_avg_combine`, from a minidump PostgreSQL
+  writes into `<PGDATA>\crashdumps` and llvm-mingw's lldb read), 31 of 231
+  regression tests. The recipe turns `__int128` off for Clang on Windows,
+  as zig's build was.
+- **A configure script finds no tool on PATH under B:** unless
+  `PATH_SEPARATOR=;`: libiconv's `WINDRES` was empty until set.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

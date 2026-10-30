@@ -2,7 +2,7 @@
   "id": "org.gdal.GDAL",
   "version": "3.13.3",
   "name": "GDAL",
-  "summary": "GDAL's raster and vector tools (gdal, gdalinfo, gdal_translate, gdalwarp, ogr2ogr and the rest), built with zig on GEOS, PROJ and SQLite",
+  "summary": "GDAL's raster and vector tools (gdal, gdalinfo, gdal_translate, gdalwarp, ogr2ogr and the rest), built with Clang on GEOS, PROJ and SQLite",
   "homepage": "https://gdal.org/",
   "license": "MIT AND LGPL-2.1-or-later AND blessing AND Zlib AND libtiff AND IJG AND libpng-2.0 AND Apache-2.0 AND Qhull",
   "command": "bin/gdal.exe",
@@ -41,13 +41,13 @@
     "sozip": { "command": "bin/sozip.exe" }
   },
   "sdk": {
-    "gdalsdk": "org.gdal.GDAL.Sdk:3.13.3@sha256:4e13cd0a2a0187c5c04f23d9b6428586e2c49f2129245ce60ae217f8d2f2b51d"
+    "gdalsdk": "org.gdal.GDAL.Sdk:3.13.3@sha256:1aa20e94671119a31afeb0938c2574b5cf729b2205c441a21b9e833c2b1e6675"
   },
   "cleanup": ["/include", "/lib", "/bin/gdal-config", "/bin/geos-config", "/bin/sqlite3.exe", "/bin/iconv.exe"],
   "modules": [
     {
       "name": "gdal",
-      "sources": [{ "image": "org.gdal.GDAL.Sdk:3.13.3@sha256:4e13cd0a2a0187c5c04f23d9b6428586e2c49f2129245ce60ae217f8d2f2b51d" }]
+      "sources": [{ "image": "org.gdal.GDAL.Sdk:3.13.3@sha256:1aa20e94671119a31afeb0938c2574b5cf729b2205c441a21b9e833c2b1e6675" }]
     }
   ]
 }

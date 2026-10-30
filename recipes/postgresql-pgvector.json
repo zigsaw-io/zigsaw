@@ -2,7 +2,7 @@
   "id": "org.postgresql.PostgreSQL.pgvector",
   "version": "0.8.7",
   "name": "pgvector for PostgreSQL 18",
-  "summary": "pgvector, vector similarity search for PostgreSQL, as an extension built with zig; once installed, PostgreSQL's server finds it",
+  "summary": "pgvector, vector similarity search for PostgreSQL, as an extension built with Clang (llvm-mingw); once installed, PostgreSQL's server finds it",
   "homepage": "https://github.com/pgvector/pgvector",
   "license": "PostgreSQL",
   "command": "about.bat",
@@ -10,9 +10,9 @@
   "extends": { "point": "org.postgresql.PostgreSQL", "version": "18" },
   "exports": {},
   "sdk": {
-    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:c685eda60e9225e3f0c91471a988518a76c85e931527892ad4853ffb461ea289",
+    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:36d028ea9861f2dc6b5e636684399f4d18815e086601d5537d7370fa9bdd72db",
     "make": "org.gnu.make:4.4.1@sha256:045e39d447d7d760a15ea5ebadaf2b45a885fe5616e626b224f31171a18c1faf",
-    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:1fd5d6d8ada26770ad03d85e375e007e4b3bfcfa6d07201e93f5ad01a72c025e",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [
@@ -26,7 +26,6 @@
         }
       ],
       "build": [
-        "sed -i 's/target(\"avx512f,avx512vpopcntdq\")/target(\"avx512f,avx512vpopcntdq,evex512\")/' src/bitutils.c && grep -q evex512 src/bitutils.c",
         "sdk=$(dirname \"$(pg_config --bindir)\") && make -j\"$(nproc)\" USE_PGXS=1 OPTFLAGS= \"COPT=-fmacro-prefix-map=$sdk=pgsdk\"",
         "make install USE_PGXS=1 OPTFLAGS= pkglibdir=\"$PREFIX/lib\" datadir=\"$PREFIX/share\" includedir_server=\"$PREFIX/include/server\"",
         "! grep -aqE 'pgsdk[^[:cntrl:]]*~[0-9]' \"$PREFIX\"/lib/*.dll",

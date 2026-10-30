@@ -59,15 +59,17 @@ qt: qt6-sdk.json qt6.json flameshot.json notes.json
 # after another; under 6 with them cached)
 texlive: ghostscript.json texlive.json
 
-# GDAL's SDK (16 here: some 1,500 compiles in 7, CMake's checks, then GEOS,
-# libiconv and PROJ) and GDAL's tools from it. PostGIS, in `postgresql`, pulls
-# the SDK from the registry.
-gdal: gdal-sdk.json gdal.json
+# llvm-mingw's image (under a minute, most of it unpacking), the toolchain
+# GDAL's and PostgreSQL's chains build with; GDAL's SDK (12 here with it, 16
+# with zig: some 1,400 compiles in 4.5, CMake's checks, then GEOS, libiconv
+# and PROJ) and GDAL's tools from it. The `postgresql` group pulls both
+# from the registry, for PostGIS and osm2pgsql.
+gdal: llvm-mingw.json gdal-sdk.json gdal.json
 
-# PostgreSQL's SDK (24 on a runner, 15 here: OpenSSL, then PostgreSQL's
-# 2,000 compiles), PostgreSQL from it, and its extensions, with GNU make:
-# pgvector and pg_cron under a minute each, PostGIS under 3 here (on GDAL's
-# SDK; 9 in iteration 47, when it built GEOS and PROJ itself), and osm2pgsql,
-# on both SDKs (2 here)
+# PostgreSQL's SDK (24 on a runner with zig; 7 here with llvm-mingw, 15 with
+# zig: OpenSSL, then PostgreSQL's 2,000 compiles), PostgreSQL from it, and
+# its extensions, with GNU make: pgvector and pg_cron under a minute each,
+# PostGIS under 3 here (on GDAL's SDK; 9 in iteration 47, when it built GEOS
+# and PROJ itself), and osm2pgsql, on both SDKs (2 here)
 postgresql: make.json postgresql-sdk.json postgresql.json postgresql-pgvector.json postgresql-pg-cron.json
 postgresql: postgresql-postgis.json osm2pgsql.json
