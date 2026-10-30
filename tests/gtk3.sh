@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # GTK 3 end to end: GTK 3's images are an add-on to GTK 4's. An app built
 # against GTK 3's SDK image (org.gtk.Gtk3.Sdk) and GTK 4's, with Meson and
-# zig, runs on both runtimes (org.gtk.Gtk3 and org.gtk.Gtk4), opens a
-# window and draws it in each sandbox, with GTK 3's settings schemas and the
-# legacy icon theme from its runtime; GTK 3's demos (org.gtk.Gtk3demo) run,
-# with the windowless shim and Start menu shortcuts (in a temporary folder).
-# Gnumeric (recipes/gnumeric.json) converts a spreadsheet between CSV, Excel
-# and OpenDocument with ssconvert in each sandbox, draws charts, writes
-# into a folder of the user's it's granted, starts up with a file given with
-# --file, and is registered for its kinds of file (in a scratch registry
-# key). Meld (recipes/meld.json), Python on PyGObject's runtime, loads GTK
-# 3, GtkSourceView and GTK 4 through their typelibs, and compares files and
+# llvm-mingw's Clang, runs on both runtimes (org.gtk.Gtk3 and org.gtk.Gtk4),
+# opens a window and draws it in each sandbox, with GTK 3's settings schemas
+# and the legacy icon theme from its runtime; GTK 3's demos (org.gtk.Gtk3demo)
+# run, with the windowless shim and Start menu shortcuts (in a temporary
+# folder). Gnumeric (recipes/gnumeric.json) converts a spreadsheet between
+# CSV, Excel and OpenDocument with ssconvert in each sandbox, draws charts,
+# writes into a folder of the user's it's granted, starts up with a file given
+# with --file, and is registered for its kinds of file (in a scratch registry
+# key). Meld (recipes/meld.json), Python on PyGObject's runtime, loads GTK 3,
+# GtkSourceView and GTK 4 through their typelibs, and compares files and
 # folders in each sandbox, and shows a git repository's changes with the git
 # of MinGit's image, one of its runtimes. Last, the published apps in the
 # store, GTK 4's too, are all on the same build of each GTK runtime.

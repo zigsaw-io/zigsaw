@@ -16,7 +16,7 @@
   "modules": [
     {
       "name": "pygobject",
-      "sources": [{ "image": "org.gnome.PyGObject.Sdk:3.58.1@sha256:13dac3b2fd9c58e75a630a5a1e64d327bb26d3c214b5bc4bd74953d498b49ba8" }]
+      "sources": [{ "image": "org.gnome.PyGObject.Sdk:3.58.1@sha256:e24980b80ecedecfecb24a69825d4e77b4ecec04ff265ba7393b116c7e6532c9" }]
     }
   ]
 }

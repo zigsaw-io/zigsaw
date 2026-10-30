@@ -1,14 +1,10 @@
-gobject-introspection's scanner on Windows, for GTK's SDK (zig's cc, builds
-on a subst drive):
+gobject-introspection's scanner on Windows, for GTK's SDK (llvm-mingw's
+Clang outside MSYS2, builds on a subst drive):
 
 - a CC that isn't cl or clang-cl is GCC-like (mingw32), not distutils'
   default, msvc (MSYS2 builds say so with MSYSTEM);
-- libraries are looked for where pkg-config says too, as zig's cc
+- libraries are looked for where pkg-config says too, as the compiler
   doesn't search the SDK's lib by itself;
-- the dumper links libfoo.dll.a by path, as zig's cc doesn't find it
-  for -lfoo;
-- without any dlltool, the DLL an import library names comes from nm,
-  as with LLVM's;
 - the lexer resolves a file name as Python's os.path.realpath does the
   scanner's list of files (GetFinalPathNameByHandle), not with
   GetFullPathName alone: on a subst drive, a header the preprocessor
@@ -25,51 +21,18 @@ on a subst drive):
  from . import utils
  
  
-@@ -118,10 +119,14 @@
- 
-     # Figure out if we have a gcc toolchain or llvm one
-     dlltool = os.environ.get('DLLTOOL', 'dlltool.exe')
--    dlltool_output = subprocess.run(
--        [dlltool], stdout=subprocess.PIPE,
--        stderr=subprocess.STDOUT,
--        universal_newlines=True).stdout
-+    try:
-+        dlltool_output = subprocess.run(
-+            [dlltool], stdout=subprocess.PIPE,
-+            stderr=subprocess.STDOUT,
-+            universal_newlines=True).stdout
-+    except FileNotFoundError:
-+        # No dlltool at all (zig's toolchain): nm reads any import library
-+        dlltool_output = 'llvm-dlltool'
-     is_llvm = 'llvm-dlltool' in dlltool_output
- 
-     if not is_llvm:
-@@ -164,6 +169,10 @@
+@@ -164,6 +165,10 @@
                  mingw = environ.get('MSYSTEM', '')
                  if mingw.startswith(('MINGW', 'CLANG', 'UCRT')) and environ.get('VCINSTALLDIR') is None:
                      compiler_name = 'mingw32'
 +                elif os.path.basename(environ.get('CC', 'cl')).lower() not in ('cl', 'cl.exe', 'clang-cl', 'clang-cl.exe'):
 +                    # A GCC-like compiler named by CC outside MSYS2,
-+                    # such as zig's cc
++                    # such as llvm-mingw's Clang
 +                    compiler_name = 'mingw32'
                  else:
                      compiler_name = distutils.ccompiler.get_default_compiler()
              if compiler_name != 'msvc' and \
-@@ -276,7 +285,12 @@
-                 if library.endswith(".la"):
-                     args.append(library)
-                 else:
--                    args.append('-l' + library)
-+                    # A MinGW import library by its path: compilers such
-+                    # as zig's cc look for -lfoo as foo.lib or libfoo.a,
-+                    # not libfoo.dll.a
-+                    implibs = [os.path.join(p, 'lib%s.dll.a' % library) for p in libpaths]
-+                    implibs = [i for i in implibs if os.name == 'nt' and os.path.isfile(i)]
-+                    args.append(implibs[0] if implibs else '-l' + library)
- 
-         for envvar in runtime_path_envvar:
-             if envvar in os.environ:
-@@ -422,7 +436,11 @@
+@@ -422,7 +427,11 @@
              proc = subprocess.Popen([self.compiler_cmd, '-print-search-dirs'],
                                      stdout=subprocess.PIPE)
              o, e = proc.communicate()

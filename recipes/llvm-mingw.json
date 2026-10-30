@@ -22,7 +22,8 @@
     "strip": { "command": "bin/llvm-strip.exe" },
     "objdump": { "command": "bin/llvm-objdump.exe" },
     "windres": { "command": "bin/x86_64-w64-mingw32-windres.exe" },
-    "dlltool": { "command": "bin/x86_64-w64-mingw32-dlltool.exe" }
+    "dlltool": { "command": "bin/x86_64-w64-mingw32-dlltool.exe" },
+    "as": { "command": "bin/x86_64-w64-mingw32-clang.exe", "args": ["-c", "-x", "assembler"], "drop": ["--64"] }
   },
   "permissions": { "sandbox": "soft", "filesystem": ["cwd"] },
   "sdk": {

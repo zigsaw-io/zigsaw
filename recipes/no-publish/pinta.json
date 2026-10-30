@@ -26,11 +26,11 @@
   },
   "runtimes": {
     "dotnet": "com.microsoft.dotnet:10.0.13@sha256:a9e05a1fe615515ed8e890187690c9bfc55193305cc103b4a340a8782b5a9c0a",
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:9a18362a2f85bc8852bdd1f71a8777d4afb981c93ebfb89f37ecebbffc878a4d"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:ce922465155eb14a4573d1d99fee58893759a736e2b8eaee35f58322c5490317"
   },
   "sdk": {
     "dotnetsdk": "com.microsoft.dotnet.Sdk:10.0.402@sha256:7687b4c6ce4f2fc43cf123426b5cf31fbe1b253978281ce56fe4fa36b1b28240",
-    "gettext": "org.gnu.gettext:1.0@sha256:f3f85ba59c5cb8607358ae8c04ae78979772ce6e6df87080b0e77cd998387e8e",
+    "gettext": "org.gnu.gettext:1.0@sha256:92b9c82ba4fb6e9a2b679050ce1dd7ef22ce43131441559e0a8fe0953d167ed1",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "cleanup": ["*.pdb"],

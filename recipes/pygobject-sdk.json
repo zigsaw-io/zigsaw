@@ -10,16 +10,9 @@
   "exports": {},
   "cleanup": ["__pycache__"],
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369"
   },
   "modules": [
-    {
-      "name": "crt-noexport",
-      "build": [
-        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
-        "cc -c noexport.s -o noexport.o"
-      ]
-    },
     {
       "name": "python",
       "sources": [
@@ -42,7 +35,6 @@
     },
     {
       "name": "pycairo",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o" },
       "sources": [
         {
           "url": "https://github.com/pygobject/pycairo/releases/download/v1.29.2/pycairo-1.29.2.tar.gz",
@@ -57,7 +49,6 @@
     },
     {
       "name": "pygobject",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/pygobject/3.58/pygobject-3.58.1.tar.gz",

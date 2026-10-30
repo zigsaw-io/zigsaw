@@ -2,21 +2,20 @@
   "id": "org.gtk.Gtk4.Sdk",
   "version": "4.24.1",
   "name": "GTK SDK",
-  "summary": "GTK 4, libadwaita and the stack below them, with headers, import libraries, introspection data and the tools to build GTK apps with zig",
+  "summary": "GTK 4, libadwaita and the stack below them, with headers, import libraries, introspection data and the tools to build GTK apps with llvm-mingw's Clang",
   "homepage": "https://www.gtk.org/",
   "license": "LGPL-2.1-or-later",
   "command": "bin/gtk4-demo.exe",
   "path": ["bin"],
   "env": {
     "PKG_CONFIG_PATH": "${app}\\lib\\pkgconfig;${app}\\share\\pkgconfig",
-    "RC": "rc /:auto-includes gnu"
+    "RCFLAGS": "--use-temp-file"
   },
   "permissions": { "sandbox": "soft", "filesystem": ["cwd"] },
   "exports": {
-    "cc": { "command": "${zig}/zig.exe", "args": ["cc", "-target", "x86_64-windows-gnu"] },
-    "c++": { "command": "${zig}/zig.exe", "args": ["c++", "-target", "x86_64-windows-gnu"] },
-    "ar": { "command": "${zig}/zig.exe", "args": ["ar"] },
-    "rc": { "command": "${zig}/zig.exe", "args": ["rc", "/:auto-includes", "gnu"] },
+    "cc": { "command": "${llvm}/bin/x86_64-w64-mingw32-clang.exe" },
+    "c++": { "command": "${llvm}/bin/x86_64-w64-mingw32-clang++.exe" },
+    "ar": { "command": "${llvm}/bin/llvm-ar.exe" },
     "pkg-config": { "command": "${meson}/bin/pkgconf.exe" },
     "meson": { "command": "${meson}/python.exe", "args": ["${meson}\\meson\\meson.py"] },
     "ninja": { "command": "${meson}/ninja.exe" },
@@ -28,8 +27,8 @@
     "msgfmt": { "command": "bin/msgfmt.exe" },
     "msgmerge": { "command": "bin/msgmerge.exe" },
     "xgettext": { "command": "bin/xgettext.exe" },
-    "windres": { "command": "bin/windres.exe" },
-    "nm": { "command": "bin/nm.exe" },
+    "windres": { "command": "${llvm}/bin/x86_64-w64-mingw32-windres.exe" },
+    "nm": { "command": "${llvm}/bin/llvm-nm.exe" },
     "g-ir-scanner": { "command": "bin/g-ir-scanner.exe" },
     "g-ir-compiler": { "command": "bin/g-ir-compiler.exe" }
   },
@@ -41,21 +40,14 @@
     "cargo-c": "com.github.lu-zero.cargo-c:0.10.25@sha256:5c3ab8267b4c4a8f4a1628ef7f0d8f62f9838a28f46df2800a13f542e71bed71"
   },
   "runtimes": {
-    "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
-    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "meson": "com.mesonbuild.meson:1.12.1@sha256:7448a74d497dd62b290ce6a647f1de6d561e7267335d9058dff36dca9c3eddad",
+    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:115b5e484a219e75e899eedcb456cfc3d7177859e704937f13db301b49fc9f64",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [
     {
-      "name": "crt-noexport",
-      "build": [
-        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
-        "cc -c noexport.s -o noexport.o"
-      ]
-    },
-    {
       "name": "base",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk.Base:4.24.1@sha256:542571a6fe381fb398a61b6135c3385411b5414a02e7bc87c6e3bd57fa899e97" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk.Base:4.24.1@sha256:4b45ce5d58f0c9904a2b55040a57b78b554e2d1da8ddc09041225642aa7fb85c" }]
     },
     {
       "name": "hicolor-icon-theme",
@@ -87,7 +79,6 @@
     },
     {
       "name": "libadwaita",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu", "CFLAGS": "-s" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/libadwaita/1.10/libadwaita-1.10.0.tar.xz",
@@ -106,7 +97,7 @@
     },
     {
       "name": "openssl",
-      "env": { "CFLAGS": "-s -O2", "PERL": "perl", "PERL5OPT": "-IB:/src/openssl/zigsaw -Munixspec" },
+      "env": { "CFLAGS": "-O2", "PERL": "perl", "PERL5OPT": "-IB:/src/openssl/zigsaw -Munixspec" },
       "sources": [
         {
           "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
@@ -120,12 +111,13 @@
         "make build_generated $(sed -n '/^GENERATED=/,/[^\\\\]$/p' Makefile | tr ' ' '\\n' | grep '[.][ch]$')",
         "make -n build_libs | grep -e ' -c -o ' | tr '\\n' '\\0' | xargs -0 -P \"$(nproc)\" -n 1 sh -c",
         "make build_sw",
-        "make install_dev"
+        "make install_dev",
+        "sed -i -e 's/^Libs: -L${libdir} -lcrypto$/Libs: -L${libdir} -lcrypto -lws2_32 -lgdi32 -lcrypt32/' -e '/^Libs.private: /d' \"$PREFIX/lib/pkgconfig/libcrypto.pc\"",
+        "grep -qx 'Libs: -L${libdir} -lcrypto -lws2_32 -lgdi32 -lcrypt32' \"$PREFIX/lib/pkgconfig/libcrypto.pc\""
       ]
     },
     {
       "name": "sqlite",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
       "sources": [
         {
           "url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
@@ -146,7 +138,6 @@
     },
     {
       "name": "nghttp2",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o" },
       "sources": [
         {
           "url": "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.xz",
@@ -155,14 +146,13 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DENABLE_LIB_ONLY=ON -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=OFF -DENABLE_DOC=OFF -DBUILD_TESTING=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DENABLE_LIB_ONLY=ON -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=OFF -DENABLE_DOC=OFF -DBUILD_TESTING=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
     },
     {
       "name": "libpsl",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
       "sources": [
         {
           "url": "https://github.com/rockdaboot/libpsl/releases/download/0.23.3/libpsl-0.23.3.tar.gz",
@@ -177,7 +167,6 @@
     },
     {
       "name": "glib-networking",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/glib-networking/2.90/glib-networking-2.90.0.tar.xz",
@@ -194,7 +183,6 @@
     },
     {
       "name": "libsoup",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/libsoup/3.8/libsoup-3.8.0.tar.xz",
@@ -209,7 +197,6 @@
     },
     {
       "name": "freetype",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
       "sources": [
         {
           "url": "https://downloads.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.xz",
@@ -224,7 +211,6 @@
     },
     {
       "name": "libxml2",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz",
@@ -241,7 +227,7 @@
     },
     {
       "name": "librsvg",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu", "PYTHONHASHSEED": "0" },
+      "env": { "PYTHONHASHSEED": "0" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/librsvg/2.63/librsvg-2.63.2.tar.xz",
@@ -260,22 +246,21 @@
         "grep -q \"find_program('nm', required: false, disabler: true)\" rsvg/meson.build && ! grep -q 'link_depends: librsvg_ver' rsvg/meson.build",
         "sed -i 's/^    link_whole: librsvg_c_lib,$/    link_with: librsvg_c_lib,/' rsvg/meson.build",
         "grep -q '^    link_with: librsvg_c_lib,$' rsvg/meson.build",
-        "meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtriplet=x86_64-pc-windows-gnu -Dpixbuf=enabled -Dpixbuf-loader=enabled -Drsvg-convert=enabled -Dintrospection=enabled -Dvala=disabled -Ddocs=disabled -Dtests=false -Davif=disabled",
-        "meson install -C out",
+        "export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=\"$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained/x86_64-w64-mingw32-gcc.exe\" && meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dtriplet=x86_64-pc-windows-gnu -Dpixbuf=enabled -Dpixbuf-loader=enabled -Drsvg-convert=enabled -Dintrospection=enabled -Dvala=disabled -Ddocs=disabled -Dtests=false -Davif=disabled",
+        "export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=\"$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained/x86_64-w64-mingw32-gcc.exe\" && meson install -C out",
         "grep -q 'pixbufloader_svg[.]dll' \"$PREFIX/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache\" && ! grep -q '^\"B:' \"$PREFIX/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache\""
       ]
     },
     {
       "name": "hunspell",
-      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "CFLAGS": "-O2", "CXXFLAGS": "-O2", "LD": "sh B:/src/hunspell/zigsaw/ld.sh", "LDFLAGS": "-Wl,-s -Wl,-Brepro" },
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "CFLAGS": "-O2", "CXXFLAGS": "-O2" },
       "sources": [
         {
           "url": "https://github.com/hunspell/hunspell/releases/download/v1.7.5/hunspell-1.7.5.tar.gz",
           "sha256": "2e559f0c2a592ba48e421477f58e9bf7e01062277a4a7821afb52fc9401010ae",
           "strip": 1
         },
-        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
-        { "path": "gtk4-sdk/autotools-ld.sh", "dest": "zigsaw/ld.sh" }
+        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" }
       ],
       "build": [
         "sh zigsaw/mtimes.sh",
@@ -288,7 +273,7 @@
     },
     {
       "name": "enchant",
-      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "NM": "nm", "RM": "rm -f", "CFLAGS": "-O2", "CXXFLAGS": "-O2", "LD": "sh B:/src/enchant/zigsaw/ld.sh", "LDFLAGS": "-Wl,-s -Wl,-Brepro", "PKG_CONFIG": "pkg-config", "DOXYGEN": "true" },
+      "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "NM": "nm", "RM": "rm -f", "CFLAGS": "-O2", "CXXFLAGS": "-O2", "PKG_CONFIG": "pkg-config", "DOXYGEN": "true" },
       "sources": [
         {
           "url": "https://github.com/rrthomas/enchant/releases/download/v2.8.21/enchant-2.8.21.tar.gz",
@@ -296,13 +281,10 @@
           "strip": 1
         },
         { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
-        { "path": "gtk4-sdk/autotools-ld.sh", "dest": "zigsaw/ld.sh" },
-        { "path": "gtk4-sdk/implibs.sh", "dest": "zigsaw/implibs.sh" },
         { "path": "gtk4-sdk/enchant.ordering", "dest": "zigsaw/enchant.ordering" }
       ],
       "build": [
         "sh zigsaw/mtimes.sh",
-        "sh zigsaw/implibs.sh \"$PREFIX/lib\"",
         "sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-gcc-warnings --with-hunspell --with-winspell --without-aspell --without-nuspell --without-hspell --without-voikko --without-applespell --without-zemberek lt_cv_deplibs_check_method=pass_all > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
         "grep -q '^#define ENABLE_RELOCATABLE 1' config.h && grep -q '^HUNSPELL_LIBS = .*hunspell' providers/Makefile && grep -q '^WINSPELL_CFLAGS = ..' providers/Makefile",
         "sed -i 's/ -shared -nostdlib / -shared /' libtool",
@@ -325,11 +307,6 @@
         { "url": "https://raw.githubusercontent.com/LibreOffice/dictionaries/e7f163feb2beaf526135132d8716e68e19d2716e/en/README_en_US.txt", "sha256": "168b4c01cb841f766a72f310b065c04d09cff46376c37a81d799593ce751c371", "dest": "share/doc/hunspell-en-us/README_en_US.txt" }
       ],
       "build": ["mkdir -p \"$PREFIX/share/hunspell\" \"$PREFIX/share/doc/hunspell-en-us\"", "cp -r share \"$PREFIX/\""]
-    },
-    {
-      "name": "implibs",
-      "sources": [{ "path": "gtk4-sdk/implibs.sh" }],
-      "build": ["sh implibs.sh \"$PREFIX/lib\""]
     }
   ]
 }

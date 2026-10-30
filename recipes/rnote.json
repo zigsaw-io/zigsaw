@@ -21,11 +21,11 @@
     ".xopp": { "command": "rnote", "description": "Xournal++ document" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:9a18362a2f85bc8852bdd1f71a8777d4afb981c93ebfb89f37ecebbffc878a4d"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:ce922465155eb14a4573d1d99fee58893759a736e2b8eaee35f58322c5490317"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2",
-    "rust": "org.rust-lang.rust:1.99.0@sha256:e7e9706485bba88759915d9509993d0e41d340d7d8dfec6426fce1feda9a10e2"
+    "rust": "org.rust-lang.rust:1.99.0@sha256:e7e9706485bba88759915d9509993d0e41d340d7d8dfec6426fce1feda9a10e2",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369"
   },
   "cleanup": [
     "/share/applications",
@@ -37,6 +37,7 @@
   "modules": [
     {
       "name": "rnote",
+      "env": { "CARGO_BUILD_JOBS": "8", "CARGO_PROFILE_RELEASE_DEBUG": "0" },
       "sources": [
         {
           "url": "https://github.com/flxzt/rnote/releases/download/v0.14.2/rnote-0.14.2.tar.xz",
@@ -65,7 +66,7 @@
         "! grep -q \"'cp'\" crates/rnote-ui/src/meson.build",
         "sed -i 's/^        call(\\[\"fc-cache.exe\", \"-v\", \"-f\"\\])$/        pass/' build-aux/meson_post_install.py",
         "! grep -q 'fc-cache.exe' build-aux/meson_post_install.py",
-        "export MINGW_PREFIX=\"$(pkg-config --variable=prefix glib-2.0)\" WINDRES=windres && meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dui=true -Dcli=true && meson install -C out"
+        "export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=\"$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained/x86_64-w64-mingw32-gcc.exe\" && export MINGW_PREFIX=\"$(pkg-config --variable=prefix glib-2.0)\" WINDRES=windres && meson setup out --prefix=\"$PREFIX\" --buildtype=release -Dui=true -Dcli=true && meson install -C out"
       ]
     }
   ]

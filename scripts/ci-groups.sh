@@ -46,7 +46,7 @@ gtk_paths=(
     tests/gtk.sh tests/gtk3.sh tests/gtk/ tests/acprobe.sh tests/acprobe.zig
     recipes/gtk4-msvc.json recipes/no-publish/pinta.json recipes/no-publish/dotnet
     # What gtk-suites seeds its store with besides GTK's family.
-    recipes/busybox.json recipes/zig.json recipes/meson.json recipes/mingit.json
+    recipes/busybox.json recipes/llvm-mingw.json recipes/meson.json recipes/mingit.json
     "${common_paths[@]}"
 )
 qt_paths=(
@@ -58,7 +58,7 @@ texlive_paths=(
     "${common_paths[@]}"
 )
 gdal_paths=(
-    tests/gdal.sh recipes/gtk4-sdk/autotools-mtimes.sh recipes/gtk4-sdk/autotools-ld.sh recipes/gtk4-sdk/autotools-windres.sh
+    tests/gdal.sh recipes/gtk4-sdk/autotools-mtimes.sh
     "${common_paths[@]}"
 )
 for group in $gtk_groups; do

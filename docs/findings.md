@@ -934,7 +934,8 @@ Composer, which doesn't, installs at low.
   ([`gobject-introspection.patch`](../recipes/gtk4-sdk/gobject-introspection.patch)).
 - **With LLVM's `dlltool`, the scanner finds the DLL behind an import
   library with `nm`**, the archive's member names. zig has no `nm`;
-  [`nm.c`](../recipes/gtk4-sdk/nm.c) prints what GNU nm does for COFF
+  `recipes/gtk4-sdk/nm.c` (deleted in iteration 63, when llvm-mingw's
+  `nm` took its place) printed what GNU nm does for COFF
   objects, archives and short import members (60 of 60 comparisons the same
   under `LC_ALL=C`, besides the symbols bfd makes up when it turns short
   import members into long ones). Within GTK's SDK's own build, Rust's
@@ -1810,6 +1811,77 @@ machine):
 - **The SDK's layer is the same whatever its config says**: setting
   `RCFLAGS` made a new SDK manifest with the layer of the build before it
   (`fead0ba1`), so the runtime's layer, made from it, stayed too.
+
+## GTK on llvm-mingw (iteration 63)
+
+gettext, GTK's SDK halves, its runtime, GTK 3's and PyGObject's images and
+the six apps moved from zig 0.16 to llvm-mingw, which GTK's SDK now carries
+as a runtime in zig's place; zig 0.16's image is pinned by nothing (scratch
+`D:\zs\i63`, the same machine):
+
+| | with zig 0.16 | with llvm-mingw |
+|---|---|---|
+| gettext, here | about 27 min | 25 min |
+| GTK's SDK base / SDK, here | about 20 / 20 min | 14 / 15 min |
+| gettext / base / SDK / runtime layer | 7.8 / 69.9 / 93.9 / 53.6 MB | 7.0 / 66.2 / 89.7 / 52.2 MB |
+
+- **What zig needed and llvm-mingw doesn't:** the object every module
+  linked to keep the C runtime's symbols out of DLLs' exports, WinRT
+  headers, `-s` in `CFLAGS` for the static libraries, `-Wl,-Brepro`, `rc`'s
+  options, the SDK's own `windres` and `nm` (llvm-mingw has both), an `ld`
+  and a `windres` script for libtool, import libraries copied to
+  `foo.lib`, `-Wno-error=date-time` for cairo, CRoaring's AVX-512 off,
+  gettext's export edits (lld honours `--export-all-symbols`, and libtool
+  makes `.def` files with llvm-nm), two hunks of gobject-introspection's
+  patch, GTK 3's `-luuid` edit and Gnumeric's `-mwindows`,
+  `--include-dir` and pseudo-relocation edits and its export header. lld
+  finds python.org's `python314.lib` for `-lpython314` and Windows' ICU as
+  `-licu`; llvm-mingw has no ICU headers, so libspelling's stays.
+- **Rust needs an assembler and its own linker.** GNU `dlltool`, which
+  Rust's image aliases for `windows-sys`, runs `as --64`; zig's image had an
+  `as` alias, llvm-mingw's `x86_64-w64-mingw32-as` refuses `--64`. The
+  user picked an `as` alias in llvm-mingw's image (Clang `-c -x
+  assembler`, dropping `--64`), which changed only its config (`115b5e48`,
+  the same layer; GDAL's, PostgreSQL's and Qt's recipes keep `1fd5d6d8`).
+  A recipe's own aliases don't apply to its own build, so GTK's SDK, whose
+  librsvg needs it, couldn't have declared it. And rustc links windows-gnu
+  with its self-contained MinGW gcc and GNU ld only when no
+  `x86_64-w64-mingw32-gcc` is on PATH; llvm-mingw's `bin` has one, whose
+  lld has no `libgcc_eh`. `RUSTFLAGS=-Clink-self-contained=yes` worked but
+  doesn't reach build scripts under `--target`, as Meson's builds of
+  librsvg and Rnote pass; `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` set to
+  Rust's own gcc does. A probe of `tests/build/rust`'s program bound all
+  193 imports, and built again to the same image.
+- **Of two `dlltool` aliases, the first image's wins**: Rnote listed GTK's
+  SDK, which brings llvm-mingw, before Rust, and built with LLVM's
+  `dlltool` and GNU ld, leaving 66 of `rnote.exe`'s imports unbound (the
+  import checker caught it). Listed after Rust, it binds all 1,051.
+- **OpenSSL's `.pc` names Winsock privately**: glib-networking's module
+  failed to link OpenSSL's socket code (`select`, `WSAGetLastError`, and
+  `WspiapiGetAddrInfo`, which mingw-w64's `libws2_32.a` holds), as Meson
+  reads `Libs` only and OpenSSL's static build lists `ws2_32`, `gdi32` and
+  `crypt32` under `Libs.private`. zig's link of the same objects pulled in
+  none of the socket code (the module it made imports no `WS2_32.dll`);
+  how, not looked into. The SDK moves them to `Libs`.
+- **libtool's C++ still needs `-nostdlib` dropped**: with it, libtool
+  links the runtime it read from `c++ -v`, which misses compiler-rt's
+  builtins (`___chkstk_ms`, for hunspell); gettext's and Gnumeric's
+  libtool builds are C and don't.
+- **Gnumeric's libspreadsheet now links with `--export-all-symbols`**: with
+  zig's export header gone, its `G_MODULE_EXPORT` marks made lld export
+  only those, and `gnumeric.exe` didn't link (`gnm_init` and dozens more
+  undefined).
+- **Rnote's Rust ran out of memory here**: with 16 CPUs, cargo's 16 rustc
+  processes (300 to 570 MB each) on top of about 4.4 GB of free commit
+  (Chrome, VS Code and Defender held some 8.8 GB; the page file is fixed
+  at 2.8 GB) left rustc a broken `.rmeta` ("only metadata stub found"),
+  and with 8 jobs the fat LTO of `rnote` itself took 8.2 GB with debug
+  info. The user picked a cap in the recipe (`CARGO_BUILD_JOBS=8`); the
+  LTO still ran out, so the recipe also turns off its release profile's
+  debug info (`CARGO_PROFILE_RELEASE_DEBUG=0`; the program is stripped
+  either way).
+  librsvg's build hit the same once, and passed when run again. A
+  process's CPU affinity doesn't lower cargo's job count.
 
 ## Not yet tested
 

@@ -1,5 +1,5 @@
 /* <unicode/uloc.h> for libspelling, from Windows' own ICU (icu.dll, in
- * Windows 10 1903 and later), which zig links as -licu but has no header
+ * Windows 10 1903 and later), which llvm-mingw links as -licu but has no header
  * for: the two functions libspelling uses, to name a dictionary's language
  * in the user's. */
 #ifndef ZIGSAW_ULOC_H

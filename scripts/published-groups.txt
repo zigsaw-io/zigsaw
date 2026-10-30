@@ -34,18 +34,22 @@ apps: php-sdk.json php.json php-apcu.json php-xdebug.json php-igbinary.json php-
 java: java-sdk.json java.json maven.json gradle.json pdfbox.json plantuml.json logisim-evolution.json scenebuilder.json
 
 # What GTK's SDK builds with: Perl (prebuilt) and cargo-c (13); gettext
-# alone (39, before iteration 38 compiled it in parallel)
+# alone (25 here with llvm-mingw; 39 on a runner before iteration 38
+# compiled it in parallel). gettext and the GTK groups pull llvm-mingw's
+# image from the registry.
 gtk-tools: perl.json cargo-c.json
 gettext: gettext.json
 # GTK's SDK in two halves, each alone: its base, then the SDK on it, with
-# GTK's runtime and the dictionaries (about 20 each here)
+# GTK's runtime and the dictionaries (about 15 each here with llvm-mingw,
+# 20 with zig)
 gtk-base: gtk4-sdk-base.json
 gtk: gtk4-sdk.json gtk4.json gtk4-hunspell-vi.json gtk4-hunspell-fr.json
 # Text Editor; GTK 3's images and its demos; PyGObject's, Meld and Gaphor
 gtk-apps: gnome-text-editor.json
 gtk-apps: gtk3-sdk.json gtk3.json gtk3demo.json
 gtk-apps: pygobject-sdk.json pygobject.json meld.json gaphor.json
-# Rnote (24) and Gnumeric (18), each alone
+# Rnote (24 on a runner with zig; 16 here with llvm-mingw, cargo capped at
+# 8 jobs) and Gnumeric (18; 21 here), each alone
 rnote: rnote.json
 gnumeric: gnumeric.json
 

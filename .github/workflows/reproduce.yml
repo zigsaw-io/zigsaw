@@ -354,7 +354,7 @@ jobs:
           ZIGSAW_HOME: ${{ runner.temp }}\store
         run: |
           mkdir -p "$(cygpath -u "$LOG_DIR")"
-          bash tests/seed-store.sh --pull busybox zig meson mingit gtk4-sdk gtk4 gtk4-hunspell-vi gtk4-hunspell-fr gnome-text-editor rnote gtk3-sdk gtk3 gtk3demo gnumeric pygobject-sdk pygobject meld gaphor 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
+          bash tests/seed-store.sh --pull busybox llvm-mingw meson mingit gtk4-sdk gtk4 gtk4-hunspell-vi gtk4-hunspell-fr gnome-text-editor rnote gtk3-sdk gtk3 gtk3demo gnumeric pygobject-sdk pygobject meld gaphor 2>&1 | tee "$(cygpath -u "$LOG_DIR")/seed.txt"
 
       - name: tests/gtk.sh
         if: ${{ !cancelled() }}

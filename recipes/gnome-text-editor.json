@@ -21,10 +21,10 @@
     ".log": { "command": "gnome-text-editor", "description": "Log file", "icon": "share/icons/org.gnome.TextEditor.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:9a18362a2f85bc8852bdd1f71a8777d4afb981c93ebfb89f37ecebbffc878a4d"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:ce922465155eb14a4573d1d99fee58893759a736e2b8eaee35f58322c5490317"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
   },
   "cleanup": [
@@ -40,15 +40,7 @@
   ],
   "modules": [
     {
-      "name": "crt-noexport",
-      "build": [
-        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
-        "cc -c noexport.s -o noexport.o"
-      ]
-    },
-    {
       "name": "gtksourceview",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/gtksourceview/5.22/gtksourceview-5.22.0.tar.xz",
@@ -63,7 +55,7 @@
     },
     {
       "name": "libspelling",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu", "CFLAGS": "-IB:/src/libspelling/zigsaw" },
+      "env": { "CFLAGS": "-IB:/src/libspelling/zigsaw" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/libspelling/0.4/libspelling-0.4.10.tar.xz",
@@ -81,7 +73,6 @@
     },
     {
       "name": "editorconfig",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o" },
       "sources": [
         {
           "url": "https://github.com/editorconfig/editorconfig-core-c/archive/refs/tags/v0.12.11.tar.gz",
@@ -90,14 +81,13 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DBUILD_DOCUMENTATION=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DBUILD_DOCUMENTATION=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
     },
     {
       "name": "gnome-text-editor",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/gnome-text-editor/51/gnome-text-editor-51.0.tar.xz",

@@ -13,7 +13,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Node.js | `org.nodejs.node` | 24.21.0 | `node`, `npm`, `npx` |
 | Prettier (on Node.js) | `io.prettier.prettier` | 3.9.9 | `prettier` |
 | Python | `org.python.python` | 3.14.7 | `python` |
-| zig | `org.ziglang.zig` | 0.17.0 (and 0.16.0, which GTK's and gettext's chains still pin; SQLite, ripgrep, bat and zstd build on 0.17.0 from iteration 59, and Meson, make, cargo-c, Ghostscript and PHP's SDK, with the extensions it builds, from iteration 60) | `zig` |
+| zig | `org.ziglang.zig` | 0.17.0 (SQLite, ripgrep, bat and zstd build on it from iteration 59, and Meson, make, cargo-c, Ghostscript and PHP's SDK, with the extensions it builds, from iteration 60; 0.16.0, which GTK's and gettext's chains pinned until iteration 63, is pinned by nothing) | `zig` |
 | SQLite (built from source) | `org.sqlite.sqlite3` | 3.53.4 | `sqlite3` |
 | Rust (windows-gnu) | `org.rust-lang.rust` | 1.99.0 | `cargo`, `rustc` |
 | ripgrep (built from source) | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
@@ -33,7 +33,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | cargo-c (for building librsvg) | `com.github.lu-zero.cargo-c` | 0.10.25 | `cargo-cbuild`, `cargo-cinstall` |
 | GNU gettext, with libiconv (built from source, for GTK's SDK) | `org.gnu.gettext` | 1.0 | `gettext`, `ngettext`, `msgfmt`, `msgmerge`, `msginit`, `msgcat`, `msgunfmt`, `xgettext`, `iconv` |
 | GTK SDK's first half: GTK and the stack below it (built from source, for GTK's SDK) | `org.gtk.Gtk4.Sdk.Base` | 4.24.1 | |
-| GTK SDK (built from source, with introspection data; with zig, Meson and BusyBox) | `org.gtk.Gtk4.Sdk` | 4.24.1 | `cc`, `c++`, `ar`, `rc`, `windres`, `nm`, `pkg-config`, `meson`, `ninja`, `sh`, `make`, `glib-compile-resources`, `glib-compile-schemas`, `gtk4-builder-tool`, `msgfmt`, `msgmerge`, `xgettext`, `g-ir-scanner`, `g-ir-compiler` |
+| GTK SDK (built from source, with introspection data; with llvm-mingw, Meson and BusyBox) | `org.gtk.Gtk4.Sdk` | 4.24.1 | `cc`, `c++`, `ar`, `windres`, `nm`, `pkg-config`, `meson`, `ninja`, `sh`, `make`, `glib-compile-resources`, `glib-compile-schemas`, `gtk4-builder-tool`, `msgfmt`, `msgmerge`, `xgettext`, `g-ir-scanner`, `g-ir-compiler` |
 | GTK, with libadwaita, libsoup, librsvg and enchant (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo`, `gio`, `pango-view`, `pango-list` |
 | Vietnamese dictionary for GTK apps (extends GTK's runtime) | `org.gtk.Gtk4.Hunspell.vi_VN` | 1.0.45 | |
 | French dictionary for GTK apps (extends GTK's runtime) | `org.gtk.Gtk4.Hunspell.fr_FR` | 7.0 | |
@@ -97,8 +97,9 @@ compiled by zig. Pulling them doesn't need those. ZLS, the language server
 for Zig, is built with `zig build`, its packages fetched in a
 [vendor step](recipes.md#zig), and runs on zig's image, which it finds
 on its PATH: point an editor at its `zls` command. [GTK](#gtk)'s SDK is built
-with Meson, CMake, zig, Perl (for OpenSSL), Rust and cargo-c (for librsvg),
-takes gettext's files from its image, and has zig, Meson and BusyBox as
+with Meson, CMake, llvm-mingw's Clang, Perl (for OpenSSL), Rust and cargo-c
+(for librsvg), takes gettext's files from its image, and has llvm-mingw,
+Meson and BusyBox as
 runtimes, so that it builds GTK programs
 [without a recipe](#building-without-a-recipe) too; its runtime is made from
 the SDK's image. GNOME Text Editor runs on GTK's runtime, with GtkSourceView

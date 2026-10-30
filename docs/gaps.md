@@ -576,8 +576,7 @@
 - The CMake files of GTK's SDK's libxml2 name the directory GTK's SDK was
   built in (`B:/prefix`), so CMake's `find_package(LibXml2 CONFIG)` fails
   against the SDK; Gnumeric's recipe gives libxslt a copy with the SDK's
-  real path. GTK's SDK's `windres` doesn't take `--include-dir` (Gnumeric's
-  recipe passes `-I`).
+  real path.
 - A build sees its SDK and runtime images where the store deployed them, a
   path that differs between stores. A header in one of them that names its
   own file (`__FILE__`, as GLib's `g_return_if_fail` does) puts that path

@@ -10,7 +10,7 @@
   "env": { "GI_GIR_PATH": "${app}\\share\\gir-1.0" },
   "exports": {},
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369"
   },
   "modules": [
     {
@@ -20,15 +20,7 @@
       ]
     },
     {
-      "name": "crt-noexport",
-      "build": [
-        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
-        "cc -c noexport.s -o noexport.o"
-      ]
-    },
-    {
       "name": "atk",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/at-spi2-core/2.60/at-spi2-core-2.60.7.tar.xz",
@@ -43,7 +35,7 @@
     },
     {
       "name": "gtk",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu /:output-format coff", "GI_GIR_PATH": "B:/prefix/share/gir-1.0" },
+      "env": { "GI_GIR_PATH": "B:/prefix/share/gir-1.0" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/gtk/3.24/gtk-3.24.52.tar.xz",
@@ -54,8 +46,6 @@
       "build": [
         "sed -i '/^    gio_querymodules: gio_module_dirs,$/d' meson.build",
         "! grep -q gio_querymodules meson.build",
-        "sed -i \"s/^    pc_gdk_extra_libs += \\['-Wl,-luuid'\\]$/    pc_gdk_extra_libs += ['-luuid']/\" meson.build",
-        "! grep -q -- -Wl,-luuid meson.build",
         "sed -i 's/^  if (g_strcmp0 (desktopdir, g_get_home_dir ()) != 0)$/  if (desktopdir != NULL \\&\\& g_strcmp0 (desktopdir, g_get_home_dir ()) != 0)/' gtk/gtkfilechooserbutton.c",
         "sed -i 's/^  if (!g_strcmp0 (name, g_get_home_dir ()))$/  if (name == NULL || !g_strcmp0 (name, g_get_home_dir ()))/' gtk/gtkfilechooserwidget.c",
         "sed -i 's/^  if (path_is_home_dir (name))$/  if (name == NULL || path_is_home_dir (name))/' gtk/gtkplacessidebar.c",
@@ -79,11 +69,6 @@
         "meson setup out --prefix=\"$PREFIX\"",
         "meson install -C out"
       ]
-    },
-    {
-      "name": "implibs",
-      "sources": [{ "path": "gtk4-sdk/implibs.sh" }],
-      "build": ["sh implibs.sh \"$PREFIX/lib\""]
     }
   ]
 }

@@ -716,11 +716,12 @@ CRT for the UCRT, libc++ and compiler-rt, as Martin Storsjö's llvm-mingw
 builds them for x86_64 Windows. A recipe lists it as an SDK where it would
 list zig's, and nothing else changes: the image gives the same aliases
 (`cc`, `c++`, `ar`, `ranlib`, `nm`, `strip`, `objdump`, `windres`,
-`dlltool`; not `rc` or `as`) and the same variables, `CC=cc`, `CXX=c++`, `RC=windres`
+`dlltool` and `as`; not `rc`) and the same variables, `CC=cc`, `CXX=c++`, `RC=windres`
 and `LDFLAGS=-s`, and its `bin` is on the build's PATH, with the
 `x86_64-w64-mingw32-*` tools that configure scripts look for with `--host`.
 GDAL's and PostgreSQL's images, and what's built on them, build with it, and
-so does [Qt's SDK](#qt), whose runtime it is, so Qt apps build with it too.
+so do [Qt's SDK](#qt) and [GTK's](#gtk) (and gettext), whose runtime it is,
+so Qt and GTK apps build with it too.
 
 - **Objects and links are reproducible without a flag**: Clang writes the
   time it compiled an object into its header, which static libraries keep,
@@ -747,6 +748,24 @@ so does [Qt's SDK](#qt), whose runtime it is, so Qt apps build with it too.
 - **Clang 23 is newer than zig 0.16's Clang 21**, and stricter: code that
   passes a pointer to another type is an error (`-Wno-error=` lets it
   through, as MSVC and GCC only warn).
+- **libtool's C++ libraries still drop `-nostdlib`**, as with zig: given
+  it, libtool links the C++ runtime it read from `c++ -v`, which leaves
+  out compiler-rt's builtins (`___chkstk_ms`). hunspell's and enchant's
+  recipes edit their `libtool` (`sed -i 's/ -shared -nostdlib / -shared /'
+  libtool`); C-only libtool builds don't need it.
+- **Rust builds with it** as with zig ([Rust](#rust)): its
+  `as` alias is the assembler GNU `dlltool` needs (`clang -c -x
+  assembler`, without the `--64` dlltool passes). Two things differ:
+  - rustc links with the self-contained MinGW gcc and GNU ld of Rust's
+    image only when no `x86_64-w64-mingw32-gcc` is on PATH, and llvm-mingw's
+    `bin` has one, whose lld has no `libgcc_eh`. A recipe names Rust's
+    own, which cargo uses for build scripts too, even with `--target`
+    (where `RUSTFLAGS` doesn't reach them):
+    `export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER="$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained/x86_64-w64-mingw32-gcc.exe"`.
+  - llvm-mingw has a `dlltool` alias too, whose import libraries GNU ld
+    lays out wrongly; Rust's GNU one must win, so a recipe lists Rust's
+    image before llvm-mingw, or before an SDK that brings it, as GTK's
+    does (Rnote's lists `rust`, then `gtksdk`).
 
 ## CMake
 
@@ -865,7 +884,8 @@ build commands through it too, one process more per command.
 GTK 4 comes as two images, as Flatpak's GNOME runtime does:
 
 - **[`org.gtk.Gtk4.Sdk`](recipes/gtk4-sdk.json)** builds GTK 4.24.1 and
-  everything it needs from source with Meson, CMake and zig: zlib, libpng,
+  everything it needs from source with Meson, CMake and Clang
+  ([llvm-mingw](#clang-llvm-mingw)): zlib, libpng,
   libjpeg-turbo, libtiff, PCRE2, libffi, GLib 2.90, pixman, FriBidi,
   HarfBuzz (with DirectWrite), cairo, Pango, graphene, libepoxy, gdk-pixbuf, Microsoft's
   DirectX headers, and GTK, with its demos, then the hicolor and Adwaita
@@ -881,7 +901,7 @@ GTK 4 comes as two images, as Flatpak's GNOME runtime does:
   [image source](#images-as-sources): gettext takes three quarters of an
   hour to build, which the SDK's builds don't repeat. It keeps their
   headers, import libraries and pkg-config files, so apps build against it
-  by listing it in their `sdk`. Its runtimes are zig, Meson and BusyBox,
+  by listing it in their `sdk`. Its runtimes are llvm-mingw, Meson and BusyBox,
   which it builds with and which builds that use it get too, and it exports
   their commands, so it builds programs
   [without a recipe](#building-without-a-recipe).
@@ -894,11 +914,9 @@ GTK 4 comes as two images, as Flatpak's GNOME runtime does:
     makes, byte for byte.
   - The base has the SDK's SDKs and runtimes too, so its modules build with
     the same tools. It exports nothing; build against the SDK.
-  - The SDK repeats the base's first module (crt-noexport, below), whose
-    object its other modules link, since a module's own directory isn't
-    in an image.
-  - Each half takes about 20 minutes here from scratch, once gettext's
-    image is there; on a 4-CPU runner, one build took 57.
+  - Each half takes about 15 minutes here from scratch, once gettext's
+    image is there (20 with zig, until iteration 63); on a 4-CPU runner,
+    one build with zig took 57.
 - **[`org.gtk.Gtk4`](recipes/gtk4.json)** is the runtime: the SDK's files
   as an [image source](#images-as-sources), without the headers, libraries
   and build tools, so it builds in seconds once the SDK is there. Apps list
@@ -927,7 +945,7 @@ An app built against GTK, as [`tests/gtk`](tests/gtk) is:
 ]
 ```
 
-The SDK brings Meson, zig and BusyBox. Meson finds `gtk4` through the SDK's pkg-config files. When the app runs,
+The SDK brings Meson, llvm-mingw and BusyBox. Meson finds `gtk4` through the SDK's pkg-config files. When the app runs,
 Windows finds GTK's DLLs on PATH, in the runtime's `bin`. The runtime's
 variables keep GLib's files in the app's data directory (`XDG_CONFIG_HOME`
 and the rest; otherwise GLib asks Windows for the user's AppData folder,
@@ -1013,11 +1031,11 @@ would be an extension the same way, its icons in `share\icons`
 ### Building without a recipe
 
 GTK's SDK exports the commands a build needs, from its runtimes and its
-own: `cc` and `c++` (zig's, for the same target as builds), `ar`, `rc`,
-`windres` (GNU windres's command line, for zig's `rc`, as Rust's
+own: `cc` and `c++` (llvm-mingw's Clang, as builds have it), `ar`,
+`windres` (llvm-windres, which takes GNU windres's command line, as Rust's
 winresource and embed-resource crates run it), `pkg-config` (which finds
 the SDK's libraries), `meson`, `ninja`, `sh`, `make`, gettext's `msgfmt`,
-`msgmerge` and `xgettext`, `nm`, gobject-introspection's `g-ir-scanner` and
+`msgmerge` and `xgettext`, `nm` (llvm-nm), gobject-introspection's `g-ir-scanner` and
 `g-ir-compiler`, and GLib's and GTK's tools. Like other exports, they run in the
 SDK's environment, with the working directory (the SDK has the `cwd`
 permission), and inside it Meson finds the compiler and the rest through
@@ -1034,34 +1052,20 @@ zigsaw run --command=C:\work\hello\hello.exe org.gtk.Gtk4
 The program runs on the runtime, which has GTK's DLLs on PATH:
 `--command` takes the absolute path of a program of yours (a relative one
 is in the app). `sh` is a shell with all of it, as builds have. Meson's
-builds are stripped, as zig's `LDFLAGS` asks; `cc` itself takes `-s` for
-that. The SDK has each import library
-twice, as `libgtk-4.dll.a` and as `gtk-4.lib`: zig's linker looks for
-`-lgtk-4` under the second name, and Meson and libtool give the first.
+builds are stripped, as llvm-mingw's `LDFLAGS` asks; `cc` itself takes `-s`
+for that.
 
-Building the stack with zig took a few workarounds, which the SDK's recipe
-spells out:
+Building the stack took a few workarounds, which the SDK's recipe spells
+out. Until iteration 63 it built with zig 0.16, which needed more: an
+object every module linked to keep the C runtime's `atexit` out of DLLs'
+exports, WinRT headers from mingw-w64's release, `-s` for the static
+libraries it keeps (zig wrote a random file name into objects), `rc`'s
+options, a `windres` and an `nm` of the SDK's own, an `ld` for libtool,
+import libraries under a second name (`gtk-4.lib`), `-Wno-error=date-time`
+for cairo and no AVX-512 for CRoaring in GTK. What's left:
 
-- Its first module assembles an object that every module links, asking
-  lld not to export the C runtime's `atexit`, `_CRT_INIT` and
-  `__mingw_module_is_dll`. A DLL with no `dllexport`, such as HarfBuzz's or
-  FriBidi's, exports all its symbols, and zig names its C runtime's objects
-  so that lld doesn't recognise them to leave them out; an executable linking
-  such a DLL then has `atexit` twice.
-- zig's MinGW headers leave out the WinRT ones (`windows.storage.h` and
-  more) that GLib uses, so a module copies them from the mingw-w64 release
-  zig's headers come from.
-- The static libraries the SDK keeps (libffi's, the DirectX headers') are
-  compiled with `-s`. zig writes debug records into objects even with
-  `-g0`, naming the temporary file it compiled to, whose name is random.
-  Executables and DLLs lose them when linked with `-s`; static libraries
-  aren't linked.
 - GLib's Python tools leave `__pycache__` when the build runs them; the
   SDK leaves it out, as the bytecode records when sources were unpacked.
-- `rc` gets `/:auto-includes gnu`, as `RC` for Meson and
-  `CMAKE_RC_FLAGS` for CMake (see [known gaps](#known-gaps)), and GTK's
-  `rc` writes COFF objects, since GTK puts its resources in a static
-  library first.
 - OpenSSL's `Configure` needs a Perl that makes Unix paths for its
   `mingw64` target; Strawberry Perl makes Windows ones, so its build loads
   [a small module](recipes/gtk4-sdk/openssl-unixspec.pm) into each Perl it
@@ -1069,12 +1073,18 @@ spells out:
   `make` runs one job at a time, so the recipe compiles OpenSSL's objects
   with `xargs -P` from `make -n`'s list, and `make` only archives them:
   75 seconds instead of 16 minutes. OpenSSL is static, linked into
-  glib-networking's module.
+  glib-networking's module. Its `libcrypto.pc` names the Windows libraries
+  it needs (`ws2_32`, `gdi32`, `crypt32`) in `Libs.private`, which only
+  `pkg-config --static` reads; with a static library only, the recipe
+  moves them to `Libs`, which Meson reads. (zig's link of the module left
+  OpenSSL's socket code out, so it needed none of them.)
 - glib-networking opens Windows' certificate stores for writing, which a
   low-integrity process may not; the recipe opens them read-only, so HTTPS
   works under `--sandbox=low`.
 - librsvg's Rust code is built by cargo-c as a static library, which Meson
-  links into `librsvg-2-2.dll` with zig. The recipe tells Meson the Rust
+  links into `librsvg-2-2.dll` with Clang. The recipe has cargo link
+  `rsvg-convert` and build scripts with Rust's own GNU ld
+  ([with llvm-mingw](#clang-llvm-mingw)), and tells Meson the Rust
   target (`-Dtriplet=x86_64-pc-windows-gnu`; it would guess `gnullvm` for a
   clang), links the static library rather than all of it (each crate's
   import libraries define the same import descriptors), drops the `nm`
@@ -1083,45 +1093,34 @@ spells out:
   pinned [vendor step](#vendor-steps), and it fixes Python's hash seed
   (`PYTHONHASHSEED=0`), as its script for the libraries Rust needs dedupes
   them with a `set` and would write them in another order each build.
-- cairo's script tool prints `__DATE__`, which zig refuses when optimizing
-  (`-Wno-error=date-time`; builds fix the date with `SOURCE_DATE_EPOCH`),
-  and CRoaring in GTK leaves out its AVX-512 code, which zig's generic
-  x86-64 target can't compile.
 - hunspell and enchant build with their release's `configure` and
   BusyBox's make, which took most of the rest. Autoconf looks for `sed`,
   `grep` and `pkg-config` as files on PATH, where BusyBox's applets and the
   `.exe` aliases aren't, so the modules name them (`SED=sed` and so on).
-  libtool decides how to make DLLs from `$LD --help`, which zig has no `ld`
-  for: [a small script](recipes/gtk4-sdk/autotools-ld.sh) runs lld's MinGW
-  driver (`zig ld.lld -m i386pep`) and says it auto-imports, as lld does.
   libtool would link C++ with `-nostdlib` and the runtime libraries it reads
-  from `c++ -v`, which zig doesn't print, so the recipe drops `-nostdlib` and
-  zig's `c++` links its own; and it checks libraries with `objdump`, which
-  isn't there (`lt_cv_deplibs_check_method=pass_all`). Release tarballs
+  from `c++ -v`, which miss compiler-rt's builtins, so the recipe drops
+  `-nostdlib` and Clang's `c++` links its own; and the recipe skips
+  libtool's check of libraries with `objdump`
+  (`lt_cv_deplibs_check_method=pass_all`). Release tarballs
   give `configure`, `aclocal.m4` and `Makefile.in` the same time to the
   second as their sources, and BusyBox's make remakes a target whose
   prerequisite is as new as it, where GNU make doesn't, so
   [a script](recipes/gtk4-sdk/autotools-mtimes.sh) orders their times first.
   enchant's library exports what upstream's `-export-symbols-regex` gives,
-  which libtool turns into a `.def` file with
-  [the SDK's `nm`](recipes/gtk4-sdk/nm.c) (`NM=nm`); its providers export
+  which libtool turns into a `.def` file with llvm-mingw's `nm`
+  (`NM=nm`); its providers export
   only `init_enchant_provider`, from a `.def` of the recipe's, as they mark
   nothing for export.
 - gettext and libiconv ([`recipes/gettext.json`](recipes/gettext.json))
   build the same way, with a few more. gnulib looks for grep as
-  `EGREP_TRADITIONAL` too. libtool runs `$RC` and `$WINDRES` as GNU windres,
-  so they're [a script](recipes/gtk4-sdk/autotools-windres.sh) that turns
-  its command line into zig `rc`'s. Their headers export with a `visibility`
+  `EGREP_TRADITIONAL` too. libtool runs `$WINDRES` as GNU windres, which
+  llvm-windres is (`WINDRES=windres`). Their headers export with a `visibility`
   attribute when the compiler takes one, which clang does and GCC for
   MinGW doesn't, and which Windows DLLs don't heed: configure is told the
   compiler doesn't (`gl_cv_cc_visibility=no`), so they use `dllexport`.
-  Some functions are `dllexport` only for MSVC, relying otherwise on GNU
-  ld's `--export-all-symbols` or on a `.def` that libtool makes with `nm`;
-  zig's linker ignores the first and gettext's image has no `nm` (GTK's
-  SDK has one since), so
-  [the recipe](recipes/gettext/exports.sh) exports them for any Windows
-  compiler and leaves the `nm` lists out. gettext's libtool keeps
-  `-nostdlib` in a variable of its own. Its manuals, man pages and
+  The rest export as upstream's MinGW builds do, with lld's
+  `--export-all-symbols` and `.def` files libtool makes with `nm`, which
+  zig's build had to work around. Its manuals, man pages and
   translations come built in the release, and the build leaves them be.
   BusyBox's `make` runs one command at a time, as for OpenSSL above, so the
   recipe's first module writes a `$(MAKE)` for the other two, `pmake.sh`.
@@ -1136,13 +1135,9 @@ spells out:
   none and falls back to automake's `install-sh`, a script run for each of
   its 2,200 files. A build command writes the wrapper, and isn't a file of
   the recipe's, because an image records the files its recipe adds to a
-  build: gettext's image is the same as before (`f3f85ba5`).
+  build.
 - Pango's Windows font map gets a one-line patch so that it finds a font
   for text that asks for color glyphs (see above).
-- `nm` is [a small program of the SDK's](recipes/gtk4-sdk/nm.c), as zig
-  has none: it lists the symbols of COFF objects, static libraries and
-  import libraries as GNU nm does, in its BSD and POSIX formats, which is
-  what libtool's export lists and gobject-introspection read.
 - GTK's input method for Windows (`gtkimcontextime.c`) listens to the
   window's messages for the text widget that has the focus, and in 4.24.1
   went on listening for one that was removed while it had it, reading freed
@@ -1166,8 +1161,14 @@ MSYS2 or Linux:
 - Its build script runs `env` and `cp`, which cmd.exe doesn't have, and
   Meson runs `cat` and `cp`: [a Python script](recipes/rnote/cargo_build.py)
   and Meson's own functions do their jobs. Meson doesn't compile any Rust
-  itself, so `project()` names no languages; with zig as `CC`, Meson would
-  have rustc link its sanity check with zig.
+  itself, so `project()` names no languages; with Clang as `CC`, Meson
+  would have rustc link its sanity check with it, which needs `libgcc_eh`.
+- Its recipe lists Rust's image before GTK's SDK and names Rust's own
+  linker ([with llvm-mingw](#clang-llvm-mingw)), and caps cargo at 8 jobs
+  with no debug info for its release profile's fat LTO
+  (`CARGO_BUILD_JOBS=8`, `CARGO_PROFILE_RELEASE_DEBUG=0`; the program is
+  stripped either way): on 16 CPUs with 16 GB, 16 rustc processes, then
+  the 8 GB that `rnote`'s own LTO took with debug info, ran out of memory.
 - It sets `XDG_DATA_DIRS` and GdkPixbuf's loader directory to the
   directories next to its executable, which would hide GTK's icons, schemas
   and SVG loader in the runtime; [a patch](recipes/rnote/data-dirs.patch)
@@ -1236,10 +1237,9 @@ so GTK 3's demos are an app of their own on both,
 Demo" and "GTK 3 Widget Factory" to the Start menu, with icons
 [made of GTK's PNGs](recipes/gtk3/png2ico.sh).
 
-GTK 3 is GTK 4's build, with three changes: its install doesn't run
+GTK 3 is GTK 4's build, with two changes: its install doesn't run
 `gio-querymodules` for module directories a Windows build doesn't have;
-`gdk-3.0.pc` asks for `-luuid` rather than `-Wl,-luuid`, which zig's `cc`
-refuses; and its file chooser, places sidebar and file button handle a
+and its file chooser, places sidebar and file button handle a
 Desktop that isn't there. Windows has no Desktop folder for a run that
 isn't given it ([your folders](../README.md#your-folders)), and
 GTK 3 took that for a folder at the path NULL. Its demos are built as GUI
@@ -1292,16 +1292,13 @@ BusyBox's make, like hunspell and enchant above, with more:
 - Strawberry Perl reads files as text on Windows unless told otherwise,
   which drops carriage returns: goffice's script that embeds its images
   into the library broke a PNG. `PERLIO=perlio` reads as Perl does on Unix.
-- `-mwindows` is ignored by zig's `cc` (it says so), so Gnumeric links with
-  `-Wl,--subsystem,windows` to be a GUI program.
 - Gnumeric's plugins are DLLs that GModule looks things up in by name, not
   all of them marked for export: they're linked with
-  `-Wl,--export-all-symbols`, which zig's linker takes and ignores, exporting
-  only what's marked if anything is. [A header](recipes/gnumeric/export-all.h)
-  makes `G_MODULE_EXPORT` mark nothing, so everything is exported, as GNU ld
-  does. libspreadsheet, Gnumeric's own library, exports everything that way
-  too: the list its build makes from some of its headers misses functions
-  `ssconvert` and the Excel plugin use.
+  `-Wl,--export-all-symbols`, which lld honours as GNU ld does (zig's
+  linker didn't, so until iteration 63 a header made `G_MODULE_EXPORT`
+  mark nothing). libspreadsheet, Gnumeric's own library, is linked that
+  way too, in place of the list its build makes from some of its headers,
+  which misses functions `ssconvert` and the Excel plugin use.
 - `glib-genmarshal` is a Python script; a `python3` in the build runs it with
   Meson's Python.
 
@@ -1325,11 +1322,10 @@ flex and bison, which are winflexbison's release (MSVC builds its sources
 only), on PATH for that module alone. Then:
 
 - [A patch](recipes/gtk4-sdk/gobject-introspection.patch) makes GI's
-  scanner work with zig's `cc` outside MSYS2: it treats a `CC` that isn't
-  MSVC's as GCC-like, looks for libraries where pkg-config says they are,
-  links `libfoo.dll.a` by its path (zig's `cc` doesn't take it for
-  `-lfoo`), and reads an import library's DLL name with `nm` when there's
-  no `dlltool`. It also has its lexer resolve file names as Python's
+  scanner work with Clang outside MSYS2: it treats a `CC` that isn't
+  MSVC's as GCC-like and looks for libraries where pkg-config says they
+  are (with zig, it also linked `libfoo.dll.a` by its path and read an
+  import library's DLL name with `nm`). It also has its lexer resolve file names as Python's
   `realpath` does, through a subst drive such as builds' `B:`: otherwise
   what a library's generated headers declare (its enums' types) was left
   out.
@@ -1562,7 +1558,7 @@ as an add-on to GTK's images, like GTK 3's:
 
 - **[`org.gnome.PyGObject.Sdk`](recipes/pygobject-sdk.json)** is built with
   GTK's SDK as its SDK: Python 3.14.7 (the same NuGet package as GTK's SDK
-  has), pycairo 1.29.2 and PyGObject 3.58.1, which build with Meson and zig
+  has), pycairo 1.29.2 and PyGObject 3.58.1, which build with Meson and Clang
   against python.org's build of Python. It keeps their headers and
   pkg-config files, and has pkg-config files for Python itself
   (`python3.pc`, `python-3.14.pc` and their `-embed` forms) and a
@@ -1681,7 +1677,7 @@ python3 -m pip install --no-index --find-links wheels --no-deps --no-compile --r
 SysML, C4 and RAAML, on GTK 4 and libadwaita. Its recipe builds:
 
 - GtkSourceView 5.22 with its typelib (Text Editor's has none);
-- Graphviz 16.1.0's `dot`, which its auto layout runs, with CMake and zig:
+- Graphviz 16.1.0's `dot`, which its auto layout runs, with CMake and Clang:
   statically, with its layouts and core output formats built in and all
   its optional libraries off. The release tarball has no CMake files, and
   GitLab's tarball of the tag has a link to a file it doesn't have, which
@@ -1775,13 +1771,14 @@ its crate on crates.io, with ripgrep's own `release-lto` profile, the one its
 release binaries are built with, and generates its man page and shell
 completions as its releases do.
 
-**Rust builds need zig in the SDK as well.** The `windows-sys` crate, which
+**Rust builds need zig (or llvm-mingw) in the SDK as well.** The `windows-sys` crate, which
 nearly every Rust program for Windows uses, links Windows' functions in a
 way that makes rustc run `dlltool`. Rust's image gives builds the GNU
 `dlltool` Rust ships as an alias, but it needs an assembler that Rust
 doesn't ship
 ([rust-lang/rust#103939](https://github.com/rust-lang/rust/issues/103939)):
-zig's `as` alias. (LLVM's `dlltool`, which needs none, makes import
+zig's `as` alias, or llvm-mingw's ([with llvm-mingw](#clang-llvm-mingw),
+two more things are needed). (LLVM's `dlltool`, which needs none, makes import
 libraries that GNU ld, Rust's linker here, lays out wrongly: some imports
 are never bound, and the program crashes when it calls one.
 `zig build imports` builds a checker for that, which `tests/build.sh` and

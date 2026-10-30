@@ -23,6 +23,7 @@ meson.json
 zls.json
 perl.json
 cargo-c.json
+llvm-mingw.json
 gettext.json
 gtk4-sdk-base.json
 gtk4-sdk.json
@@ -69,7 +70,6 @@ flameshot.json
 notes.json
 ghostscript.json
 texlive.json
-llvm-mingw.json
 gdal-sdk.json
 gdal.json
 make.json

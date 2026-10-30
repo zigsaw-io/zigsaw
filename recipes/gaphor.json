@@ -26,12 +26,12 @@
     ".gaphor": { "command": "gaphor", "description": "Gaphor model", "icon": "share/icons/org.gaphor.Gaphor.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:9a18362a2f85bc8852bdd1f71a8777d4afb981c93ebfb89f37ecebbffc878a4d",
-    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:68e29e6a862276ccb74208f7d674a9628cb3cc54f5932b75c38b6e958e15ed8e"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:ce922465155eb14a4573d1d99fee58893759a736e2b8eaee35f58322c5490317",
+    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:ff7ea152ddeb9e4170412634baf2ebb900b3c47e0ed974cb343583a61bece483"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2",
-    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:13dac3b2fd9c58e75a630a5a1e64d327bb26d3c214b5bc4bd74953d498b49ba8",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369",
+    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:e24980b80ecedecfecb24a69825d4e77b4ecec04ff265ba7393b116c7e6532c9",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
   },
   "cleanup": [
@@ -47,15 +47,7 @@
   ],
   "modules": [
     {
-      "name": "crt-noexport",
-      "build": [
-        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
-        "cc -c noexport.s -o noexport.o"
-      ]
-    },
-    {
       "name": "gtksourceview",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "RC": "rc /:auto-includes gnu" },
       "sources": [
         {
           "url": "https://download.gnome.org/sources/gtksourceview/5.22/gtksourceview-5.22.0.tar.xz",

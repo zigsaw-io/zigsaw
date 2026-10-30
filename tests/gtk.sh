@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 # GTK end to end: an app built against GTK's SDK image (org.gtk.Gtk4.Sdk),
-# with Meson and zig, runs on GTK's runtime image (org.gtk.Gtk4), with
-# libadwaita, opens a window, draws a frame and quits, in each sandbox; it
-# gets HTTPS URLs with libsoup, loads an SVG with librsvg's loader, draws
-# text in a font file with pangocairo and checks spelling with enchant; the
-# runtime's own tools run too (Pango's and GIO's among them), its demos get
-# the windowless shim and Start menu shortcuts (in a temporary folder); the
-# SDK's exports build GTK programs without a recipe, and GNOME Text Editor
-# (recipes/gnome-text-editor.json) starts up in each sandbox. Images that
-# extend the runtime's extension point, its French and Vietnamese
+# with Meson and llvm-mingw's Clang, runs on GTK's runtime image
+# (org.gtk.Gtk4), with libadwaita, opens a window, draws a frame and quits, in
+# each sandbox; it gets HTTPS URLs with libsoup, loads an SVG with librsvg's
+# loader, draws text in a font file with pangocairo and checks spelling with
+# enchant; the runtime's own tools run too (Pango's and GIO's among them), its
+# demos get the windowless shim and Start menu shortcuts (in a temporary
+# folder); the SDK's exports build GTK programs without a recipe, and GNOME
+# Text Editor (recipes/gnome-text-editor.json) starts up in each sandbox.
+# Images that extend the runtime's extension point, its French and Vietnamese
 # dictionaries and an icon, join its runs once installed. Gaphor
 # (recipes/gaphor.json), a Python app on the runtime and PyGObject's, passes
-# its own self-test in each sandbox. The runtime
-# speaks the language LANGUAGE names; the SDK has gettext's tools and a
-# windres. Rnote (recipes/rnote.json), a Rust app, converts a Xournal++
-# document with its command-line program and starts up in each sandbox.
-# The apps' shortcuts have icons made from their SVGs; Text Editor and Rnote
-# are registered for their kinds of file (in a scratch registry key) and open
-# one given with --file in each sandbox. Pinta (recipes/no-publish/pinta.json),
-# a C# app, runs on the runtime and .NET's, and opens an image given with
-# --file in each sandbox. GTK built with MSVC (recipes/gtk4-msvc.json) runs
-# its demos, if the store has it.
+# its own self-test in each sandbox. The runtime speaks the language LANGUAGE
+# names; the SDK has gettext's tools and a windres. Rnote
+# (recipes/rnote.json), a Rust app, converts a Xournal++ document with its
+# command-line program and starts up in each sandbox. The apps' shortcuts have
+# icons made from their SVGs; Text Editor and Rnote are registered for their
+# kinds of file (in a scratch registry key) and open one given with --file in
+# each sandbox. Pinta (recipes/no-publish/pinta.json), a C# app, runs on the
+# runtime and .NET's, and opens an image given with --file in each sandbox.
+# GTK built with MSVC (recipes/gtk4-msvc.json) runs its demos, if the store
+# has it.
 #
 # In CI (the Reproduce workflow's gtk-suites job), it runs in a store of the
 # published images (tests/seed-store.sh), which it installs again rather

@@ -1093,6 +1093,29 @@ check "the loader binds all its imports" rust_bound
 # executable would show.
 rust_again() { [ "$(rebuilt_manifest "$work\\rust\\hello.json")" = "$rust_app_digest" ]; }
 check "built again, from the vendored crates in the cache, it's the same image" rust_again
+# The same program with llvm-mingw's image instead of zig's, as GTK's SDK
+# has it: GNU dlltool assembles with llvm-mingw's as alias, the cc crate
+# compiles with its cc, and rustc links with its own self-contained GNU ld,
+# not the x86_64-w64-mingw32-gcc llvm-mingw puts on PATH (whose lld has no
+# libgcc_eh), even for build scripts under --target.
+RUSTLLVM=test.build.rust-llvm
+[ -f "$ZIGSAW_HOME\\refs\\com.github.mstorsjo.llvm-mingw.json" ] || z build "$root\\recipes\\llvm-mingw.json" >/dev/null 2>&1
+mkdir -p "$work\\rust-llvm" && cp "$(cygpath -u "$work")"/rust/{Cargo.toml,Cargo.lock,build.rs,greet.c,main.rs} "$(cygpath -u "$work")/rust-llvm/" &&
+    sed -e "s/\"test.build.rust\"/\"$RUSTLLVM\"/" -e "s/@RUST@/$(manifest_of org.rust-lang.rust)/" -e "s/@BUSYBOX@/$bb_digest/" \
+        -e "s/\"zig\": \"org.ziglang.zig@@ZIG@\"/\"llvm\": \"com.github.mstorsjo.llvm-mingw@$(manifest_of com.github.mstorsjo.llvm-mingw)\"/" \
+        -e 's|"cargo build --offline|"export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=\\"$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained/x86_64-w64-mingw32-gcc.exe\\" \&\& cargo build --target x86_64-pc-windows-gnu --offline|' \
+        -e 's|cp target/release/hello.exe|cp target/x86_64-pc-windows-gnu/release/hello.exe|' \
+        "$root\\tests\\build\\rust\\hello.json.in" >"$work\\rust-llvm\\hello.json"
+check "it builds with llvm-mingw's image instead of zig's" z build "$work\\rust-llvm\\hello.json"
+rust_llvm_runs() {
+    local out
+    out=$(z run $RUSTLLVM zigsaw | tr -d '\r')
+    [ "$out" = "hello, zigsaw, from Rust
+hello from C, zigsaw (42)
+Windows is up: true" ] || { echo "got: $out"; return 1; }
+    "$imports" "$ZIGSAW_HOME\\deploy\\$(own_layer $RUSTLLVM)\\hello.exe"
+}
+check "it runs, and the loader binds all its imports" rust_llvm_runs
 fi
 
 # --- Go from source -----------------------------------------------------------------

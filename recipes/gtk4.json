@@ -36,7 +36,7 @@
     "Adwaita Demo": { "command": "adwaita-1-demo", "description": "libadwaita's widgets at work", "icon": "share/icons/org.gnome.Adwaita1.Demo.ico" }
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369"
   },
   "cleanup": [
     "/include",
@@ -84,7 +84,6 @@
     "/share/gir-1.0",
     "/share/gobject-introspection-1.0",
     "/bin/g-ir-*",
-    "nm.exe",
     "msg*.exe",
     "xgettext.exe",
     "envsubst.exe",
@@ -94,7 +93,6 @@
     "printf_ngettext.exe",
     "recode-sr-latin.exe",
     "iconv.exe",
-    "windres.exe",
     "/bin/autopoint",
     "/bin/gettextize",
     "/bin/gettext.sh",
@@ -116,7 +114,7 @@
   "modules": [
     {
       "name": "gtk",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:eed28b79b96fafb2edddc8d49cca89d3c63e578cc726af08dd1a5abf753d05d2" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369" }]
     },
     {
       "name": "icons",
