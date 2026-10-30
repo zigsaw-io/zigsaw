@@ -928,6 +928,20 @@ a string from its resources" ] || { echo "got: $out"; return 1; }
 check "it runs, with libc++ linked in" llvm_runs
 llvm_again() { [ "$(rebuilt_manifest "$work\\cmake-llvm\\hello.json")" = "$llvm_app_digest" ]; }
 check "built again a moment later, it's the same image" llvm_again
+
+# C++ across two DLLs and a program, each with its own copy of libc++,
+# libc++abi and libunwind, as Qt's DLLs have: exceptions, RTTI, the heap,
+# std::function, thread_local and static initialisers (tests/build/xdll).
+mkdir -p "$work\\xdll" && cp "$(cygpath -u "$root")"/tests/build/xdll/*.{h,cpp} "$(cygpath -u "$work")/xdll/" &&
+    sed -e "s/@LLVM@/$(manifest_of com.github.mstorsjo.llvm-mingw)/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\xdll\\xdll.json.in" >"$work\\xdll\\xdll.json"
+check "two DLLs and a program in C++ build with llvm-mingw's image" z build "$work\\xdll\\xdll.json"
+xdll_runs() {
+    local out
+    out=$(z run test.build.xdll | tr -d '\r') || { grep -v '^ok ' <<<"$out"; return 1; }
+    [ "$(grep -c '^ok ' <<<"$out")" = 19 ] || { echo "$out"; return 1; }
+}
+check "C++ works across the DLLs, each with libc++ linked in" xdll_runs
 fi
 
 # --- Meson --------------------------------------------------------------------------

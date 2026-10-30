@@ -15,22 +15,14 @@
     "Notes": { "command": "notes", "description": "Take notes" }
   },
   "runtimes": {
-    "qt": "io.qt.Qt6:6.12.0@sha256:1b2c095af5ed8eb7659f57f1ac94114aef76bbc6163781cbb8b26f2b351d52b5"
+    "qt": "io.qt.Qt6:6.12.0@sha256:ef6e37e28433f35f22b7a4f317b09b14071885d4eb206f15f28153903c1f48cd"
   },
   "sdk": {
-    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:e71f873331c783b866fc6af726e5bdcb0798ed9aa63189c6b7b846d0ad52cafa"
+    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:6080b660659e34bfd0e11156b81b18e3df30b1c5fac6631113a669c9701f0444"
   },
   "modules": [
     {
-      "name": "crt-noexport",
-      "build": [
-        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
-        "cc -c noexport.s -o noexport.o"
-      ]
-    },
-    {
       "name": "notes",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "CFLAGS": "-s", "CXXFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/nuttyartist/notes/archive/refs/tags/v2.3.1.tar.gz",
@@ -53,7 +45,7 @@
       "build": [
         "sed -i 's/^    Quick)$/    Quick CorePrivate GuiPrivate WidgetsPrivate)/' CMakeLists.txt",
         "grep -q '^    Quick CorePrivate GuiPrivate WidgetsPrivate)$' CMakeLists.txt",
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DUPDATE_CHECKER=OFF -DGIT_REVISION=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DUPDATE_CHECKER=OFF -DGIT_REVISION=OFF",
         "cmake --build out",
         "cmake --install out"
       ]

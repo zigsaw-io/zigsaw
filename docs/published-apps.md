@@ -13,7 +13,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Node.js | `org.nodejs.node` | 24.21.0 | `node`, `npm`, `npx` |
 | Prettier (on Node.js) | `io.prettier.prettier` | 3.9.9 | `prettier` |
 | Python | `org.python.python` | 3.14.7 | `python` |
-| zig | `org.ziglang.zig` | 0.17.0 (and 0.16.0, which GTK's, Qt's and gettext's chains still pin; SQLite, ripgrep, bat and zstd build on 0.17.0 from iteration 59, and Meson, make, cargo-c, Ghostscript and PHP's SDK, with the extensions it builds, from iteration 60) | `zig` |
+| zig | `org.ziglang.zig` | 0.17.0 (and 0.16.0, which GTK's and gettext's chains still pin; SQLite, ripgrep, bat and zstd build on 0.17.0 from iteration 59, and Meson, make, cargo-c, Ghostscript and PHP's SDK, with the extensions it builds, from iteration 60) | `zig` |
 | SQLite (built from source) | `org.sqlite.sqlite3` | 3.53.4 | `sqlite3` |
 | Rust (windows-gnu) | `org.rust-lang.rust` | 1.99.0 | `cargo`, `rustc` |
 | ripgrep (built from source) | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
@@ -71,7 +71,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Logisim-evolution (built from source with Gradle, on Java's runtime) | `com.github.reds.LogisimEvolution` | 5.0.0 | `logisim`, `logisim-gui` |
 | Scene Builder (built from source with Maven, with OpenJFX, on the JDK) | `com.gluonhq.SceneBuilder` | 26.0.0 | `scenebuilder` |
 | Qt 6 SDK's first half: qtbase and the modules before QML (built from source, for Qt's SDK) | `io.qt.Qt6.Sdk.Base` | 6.12.0 | |
-| Qt 6 SDK, the Widgets set with QML and Qt Quick (built from source; with zig, CMake and BusyBox) | `io.qt.Qt6.Sdk` | 6.12.0 | `cc`, `c++`, `ar`, `rc`, `cmake`, `ninja`, `sh`, `make`, `qmake`, `qtpaths`, `lupdate`, `lrelease` |
+| Qt 6 SDK, the Widgets set with QML and Qt Quick (built from source; with llvm-mingw, CMake and BusyBox) | `io.qt.Qt6.Sdk` | 6.12.0 | `cc`, `c++`, `ar`, `windres`, `cmake`, `ninja`, `sh`, `make`, `qmake`, `qtpaths`, `lupdate`, `lrelease` |
 | Qt 6, with Qt Widgets Designer and Qt Linguist (from its SDK) | `io.qt.Qt6` | 6.12.0 | `designer`, `linguist`, `pixeltool`, `qml`, `qtdiag` |
 | Flameshot (built from source, on Qt) | `org.flameshot.Flameshot` | 14.0.0 | `flameshot` |
 | Notes (built from source, on Qt Quick) | `io.github.nuttyartist.notes` | 2.3.1 | `notes` |
@@ -122,11 +122,12 @@ GTK's runtime has an [extension point](recipes.md#gtks-data-directories-and-exte
 installed, the Vietnamese and French dictionaries join every GTK app's
 spell checking.
 [Qt 6](recipes.md#qt)'s SDK builds Qt's Widgets set, QML and Qt Quick from
-source with CMake and zig, in two halves (qtbase, qtsvg, qtimageformats and
-qtshadertools; then qtdeclarative, qttools and qttranslations), with CMake,
-zig and BusyBox as runtimes, so it builds Qt programs without a recipe too;
-its runtime, made from it, runs Qt Widgets Designer and Qt Linguist and gets
-their shortcuts, and its `qml` runs QML files. Flameshot, a screenshot tool,
+source with CMake and llvm-mingw's Clang, in two halves (qtbase, qtsvg,
+qtimageformats and qtshadertools; then qtdeclarative, qttools and
+qttranslations), with CMake, llvm-mingw and BusyBox as runtimes, so it
+builds Qt programs without a recipe too; its runtime, made from it, runs
+Qt Widgets Designer and Qt Linguist and gets their shortcuts, and its `qml`
+runs QML files. Flameshot, a screenshot tool,
 runs on it, in its tray, and `flameshot full --path <dir>` saves a
 screenshot from the command line, in every sandbox; Notes, a note-taking
 app whose kanban board is Qt Quick, opens in every sandbox too.

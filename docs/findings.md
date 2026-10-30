@@ -1759,6 +1759,58 @@ the same machine as iteration 60):
 - **A configure script finds no tool on PATH under B:** unless
   `PATH_SEPARATOR=;`: libiconv's `WINDRES` was empty until set.
 
+## Qt on llvm-mingw (iteration 62)
+
+Qt's SDK halves, its runtime, Flameshot and Notes moved from zig 0.16 to
+the llvm-mingw image iteration 61 published (`1fd5d6d8`), which the SDK
+now carries as a runtime in zig's place (scratch `D:\zs\i62`, the same
+machine):
+
+| | with zig 0.16 | with llvm-mingw |
+|---|---|---|
+| Qt's SDK base, here | 25 min (qtbase 17.5) | 16.5 min (qtbase 12.3) |
+| Qt's SDK on it, here | 26 min (qtdeclarative 14, its second pass 2.5) | 18.6 to 19.3 min (9.9, 1.6; qttools 4) |
+| least free commit, base / SDK, 18 jobs | | 6.2 / 4.6 GB |
+| base / SDK / runtime layer | 35.3 / 87.5 / 55.6 MB | 37.2 / 91.3 / 57.4 MB |
+| runtime deployed | 153 MB | 160 MB |
+| the toolchain an SDK pull brings | zig, 88 MB | llvm-mingw, 108 MB |
+
+- **C++ works across DLLs that each link libc++ in**, with llvm-mingw's
+  static libc++, libc++abi and libunwind as with zig's: 19 checks of two
+  DLLs and a program ([`tests/build/xdll`](../tests/build/xdll)) passed in
+  all three sandboxes before Qt was rebuilt: exceptions of a DLL's class
+  and of a header-only one, caught in the other DLL and in the program,
+  thrown through another DLL's frame, and rethrown from an
+  `exception_ptr`; `dynamic_cast`, `typeid` and virtual calls on a class
+  whose vtable is in the other DLL, and on a header-only one; strings and
+  vectors grown and freed across them; `std::function` both ways;
+  `thread_local`; static initialisers. The DLLs export only what's marked
+  `dllexport`: none of the C runtime's symbols, which zig's needed an
+  object to keep out.
+- **What zig needed and llvm-mingw doesn't:** the `synchronization` and
+  `runtimeobject` import libraries (llvm-mingw's mingw-w64 has both),
+  QtCore asking for `-Wl,--subsystem,windows` (Clang honours `-mwindows`;
+  the SDK's build checks Designer's subsystem), the object that kept the
+  C runtime's symbols out of the exports, `-s` in `CFLAGS` and
+  `-Wl,-Brepro`, and `rc`'s options. llvm-windres reads the manifest's
+  unquoted file name too; the quoting edit stays, as every resource
+  compiler reads a quoted one.
+- **llvm-windres unquotes `-D` values once**, as GNU windres does by
+  running its preprocessor through a shell: CMake passes
+  `-DFLAMESHOT_VERSION_STRING=\"14.0.0\"`, the program gets
+  `-DFLAMESHOT_VERSION_STRING="14.0.0"`, and the resource script saw
+  `14.0.0`, which isn't a string (`expected BLOCK or VALUE, got .0.0`).
+  `--use-temp-file` keeps the quotes. CMake reads `RCFLAGS` for
+  `CMAKE_RC_FLAGS`, so Qt's SDK sets `RCFLAGS=--use-temp-file` for the
+  builds on it; Qt's own modules pass no quoted values to windres, and
+  GDAL's and PostgreSQL's chains don't either.
+- **LLVM 23's libc++ again needs an include** its older headers brought
+  in: Flameshot's `strfparse.cpp` uses `std::back_inserter` without
+  `<iterator>`. Qt itself and Notes built as they were.
+- **The SDK's layer is the same whatever its config says**: setting
+  `RCFLAGS` made a new SDK manifest with the layer of the build before it
+  (`fead0ba1`), so the runtime's layer, made from it, stayed too.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

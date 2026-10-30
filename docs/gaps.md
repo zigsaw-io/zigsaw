@@ -368,6 +368,7 @@
 - DLLs that zig links without any `dllexport` export the C runtime's
   `atexit`, `_CRT_INIT` and `__mingw_module_is_dll` too, unless the link
   includes an object that excludes them, as GTK's SDK recipe does.
+  llvm-mingw's lld doesn't export them.
 - A GUI app whose executable is built as a console program, as
   libadwaita's demo is upstream, gets a console shim, and a console window
   from the Start menu; its recipe has to build it as a GUI program
@@ -654,11 +655,11 @@
   passes `flameshot.exe`'s output on instead.
 - CI checks Qt's family, like GTK's, on a push only when something it's
   built or tested from changed, and weekly otherwise. Its SDK is built in
-  two halves at once, the base (25 minutes here) and the SDK on the
-  published base (26 here; 48 before qtdeclarative's unity build). Runners
-  differ in speed by half again: the base took 34 and 49 minutes on two of
-  them, and the SDK before its unity build 70 and 109, so the jobs'
-  timeout is 180 minutes.
+  two halves at once, the base (16.5 minutes here with llvm-mingw, 25 with
+  zig) and the SDK on the published base (19 here; 26 with zig, 48 before
+  qtdeclarative's unity build). Runners differ in speed by half again: with
+  zig, the base took 34 and 49 minutes on two of them, and the SDK before
+  its unity build 70 and 109, so the jobs' timeout is 180 minutes.
 - In an AppContainer, ORAS can't pull into a folder, nor skopeo copy into
   one (`oci:`, `dir:`): both resolve the path with Go's
   `filepath.EvalSymlinks`, which opens each folder from the drive's root

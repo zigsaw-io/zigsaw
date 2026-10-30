@@ -2,21 +2,21 @@
   "id": "io.qt.Qt6.Sdk",
   "version": "6.12.0",
   "name": "Qt 6 SDK",
-  "summary": "Qt 6's Widgets set, QML and Qt Quick built with zig, with CMake, Ninja and zig's compilers for building Qt apps (qtbase and more from io.qt.Qt6.Sdk.Base)",
+  "summary": "Qt 6's Widgets set, QML and Qt Quick built with Clang (llvm-mingw), with CMake, Ninja and Clang for building Qt apps (qtbase and more from io.qt.Qt6.Sdk.Base)",
   "homepage": "https://www.qt.io/",
   "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
   "command": "bin/qtpaths.exe",
   "path": ["bin"],
   "env": {
     "CMAKE_PREFIX_PATH": "${app}",
-    "RC": "rc /:auto-includes gnu"
+    "RCFLAGS": "--use-temp-file"
   },
   "permissions": { "sandbox": "soft", "filesystem": ["cwd"] },
   "exports": {
-    "cc": { "command": "${zig}/zig.exe", "args": ["cc", "-target", "x86_64-windows-gnu"] },
-    "c++": { "command": "${zig}/zig.exe", "args": ["c++", "-target", "x86_64-windows-gnu"] },
-    "ar": { "command": "${zig}/zig.exe", "args": ["ar"] },
-    "rc": { "command": "${zig}/zig.exe", "args": ["rc", "/:auto-includes", "gnu"] },
+    "cc": { "command": "${llvm}/bin/x86_64-w64-mingw32-clang.exe" },
+    "c++": { "command": "${llvm}/bin/x86_64-w64-mingw32-clang++.exe" },
+    "ar": { "command": "${llvm}/bin/llvm-ar.exe" },
+    "windres": { "command": "${llvm}/bin/x86_64-w64-mingw32-windres.exe" },
     "cmake": { "command": "${cmake}/bin/cmake.exe" },
     "ninja": { "command": "${cmake}/bin/ninja.exe" },
     "sh": { "command": "${busybox}/busybox.exe", "args": ["sh"] },
@@ -29,24 +29,16 @@
   "cleanup": ["*.bat"],
   "runtimes": {
     "cmake": "org.cmake.cmake:4.4.4@sha256:fa7efc2e143063055620628a8867dbd904bb0464a36f6a44943f7dba50a8bcd0",
-    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:1fd5d6d8ada26770ad03d85e375e007e4b3bfcfa6d07201e93f5ad01a72c025e",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [
     {
-      "name": "crt-noexport",
-      "build": [
-        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
-        "cc -c noexport.s -o noexport.o"
-      ]
-    },
-    {
       "name": "base",
-      "sources": [{ "image": "io.qt.Qt6.Sdk.Base:6.12.0@sha256:c3df032b2c90454aa034c86c02884704eac6471a7fb3f404718ff956c66e034a" }]
+      "sources": [{ "image": "io.qt.Qt6.Sdk.Base:6.12.0@sha256:62e471c1d23599566ea232db235d58eb18c6f9eddbbf8436212c4a2bdd8427ea" }]
     },
     {
       "name": "qtdeclarative",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "CFLAGS": "-s", "CXXFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/qt/qtdeclarative/archive/refs/tags/v6.12.0.tar.gz",
@@ -60,7 +52,7 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF -DQT_UNITY_BUILD=ON -DFEATURE_quickcontrols2_imagine=OFF -DFEATURE_quickcontrols2_stylekit=OFF -DPython_EXECUTABLE=B:/src/qtdeclarative/zigsaw/python/python.exe",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF -DQT_UNITY_BUILD=ON -DFEATURE_quickcontrols2_imagine=OFF -DFEATURE_quickcontrols2_stylekit=OFF -DPython_EXECUTABLE=B:/src/qtdeclarative/zigsaw/python/python.exe",
         "cmake --build out",
         "find out -path '*/.rcc/qmlcache/*' -type f \\( -name '*.cpp' -o -name '*.aotstats' \\) -delete",
         "cmake --build out",
@@ -69,7 +61,6 @@
     },
     {
       "name": "qttools",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "CFLAGS": "-s", "CXXFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/qt/qttools/archive/refs/tags/v6.12.0.tar.gz",
@@ -78,14 +69,13 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF -DFEATURE_assistant=OFF -DFEATURE_clang=OFF -DFEATURE_qdoc=OFF -DFEATURE_qdbus=OFF -DFEATURE_distancefieldgenerator=OFF -DFEATURE_qtattributionsscanner=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF -DFEATURE_assistant=OFF -DFEATURE_clang=OFF -DFEATURE_qdoc=OFF -DFEATURE_qdbus=OFF -DFEATURE_distancefieldgenerator=OFF -DFEATURE_qtattributionsscanner=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
     },
     {
       "name": "qttranslations",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "CFLAGS": "-s", "CXXFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/qt/qttranslations/archive/refs/tags/v6.12.0.tar.gz",
@@ -94,7 +84,7 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
@@ -103,7 +93,9 @@
       "name": "relocate",
       "build": [
         "sed -i 's|^prefix=B:/prefix$|prefix=${pcfiledir}/../..|' \"$PREFIX\"/lib/pkgconfig/*.pc",
-        "! grep -l 'B:/prefix' \"$PREFIX\"/lib/pkgconfig/*.pc"
+        "! grep -l 'B:/prefix' \"$PREFIX\"/lib/pkgconfig/*.pc",
+        "! find \"$PREFIX\" -name '*.dll' -exec objdump -p {} + | grep -iE 'DLL Name: lib(c\\+\\+|unwind|winpthread)'",
+        "objdump -p \"$PREFIX/bin/designer.exe\" | grep -q 'Subsystem.*(Windows GUI)'"
       ]
     }
   ]

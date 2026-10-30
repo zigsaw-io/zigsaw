@@ -719,7 +719,8 @@ list zig's, and nothing else changes: the image gives the same aliases
 `dlltool`; not `rc` or `as`) and the same variables, `CC=cc`, `CXX=c++`, `RC=windres`
 and `LDFLAGS=-s`, and its `bin` is on the build's PATH, with the
 `x86_64-w64-mingw32-*` tools that configure scripts look for with `--host`.
-GDAL's and PostgreSQL's images, and what's built on them, build with it.
+GDAL's and PostgreSQL's images, and what's built on them, build with it, and
+so does [Qt's SDK](#qt), whose runtime it is, so Qt apps build with it too.
 
 - **Objects and links are reproducible without a flag**: Clang writes the
   time it compiled an object into its header, which static libraries keep,
@@ -731,7 +732,10 @@ GDAL's and PostgreSQL's images, and what's built on them, build with it.
 - **libc++, libunwind and winpthreads link in**: the image has their
   static libraries only, so a C++ program or DLL needs none of llvm-mingw's
   DLLs, as with zig's libc++. Two extensions with their own C++ can't load
-  two libc++ DLLs into one process.
+  two libc++ DLLs into one process. C++ still works across DLLs that each
+  have their own copy, as Qt's do: exceptions, `dynamic_cast` and `typeid`,
+  the heap, `std::function`, `thread_local` and static initialisers
+  ([`tests/build/xdll`](tests/build/xdll), in build.sh's `llvm` section).
 - **It's lld, as GNU ld behaves**: `--export-all-symbols` (which leaves
   the CRT's symbols out), `--allow-multiple-definition`, `-lX` finding
   `libX.dll.a`, and compiler-rt's `__cpu_model` for
@@ -1345,7 +1349,8 @@ before).
 
 ## Qt
 
-Qt 6 comes as two images too, built from source with CMake, Ninja and zig:
+Qt 6 comes as two images too, built from source with CMake, Ninja and
+Clang (llvm-mingw, since iteration 62; zig 0.16 before):
 
 - **[`io.qt.Qt6.Sdk`](recipes/qt6-sdk.json)** builds Qt 6.12.0's Widgets
   set and QML: qtbase (Core, Gui, Widgets, Network, Sql, PrintSupport,
@@ -1355,26 +1360,32 @@ Qt 6 comes as two images too, built from source with CMake, Ninja and zig:
   `lrelease`) and qttranslations. qtbase uses its own copies
   of zlib, libpng, libjpeg, HarfBuzz, FreeType, PCRE2, md4c and SQLite, so
   the Qt family needs nothing from GTK's; TLS is Schannel's, Windows' own.
-  Its runtimes are zig, CMake and BusyBox, so builds that use it get CMake
-  and Ninja without naming them, and it exports their commands, Qt's
+  Its runtimes are [llvm-mingw](#clang-llvm-mingw), CMake and BusyBox, so
+  builds that use it get Clang, CMake and Ninja without naming them, and it
+  exports their commands, Qt's
   `qmake`, `qtpaths`, `lupdate` and `lrelease` (Designer and Linguist come
   from the runtime: the first app installed keeps a command's name, and the
   runtime's Start menu shortcuts run its own), and sets
   `CMAKE_PREFIX_PATH` to itself, so it builds Qt programs
-  [without a recipe](#building-qt-programs-without-a-recipe). Since
+  [without a recipe](#building-qt-programs-without-a-recipe). It also sets
+  `RCFLAGS=--use-temp-file`, which CMake passes to llvm-mingw's `windres`:
+  without it, `windres` takes the quotes off a definition's value, as GNU's
+  does, and a resource script that uses a quoted `-D` value as a string
+  (Flameshot's version) fails. Since
   iteration 40 it's built in two halves, as GTK's is, so that CI builds them
   at once: [`io.qt.Qt6.Sdk.Base`](recipes/qt6-sdk-base.json) builds
   qtbase, qtsvg, qtimageformats and qtshadertools, and the SDK takes the
   base's files as an [image source](#images-as-sources) and builds
   qtdeclarative, qttools and qttranslations on them. From scratch here the
-  base takes 25 minutes (most of it qtbase's 1,900 build steps), and the SDK
-  on it 26 (qtdeclarative takes 14, and its second pass 2.5; they took 48,
-  32 and 7.5 before its unity build, in iteration 42).
+  base takes 16.5 minutes (most of it qtbase's 1,900 build steps, 12), and
+  the SDK on it 19 (qtdeclarative takes 10, and its second pass 1.5). With
+  zig, until iteration 62, they took 25 and 26 (qtdeclarative 14 and 2.5;
+  48, 32 and 7.5 before its unity build, in iteration 42).
 - **[`io.qt.Qt6`](recipes/qt6.json)** is the runtime: the SDK's files as an
   [image source](#images-as-sources), without the headers, libraries, CMake
-  files and build tools (QML's too), in seconds: 153 MB (56 MB compressed;
-  75 and 29 before QML and Qt Quick, 163 and 59 with the Quick Controls
-  styles left out since iteration 42). Apps list it in
+  files and build tools (QML's too), in seconds: 160 MB (57 MB compressed;
+  153 and 56 built with zig, 75 and 29 before QML and Qt Quick, 163 and 59
+  with the Quick Controls styles left out since iteration 42). Apps list it in
   their `runtimes`. As an app, it runs Designer, exports `designer`,
   `linguist`, `pixeltool`, `qml` and `qtdiag`, adds "Qt Widgets Designer"
   and "Qt Linguist" to the Start menu, and keeps their settings
@@ -1390,10 +1401,9 @@ An app built against Qt, as [`tests/qt`](tests/qt) is:
 "modules": [
   {
     "name": "hello",
-    "env": { "LDFLAGS": "-s -Wl,-Brepro" },
     "sources": [{ "path": "CMakeLists.txt" }, { "path": "hello.cpp" }],
     "build": [
-      "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\"",
+      "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\"",
       "cmake --build out",
       "cmake --install out"
     ]
@@ -1414,27 +1424,15 @@ registry, which apps keep apart only for the keys their image declares
 ([registry](#registry-settings-kept-with-the-app)). Qt apps run in all
 three sandboxes.
 
-Building Qt with zig needed these, in
+Building Qt needs these, in
 [`qt6-sdk/qtbase.sh`](recipes/qt6-sdk/qtbase.sh) and the recipe:
 
-- **Two import libraries zig's MinGW lacks**, `synchronization`
-  (`WaitOnAddress`, for QtCore's futex) and `runtimeobject` (WinRT's
-  activation and HSTRING functions), made by
-  [`qt6-sdk/winlibs.sh`](recipes/qt6-sdk/winlibs.sh) as the import
-  libraries of stub DLLs named after the system DLLs that have the
-  functions (`api-ms-win-core-synch-l1-2-0.dll`, `combase.dll`), and found
-  with `-L`. QtCore no longer passes `runtimeobject` on to apps, which only
-  QtCore calls.
-- **A GUI program's subsystem.** CMake makes a `WIN32_EXECUTABLE` a GUI
-  program with `-mwindows`, which zig's `cc` ignores: Designer, and every
-  app's window, came with a console. QtCore now asks executables with
-  `WIN32_EXECUTABLE` that link it for `-Wl,--subsystem,windows`, so apps get
-  it too, through Qt's CMake files.
+- **An include** `qthread_win.cpp` relied on MSVC's headers for (`qspan.h`).
 - **The manifest's `.rc`.** Qt embeds an executable's manifest with a
   one-line resource script that names the file unquoted; zig's `rc` read
   `lrelease-pro_internal_qt.manifest` as `lrelease` and an expression.
-  Quoted, names with a `-` work (Flameshot's `flameshot-cli` has one).
-- **An include** `qthread_win.cpp` relied on MSVC's headers for (`qspan.h`).
+  llvm-mingw's `windres` reads it either way; the name stays quoted, which
+  every resource compiler reads.
 - **Named pipes in an AppContainer.** A process in one may create named
   pipes only in its own namespace, `\\.\pipe\LOCAL\`, so QLocalServer
   couldn't listen, and an app's single-instance check (Flameshot's
@@ -1457,6 +1455,16 @@ Building Qt with zig needed these, in
   git submodules are empty: Assistant's HTML viewer (qlitehtml) is one, and
   Assistant, with no documentation built to read, is left out.
 
+Built with zig, until iteration 62, Qt needed more: import libraries for
+`synchronization` and `runtimeobject`, which zig's MinGW lacks (stub DLLs'
+ones); QtCore asking executables for `-Wl,--subsystem,windows`, as zig's
+`cc` ignores the `-mwindows` CMake gives a `WIN32_EXECUTABLE`; an object
+that kept the C runtime's symbols out of the DLLs' exports; and `rc`'s
+options in `CMAKE_RC_FLAGS`. llvm-mingw has the libraries, honours
+`-mwindows` (the SDK's build checks that Designer is a GUI program), and
+its lld exports only what's marked `dllexport`
+([findings](findings.md#qt-on-llvm-mingw-iteration-62)).
+
 Since iteration 40 the SDK has QML and Qt Quick too: qtshadertools (`qsb`,
 with its own glslang and SPIRV-Cross) and qtdeclarative (QML with its JIT,
 Qt Quick, Quick Controls, Quick Dialogs, Layouts, Shapes, Effects and
@@ -1470,8 +1478,9 @@ twelfth of qtdeclarative's build, and 9 MB of the runtime.
 qtdeclarative is built as a unity build (`-DQT_UNITY_BUILD=ON`, which
 Qt's CI builds too): CMake compiles its C++ files 32 to a file, so each
 batch parses Qt's headers once. With that and the two styles out, its build
-went from 32 minutes here to 14, and from 712 minutes of CPU time to 258;
-the files it makes differ, but build the same from store to store.
+went from 32 minutes here to 14 (with zig), and from 712 minutes of CPU
+time to 258; the files it makes differ, but build the same from store to
+store.
 
 qtdeclarative's build runs a Python script, so its module unpacks Python's
 embeddable zip, which stays in the build. Its module builds twice: qmlcachegen compiles a module's QML to C++
@@ -1487,16 +1496,18 @@ a `.qml` file, and adds "Qt Linguist" to the Start menu. qmlls isn't built
 `qt_add_qml_module`; Qt's own come from the runtime's `qml` folder, which Qt
 finds from `Qt6Core.dll` as it finds its plugins.
 
-zig links its libc++ into each DLL and
-program, so Qt's 14 DLLs in the runtime each have their own copy: exceptions,
-`dynamic_cast` and `typeid` work across them (libc++ compares type names on
-Windows), and so do `std::string`, `std::function` and `thread_local`, as a
-probe found before Qt was built ([findings](findings.md#qt-6-with-zig-iteration-39)).
+llvm-mingw's image links libc++ into each DLL and program, as zig did, so
+Qt's 14 DLLs in the runtime each have their own copy, and the SDK's build
+checks that none imports a DLL of llvm-mingw's: exceptions, `dynamic_cast`
+and `typeid` work across them (libc++ compares type names on Windows), and
+so do `std::string`, `std::function` and `thread_local`, as
+[`tests/build/xdll`](tests/build/xdll) checks
+([findings](findings.md#qt-6-with-zig-iteration-39) for zig's).
 
 ### Building Qt programs without a recipe
 
 With the store's `bin` on PATH, the SDK's `cmake` builds a Qt project, with
-its Ninja, zig's `c++` and `rc`, and finds Qt:
+its Ninja, llvm-mingw's `c++` and `windres`, and finds Qt:
 
 ```
 zigsaw pull io.qt.Qt6.Sdk
@@ -1517,7 +1528,9 @@ what its CMake would fetch with git: Qt-Color-Widgets (a commit, put where
 its CMake looks first), KDSingleApplication 1.2.0 (the same), and QHotkey,
 which it fetched from `master` (pinned at that branch's commit when 14.0.0
 came out, given with `FETCHCONTENT_SOURCE_DIR_QHOTKEY`). Its update check
-and Imgur upload are off. Its `flameshot-cli.exe`, a console program that
+and Imgur upload are off. One of its files uses `std::back_inserter`
+without including `<iterator>`, which LLVM 23's libc++ no longer brings in
+with `<algorithm>`; the recipe adds the include. Its `flameshot-cli.exe`, a console program that
 runs `flameshot.exe` through cmd.exe, sizes its command line by
 `sizeof(std::wstring)`, about 80 characters, which a path in the store
 exceeds, so the image leaves it out; `zigsaw run` gives `flameshot.exe`

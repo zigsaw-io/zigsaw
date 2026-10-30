@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Qt end to end: an app built against Qt's SDK image (io.qt.Qt6.Sdk), with
-# CMake and zig, runs on Qt's runtime image (io.qt.Qt6), opens a window and
-# paints it, in each sandbox; Qt finds its plugins and translations in the
-# runtime's deployment (it's relocatable), has the SVG, WebP and TIFF image
-# plugins and Schannel for TLS, and keeps an app's files in its data
-# directory. A Qt Quick program of the same app draws a window of Controls
+# CMake and llvm-mingw's Clang, runs on Qt's runtime image (io.qt.Qt6),
+# opens a window and paints it, in each sandbox; Qt finds its plugins and
+# translations in the runtime's deployment (it's relocatable), has the SVG,
+# WebP and TIFF image plugins and Schannel for TLS, and keeps an app's files
+# in its data directory. A Qt Quick program of the same app draws a window of Controls
 # with Direct3D 11 in each sandbox, with Qt's QML modules from the runtime,
 # which has the Controls styles it should.
 # The SDK's exports build a Qt program without a recipe (CMake, finding Qt
@@ -167,10 +167,10 @@ printf '%s\n' 'import QtQuick' 'Window {' '    visible: true' \
 check "the runtime's qml tool runs a QML file" sh -c "timeout 60 \"\$0\" run --env=QT_FORCE_STDERR_LOGGING=1 --command=qml io.qt.Qt6 ran.qml 2>&1 | tr -d '\r' | grep -q 'ran on windows'" "$zigsaw"
 
 # Building without a recipe: the SDK's exports, from the store's bin, as
-# cmake (with its ninja, zig's c++ and rc); the program then runs on the
-# runtime. The first app installed keeps a command's name: in a store that
+# cmake (with its ninja, llvm-mingw's c++ and windres); the program then
+# runs on the runtime. The first app installed keeps a command's name: in a store that
 # had CMake's own image first, the `cmake` shim runs that one, which has
-# neither zig nor Qt (CI's qt-suites job seeded it so once), so then this
+# neither a compiler nor Qt (CI's qt-suites job seeded it so once), so then this
 # runs the SDK's as its shim would. On failure, CMake's output is kept in
 # LOG_DIR.
 mkdir -p "$work\\loose" && cp "$work\\hello.cpp" "$work\\CMakeLists.txt" "$work\\loose\\"

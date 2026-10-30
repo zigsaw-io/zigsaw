@@ -21,7 +21,7 @@
     "Qt Linguist": { "command": "linguist", "description": "Translate Qt apps" }
   },
   "sdk": {
-    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:e71f873331c783b866fc6af726e5bdcb0798ed9aa63189c6b7b846d0ad52cafa"
+    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:6080b660659e34bfd0e11156b81b18e3df30b1c5fac6631113a669c9701f0444"
   },
   "cleanup": [
     "/include",
@@ -95,7 +95,7 @@
   "modules": [
     {
       "name": "qt",
-      "sources": [{ "image": "io.qt.Qt6.Sdk:6.12.0@sha256:e71f873331c783b866fc6af726e5bdcb0798ed9aa63189c6b7b846d0ad52cafa" }]
+      "sources": [{ "image": "io.qt.Qt6.Sdk:6.12.0@sha256:6080b660659e34bfd0e11156b81b18e3df30b1c5fac6631113a669c9701f0444" }]
     },
     {
       "name": "qt-conf",

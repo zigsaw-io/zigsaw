@@ -8,33 +8,19 @@
   "command": "bin/qtpaths.exe",
   "path": ["bin"],
   "env": {
-    "CMAKE_PREFIX_PATH": "${app}",
-    "RC": "rc /:auto-includes gnu"
+    "CMAKE_PREFIX_PATH": "${app}"
   },
   "permissions": { "filesystem": ["cwd"] },
   "exports": {},
   "cleanup": ["*.bat"],
   "runtimes": {
     "cmake": "org.cmake.cmake:4.4.4@sha256:fa7efc2e143063055620628a8867dbd904bb0464a36f6a44943f7dba50a8bcd0",
-    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:1fd5d6d8ada26770ad03d85e375e007e4b3bfcfa6d07201e93f5ad01a72c025e",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [
     {
-      "name": "crt-noexport",
-      "build": [
-        "printf '%s\\n' '.section .drectve' '.ascii \" -exclude-symbols:atexit,_CRT_INIT,__mingw_module_is_dll\"' > noexport.s",
-        "cc -c noexport.s -o noexport.o"
-      ]
-    },
-    {
-      "name": "winlibs",
-      "sources": [{ "path": "qt6-sdk/winlibs.sh" }],
-      "build": ["sh winlibs.sh B:/src/winlibs"]
-    },
-    {
       "name": "qtbase",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o -LB:/src/winlibs", "CFLAGS": "-s", "CXXFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/qt/qtbase/archive/refs/tags/v6.12.0.tar.gz",
@@ -46,14 +32,13 @@
       ],
       "build": [
         "sh zigsaw/qtbase.sh",
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DQT_BUILD_BENCHMARKS=OFF -DBUILD_WITH_PCH=OFF -DFEATURE_dbus=OFF -DFEATURE_openssl=OFF -DFEATURE_icu=OFF -DFEATURE_system_zlib=OFF -DFEATURE_system_png=OFF -DFEATURE_system_jpeg=OFF -DFEATURE_system_harfbuzz=OFF -DFEATURE_system_pcre2=OFF -DFEATURE_system_freetype=OFF -DFEATURE_system_doubleconversion=OFF -DFEATURE_system_md4c=OFF -DFEATURE_system_sqlite=OFF -DFEATURE_sql_psql=OFF -DFEATURE_sql_mysql=OFF -DFEATURE_sql_oci=OFF -DFEATURE_sql_db2=OFF -DFEATURE_sql_ibase=OFF -DFEATURE_sql_mimer=OFF -DQT_GENERATE_SBOM=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DQT_BUILD_BENCHMARKS=OFF -DBUILD_WITH_PCH=OFF -DFEATURE_dbus=OFF -DFEATURE_openssl=OFF -DFEATURE_icu=OFF -DFEATURE_system_zlib=OFF -DFEATURE_system_png=OFF -DFEATURE_system_jpeg=OFF -DFEATURE_system_harfbuzz=OFF -DFEATURE_system_pcre2=OFF -DFEATURE_system_freetype=OFF -DFEATURE_system_doubleconversion=OFF -DFEATURE_system_md4c=OFF -DFEATURE_system_sqlite=OFF -DFEATURE_sql_psql=OFF -DFEATURE_sql_mysql=OFF -DFEATURE_sql_oci=OFF -DFEATURE_sql_db2=OFF -DFEATURE_sql_ibase=OFF -DFEATURE_sql_mimer=OFF -DQT_GENERATE_SBOM=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
     },
     {
       "name": "qtsvg",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "CFLAGS": "-s", "CXXFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/qt/qtsvg/archive/refs/tags/v6.12.0.tar.gz",
@@ -62,14 +47,13 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
     },
     {
       "name": "qtimageformats",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "CFLAGS": "-s", "CXXFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/qt/qtimageformats/archive/refs/tags/v6.12.0.tar.gz",
@@ -78,14 +62,13 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF -DFEATURE_system_tiff=OFF -DFEATURE_system_webp=OFF -DFEATURE_jasper=OFF -DFEATURE_mng=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF -DFEATURE_system_tiff=OFF -DFEATURE_system_webp=OFF -DFEATURE_jasper=OFF -DFEATURE_mng=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
     },
     {
       "name": "qtshadertools",
-      "env": { "LDFLAGS": "-s -Wl,-Brepro B:/src/crt-noexport/noexport.o", "CFLAGS": "-s", "CXXFLAGS": "-s" },
       "sources": [
         {
           "url": "https://github.com/qt/qtshadertools/archive/refs/tags/v6.12.0.tar.gz",
@@ -94,7 +77,7 @@
         }
       ],
       "build": [
-        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" \"-DCMAKE_RC_FLAGS=/:auto-includes gnu\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF",
+        "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_VERSION=10.0.26300 -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF -DBUILD_WITH_PCH=OFF -DQT_GENERATE_SBOM=OFF",
         "cmake --build out",
         "cmake --install out"
       ]
@@ -103,7 +86,8 @@
       "name": "relocate",
       "build": [
         "sed -i 's|^prefix=B:/prefix$|prefix=${pcfiledir}/../..|' \"$PREFIX\"/lib/pkgconfig/*.pc",
-        "! grep -l 'B:/prefix' \"$PREFIX\"/lib/pkgconfig/*.pc"
+        "! grep -l 'B:/prefix' \"$PREFIX\"/lib/pkgconfig/*.pc",
+        "! find \"$PREFIX\" -name '*.dll' -exec objdump -p {} + | grep -iE 'DLL Name: lib(c\\+\\+|unwind|winpthread)'"
       ]
     }
   ]
