@@ -10,8 +10,8 @@
   "extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17", "needs": ["net.php.php.Igbinary"] },
   "exports": {},
   "sdk": {
-    "phpsdk": "net.php.php.Sdk:8.5.11@sha256:b8828d57c9aaf22e1093b84f2e1c2a60004d189a27ca6e884505076af0786656",
-    "igbinary": "net.php.php.Igbinary:3.2.17RC1@sha256:8596d692f8949936855ccf855e3eaccb7e463767143d1e1838456b9e924fe64c"
+    "phpsdk": "net.php.php.Sdk:8.5.11@sha256:095dc2d756745242ac59c0609bcf858f0b883d9d0ae77ee99cef4569e1cf8edb",
+    "igbinary": "net.php.php.Igbinary:3.2.17RC1@sha256:55396a61c0eeb42f68db21f2f726c24a5d38a1f6cd6760120b9d9994c9da9156"
   },
   "modules": [
     {

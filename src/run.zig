@@ -634,10 +634,11 @@ const LowSetup = struct {
 /// file is labelled low at low integrity, whoever starts it (zig 0.17's
 /// Maker, in its cache; a command installed there). The app's next low run
 /// labels it again. Not while another run of the app goes on, which may be a
-/// low one.
+/// low one. An app's first run has no data directory yet, so no label.
 fn unlabelData(ctx: *Context, id: []const u8) !void {
     const arena = ctx.arena;
     const data_dir = try ctx.store.path(arena, &.{ "data", id });
+    if (!try Store.exists(ctx.io, data_dir)) return;
     const rid = (acl.ownLabel(arena, data_dir) catch return) orelse return;
     if (rid > win32.SECURITY_MANDATORY_LOW_RID) return;
     const below = try acl.belowMedium();

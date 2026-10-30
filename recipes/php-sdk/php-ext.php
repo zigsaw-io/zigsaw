@@ -91,8 +91,11 @@ function build(string $dev, array $args): int
     $prefix = (string) getenv('PREFIX');
     $base = array_merge(
         // Calling an undeclared function is a warning for MSVC (C4013), and
-        // extensions do, as redis does PHP's usleep and gettimeofday.
+        // extensions do, as redis does PHP's usleep and gettimeofday. So is
+        // passing a pointer to another type (C4133), which clang 22 (zig
+        // 0.17) makes an error, as Xdebug's int * for a DWORD * is.
         ['-O2', '-fms-extensions', '-Wno-date-time', '-Wno-error=implicit-function-declaration',
+         '-Wno-error=incompatible-pointer-types',
          '-include', "$dev/zigsaw/zig-php.h", "-I$tmp", '-I.'],
         array_map(fn($d) => "-I$dev/include$d", ['', '/main', '/Zend', '/TSRM', '/ext']),
         // The headers of libraries the recipe built first, in the build's

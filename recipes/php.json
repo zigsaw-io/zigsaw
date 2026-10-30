@@ -20,7 +20,7 @@
   "modules": [
     {
       "name": "php",
-      "sources": [{ "image": "net.php.php.Sdk:8.5.11@sha256:50ececfb43e2bf0133243ccca664d1b28017217ccb5cb6ad06fa28700c2b1e8b" }]
+      "sources": [{ "image": "net.php.php.Sdk:8.5.11@sha256:095dc2d756745242ac59c0609bcf858f0b883d9d0ae77ee99cef4569e1cf8edb" }]
     }
   ]
 }

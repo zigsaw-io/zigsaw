@@ -676,11 +676,12 @@ check "soft: a run of a program labelled low says it starts at low integrity" wa
 # labels it again (src/run.zig, unlabelData). zig 0.17 builds its Maker there.
 data="$ZIGSAW_HOME\\data\\$PROG"
 # soft_starts <sh command>: a soft run of it, whose last program, started by
-# the app, is the probe at medium integrity.
+# the app, is the probe at the level of what started zigsaw: medium, or high
+# where that's elevated (CI's runners), as a file with no label caps nothing.
 soft_starts() {
     local out
     out=$(z run --sandbox=soft $PROG sh -c "$1" 2>&1 | tr -d '\r' | grep '^# integrity')
-    [ "$out" = "# integrity medium" ] || { echo "got \"$out\""; return 1; }
+    case $out in "# integrity medium" | "# integrity high") ;; *) echo "got \"$out\""; return 1 ;; esac
 }
 data_low_written() {
     z run $PROG sh -c "cp '$work\\prog\\src.bin' '$data\\d.exe'" >/dev/null 2>&1 || return 1
@@ -705,7 +706,14 @@ data_held() {
 check "soft: a program a low run wrote in the data folder starts at medium" data_low_written
 check "soft: one the soft run writes there and starts itself, after a low run, too" data_soft_written
 check "low: the next low run labels the data folder again and writes there" data_relabelled
+data_first_soft() {
+    rm -rf "$data" || return 1
+    local out
+    out=$(z run --sandbox=soft $PROG sh -c true 2>&1) || { echo "$out"; return 1; }
+    ! grep -q 'error' <<<"$out" || { echo "$out"; return 1; }
+}
 check "while another run of the app goes on, a soft run keeps the data folder's label and says so" data_held
+check "soft: an app's first run says nothing of its data folder" data_first_soft
 check "rm forgets the programs, which stay medium" rm_forgets
 
 rm -rf "$ZIGSAW_HOME" "$work"

@@ -13,7 +13,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Node.js | `org.nodejs.node` | 24.21.0 | `node`, `npm`, `npx` |
 | Prettier (on Node.js) | `io.prettier.prettier` | 3.9.9 | `prettier` |
 | Python | `org.python.python` | 3.14.7 | `python` |
-| zig | `org.ziglang.zig` | 0.17.0 (and 0.16.0, which the SDKs and the apps on them still pin; SQLite, ripgrep, bat and zstd build on 0.17.0 from iteration 59) | `zig` |
+| zig | `org.ziglang.zig` | 0.17.0 (and 0.16.0, which GTK's, Qt's, gettext's, GDAL's and PostgreSQL's chains still pin; SQLite, ripgrep, bat and zstd build on 0.17.0 from iteration 59, and Meson, make, cargo-c, Ghostscript and PHP's SDK, with the extensions it builds, from iteration 60) | `zig` |
 | SQLite (built from source) | `org.sqlite.sqlite3` | 3.53.4 | `sqlite3` |
 | Rust (windows-gnu) | `org.rust-lang.rust` | 1.99.0 | `cargo`, `rustc` |
 | ripgrep (built from source) | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |

@@ -18,7 +18,7 @@
   "permissions": { "filesystem": ["cwd"] },
   "runtimes": {
     "perl": "org.perl.perl:5.42.3.1@sha256:4bf63dc4d73c1094335f85767629736c3d01276dc3e46be04bfba985b70e25df",
-    "gs": "com.artifex.Ghostscript:10.08.0@sha256:bc9081d9e3f9785a27f590a7f06317ed74b5f9327334c264c128b790be0164b8"
+    "gs": "com.artifex.Ghostscript:10.08.0@sha256:deaacbe917263f355abc4ee700d91c52ca95d322f2b7af4d1719456a78594041"
   },
   "exports": {
     "afm2tfm": { "command": "bin/windows/afm2tfm.exe" },

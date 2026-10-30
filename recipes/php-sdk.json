@@ -9,7 +9,7 @@
   "env": { "PHPRC": "${app}", "SSL_CERT_FILE": "${roots}" },
   "permissions": { "sandbox": "soft", "network": true, "filesystem": ["cwd"] },
   "runtimes": {
-    "zig": "org.ziglang.zig:0.16.0@sha256:0379659d0e7a87ac7912ea6bd12fc929f889b554706e91299c8063235afea355",
+    "zig": "org.ziglang.zig:0.17.0@sha256:93ec2b6b36708ae80ffac87872e70dafaee350cd2d49a95dd2fa5847d0a10449",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d",
     "node": "org.nodejs.node:24.21.0@sha256:3f86c9ebda5d5b84abd3551eccc834102e7f9934ce5c64e19ca557fe82e8c6cb"
   },

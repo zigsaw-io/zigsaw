@@ -10,7 +10,7 @@
   "extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17" },
   "exports": {},
   "sdk": {
-    "phpsdk": "net.php.php.Sdk:8.5.11@sha256:aaff294a00e7dbc0d70217fb7ad876b10d9133ce155581eacadab866e9e8595f",
+    "phpsdk": "net.php.php.Sdk:8.5.11@sha256:095dc2d756745242ac59c0609bcf858f0b883d9d0ae77ee99cef4569e1cf8edb",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
   },
   "cleanup": ["/cmake", "/include", "/lib/libyaml.a", "/lib/libyaml_a.lib"],

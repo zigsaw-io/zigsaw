@@ -1666,6 +1666,37 @@ before moving zigsaw and the zig image to it (scratch `D:\zs\i58`):
   and C++ with `rc`, SQLite, CMake, Meson and make, Rust with GNU dlltool and
   zig's `as`, and cgo; 0 failed in the zig, cmake-meson, langs and base groups.
 
+## The small chains on Zig 0.17 (iteration 60)
+
+Moving the recipes that build with zig 0.16's image onto 0.17.0's (scratch
+`D:\zs\i60`), on Windows 11 26300 with 16 logical processors and 16 GB:
+
+- **A link with zig 0.17's `cc` commits about twice the memory**: 906 MB
+  against 0.16's 425 MB, for a hello-world (`zig cc -s -Wl,-Brepro hi.o`),
+  the same on every run, with `-fuse-ld=lld` too, and whether the process
+  may use 1, 4 or 16 processors. A compile costs the same with both (a C++
+  file with the standard library's headers: 184 MB for zig, 230 MB for the
+  clang it starts). Ninja runs 18 jobs here, so when GDAL's SDK and
+  PostgreSQL's reach their links, which start many at once, they need about
+  16 GB: on this machine, whose commit limit is 18.5 GB with a 2.8 GB paging
+  file and some 8 GB in use by everything else, they failed three times
+  ("The paging file is too small", `LLVM ERROR: out of memory`). A runner's
+  4 processors give 6 jobs. So GDAL's and PostgreSQL's chains stay on zig
+  0.16 for now.
+- **zig 0.17's compiler-rt still has no `__cpu_model`**:
+  `__builtin_cpu_supports("avx2")` doesn't link, so GDAL's CPUID patch
+  stays.
+- **Clang 22 makes `-Wincompatible-pointer-types` an error**: Xdebug 3.5.3
+  passes an `int *` for a `DWORD *` (`GetOverlappedResult`, `ReadFile`).
+  MSVC only warns (C4133), as it does for an undeclared function, which
+  php-ext already let through, so php-ext now lets this through too.
+- **Meson, make, cargo-c, Ghostscript, PHP's SDK and every PHP extension
+  build with 0.17 as they did with 0.16**, the extensions with nothing but
+  that flag.
+- **PHP's image is the same layer from the new SDK** (`a48cecfd`): its
+  files are the official build's. Its config names the SDK it was taken
+  from, so its digest, and Composer's and Kanboard's, which pin it, change.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.
