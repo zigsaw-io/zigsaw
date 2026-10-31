@@ -617,6 +617,7 @@ test {
     _ = @import("exports.zig");
     _ = @import("extensions.zig");
     _ = @import("folders.zig");
+    _ = @import("format.zig");
     _ = @import("gitignore.zig");
     _ = @import("grants.zig");
     _ = @import("hkcu.zig");

@@ -229,12 +229,12 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "association \"{s}\" has the icon", .{ext}), icon);
 
     const start = ctx.now();
-    const layer_file = try tree.writeLayerFile(ctx, .gzip);
+    const layer_file = try tree.writeLayerFile(ctx, r.layer.format());
     ctx.timed(start, "write layer ({d} entries)", .{tree.nodes.count()});
     // Without build commands, a project's files went from its directory
     // straight into the layer.
     if (!building) try projects.recheck(ctx, null);
-    try layers.append(arena, try ctx.store.putBlobFile(arena, layer_file.path, layer_file.hash, oci.media_type.layer_tar_gzip));
+    try layers.append(arena, layer_file.descriptor(try ctx.store.putBlobFile(arena, layer_file.path, layer_file.hash, layer_file.media_type)));
 
     const config_desc = try ctx.store.putBlob(arena, try oci.toJson(arena, config), oci.media_type.config);
     var annotations: std.json.ArrayHashMap([]const u8) = .{};
@@ -622,7 +622,7 @@ const BuildRoot = struct {
             if (!try Store.exists(io, made))
                 return fail("module {s}: the vendor commands left nothing in {s}", .{ m.name, v.dir });
             const tree = try Tree.fromDir(io, arena, made);
-            const file = try tree.writeLayerFile(ctx, .none);
+            const file = try tree.writeLayerFile(ctx, .tar);
             const got = try arena.dupe(u8, &file.hash.hex);
             // Kept under its actual hash, as downloads are, so pinning it
             // doesn't run the commands again.

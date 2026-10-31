@@ -1,9 +1,12 @@
 .{
     .name = .zigsaw,
-    .version = "0.64.0",
+    .version = "0.65.0",
     .fingerprint = 0xcd983df2cc779fc5, // Changing this has security and trust implications.
     .minimum_zig_version = "0.17.0",
-    .dependencies = .{},
+    .dependencies = .{
+        // Seekable layer formats (eStargz), a git submodule.
+        .stargazer = .{ .path = "stargazer" },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

@@ -15,6 +15,7 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
+const format = @import("format.zig");
 const layer = @import("layer.zig");
 const oci = @import("oci.zig");
 const recipe = @import("recipe.zig");
@@ -495,44 +496,12 @@ fn sameContents(io: Io, zip: *zipfile.Content, dest: Io.Dir, node: Node, src_buf
 // ---------------------------------------------------------------------------
 // To a layer
 
-pub const LayerFile = struct {
-    path: []const u8,
-    hash: Store.FileHash,
-};
-
-/// Writes the layer to a temporary file, compressed as asked, hashing what's
-/// written on the way. Images' layers are gzip-compressed; what vendor steps
-/// make is kept as a plain tar, as its hash is pinned.
-pub fn writeLayerFile(t: *const Tree, ctx: *Context, compression: oci.Compression) !LayerFile {
-    const io = ctx.io;
-    const path = try ctx.store.tmpPath(ctx.arena, "layer");
-    errdefer Io.Dir.cwd().deleteFile(io, path) catch {};
-    // Read access too, so the handle can query the file's final length.
-    var file = try Io.Dir.cwd().createFile(io, path, .{ .read = true });
-    defer file.close(io);
-
-    var file_buf: [64 * 1024]u8 = undefined;
-    var file_writer = file.writer(io, &file_buf);
-    var hash_buf: [64 * 1024]u8 = undefined;
-    var hashed = file_writer.interface.hashed(std.crypto.hash.sha2.Sha256.init(.{}), &hash_buf);
-    switch (compression) {
-        .none => try t.writeLayer(io, ctx.arena, &hashed.writer),
-        .gzip => {
-            const gz = try layer.gzip(ctx.arena, &hashed.writer);
-            try t.writeLayer(io, ctx.arena, &gz.writer);
-            try gz.finish();
-        },
-    }
-    try hashed.writer.flush();
-    try file_writer.interface.flush();
-
-    return .{
-        .path = path,
-        .hash = .{
-            .hex = std.fmt.bytesToHex(hashed.hasher.finalResult(), .lower),
-            .size = try file.length(io),
-        },
-    };
+/// Writes the tree as a layer in format `f` to a temporary file (see
+/// format.zig). Images' layers are gzip-compressed unless their recipe asks
+/// for another format; what vendor steps make is kept as a plain tar, as
+/// its hash is pinned.
+pub fn writeLayerFile(t: *const Tree, ctx: *Context, f: format.Format) !format.Blob {
+    return format.write(ctx, f, t);
 }
 
 /// The sha256 of the tree as an uncompressed layer, which depends only on
@@ -541,12 +510,13 @@ pub fn writeLayerFile(t: *const Tree, ctx: *Context, compression: oci.Compressio
 pub fn contentHash(t: *const Tree, io: Io, arena: Allocator) ![64]u8 {
     var buf: [64 * 1024]u8 = undefined;
     var hashing: Io.Writer.Hashing(std.crypto.hash.sha2.Sha256) = .init(&buf);
-    try t.writeLayer(io, arena, &hashing.writer);
+    try t.writeTar(io, arena, &hashing.writer);
     try hashing.writer.flush();
     return std.fmt.bytesToHex(hashing.hasher.finalResult(), .lower);
 }
 
-fn writeLayer(t: *const Tree, io: Io, arena: Allocator, out: *Io.Writer) !void {
+/// Writes the tree as a plain tar, the layer before any compression.
+pub fn writeTar(t: *const Tree, io: Io, arena: Allocator, out: *Io.Writer) !void {
     var w: layer.Writer = .init(out);
     const zip = try arena.create(zipfile.Content);
     var read_buf: [64 * 1024]u8 = undefined;
@@ -666,7 +636,7 @@ test "zip sources stream into a layer" {
     try tree.addZipEntries(arena, archive, try zipfile.list(arena, &archive.reader), "app", 1);
 
     var out: Io.Writer.Allocating = .init(arena);
-    try tree.writeLayer(io, arena, &out.writer);
+    try tree.writeTar(io, arena, &out.writer);
     try tmp.dir.writeFile(io, .{ .sub_path = "layer.tar", .data = out.written() });
     const dest = try std.fs.path.join(arena, &.{ base, "out" });
     try layer.extract(io, arena, try std.fs.path.join(arena, &.{ base, "layer.tar" }), dest);
@@ -706,7 +676,7 @@ test "tar sources stream into a layer" {
         tree.cleanup(&.{"sub"});
 
         var out: Io.Writer.Allocating = .init(arena);
-        try tree.writeLayer(io, arena, &out.writer);
+        try tree.writeTar(io, arena, &out.writer);
         const layer_name = try std.fmt.allocPrint(arena, "{s}.layer", .{name});
         try tmp.dir.writeFile(io, .{ .sub_path = layer_name, .data = out.written() });
         const dest = try std.fs.path.join(arena, &.{ base, try std.fmt.allocPrint(arena, "{s}.out", .{name}) });
@@ -749,7 +719,7 @@ test "links in tar sources become copies of the files they point to" {
     var tree: Tree = .{};
     try tree.addTarEntries(arena, archive, try listTar(arena, archive), ".", 1);
     var out: Io.Writer.Allocating = .init(arena);
-    try tree.writeLayer(io, arena, &out.writer);
+    try tree.writeTar(io, arena, &out.writer);
     try tmp.dir.writeFile(io, .{ .sub_path = "good.layer", .data = out.written() });
     const dest = try std.fs.path.join(arena, &.{ base, "good.out" });
     try layer.extract(io, arena, try std.fs.path.join(arena, &.{ base, "good.layer" }), dest);

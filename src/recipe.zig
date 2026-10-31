@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const oci = @import("oci.zig");
+const Format = @import("format.zig").Format;
 const Context = @import("Context.zig");
 const fail = Context.fail;
 
@@ -111,6 +112,19 @@ pub const Vendor = struct {
     sha256: ?[]const u8 = null,
 };
 
+/// The layer formats a recipe can ask for.
+pub const Layer = enum {
+    gzip,
+    estargz,
+
+    pub fn format(l: Layer) Format {
+        return switch (l) {
+            .gzip => .gzip,
+            .estargz => .estargz,
+        };
+    }
+};
+
 pub const Recipe = struct {
     id: []const u8,
     version: []const u8,
@@ -145,6 +159,9 @@ pub const Recipe = struct {
     /// Images the app runs with, by alias, pinned the same way. Their
     /// directories are ${<alias>} in the app's config.
     runtimes: std.json.ArrayHashMap([]const u8) = .{},
+    /// The format of the app's own layer (see format.zig): "gzip", or
+    /// "estargz", whose files can be read where they are.
+    layer: Layer = .gzip,
     /// What to leave out of the app's layer: "/path" from the top of the
     /// prefix, or a file name pattern ("*.pdb") that matches anywhere.
     cleanup: []const []const u8 = &.{},
@@ -374,6 +391,26 @@ test "parse minimal recipe" {
     const cfg = try r.appConfig(arena_state.allocator(), .{}, .{});
     try std.testing.expectEqual(1, cfg.exports.map.count());
     try std.testing.expectEqualStrings("busybox.exe", cfg.exports.map.get("busybox").?.command);
+    try std.testing.expectEqual(.gzip, r.layer.format());
+}
+
+test "the layer's format: gzip unless a recipe asks for eStargz" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const r = try parse(arena, "t.json",
+        \\{ "id": "x", "version": "1", "command": "a.exe", "layer": "estargz",
+        \\  "modules": [{ "name": "m", "sources": [{ "url": "https://example.com/a.exe", "dest": "a.exe" }] }] }
+    );
+    try std.testing.expectEqual(.estargz, r.layer.format());
+    // Plain tar is for vendor steps' results, and zstd zigsaw can't write.
+    for ([_][]const u8{ "tar", "zstd" }) |name| {
+        const json = try std.fmt.allocPrint(arena,
+            \\{{ "id": "x", "version": "1", "command": "a.exe", "layer": "{s}",
+            \\  "modules": [{{ "name": "m", "sources": [{{ "url": "https://example.com/a.exe", "dest": "a.exe" }}] }}] }}
+        , .{name});
+        try std.testing.expectError(error.Failed, parse(arena, "t.json", json));
+    }
 }
 
 test "recipe checks" {

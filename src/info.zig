@@ -5,6 +5,7 @@ const std = @import("std");
 const Io = std.Io;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const format = @import("format.zig");
 const oci = @import("oci.zig");
 const remote = @import("remote.zig");
 
@@ -64,6 +65,8 @@ pub fn writeContents(ctx: *Context, w: *Io.Writer, manifest: oci.Manifest, cfg: 
     var runtimes: std.ArrayList([]const u8) = .empty;
     for (cfg.runtimes.map.values()) |r| try runtimes.append(arena, try std.fmt.allocPrint(arena, "{s} {s}", .{ r.id, r.version }));
     try writeLine(w, "runtimes", try std.mem.join(arena, ", ", runtimes.items));
+    // Only when it isn't what builds make by default.
+    if (format.Format.ofDescriptor(oci.ownLayer(manifest))) |f| if (f != .gzip) try writeLine(w, "layer", f.label());
     if (cfg.extensions) |e| {
         var pts: std.ArrayList([]const u8) = .empty;
         for (e.map.keys(), e.map.values()) |name, p| try pts.append(arena, try std.fmt.allocPrint(arena, "{s} {s}", .{ name, p.version }));

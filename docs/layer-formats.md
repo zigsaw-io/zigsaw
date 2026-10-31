@@ -2,7 +2,10 @@
 
 Designed 2026-10-31; the [decisions](#decisions) were taken the same day.
 The first slice was built in [iteration 64](iteration-64.md): stargazer
-0.1.0, zigsaw's gunzip of every member, and measurements on Qt's layers.
+0.1.0, zigsaw's gunzip of every member, and measurements on Qt's layers. The
+second in [iteration 65](iteration-65.md): the formats behind one interface
+in zigsaw ([`src/format.zig`](../src/format.zig)), `"layer": "estargz"`, and
+Qt's images on it.
 The formats themselves are written and read by
 [stargazer](https://github.com/zigsaw-io/stargazer), a library of seekable
 layer formats in [`stargazer/`](../stargazer) (a git submodule, MIT
@@ -99,7 +102,12 @@ the rest of the input unread. So:
 tar and gzip move behind the same interface first, with their bytes
 unchanged (the pinned-deflate test doesn't move). eStargz is then a third
 implementation, which [`src/remote.zig`](../src/remote.zig) and
-[`src/Store.zig`](../src/Store.zig) never name.
+[`src/Store.zig`](../src/Store.zig) never name. Built in iteration 65 as
+[`src/format.zig`](../src/format.zig): `Format.ofDescriptor` tells a layer's
+format from its descriptor (an eStargz layer is `tar+gzip` with a TOC
+digest), `write` makes a layer of a tree, and `deploy` unpacks one. The
+capabilities in the table above come with the update code that uses them
+(iteration 66).
 
 ### Stargazer and zigsaw
 
@@ -192,12 +200,18 @@ pulling the layer.
 
 ### zigsaws that don't know a format
 
-- zigsaw 0.60.0 and older can't read eStargz (above). 0.64.0 reads every
-  member, so it would deploy an eStargz layer, but with
-  `stargz.index.json` and `.no.prefetch.landmark` as two files of the app's.
-  eStargz images need the zigsaw of iteration 65 or later, which leaves
-  them out. How 0.60.0 fails is checked with its release binary in
-  iteration 65.
+- eStargz images need zigsaw 0.65 or later. Checked with the release
+  binaries in [iteration 65](iteration-65.md), pulling a small eStargz
+  image from a local registry:
+  - **0.60.0 fails to unpack it**: `error: EndOfStream`, after inflating
+    the first member. Nothing is installed or deployed, and 0.65 then
+    pulls it into the same store.
+  - **0.64.0 installs it, and the app runs**, but its deployment has
+    `stargz.index.json` and `.no.prefetch.landmark` among the app's files.
+    0.65 keeps that deployment, since its digest is the layer's, until it's
+    deleted.
+  - No image says which zigsaw it needs: decided in iteration 65, as
+    0.60's failure is clean and 0.64's is harmless.
 - A later format with a media type of its own, such as zstd:chunked
   (`tar+zstd`), is refused by name, as zstd is now.
 

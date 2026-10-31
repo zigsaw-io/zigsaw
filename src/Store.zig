@@ -35,7 +35,7 @@ const Allocator = std.mem.Allocator;
 const acl = @import("acl.zig");
 const win32 = @import("win32.zig");
 const oci = @import("oci.zig");
-const layer = @import("layer.zig");
+const format = @import("format.zig");
 const Context = @import("Context.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -469,7 +469,7 @@ pub fn usedLayers(s: Store, arena: Allocator, opts: UsedOptions) !std.StringHash
 /// are shared by every run, and by every app with the layer, so they are
 /// protected from changes.
 pub fn deploy(s: Store, arena: Allocator, desc: oci.Descriptor) ![]u8 {
-    const compression = oci.layerCompression(desc.mediaType) orelse
+    if (format.Format.ofDescriptor(desc) == null)
         return fail("layer type {s} is not supported", .{desc.mediaType});
     const dest = try s.deployPath(arena, desc.digest);
     if (try exists(s.io, dest)) {
@@ -486,23 +486,10 @@ pub fn deploy(s: Store, arena: Allocator, desc: oci.Descriptor) ![]u8 {
     defer Io.Dir.cwd().deleteTree(s.io, work) catch {};
     const tree = try std.fs.path.join(arena, &.{ work, "app" });
     const blob = try s.blobPath(arena, oci.digestHex(desc.digest).?);
-    var start = Io.Timestamp.now(s.io, .awake);
-    // Extracting reads files' bytes from their places in a plain tar, in
-    // parallel, so a gzip layer is decompressed first, next to the tree.
-    const tar = switch (compression) {
-        .none => blob,
-        .gzip => tar: {
-            const p = try std.fs.path.join(arena, &.{ work, "layer.tar" });
-            try layer.inflate(s.io, blob, p);
-            Context.reportTime(s.io, s.verbose, start, "  inflate {s}", .{oci.shortDigest(desc.digest)});
-            start = Io.Timestamp.now(s.io, .awake);
-            break :tar p;
-        },
-    };
-    try layer.extract(s.io, arena, tar, tree);
-    Context.reportTime(s.io, s.verbose, start, "  unpack {s}", .{oci.shortDigest(desc.digest)});
+    // Several threads write the files of a seekable layer.
+    try format.deploy(s.io, std.heap.smp_allocator, arena, s.verbose, desc, blob, work, tree);
     try Io.Dir.rename(.cwd(), tree, .cwd(), dest, s.io);
-    start = Io.Timestamp.now(s.io, .awake);
+    const start = Io.Timestamp.now(s.io, .awake);
     try acl.protect(arena, dest);
     Context.reportTime(s.io, s.verbose, start, "  protect", .{});
     return dest;

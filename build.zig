@@ -250,6 +250,9 @@ fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
     const options = b.addOptions();
     options.addOption([]const u8, "version", @import("build.zig.zon").version);
     mod.addOptions("options", options);
+    // eStargz layers (see format.zig).
+    const stargazer = b.dependency("stargazer", .{ .target = target, .optimize = optimize });
+    mod.addImport("stargazer", stargazer.module("stargazer"));
     // AppContainer profiles live in userenv; ACL editing lives in advapi32.
     mod.linkSystemLibrary("userenv", .{});
     mod.linkSystemLibrary("advapi32", .{});

@@ -92,6 +92,44 @@ check "a digest that doesn't match is refused" fails zb pull --yes "$repo/busybo
 check "a missing tag is reported" missing_tag
 check "the pulled app's commands are installed" test -f "$store_b\\bin\\busybox.exe"
 
+# An eStargz layer ("layer": "estargz"): its descriptor carries its TOC's
+# digest through the registry, and a pull deploys the same files, without
+# eStargz's own two, and without inflating a tar first.
+SGZ=test.registry.estargz
+printf '{ "id": "%s", "version": "1", "command": "busybox.exe", "exports": {}, "layer": "estargz",\n  "modules": [{ "name": "busybox", "sources": [{ "url": "https://frippery.org/files/busybox/busybox-w64-FRP-6075-g169694ebd.exe", "sha256": "07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075", "dest": "busybox.exe" }] }] }\n' \
+    $SGZ >"$work\\estargz.json"
+sgz_built() {
+    za build "$work\\estargz.json" >/dev/null 2>&1 || return 1
+    local manifest
+    manifest=$(grep -o 'sha256:[0-9a-f]*' "$store_a\\refs\\$SGZ.json" | cut -d: -f2)
+    grep -q '"containerd.io/snapshot/stargz/toc.digest": "sha256:' "$store_a\\blobs\\sha256\\$manifest"
+}
+sgz_pushed() {
+    za push $SGZ "$repo/estargz" >/dev/null 2>&1 || return 1
+    curl -sf -H "Accept: application/vnd.oci.image.manifest.v1+json" "http://${registry/localhost/127.0.0.1}/v2/${repo#*/}/estargz/manifests/1" |
+        grep -q '"containerd.io/snapshot/stargz/toc.digest"'
+}
+sgz_pulled() {
+    local out
+    out=$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" -v pull --yes "$repo/estargz:1" 2>&1) || { echo "$out" | tail -2; return 1; }
+    grep -q ' unpack ' <<<"$out" && ! grep -q ' inflate ' <<<"$out" || { echo "$out"; return 1; }
+    [ "$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" list | awk -v id=$SGZ '$1 == id { print $3 }')" = "$(za list | awk -v id=$SGZ '$1 == id { print $3 }')" ]
+}
+sgz_runs() { [ "$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" run $SGZ echo sgz | tr -d '\r')" = sgz ]; }
+sgz_own_files_only() {
+    local deployed
+    # The lock files next to deployments are the runs'.
+    deployed=$(cd "$(cygpath -u "$work\\sgz")/deploy" && find . -type f ! -name '*.lock')
+    [[ "$deployed" =~ ^\./[0-9a-f]{64}/busybox\.exe$ ]] || { echo "$deployed"; return 1; }
+}
+sgz_info() { ZIGSAW_HOME="$work\\sgz" "$zigsaw" info "$repo/estargz:1" 2>&1 | grep -q '^ *layer  *eStargz$'; }
+check "eStargz: the layer's descriptor has its TOC's digest" sgz_built
+check "  pushed, the registry's manifest has it" sgz_pushed
+check "  pulled, the same image, unpacked without inflating" sgz_pulled
+check "  it runs" sgz_runs
+check "  its deployment has the app's files, not the TOC or landmark" sgz_own_files_only
+check "  info says the layer is eStargz" sgz_info
+
 # Blobs bigger than a chunk go up in chunks (64 KiB here, 64 MiB unless
 # ZIGSAW_UPLOAD_CHUNK_SIZE says), and one that breaks off goes on from where
 # the registry got to.
@@ -583,8 +621,8 @@ check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep
 
 # Installed apps are protected against deletion, so remove them through
 # zigsaw, and the images builds use with prune --downloads.
-for store in "$work\a" "$work\b" "$work\c" "$work\d" "$work\idx" "$work\chunks" "$work\plain" "$work\fresh1" "$work\fresh2" "$work\fresh-none" "$work\fresh-vendor" "$work\consent" "$work\par1" "$work\par2"; do
-    for id in net.frippery.busybox org.nodejs.node io.prettier.prettier test.registry.vendored test.registry.catalog test.registry.parallel; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
+for store in "$work\a" "$work\b" "$work\c" "$work\d" "$work\idx" "$work\chunks" "$work\plain" "$work\fresh1" "$work\fresh2" "$work\fresh-none" "$work\fresh-vendor" "$work\consent" "$work\par1" "$work\par2" "$work\sgz"; do
+    for id in net.frippery.busybox org.nodejs.node io.prettier.prettier test.registry.vendored test.registry.catalog test.registry.parallel $SGZ; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
     ZIGSAW_HOME="$store" "$zigsaw" prune --downloads >/dev/null 2>&1
 done
 rm -rf "$work"

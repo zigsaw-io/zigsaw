@@ -45,6 +45,17 @@ them, with 7-Zip's image in the recipe's `sdk`
 the top, and `"*.pdb"` a file name pattern that matches anywhere. Building the
 same recipe always produces the same image digest.
 
+`layer` is the format of the app's own layer: `"gzip"`, the default, or
+`"estargz"` ([layer formats](layer-formats.md)), a gzip-compressed tar whose
+files can be read where they are, through a table of contents at its end.
+zigsaw then unpacks the layer without inflating a tar first, which saves
+the tar's size in disk while pulling (323 MB for Qt's SDK), at 2 to 5% more
+to download. Its layer's descriptor carries the table's digest, as other
+eStargz tools expect. An eStargz image needs zigsaw 0.65 or later: 0.60
+fails to unpack it (`EndOfStream`), and 0.64 unpacks it with eStargz's two
+files of its own, `stargz.index.json` and `.no.prefetch.landmark`, among
+the app's. Qt's images have eStargz layers.
+
 `name`, `summary`, `homepage` and `license` describe the app for
 [`search` and `info`](#finding-apps): what people call it, what it is in a
 line, an https URL, and an SPDX expression. All are optional, and left out
@@ -1376,11 +1387,15 @@ Clang (llvm-mingw, since iteration 62; zig 0.16 before):
   base takes 16.5 minutes (most of it qtbase's 1,900 build steps, 12), and
   the SDK on it 19 (qtdeclarative takes 10, and its second pass 1.5). With
   zig, until iteration 62, they took 25 and 26 (qtdeclarative 14 and 2.5;
-  48, 32 and 7.5 before its unity build, in iteration 42).
+  48, 32 and 7.5 before its unity build, in iteration 42). Since
+  iteration 65, the three Qt images' own layers are
+  [eStargz](#recipes) (`"layer": "estargz"`); their CMake, llvm-mingw and
+  BusyBox layers stay gzip, and Flameshot and Notes, gzip too, run on an
+  eStargz runtime.
 - **[`io.qt.Qt6`](recipes/qt6.json)** is the runtime: the SDK's files as an
   [image source](#images-as-sources), without the headers, libraries, CMake
-  files and build tools (QML's too), in seconds: 160 MB (57 MB compressed;
-  153 and 56 built with zig, 75 and 29 before QML and Qt Quick, 163 and 59
+  files and build tools (QML's too), in seconds: 160 MB (58.4 MB as
+  eStargz, 57.4 as gzip before iteration 65; 153 and 56 built with zig, 75 and 29 before QML and Qt Quick, 163 and 59
   with the Quick Controls styles left out since iteration 42). Apps list it in
   their `runtimes`. As an app, it runs Designer, exports `designer`,
   `linguist`, `pixeltool`, `qml` and `qtdiag`, adds "Qt Widgets Designer"

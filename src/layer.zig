@@ -136,7 +136,7 @@ pub fn extract(io: Io, arena: Allocator, tar_path: []const u8, dest_path: []cons
 
 /// Measured on zig's 19.5k files: 1 worker 14 s, 4 workers 8 s, and no real
 /// gain beyond that, since Defender's scanning becomes the bottleneck.
-const max_extract_workers = 4;
+pub const max_extract_workers = 4;
 
 const FileEntry = struct {
     /// '/'-separated, relative to the destination.
@@ -340,7 +340,7 @@ fn expectSha256(want: []const u8, bytes: []const u8) !void {
 }
 
 /// A small layer, compressed as asked.
-fn testLayer(arena: Allocator, compression: oci.Compression) ![]const u8 {
+fn testLayer(arena: Allocator, compression: enum { none, gzip }) ![]const u8 {
     var out: Io.Writer.Allocating = try .initCapacity(arena, 64 * 1024);
     const gz = if (compression == .gzip) try gzip(arena, &out.writer) else null;
     var w: Writer = .init(if (gz) |c| &c.writer else &out.writer);

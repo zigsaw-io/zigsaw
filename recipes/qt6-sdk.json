@@ -5,6 +5,7 @@
   "summary": "Qt 6's Widgets set, QML and Qt Quick built with Clang (llvm-mingw), with CMake, Ninja and Clang for building Qt apps (qtbase and more from io.qt.Qt6.Sdk.Base)",
   "homepage": "https://www.qt.io/",
   "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+  "layer": "estargz",
   "command": "bin/qtpaths.exe",
   "path": ["bin"],
   "env": {
@@ -35,7 +36,7 @@
   "modules": [
     {
       "name": "base",
-      "sources": [{ "image": "io.qt.Qt6.Sdk.Base:6.12.0@sha256:62e471c1d23599566ea232db235d58eb18c6f9eddbbf8436212c4a2bdd8427ea" }]
+      "sources": [{ "image": "io.qt.Qt6.Sdk.Base:6.12.0@sha256:826fa4eee4360408b5b47dbe1f63594d402fd7555d4de4d6e891d2ad5963d899" }]
     },
     {
       "name": "qtdeclarative",
