@@ -185,7 +185,7 @@ pub fn hasBlob(r: *Registry, digest: []const u8) !bool {
 
 /// Downloads a blob to `dest` and checks it against its descriptor.
 pub fn downloadBlob(r: *Registry, desc: oci.Descriptor, dest: []const u8) !Store.FileHash {
-    const hash = try r.downloadBlobByDigest(desc.digest, dest) orelse
+    const hash = try r.downloadTo(desc.digest, desc.size, dest) orelse
         return r.failStatus(.{ .status = .not_found }, "downloading a blob");
     if (hash.size != desc.size) {
         Io.Dir.cwd().deleteFile(r.ctx.io, dest) catch {};
@@ -197,6 +197,27 @@ pub fn downloadBlob(r: *Registry, desc: oci.Descriptor, dest: []const u8) !Store
 /// Downloads the blob with this digest to `dest`, and checks it. Null if the
 /// repository doesn't have it.
 pub fn downloadBlobByDigest(r: *Registry, digest: []const u8, dest: []const u8) !?Store.FileHash {
+    return r.downloadTo(digest, null, dest);
+}
+
+/// A registry that answers a download's resumption with the whole blob is
+/// asked for the whole blob once more.
+fn downloadTo(r: *Registry, digest: []const u8, size: ?u64, dest: []const u8) !?Store.FileHash {
+    var again = false;
+    while (true) {
+        return r.downloadOnce(digest, size, dest) catch |err| switch (err) {
+            error.RangeIgnored => {
+                if (again) return fail("blob {s} from {f}: the download broke off, and the registry can't go on from where it got to", .{ digest, r.ref });
+                again = true;
+                if (r.ctx.verbose) Context.note("  {s}: the registry sent the whole blob again; starting over", .{oci.shortDigest(digest)});
+                continue;
+            },
+            else => |e| return e,
+        };
+    }
+}
+
+fn downloadOnce(r: *Registry, digest: []const u8, size: ?u64, dest: []const u8) !?Store.FileHash {
     const io = r.ctx.io;
     var file = try Io.Dir.cwd().createFile(io, dest, .{ .read = true });
     var keep = false;
@@ -207,13 +228,7 @@ pub fn downloadBlobByDigest(r: *Registry, digest: []const u8, dest: []const u8) 
     var hash_buf: [64 * 1024]u8 = undefined;
     var hashed = file_writer.interface.hashed(std.crypto.hash.sha2.Sha256.init(.{}), &hash_buf);
 
-    const res = try r.send(.{
-        .method = .GET,
-        .url = try r.url("/v2/{s}/blobs/{s}", .{ r.ref.repository, digest }),
-        .sink = &hashed.writer,
-    });
-    if (res.status == .not_found) return null;
-    if (res.status != .ok) return r.failStatus(res, "downloading a blob");
+    if (!try r.getBlob(digest, .{ .len = size }, &hashed.writer)) return null;
     try hashed.writer.flush();
     try file_writer.interface.flush();
 
@@ -222,6 +237,103 @@ pub fn downloadBlobByDigest(r: *Registry, digest: []const u8, dest: []const u8) 
         return fail("blob {s} from {f} doesn't match its digest", .{ digest, r.ref });
     keep = true;
     return hash;
+}
+
+/// Bytes of a blob: from `start`, to `end` (exclusive) or to the blob's end.
+pub const Span = struct {
+    start: u64 = 0,
+    end: ?u64 = null,
+    /// How many bytes that is, if known without `end`.
+    len: ?u64 = null,
+
+    fn length(s: Span) ?u64 {
+        return if (s.end) |end| end - s.start else s.len;
+    }
+};
+
+/// How many times a transfer that breaks off goes on, each time having got
+/// further than the last.
+const max_resumes = 5;
+
+/// Streams a blob, or a span of it (by a Range request), into `sink`. A
+/// transfer that breaks off goes on from where it got to, by a Range
+/// request. False if the repository doesn't have the blob;
+/// error.RangeIgnored if the registry answered a Range request with the
+/// whole blob, which then isn't read.
+pub fn getBlob(r: *Registry, digest: []const u8, span: Span, sink: *Io.Writer) !bool {
+    const arena = r.ctx.arena;
+    const blob_url = try r.url("/v2/{s}/blobs/{s}", .{ r.ref.repository, digest });
+    var at = span.start;
+    var resumes: u32 = 0;
+    var break_after = r.testDownloadBreak(span);
+    while (true) {
+        var count_buf: [64 * 1024]u8 = undefined;
+        var counted = sink.hashed(Count{}, &count_buf);
+        const ranged = at > 0 or span.end != null;
+        const range: ?[]const u8 = if (!ranged) null else if (span.end) |end|
+            try std.fmt.allocPrint(arena, "bytes={d}-{d}", .{ at, end - 1 })
+        else
+            try std.fmt.allocPrint(arena, "bytes={d}-", .{at});
+        const sent = r.send(.{
+            .method = .GET,
+            .url = blob_url,
+            .range = range,
+            .sink = &counted.writer,
+            .resumable = true,
+            .break_after = break_after,
+        });
+        break_after = null;
+        // What arrived before a break is good: it goes on from there.
+        try counted.writer.flush();
+        const res = sent catch |err| switch (err) {
+            error.Broken => {
+                resumes += 1;
+                if (counted.hasher.n == 0 or resumes > max_resumes) return fail("GET {s}: {t}", .{ blob_url, r.broken.? });
+                at += counted.hasher.n;
+                if (r.ctx.verbose) Context.note("  resuming {s} at {d} bytes, after {t}", .{ oci.shortDigest(digest), at, r.broken.? });
+                continue;
+            },
+            else => |e| return e,
+        };
+        switch (res.status) {
+            .not_found => return false,
+            .ok => if (ranged) return error.RangeIgnored,
+            .partial_content => if (!ranged or contentRangeStart(res.content_range orelse "") != at)
+                return fail("blob {s} from {f}: the registry sent other bytes than asked for ({s})", .{ digest, r.ref, res.content_range orelse "no Content-Range" }),
+            else => return r.failStatus(res, "downloading a blob"),
+        }
+        at += counted.hasher.n;
+        if (span.end) |end| if (at != end) return fail("blob {s} from {f}: {d} bytes short", .{ digest, r.ref, end - at });
+        return true;
+    }
+}
+
+/// A "hasher" that counts.
+const Count = struct {
+    n: u64 = 0,
+
+    pub fn update(c: *Count, bytes: []const u8) void {
+        c.n += bytes.len;
+    }
+};
+
+/// For tests, ZIGSAW_TEST_DOWNLOAD_BREAK: after how many bytes the first
+/// transfer longer than that breaks off, once in the process.
+fn testDownloadBreak(r: *Registry, span: Span) ?u64 {
+    const n = std.fmt.parseInt(u64, r.ctx.env.get("ZIGSAW_TEST_DOWNLOAD_BREAK") orelse return null, 10) catch return null;
+    if ((span.length() orelse return null) <= n) return null;
+    if (download_broken.swap(true, .monotonic)) return null;
+    return n;
+}
+
+var download_broken: std.atomic.Value(bool) = .init(false);
+
+/// Where a Content-Range header ("bytes 6-10/35") says its bytes start.
+fn contentRangeStart(text: []const u8) ?u64 {
+    if (!std.ascii.startsWithIgnoreCase(text, "bytes ")) return null;
+    const rest = std.mem.trimStart(u8, text["bytes ".len..], " ");
+    const dash = std.mem.indexOfScalar(u8, rest, '-') orelse return null;
+    return std.fmt.parseInt(u64, rest[0..dash], 10) catch null;
 }
 
 pub const Upload = union(enum) {
@@ -547,12 +659,18 @@ const Request = struct {
     content_type: ?[]const u8 = null,
     content_range: ?[]const u8 = null,
     accept: ?[]const u8 = null,
+    /// A Range header. With one, a 200's body (all of the resource, not the
+    /// part asked for) is neither sent to `sink` nor read.
+    range: ?[]const u8 = null,
     /// Whether a request that breaks off fails with error.Broken, for the
-    /// caller to go on (see `putChunks`), rather than with a message.
+    /// caller to go on (see `putChunks` and `getBlob`), rather than with a
+    /// message.
     resumable: bool = false,
     /// Where a successful response's body goes; otherwise it is collected
     /// into `Response.body`.
     sink: ?*Io.Writer = null,
+    /// For tests: the body breaks off after this many bytes went to `sink`.
+    break_after: ?u64 = null,
 };
 
 const Response = struct {
@@ -562,6 +680,8 @@ const Response = struct {
     www_authenticate: ?[]const u8 = null,
     /// How much of an upload the registry has.
     range: ?[]const u8 = null,
+    /// Which bytes of a blob a 206 holds.
+    content_range: ?[]const u8 = null,
     /// OCI-Chunk-Min-Length.
     chunk_min: ?u64 = null,
 };
@@ -645,6 +765,7 @@ fn exchangeUnchecked(r: *Registry, req: Request, authorization: ?[]const u8) !Re
     var extra: std.ArrayList(http.Header) = .empty;
     if (req.accept) |a| try extra.append(arena, .{ .name = "accept", .value = a });
     if (req.content_range) |range| try extra.append(arena, .{ .name = "content-range", .value = range });
+    if (req.range) |range| try extra.append(arena, .{ .name = "range", .value = range });
 
     var hreq = try r.client.request(req.method, try std.Uri.parse(req.url), .{
         // `follow` handles redirects, so it can decide where the token goes.
@@ -705,12 +826,25 @@ fn exchangeUnchecked(r: *Registry, req: Request, authorization: ?[]const u8) !Re
         if (std.ascii.eqlIgnoreCase(h.name, "www-authenticate") and res.www_authenticate == null)
             res.www_authenticate = try arena.dupe(u8, h.value);
         if (std.ascii.eqlIgnoreCase(h.name, "range")) res.range = try arena.dupe(u8, h.value);
+        if (std.ascii.eqlIgnoreCase(h.name, "content-range")) res.content_range = try arena.dupe(u8, h.value);
         if (std.ascii.eqlIgnoreCase(h.name, "oci-chunk-min-length")) res.chunk_min = std.fmt.parseInt(u64, h.value, 10) catch null;
     }
 
     var transfer_buf: [64 * 1024]u8 = undefined;
     const body = response.reader(&transfer_buf);
-    if (req.sink != null and res.status.class() == .success) {
+    if (req.sink != null and req.range != null and res.status == .ok) {
+        // All of it, not the part asked for: left unread, on a connection
+        // nothing else gets.
+        if (hreq.connection) |c| c.closing = true;
+    } else if (req.sink != null and res.status.class() == .success) {
+        if (req.break_after) |n| {
+            body.streamExact64(req.sink.?, n) catch |err| switch (err) {
+                error.ReadFailed => return response.bodyErr().?,
+                error.WriteFailed => return error.WriteFailed,
+                error.EndOfStream => return error.EndOfStream,
+            };
+            return error.ConnectionResetByPeer;
+        }
         _ = body.streamRemaining(req.sink.?) catch |err| switch (err) {
             error.ReadFailed => return response.bodyErr().?,
             error.WriteFailed => return error.WriteFailed,
@@ -1037,6 +1171,13 @@ test nextOffset {
     // Before the first byte, registries answer 0-0.
     try std.testing.expectEqual(0, nextOffset("0-0").?);
     try std.testing.expectEqual(null, nextOffset("garbage"));
+}
+
+test contentRangeStart {
+    try std.testing.expectEqual(6, contentRangeStart("bytes 6-10/35").?);
+    try std.testing.expectEqual(0, contentRangeStart("Bytes 0-4/*").?);
+    try std.testing.expectEqual(null, contentRangeStart("bytes */35"));
+    try std.testing.expectEqual(null, contentRangeStart("6-10/35"));
 }
 
 test percentEncode {

@@ -13,7 +13,9 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Registry = @import("Registry.zig");
+const RemoteBlob = @import("RemoteBlob.zig");
 const Store = @import("Store.zig");
+const format = @import("format.zig");
 const info = @import("info.zig");
 const install = @import("install.zig");
 const oci = @import("oci.zig");
@@ -146,16 +148,25 @@ pub const Info = struct {
 /// layers: what `info` shows and the catalog lists. The config stays in the
 /// store as a blob.
 pub fn fetchInfo(ctx: *Context, image_text: []const u8) !Info {
+    var registry: Registry = undefined;
+    const app = try fetchInfoOpen(ctx, image_text, &registry);
+    registry.deinit();
+    return app;
+}
+
+/// As `fetchInfo`, leaving `registry` open for reading the image's blobs;
+/// the caller deinits it.
+pub fn fetchInfoOpen(ctx: *Context, image_text: []const u8, registry_out: *Registry) !Info {
     const arena = ctx.arena;
     const target = try resolve(ctx, image_text);
-    var registry: Registry = undefined;
+    const registry = registry_out;
     try registry.init(ctx, target.ref, "pull");
-    defer registry.deinit();
-    const fetched = (try resolveImage(&registry, target.ref, null)).?;
+    errdefer registry.deinit();
+    const fetched = (try resolveImage(registry, target.ref, null)).?;
     const manifest = fetched.manifest;
     if (!oci.isConfigType(manifest.config.mediaType))
         return fail("{f} is not a zigsaw app (its config type is {s}; it may be a container image)", .{ target.ref, manifest.config.mediaType });
-    try downloadBlob(ctx, &registry, manifest.config);
+    try downloadBlob(ctx, registry, manifest.config);
     const config = try oci.parseConfig(arena, target.text, manifest.config.mediaType, try ctx.store.readBlob(arena, manifest.config.digest));
     try oci.validateLayers(target.text, manifest, config);
     if (target.app_id) |id| if (!std.ascii.eqlIgnoreCase(id, config.id))
@@ -263,12 +274,142 @@ fn downloadBlob(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !void 
     const arena = ctx.arena;
     const hex = oci.digestHex(desc.digest) orelse return fail("{f}: malformed digest {s}", .{ registry.ref, desc.digest });
     if (try Store.exists(ctx.io, try ctx.store.blobPath(arena, hex))) return;
-    if (desc.size > 1 << 20) note("downloading {s} ({d} bytes)", .{ desc.digest, desc.size });
     const start = ctx.now();
+    if (try downloadByPlan(ctx, registry, desc)) {
+        ctx.timed(start, "download {s}", .{desc.digest});
+        return;
+    }
+    if (desc.size > 1 << 20) note("downloading {s} ({d} bytes)", .{ desc.digest, desc.size });
     const tmp = try ctx.store.tmpPath(arena, "pull");
     const hash = try registry.downloadBlob(desc, tmp);
     _ = try ctx.store.putBlobFile(arena, tmp, hash, desc.mediaType);
     ctx.timed(start, "download {s}", .{desc.digest});
+}
+
+/// Fetching less than this share of a blob's bytes (in tenths) isn't worth
+/// building it from pieces.
+const min_reuse_tenths = 1;
+
+/// Builds an indexed layer's blob (see `format.Format.indexed`) from the
+/// members that the store's blobs of other indexed layers have, as an
+/// update's old version of the layer does, and fetches the rest by Range
+/// requests. The blob built is checked against its digest, as a download
+/// is. False, leaving it to a whole download, if there's nothing to build
+/// from, too little, the registry sends blobs only whole, or the blob built
+/// isn't the one its digest names.
+fn downloadByPlan(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !bool {
+    const arena = ctx.arena;
+    const gpa = ctx.gpa;
+    const io = ctx.io;
+    const short = oci.shortDigest(desc.digest);
+    if (!(format.Format.ofDescriptor(desc) orelse return false).indexed()) return false;
+    const pool = try indexedLayers(ctx, desc.digest);
+    if (pool.len == 0) return false;
+
+    // The old blobs, each opened through its index.
+    var olds: std.ArrayList(*format.Index) = .empty;
+    var old_blobs: std.ArrayList(*RemoteBlob) = .empty;
+    defer {
+        for (olds.items) |r| r.deinit();
+        for (old_blobs.items) |b| b.close();
+    }
+    for (pool) |d| {
+        const b = try RemoteBlob.open(ctx, registry, d);
+        const r = format.openIndex(gpa, d, b.source()) catch |err| switch (err) {
+            error.OutOfMemory => |e| return e,
+            else => {
+                b.close();
+                continue;
+            },
+        };
+        try olds.append(arena, r);
+        try old_blobs.append(arena, b);
+    }
+    if (olds.items.len == 0) return false;
+
+    const new = try RemoteBlob.open(ctx, registry, desc);
+    defer new.close();
+    const index = format.openIndex(gpa, desc, new.source()) catch |err| switch (err) {
+        error.RangeIgnored => return false,
+        else => |e| return e,
+    };
+    defer index.deinit();
+    var p = try format.plan.make(gpa, index, olds.items);
+    defer p.deinit();
+    try p.coalesce(.{ .have_from = new.tail_start });
+    const copied = p.copied();
+    if (copied * 10 < desc.size * min_reuse_tenths) {
+        if (ctx.verbose) Context.note("  {s}: the store's layers have {d} of its {d} bytes; downloading it whole", .{ short, copied, desc.size });
+        return false;
+    }
+    note("downloading {s}: {d} of {d} bytes, the rest from layers in the store", .{ desc.digest, desc.size - copied, desc.size });
+
+    const tmp = try ctx.store.tmpPath(arena, "pull");
+    var keep = false;
+    defer if (!keep) Io.Dir.cwd().deleteFile(io, tmp) catch {};
+    const hash = hash: {
+        var file = try Io.Dir.cwd().createFile(io, tmp, .{});
+        defer file.close(io);
+        var file_buf: [64 * 1024]u8 = undefined;
+        var file_writer = file.writer(io, &file_buf);
+        var hash_buf: [64 * 1024]u8 = undefined;
+        var hashed = file_writer.interface.hashed(std.crypto.hash.sha2.Sha256.init(.{}), &hash_buf);
+        var copy_buf: [64 * 1024]u8 = undefined;
+        var at: u64 = 0;
+        for (p.pieces) |piece| {
+            switch (piece) {
+                .copy => |c| {
+                    const src = old_blobs.items[c.source].source();
+                    var done: u64 = 0;
+                    while (done < c.len) {
+                        const n: usize = @intCast(@min(c.len - done, copy_buf.len));
+                        try src.readAll(c.offset + done, copy_buf[0..n]);
+                        try hashed.writer.writeAll(copy_buf[0..n]);
+                        done += n;
+                    }
+                },
+                .fetch => |f| new.fetchTo(f.offset, f.offset + f.len, &hashed.writer) catch |err| switch (err) {
+                    error.RangeIgnored => return false,
+                    else => |e| return e,
+                },
+            }
+            at += piece.len();
+        }
+        try hashed.writer.flush();
+        try file_writer.interface.flush();
+        break :hash Store.FileHash{ .hex = std.fmt.bytesToHex(hashed.hasher.finalResult(), .lower), .size = at };
+    };
+    if (ctx.verbose) Context.note("  {s}: {d} bytes from the store's layers, {d} fetched in {d} request(s)", .{ short, copied, new.fetched, new.requests });
+    if (hash.size != desc.size or !std.mem.eql(u8, &hash.hex, oci.digestHex(desc.digest).?)) {
+        note("{s}, built from layers in the store, isn't the blob its digest names; downloading it whole", .{desc.digest});
+        return false;
+    }
+    _ = try ctx.store.putBlobFile(arena, tmp, hash, desc.mediaType);
+    keep = true;
+    return true;
+}
+
+/// The indexed layers of the store's images (apps and builds' images) whose
+/// blobs it has, but `except`.
+fn indexedLayers(ctx: *Context, except: []const u8) ![]oci.Descriptor {
+    const arena = ctx.arena;
+    const store = ctx.store;
+    var manifests: std.ArrayList([]const u8) = .empty;
+    for (store.listRefs(arena) catch &.{}) |ref| try manifests.append(arena, ref.manifest);
+    try manifests.appendSlice(arena, store.listBuildImages(arena) catch &.{});
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    var found: std.ArrayList(oci.Descriptor) = .empty;
+    for (manifests.items) |digest| {
+        const manifest = store.readManifest(arena, digest) catch continue;
+        for (manifest.layers) |l| {
+            const f = format.Format.ofDescriptor(l) orelse continue;
+            if (!f.indexed() or std.mem.eql(u8, l.digest, except)) continue;
+            if ((try seen.getOrPut(arena, l.digest)).found_existing) continue;
+            const hex = oci.digestHex(l.digest) orelse continue;
+            if (try Store.exists(ctx.io, try store.blobPath(arena, hex))) try found.append(arena, l);
+        }
+    }
+    return found.items;
 }
 
 pub const PushOptions = struct {

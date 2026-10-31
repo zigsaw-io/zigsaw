@@ -29,6 +29,16 @@ pub fn note(comptime fmt: []const u8, args: anytype) void {
     printStderr(fmt ++ "\n", args);
 }
 
+/// Standard output, flagged as std must know it. Zig 0.17 takes the
+/// standard handles for synchronous ones, but Git Bash's pipes aren't: a
+/// write that has to wait for a full one then fails an assertion, so a
+/// handle without synchronous I/O takes std's nonblocking path, which waits.
+pub fn stdout() std.Io.File {
+    var f = std.Io.File.stdout();
+    if (win32.synchronousIo(f.handle) == false) f.flags.nonblocking = true;
+    return f;
+}
+
 /// Writes to stderr, ignoring failures. std.debug.print means to as well,
 /// but in Zig 0.16 it crashes on Windows once stderr is a pipe nobody reads
 /// any more, as in `zigsaw build ... | head`. A build ending that way would

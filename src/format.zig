@@ -37,6 +37,12 @@ pub const Format = enum {
         return if (annotations.map.contains(estargz.toc_digest_annotation)) .estargz else .gzip;
     }
 
+    /// Whether the blob has an index of its files, so that a file can be
+    /// read, or an update planned, from a few ranges of it (see `openIndex`).
+    pub fn indexed(f: Format) bool {
+        return f == .estargz;
+    }
+
     /// As `zigsaw info` shows it.
     pub fn label(f: Format) []const u8 {
         return switch (f) {
@@ -53,6 +59,40 @@ pub const Format = enum {
         };
     }
 };
+
+/// An indexed layer's index of its files: their names, sizes and digests,
+/// and where in the blob their bytes are.
+pub const Index = estargz.Reader;
+/// Where an index reads the blob's bytes: the store's file, or ranges of the
+/// registry's blob.
+pub const Source = stargazer_source;
+/// Which bytes of an indexed blob other indexed blobs have (see
+/// `downloadByPlan` in remote.zig).
+pub const plan = @import("stargazer").plan;
+
+/// Opens the index of the indexed layer `desc`, whose blob `src` reads, and
+/// checks that it's the one its descriptor names.
+pub fn openIndex(gpa: Allocator, desc: oci.Descriptor, src: Source) !*Index {
+    const short = oci.shortDigest(desc.digest);
+    std.debug.assert(Format.ofDescriptor(desc).?.indexed());
+    const r = estargz.Reader.open(gpa, src, .{}) catch |err| switch (err) {
+        // The source's: a registry that sends blobs only whole.
+        error.OutOfMemory, error.Failed, error.RangeIgnored => |e| return e,
+        else => return fail("layer {s} can't be read as {s}: {t}", .{ short, Format.ofDescriptor(desc).?.label(), err }),
+    };
+    errdefer r.deinit();
+    const want = desc.annotations.?.map.get(estargz.toc_digest_annotation).?;
+    const got = std.fmt.bytesToHex(r.toc_digest, .lower);
+    if (!std.mem.startsWith(u8, want, "sha256:") or !std.mem.eql(u8, want["sha256:".len..], &got))
+        return fail("layer {s}: its TOC isn't the one its descriptor names ({s})", .{ short, want });
+    return r;
+}
+
+/// Whether the index lists `name` among the layer's own files, rather than
+/// as part of the format (eStargz's TOC and landmark).
+pub fn isLayerFile(name: []const u8) bool {
+    return name.len > 0 and !estargz.isReserved(name);
+}
 
 /// A layer written to a temporary file in the store, to move in as a blob.
 pub const Blob = struct {
@@ -173,16 +213,11 @@ fn deployEstargz(io: Io, gpa: Allocator, desc: oci.Descriptor, blob: []const u8,
     var file = try Io.Dir.cwd().openFile(io, blob, .{});
     defer file.close(io);
     const src: stargazer_source.File = .{ .io = io, .file = file };
-    const r = estargz.Reader.open(gpa, src.source(try file.length(io)), .{}) catch |err|
-        return fail("layer {s} can't be read as eStargz: {t}", .{ short, err });
+    const r = try openIndex(gpa, desc, src.source(try file.length(io)));
     defer r.deinit();
-    const want = desc.annotations.?.map.get(estargz.toc_digest_annotation).?;
-    const got = std.fmt.bytesToHex(r.toc_digest, .lower);
-    if (!std.mem.startsWith(u8, want, "sha256:") or !std.mem.eql(u8, want["sha256:".len..], &got))
-        return fail("layer {s}: its TOC isn't the one its descriptor names ({s})", .{ short, want });
     // The names a tar layer may have, checked by zigsaw's rules, as there.
     for (r.files) |f| {
-        if (f.name.len == 0 or estargz.isReserved(f.name)) continue;
+        if (!isLayerFile(f.name)) continue;
         if (!oci.isSafeRelPath(std.mem.trimEnd(u8, f.entry.name, "/")))
             return fail("layer {s} has a file outside it: {s}", .{ short, f.entry.name });
         if (f.entry.type != .dir and f.entry.type != .reg)

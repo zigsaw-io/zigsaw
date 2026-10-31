@@ -88,6 +88,10 @@ zigsaw build [--rebuild] [--clean] [--keep-build-dir] [<recipe.json> | <dir>]
                                        without the work directories its last build left
 zigsaw search [<words>...]             find apps in the default registry's catalog
 zigsaw info <image>                    show what an app in a registry is, needs and may reach
+zigsaw ls <image>                      list the files of an app in a registry without pulling
+                                       it, as far as its layers' format allows (eStargz)
+zigsaw cat <image> <path>              write a file of an app in a registry to stdout, the
+                                       same way
 zigsaw pull [--yes] <image>            install an app and its commands from a registry, once
                                        you agree to what it may reach; --yes agrees without
                                        asking
@@ -134,6 +138,12 @@ reach, and how it was built. It takes any image, in the catalog or not
 (`zigsaw info ghcr.io/you/app:1.0`). `pull` says what the app may reach
 before it downloads it, and `update` says so when a new version may reach
 something else.
+
+`zigsaw ls <app-id>` lists an app's files, and `zigsaw cat <app-id> <path>`
+writes one of them, a licence say, to stdout, without pulling the app: for
+layers in eStargz, a layer format whose files can be found and read one by
+one, they take a few ranged requests, and check what they read against the
+layer's index. Layers in gzip, the default, can't be read that way.
 
 The catalog is an artifact next to the images, `<registry>/catalog:latest`
 (`ghcr.io/zigsaw-io/catalog`), so `ZIGSAW_REGISTRY` changes it too. It lists

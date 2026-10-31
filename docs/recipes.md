@@ -54,7 +54,17 @@ to download. Its layer's descriptor carries the table's digest, as other
 eStargz tools expect. An eStargz image needs zigsaw 0.65 or later: 0.60
 fails to unpack it (`EndOfStream`), and 0.64 unpacks it with eStargz's two
 files of its own, `stargz.index.json` and `.no.prefetch.landmark`, among
-the app's. Qt's images have eStargz layers.
+the app's. Qt's images and llvm-mingw's have eStargz layers.
+
+An eStargz layer is also what an update can download in part (zigsaw
+0.66 and later): the new layer's blob is built from the members of
+eStargz layers the store has, an older version of it usually, and the rest
+comes in a few ranged requests; the blob built is checked against its
+digest, as a download is, and downloaded whole if it isn't the one. How much
+that saves depends on how much changes: 3 changed files of Qt's SDK, 0.4%
+of its layer fetched; llvm-mingw from 20261006 to 20261020, whose programs
+all change and whose headers don't, 83%. `zigsaw ls` and `zigsaw cat` read
+an eStargz layer's files where they are, without pulling it.
 
 `name`, `summary`, `homepage` and `license` describe the app for
 [`search` and `info`](#finding-apps): what people call it, what it is in a
@@ -732,7 +742,10 @@ and `LDFLAGS=-s`, and its `bin` is on the build's PATH, with the
 `x86_64-w64-mingw32-*` tools that configure scripts look for with `--host`.
 GDAL's and PostgreSQL's images, and what's built on them, build with it, and
 so do [Qt's SDK](#qt) and [GTK's](#gtk) (and gettext), whose runtime it is,
-so Qt and GTK apps build with it too.
+so Qt and GTK apps build with it too. Its layer is
+[eStargz](#recipes) since iteration 66 (110 MB; 108 as gzip); those
+recipes pin its earlier gzip build, `@sha256:1fd5d6d8…` and
+`@sha256:115b5e48…`, which have the same files.
 
 - **Objects and links are reproducible without a flag**: Clang writes the
   time it compiled an object into its header, which static libraries keep,

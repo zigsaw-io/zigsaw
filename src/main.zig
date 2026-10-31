@@ -11,6 +11,7 @@ const exports = @import("exports.zig");
 const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
 const info = @import("info.zig");
+const peek = @import("peek.zig");
 const install = @import("install.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
@@ -37,6 +38,10 @@ const usage =
     \\                                  a project's modules without their kept work directories
     \\  search [<words>...]             find apps in the default registry's catalog
     \\  info <image>                    show what an app in a registry is, needs and may reach
+    \\  ls <image>                      list the files of an app in a registry without pulling
+    \\                                  it, as far as its layers' format allows (eStargz)
+    \\  cat <image> <path>              write a file of an app in a registry to stdout, the
+    \\                                  same way
     \\  pull [--yes] <image>            install an app and its commands from a registry, once
     \\                                  you agree to what it may reach; --yes agrees without
     \\                                  asking
@@ -241,6 +246,14 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         if (rest.len != 1 or std.mem.startsWith(u8, rest[0], "-")) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
         try info.info(ctx, rest[0]);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "ls") or std.mem.eql(u8, command, "cat")) {
+        const listing = std.mem.eql(u8, command, "ls");
+        if (rest.len != @as(usize, if (listing) 1 else 2)) return usageError();
+        for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        if (listing) try peek.ls(ctx, rest[0]) else try peek.cat(ctx, rest[0], rest[1]);
         return 0;
     }
     if (std.mem.eql(u8, command, "run")) return runtime.run(ctx, try parseRunOptions(ctx, rest));

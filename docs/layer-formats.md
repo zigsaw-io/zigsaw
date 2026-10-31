@@ -5,7 +5,9 @@ The first slice was built in [iteration 64](iteration-64.md): stargazer
 0.1.0, zigsaw's gunzip of every member, and measurements on Qt's layers. The
 second in [iteration 65](iteration-65.md): the formats behind one interface
 in zigsaw ([`src/format.zig`](../src/format.zig)), `"layer": "estargz"`, and
-Qt's images on it.
+Qt's images on it. The third in [iteration 66](iteration-66.md): Range
+downloads, updates that build the new blob from the old one, and
+`zigsaw ls` and `zigsaw cat`.
 The formats themselves are written and read by
 [stargazer](https://github.com/zigsaw-io/stargazer), a library of seekable
 layer formats in [`stargazer/`](../stargazer) (a git submodule, MIT
@@ -105,9 +107,11 @@ implementation, which [`src/remote.zig`](../src/remote.zig) and
 [`src/Store.zig`](../src/Store.zig) never name. Built in iteration 65 as
 [`src/format.zig`](../src/format.zig): `Format.ofDescriptor` tells a layer's
 format from its descriptor (an eStargz layer is `tar+gzip` with a TOC
-digest), `write` makes a layer of a tree, and `deploy` unpacks one. The
-capabilities in the table above come with the update code that uses them
-(iteration 66).
+digest), `write` makes a layer of a tree, and `deploy` unpacks one.
+Iteration 66 added the one capability the update code asks for,
+`Format.indexed()` (a per-file index; eStargz has one), and `openIndex`,
+which opens a layer's index from any source and checks its TOC against the
+descriptor.
 
 ### Stargazer and zigsaw
 
@@ -174,29 +178,56 @@ capabilities in the table above come with the update code that uses them
 
 ### Updating
 
-When a layer's digest changed and both the old and the new layer are
-eStargz:
+Built in iteration 66, for any pull or update of an indexed layer the store
+lacks, when the store has blobs of other indexed layers (of any image it
+keeps, apps' and builds'):
 
-1. Read the new blob's footer and TOC with two Range requests, and check
-   the TOC against the `toc.digest` annotation of the manifest, which is
-   itself checked.
-2. Plan against the old blob's TOC, from `blobs\`: a member of the new
-   blob is reused if a member of the old one has the same compressed
-   length, the same chunk digest, and the same tar entries following it up
-   to the next payload. Otherwise its bytes are fetched.
-3. Write the new blob from copied ranges, fetched ranges, the TOC and the
-   footer, and check its sha256 against the manifest. If it differs, fetch
-   it whole.
+1. Read the new blob's tail with one Range request (1/64 of the blob,
+   between 16 KiB and 1 MiB: most TOCs fit), its footer and TOC from it (a
+   second request if the TOC is longer), and check the TOC against the
+   `toc.digest` annotation of the manifest, which is itself checked.
+2. Plan against the old blobs' TOCs, from `blobs\` (stargazer's
+   `plan.make`): a member of the new blob is reused if a member of an old
+   one has the same compressed length, the same chunk digest and size, and,
+   for a file's last chunk, the same padding and the same entries after it
+   up to the next payload, as the TOC gives them: their tar headers are in
+   the member. Otherwise its bytes are fetched.
+3. Coalesce the fetches (`plan.coalesce`): a gap of copies up to 64 KiB
+   between two fetches is fetched too, then the shortest gaps until there
+   are at most 64 requests. No multi-range requests: storage services
+   behind registries don't all serve them.
+4. If less than a tenth of the blob would be copied, download it whole.
+5. Write the new blob from copied ranges, fetched ranges and the tail, in
+   order, through one sha256, and check it against the manifest. If it
+   differs, download it whole. A registry that answers a Range request with
+   the whole blob (200) gets the same.
 
 Reuse rests on the writer's determinism: the same file, after the same
 entries, compressed by the same deflate, is the same member. The final
-check is what makes it safe.
+check is what makes it safe: the TOC can't prove the following headers
+byte for byte.
+
+What it saved, measured in iteration 66:
+
+| update | blob | copied | fetched | requests |
+|---|---|---|---|---|
+| Qt's SDK, 3 files changed in place | 96.2 MB | 98.9% | 0.4% + 0.6 MB TOC | 3 |
+| llvm-mingw 20261006 → 20261020 | 110.3 MB | 16.5% | 83.5% (incl. tail) | 14 |
+
+llvm-mingw's 5,115 unchanged files of 5,382 are mostly headers, 17% of the
+bytes; its programs and Clang's runtime libraries all change between
+releases.
 
 ### Reading one file
 
-`zigsaw info` can read a file of a remote layer, such as a licence or an
-icon, through the footer, the checked TOC and the file's members, without
-pulling the layer.
+Built in iteration 66 as two commands rather than `info` flags:
+`zigsaw ls <image>` lists the files of an image's indexed layers, and
+`zigsaw cat <image> <path>` writes one, checked against its chunk and file
+digests, looking in the app's own layer first, then its runtimes'. Each
+reads the tail (footer and TOC) and the file's members: Qt's runtime is
+listed in one request of 1 MiB, and a 10 KB file of it read in two, through
+ghcr.io's redirect to its storage. A blob the store has is read from there.
+A gzip layer is named as one that can't be read without pulling.
 
 ### zigsaws that don't know a format
 
@@ -246,7 +277,7 @@ pulling the layer.
 |---|---|
 | 64 | stargazer 0.1: TOC model, eStargz reader and writer, CLI, C ABI v0, fuzzing, Go conformance, CI on three OSes. zigsaw: `layer.gunzip` reads every member, the submodule cloned by https in CI. Sizes and times on Qt's layers |
 | 65 | the format interface in zigsaw, tar and gzip behind it unchanged; `"layer": "estargz"`, descriptor annotations, pulls without an inflated tar; Qt's chain on eStargz, five images published again |
-| 66 | Range downloads, updates that rebuild the blob, reading one remote file |
+| 66 | Range downloads (and resuming a broken download); stargazer 0.2's update plans; updates that build the blob from the store's; `zigsaw ls` and `zigsaw cat`; llvm-mingw on eStargz |
 
 ## Decisions
 

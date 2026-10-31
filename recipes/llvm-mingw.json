@@ -6,6 +6,7 @@
   "homepage": "https://github.com/mstorsjo/llvm-mingw",
   "license": "Apache-2.0 WITH LLVM-exception AND ZPL-2.1 AND MIT AND ISC",
   "command": "bin/clang.exe",
+  "layer": "estargz",
   "path": ["bin"],
   "env": {
     "CC": "cc",

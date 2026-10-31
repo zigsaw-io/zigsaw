@@ -130,6 +130,70 @@ check "  it runs" sgz_runs
 check "  its deployment has the app's files, not the TOC or landmark" sgz_own_files_only
 check "  info says the layer is eStargz" sgz_info
 
+# Its files, listed and read from the registry by Range requests, without
+# pulling the layer: a fresh store keeps only the config.
+zp() { ZIGSAW_HOME="$work\\peek" "$zigsaw" "$@"; }
+sgz_ls() { zp ls "$repo/estargz:1" | grep -qE '^ +[0-9]+  busybox\.exe$'; }
+sgz_cat() { [ "$(zp cat "$repo/estargz:1" busybox.exe | sha256sum | cut -d' ' -f1)" = 07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075 ]; }
+sgz_peek_blobs() { [ "$(ls "$(cygpath -u "$work\\peek")/blobs/sha256" | wc -l)" -eq 1 ]; }
+gzip_cat() { zp cat "$repo/busybox:FRP-6075-g169694ebd" busybox.exe 2>&1 | grep -q "busybox's (gzip) can't be"; }
+check "  ls lists its files without pulling it" sgz_ls
+check "  cat writes a file, checked, without pulling it" sgz_cat
+check "  the store has only the image's config" sgz_peek_blobs
+check "  cat of a gzip layer says it can't" gzip_cat
+
+# An update of an eStargz layer builds the new blob from the old one, and
+# fetches only what changed: version 2 adds a.txt, whose name sorts first,
+# so busybox.exe's member is the same. In a store whose old blob was
+# damaged after its download, the blob built doesn't match its digest, and
+# is downloaded whole.
+zbad() { ZIGSAW_HOME="$work\\sgzbad" "$zigsaw" "$@"; }
+printf '{ "id": "%s", "version": "2", "command": "busybox.exe", "exports": {}, "layer": "estargz",\n  "sdk": { "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@%s" },\n  "modules": [{ "name": "busybox", "sources": [{ "url": "https://frippery.org/files/busybox/busybox-w64-FRP-6075-g169694ebd.exe", "sha256": "07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075", "dest": "busybox.exe" }] },\n    { "name": "note", "build": ["echo version 2 > $PREFIX/a.txt"] }] }\n' \
+    $SGZ "$full_digest" >"$work\\estargz2.json"
+own_layer() { # <store>: the blob path of the installed eStargz app's own layer
+    local manifest
+    manifest=$(grep -o 'sha256:[0-9a-f]*' "$1\\refs\\$SGZ.json" | head -1 | cut -d: -f2)
+    echo "$1\\blobs\\sha256\\$(grep -o '"digest": *"sha256:[0-9a-f]*"' "$1\\blobs\\sha256\\$manifest" | tail -1 | grep -o '[0-9a-f]\{64\}')"
+}
+sgz_v2_pushed() {
+    zbad pull --yes "$repo/estargz:1" >/dev/null 2>&1 || return 1
+    # A byte in the middle of the old layer, in busybox.exe's member.
+    python -I -c 'import sys; p = sys.argv[1]; b = bytearray(open(p, "rb").read()); b[len(b) // 2] ^= 0xff; open(p, "wb").write(b)' "$(own_layer "$work\\sgzbad")" || return 1
+    za build "$work\\estargz2.json" >/dev/null 2>&1 && za push $SGZ "$repo/estargz:1" >/dev/null 2>&1
+}
+sgz_delta() {
+    local out size fetched
+    out=$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" -v update --yes $SGZ 2>&1) || { echo "$out" | tail -2; return 1; }
+    size=$(stat -c %s "$(own_layer "$store_a")")
+    fetched=$(grep -o "from the store's layers, [0-9]* fetched" <<<"$out" | grep -o '[0-9]*') || { echo "$out" | grep -iE 'download|whole' | tail -2; return 1; }
+    [ "$((fetched * 4))" -lt "$size" ] || { echo "fetched $fetched of $size"; return 1; }
+    [ "$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" list | awk -v id=$SGZ '$1 == id { print $3 }')" = "$(za list | awk -v id=$SGZ '$1 == id { print $3 }')" ]
+}
+sgz_v2_runs() {
+    [ "$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" run $SGZ echo v2 | tr -d '\r')" = v2 ] &&
+        [ "$(cat "$(cygpath -u "$work\\sgz")"/deploy/*/a.txt | tr -d '\r ')" = version2 ]
+}
+sgz_mismatch() {
+    local out
+    out=$(zbad update --yes $SGZ 2>&1) || { echo "$out" | tail -2; return 1; }
+    grep -q "isn't the blob its digest names; downloading it whole" <<<"$out" || { echo "$out" | tail -2; return 1; }
+    [ "$(zbad list | awk -v id=$SGZ '$1 == id { print $3 }')" = "$(za list | awk -v id=$SGZ '$1 == id { print $3 }')" ]
+}
+check "  version 2 pushed under the same tag" sgz_v2_pushed
+check "  update builds it from the old blob, fetching under a quarter" sgz_delta
+check "  the updated app runs, with the new file" sgz_v2_runs
+check "  a damaged old blob: the blob built is refused, then downloaded whole" sgz_mismatch
+
+# A download that breaks off goes on from where it got to (a Range
+# request), into the same blob.
+resumed() {
+    local out
+    out=$(ZIGSAW_TEST_DOWNLOAD_BREAK=100000 ZIGSAW_HOME="$work\\resume" "$zigsaw" -v pull --yes "$repo/busybox:FRP-6075-g169694ebd" 2>&1) || { echo "$out" | tail -2; return 1; }
+    grep -q 'resuming sha256:[0-9a-f]* at 100000 bytes' <<<"$out" || { echo "$out" | tail -3; return 1; }
+    [ "$(ZIGSAW_HOME="$work\\resume" "$zigsaw" list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]
+}
+check "a download that breaks off goes on where it got to" resumed
+
 # Blobs bigger than a chunk go up in chunks (64 KiB here, 64 MiB unless
 # ZIGSAW_UPLOAD_CHUNK_SIZE says), and one that breaks off goes on from where
 # the registry got to.
@@ -520,6 +584,13 @@ check "pushing a pulled app to another repository mounts all of it" remounted
 
 # Real registries, read-only: the token flow works.
 check "ghcr.io: token, container image refused" refused ghcr.io/oras-project/oras:v1.2.0
+# A file of Qt's eStargz runtime, read through ghcr.io's redirect to its
+# storage by Range requests.
+ghcr_cat() {
+    [ "$(ZIGSAW_HOME="$work\\peek" "$zigsaw" cat ghcr.io/zigsaw-io/io.qt.qt6@sha256:5b3217abb8c7486dfbc80e8204cd1796f725e227a1f1997bf4f9b6f83120d200 bin/Qt6QuickControls2Native.dll |
+        sha256sum | cut -d' ' -f1)" = 6f3cde26e753c28f70729ac1624a119d1539af18393860f45516ca98c5641e6d ]
+}
+check "ghcr.io: cat a file of an eStargz layer by Range requests" ghcr_cat
 # Credentials in the environment are for the default registry (ghcr.io), so
 # Docker Hub never sees them; if it did, it would refuse these.
 docker_hub() { ZIGSAW_REGISTRY_USERNAME=zigsaw-nobody ZIGSAW_REGISTRY_PASSWORD=wrong refused docker.io/library/alpine:3.20; }

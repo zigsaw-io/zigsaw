@@ -26,6 +26,16 @@ pub const STD_OUTPUT_HANDLE: DWORD = @bitCast(@as(i32, -11));
 pub const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
 pub const HANDLE_FLAG_INHERIT: DWORD = 0x1;
 
+/// Whether I/O on a handle is synchronous (FILE_SYNCHRONOUS_IO_ALERT or
+/// _NONALERT in its mode); null if Windows won't say.
+pub fn synchronousIo(handle: HANDLE) ?bool {
+    const w = std.os.windows;
+    var iosb: w.IO_STATUS_BLOCK = undefined;
+    var mode: u32 = 0;
+    if (w.ntdll.NtQueryInformationFile(@ptrCast(handle), &iosb, &mode, @sizeOf(u32), .Mode) != .SUCCESS) return null;
+    return mode & (0x10 | 0x20) != 0;
+}
+
 pub const CTRL_C_EVENT: DWORD = 0;
 pub const CTRL_BREAK_EVENT: DWORD = 1;
 
