@@ -27,14 +27,37 @@ pub fn gzip(arena: Allocator, out: *Io.Writer) !*flate.Compress {
     return c;
 }
 
-/// Decompresses gzip data from `in` to `out`.
+/// Decompresses gzip data from `in` to `out`: every member of it, as gzip
+/// does. Zig's decompressor stops after the first member, without an error,
+/// so the rest of a file of several (bgzip's, eStargz) would be lost.
 pub fn gunzip(in: *Io.Reader, out: *Io.Writer) !void {
     var window: [flate.max_window_len]u8 = undefined;
-    var d: flate.Decompress = .init(in, .gzip, &window);
-    _ = d.reader.streamRemaining(out) catch |err| switch (err) {
-        error.ReadFailed => return d.err orelse err,
-        else => |e| return e,
-    };
+    while (true) {
+        var d: flate.Decompress = .init(in, .gzip, &window);
+        _ = d.reader.streamRemaining(out) catch |err| switch (err) {
+            error.ReadFailed => return d.err orelse err,
+            else => |e| return e,
+        };
+        if (!try anotherMember(in)) return;
+    }
+}
+
+/// Whether another gzip member follows the one just read. Zero bytes up to
+/// the end are padding, which GNU gzip ignores too; other bytes fail.
+fn anotherMember(in: *Io.Reader) !bool {
+    if (in.peek(2)) |magic| {
+        if (magic[0] == 0x1f and magic[1] == 0x8b) return true;
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        error.ReadFailed => return err,
+    }
+    while (in.peekGreedy(1)) |bytes| {
+        for (bytes) |b| if (b != 0) return error.GzipTrailingGarbage;
+        in.toss(bytes.len);
+    } else |err| switch (err) {
+        error.EndOfStream => return false,
+        error.ReadFailed => return err,
+    }
 }
 
 /// Decompresses the gzip-compressed layer at `gz_path` into a plain tar at
@@ -256,21 +279,58 @@ test "gzip layers: the bytes this Zig's deflate makes" {
 
     try expectSha256("73328f9013587c5ac268810fea2afaa3f7c14c595d7d95d81c9bfe81ceab55da", try testLayer(arena, .gzip));
 
-    // A MiB of words in an order picked by a fixed LCG (not std.Random, whose
-    // output a new Zig could change too), so deflate finds matches of all
-    // lengths and distances, as in real files.
+    // A MiB of words, as in real files.
+    const data = try lcgWords(arena, 1 << 20, 1);
+    var out: Io.Writer.Allocating = try .initCapacity(arena, 1 << 20);
+    const gz = try gzip(arena, &out.writer);
+    try gz.writer.writeAll(data);
+    try gz.finish();
+    try expectSha256("b3c3a2e286e4d45591e9e29bac9f9027ec91abdf4f3767fdd206fb2fb1fe0f1b", out.written());
+}
+
+test "gunzip reads every member, and padding after the last" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Members of several deflate blocks each, so the end of one isn't at the
+    // end of the decompressor's input buffer.
+    const first = try lcgWords(arena, 300 * 1024, 1);
+    const second = try lcgWords(arena, 200 * 1024, 2);
+    var out: Io.Writer.Allocating = try .initCapacity(arena, 1 << 20);
+    for ([_][]const u8{ first, second, "" }) |data| {
+        const gz = try gzip(arena, &out.writer);
+        try gz.writer.writeAll(data);
+        try gz.finish();
+    }
+    const members = try arena.dupe(u8, out.written());
+    const want = try std.mem.concat(arena, u8, &.{ first, second });
+
+    for ([_][]const u8{ "", "\x00", repeat("\x00", 1000) }) |padding| {
+        var in: Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ members, padding }));
+        var got: Io.Writer.Allocating = .init(arena);
+        try gunzip(&in, &got.writer);
+        try std.testing.expectEqualSlices(u8, want, got.written());
+    }
+    for ([_][]const u8{ "x", "\x00\x00x", "\x1f" }) |garbage| {
+        var in: Io.Reader = .fixed(try std.mem.concat(arena, u8, &.{ members, garbage }));
+        var got: Io.Writer.Allocating = .init(arena);
+        try std.testing.expectError(error.GzipTrailingGarbage, gunzip(&in, &got.writer));
+    }
+}
+
+/// `len` bytes of words in an order picked by a fixed LCG (not std.Random,
+/// whose output a new Zig could change too), so deflate finds matches of all
+/// lengths and distances, as in real files.
+fn lcgWords(arena: Allocator, len: usize, seed: u32) ![]const u8 {
     const words = [_][]const u8{ "zig ", "saw ", "layer ", "image ", "manifest ", "\n", "tar ", "0x7f ", "{}", "MZ\x90\x00", "\x00\x00\x00\x00" };
-    var data: Io.Writer.Allocating = try .initCapacity(arena, 1 << 20);
-    var x: u32 = 1;
-    while (data.written().len < 1 << 20) {
+    var data: Io.Writer.Allocating = try .initCapacity(arena, len + 16);
+    var x: u32 = seed;
+    while (data.written().len < len) {
         x = x *% 1664525 +% 1013904223;
         try data.writer.writeAll(words[(x >> 16) % words.len]);
     }
-    var out: Io.Writer.Allocating = try .initCapacity(arena, 1 << 20);
-    const gz = try gzip(arena, &out.writer);
-    try gz.writer.writeAll(data.written());
-    try gz.finish();
-    try expectSha256("b3c3a2e286e4d45591e9e29bac9f9027ec91abdf4f3767fdd206fb2fb1fe0f1b", out.written());
+    return data.written();
 }
 
 fn expectSha256(want: []const u8, bytes: []const u8) !void {

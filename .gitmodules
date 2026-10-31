@@ -1,0 +1,3 @@
+[submodule "stargazer"]
+	path = stargazer
+	url = https://github.com/zigsaw-io/stargazer.git
