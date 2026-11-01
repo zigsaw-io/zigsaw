@@ -86,6 +86,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | GDAL, its raster and vector tools (from its SDK) | `org.gdal.GDAL` | 3.13.3 | `gdal`, `gdalinfo`, `gdal_translate`, `gdalwarp`, `ogr2ogr`, `ogrinfo`, `gdalsrsinfo`, `gdaltransform`, `gdal_create` and 20 more |
 | PostGIS, extending PostgreSQL (built from source, on GDAL's SDK; with rasters) | `org.postgresql.PostgreSQL.PostGIS` | 3.6.4 | |
 | osm2pgsql, which imports OpenStreetMap data into PostGIS (built from source with Clang, on PostgreSQL's and GDAL's SDKs) | `org.osm2pgsql.osm2pgsql` | 2.3.1 | `osm2pgsql`, `osm2pgsql-expire` |
+| VSCodium, a code editor: Visual Studio Code's source without Microsoft's branding and telemetry (on Electron, with MinGit) | `com.vscodium.codium` | 1.143.17232 | `codium`, `codium-cli` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -199,6 +200,15 @@ cosign signs with a key pair (`cosign generate-key-pair`, its password from
 Sigstore's public services, hasn't been tried. In an AppContainer they
 reach registries, on this machine too, but ORAS can't pull into a folder,
 nor skopeo copy into one ([known gaps](gaps.md)).
+[VSCodium](recipes.md#chromium-and-electron) is upstream's build, on Electron,
+which brings a sandbox of its own: Windows doesn't let that start at low
+integrity or in an AppContainer, so its image asks for `soft`, and it can write
+whatever you can. `codium` opens the editor, a file or a folder; `codium-cli`
+is its command line (`--version`, `--install-extension`). Its extensions come
+from Open VSX, and its terminal has git, from MinGit's image, but not your own
+tools. To confine what its extensions and terminal write instead, at the cost
+of its renderer's sandbox: `zigsaw run --sandbox=low com.vscodium.codium
+--no-sandbox`.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -218,12 +228,14 @@ mustn't be published, as the licences of what's in them don't allow it.
 | .NET runtime, with ASP.NET Core and Windows Desktop (from its SDK) | `com.microsoft.dotnet` | 10.0.13 | |
 | Pinta (built from source, on GTK and .NET) | `com.github.PintaProject.Pinta` | 3.1.2 | `pinta` |
 | Files - Zigsaw build (built from source, on .NET) | `community.files.Files` | 4.3 | `files` |
+| ungoogled-chromium, a web browser: Chromium without Google's services (upstream's build) | `io.github.ungoogled_software.ungoogled_chromium` | 156.0.8078.73-1.1 | `chromium` |
 
 ```powershell
 zigsaw build recipes\no-publish\dotnet-sdk.json   # 300 MB from Microsoft
 zigsaw build recipes\no-publish\dotnet.json
 zigsaw build recipes\no-publish\pinta.json
 zigsaw build recipes\no-publish\files.json        # 3.3 GB of NuGet packages; about ten minutes
+zigsaw build recipes\no-publish\ungoogled-chromium.json   # 200 MB from its releases; needs nothing above
 ```
 
 Microsoft's licence for its .NET binaries on Windows lets anyone use them
@@ -241,6 +253,13 @@ shortcut say "Files - Zigsaw build", so as not to pass for the Files its
 project publishes. It works in the `soft` sandbox only, which its image
 asks for: at low integrity and in an AppContainer it starts, but shows no
 drives and asks for a permission it can't be given.
+
+[ungoogled-chromium](recipes.md#chromium-and-electron) isn't published, as its
+Windows build has codecs that patents cover (H.264, AAC): each machine makes
+the image from upstream's zip, so `zigsaw pull` can't find it. Its image asks
+for `soft`, as Windows doesn't let Chromium's sandbox start otherwise. It keeps
+its settings in its data, its registry key too, and asks where to save each
+download.
 
 ## Reproducibility
 

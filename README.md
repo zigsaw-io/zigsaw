@@ -671,6 +671,12 @@ executable, which zigsaw installs read-only (Notepad++'s `doLocalConf.xml`),
 and their updaters: zigsaw updates them. VLC's turns off its first-run
 privacy question and its update check with arguments.
 
+Chromium's and Electron's programs bring a sandbox of their own, which Windows
+doesn't let start at low integrity or in an AppContainer: VSCodium and
+ungoogled-chromium ask for `soft`, and exit at once under the others
+([what's needed](docs/recipes.md#chromium-and-electron),
+[what was found](docs/findings.md#chromium-and-electron)).
+
 ### Start menu shortcuts
 
 A recipe can declare shortcuts to its exports, as Flatpak apps export
@@ -790,6 +796,7 @@ bash tests/certs.sh     # which apps trust a root CA added to Windows: a test CA
 bash tests/qt.sh        # a Qt Widgets app built against Qt's SDK with CMake, on its runtime, in each sandbox: plugins found from the runtime, image formats, Schannel, translations; a Qt Quick window drawn with Direct3D 11 in each sandbox; the SDK's cmake without a recipe; the qml tool; Designer's and Linguist's windows, shims and shortcuts; Flameshot in each sandbox, and its full command saving a screenshot; Notes in each sandbox, its QML and database (needs QT_HOME or BUILD_HOME; opens windows)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
+bash tests/chromium.sh # ungoogled-chromium and VSCodium in each sandbox, with Windows' word on how their processes are confined: pages, WebGL, H.264, a second launch, downloads, a task in VSCodium's terminal, an extension saving a file; shims, shortcuts and what they leave outside
 bash tests/zls.sh       # ZLS's language server sessions over stdio in each sandbox: the standard library's documentation, a module a project's build.zig declares, a syntax error; its shim (needs ZLS_HOME or BUILD_HOME, or builds it)
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API, in an AppContainer through its service too (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)

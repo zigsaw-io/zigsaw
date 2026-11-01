@@ -79,3 +79,4 @@ postgresql-pgvector.json
 postgresql-pg-cron.json
 postgresql-postgis.json
 osm2pgsql.json
+vscodium.json

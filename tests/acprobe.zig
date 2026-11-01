@@ -25,6 +25,9 @@
 //!   drive-root      the working directory's drive root, opened to read its
 //!                   attributes, as Node's lstat("C:\\") does
 //!   nul             NUL, opened to read and write, as git and Go open it
+//!   window-station  making a window station, as Chromium does for its
+//!                   renderers before anything else, and stops if it can't
+//!   desktop         making a desktop in the current window station
 
 const std = @import("std");
 const win32 = @import("win32");
@@ -42,6 +45,10 @@ const VOLUME_NAME_NT: DWORD = 0x2;
 extern "kernel32" fn GetFinalPathNameByHandleW(file: HANDLE, path: [*]u16, len: DWORD, flags: DWORD) callconv(.winapi) DWORD;
 extern "kernel32" fn GetCurrentDirectoryW(len: DWORD, buf: [*]u16) callconv(.winapi) DWORD;
 extern "kernel32" fn GetLongPathNameW(short: [*:0]const u16, long: [*]u16, len: DWORD) callconv(.winapi) DWORD;
+extern "user32" fn CreateWindowStationW(name: ?[*:0]const u16, flags: DWORD, access: DWORD, attributes: ?*anyopaque) callconv(.winapi) ?HANDLE;
+extern "user32" fn CloseWindowStation(station: HANDLE) callconv(.winapi) win32.BOOL;
+extern "user32" fn CreateDesktopW(name: [*:0]const u16, device: ?[*:0]const u16, mode: ?*anyopaque, flags: DWORD, access: DWORD, attributes: ?*anyopaque) callconv(.winapi) ?HANDLE;
+extern "user32" fn CloseDesktop(desktop: HANDLE) callconv(.winapi) win32.BOOL;
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -77,7 +84,24 @@ pub fn main(init: std.process.Init) !void {
         try out.print("drive-root skipped: the working directory has no drive letter\n", .{});
     }
     try report(out, "nul", open(std.unicode.utf8ToUtf16LeStringLiteral("NUL"), win32.GENERIC_READ | GENERIC_WRITE, 0));
+    try report(out, "window-station", windowStation());
+    try report(out, "desktop", desktop());
     try out.flush();
+}
+
+fn windowStation() Result {
+    const WINSTA_ALL_ACCESS: DWORD = 0x37F;
+    const station = CreateWindowStationW(null, 0, WINSTA_ALL_ACCESS, null) orelse return win32.GetLastError();
+    _ = CloseWindowStation(station);
+    return null;
+}
+
+fn desktop() Result {
+    const GENERIC_ALL: DWORD = 0x10000000;
+    const name = std.unicode.utf8ToUtf16LeStringLiteral("zigsaw-acprobe");
+    const created = CreateDesktopW(name, null, null, 0, GENERIC_ALL, null) orelse return win32.GetLastError();
+    _ = CloseDesktop(created);
+    return null;
 }
 
 /// A check's result: null when it succeeded, else the Win32 error.

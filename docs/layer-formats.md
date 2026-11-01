@@ -213,6 +213,8 @@ What it saved, measured in iteration 66:
 |---|---|---|---|---|
 | Qt's SDK, 3 files changed in place | 96.2 MB | 98.9% | 0.4% + 0.6 MB TOC | 3 |
 | llvm-mingw 20261006 → 20261020 | 110.3 MB | 16.5% | 83.5% (incl. tail) | 14 |
+| VSCodium 1.143.17183 → 1.143.17232 (a recovery release; `stargazer plan`, iteration 67) | 218.2 MB | 83.5% | 16.4% + 0.2 MB TOC | 17 |
+| VSCodium 1.140.06880 → 1.143.17232 (monthly) | 218.2 MB | 24.6% | 75.3% + 0.2 MB TOC | 35 |
 
 llvm-mingw's 5,115 unchanged files of 5,382 are mostly headers, 17% of the
 bytes; its programs and Clang's runtime libraries all change between

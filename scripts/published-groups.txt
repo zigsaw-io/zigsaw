@@ -33,6 +33,10 @@ apps: php-sdk.json php.json php-apcu.json php-xdebug.json php-igbinary.json php-
 # Scene Builder (about 3)
 java: java-sdk.json java.json maven.json gradle.json pdfbox.json plantuml.json logisim-evolution.json scenebuilder.json
 
+# VSCodium, packaged from upstream's zip (about a minute: sed, a copy, and an
+# eStargz layer of 3,500 files), pulling BusyBox's and MinGit's images
+electron: vscodium.json
+
 # What GTK's SDK builds with: Perl (prebuilt) and cargo-c (13); gettext
 # alone (25 here with llvm-mingw; 39 on a runner before iteration 38
 # compiled it in parallel). gettext and the GTK groups pull llvm-mingw's

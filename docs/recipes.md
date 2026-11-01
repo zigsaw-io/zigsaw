@@ -3178,6 +3178,54 @@ under soft and low, in about 40 s:
   flat nodes and an area table in UTM;
 - gzip and bzip2 input, and `-W` reading the password.
 
+## Chromium and Electron
+
+Programs made with Chromium or Electron can be packaged from upstream's
+archives, as [`recipes/vscodium.json`](../recipes/vscodium.json) and
+[`recipes/no-publish/ungoogled-chromium.json`](../recipes/no-publish/ungoogled-chromium.json)
+are. What such a recipe needs, from
+[what was found](findings.md#chromium-and-electron):
+
+- **`"sandbox": "soft"`.** Their sandbox starts by making a window station,
+  which Windows refuses at low integrity and in an AppContainer: they exit with
+  code 3, with no window and no message. Only `--no-sandbox` gets past that,
+  and it takes the sandbox from every process, so neither image passes it.
+- **`"registry"`, if it writes keys.** Chromium writes
+  `HKCU\Software\Chromium`, its preferences' MACs among it, and under `soft`
+  that's the real registry unless the recipe declares the key. An Electron
+  app may not: VSCodium writes none.
+- **Leave out what writes to your real profile.** The profile folder is one
+  of the things that [don't follow `USERPROFILE`](findings.md#where-windows-sends-a-program):
+  `.vscode-oss\cli` appeared in the real one until VSCodium's recipe left out
+  `bin\codium-tunnel.exe`.
+- **Turn off the updater.** VSCodium's recipe deletes `updateUrl` from its
+  `product.json`, which its integrity check doesn't cover:
+
+  ```json
+  "build": [
+    "grep -q '\"updateUrl\"' resources/app/product.json",
+    "sed -i '/\"updateUrl\"/d' resources/app/product.json",
+    "! grep -q '\"updateUrl\"' resources/app/product.json",
+    "cp -r . \"$PREFIX/\""
+  ]
+  ```
+
+- **The GUI program as the command people type.** Electron's CLI (`bin\<name>.cmd`)
+  starts the GUI detached and exits, and a run ends what's left when its
+  command does, so the window would close at once. Its GUI program takes
+  the same files and folders, and gets the windowless shim, so the editor
+  stays. Export the CLI under another name for what only it does (`--version`,
+  `--install-extension`).
+- **`documents` in its permissions, if it has a Save dialog**: Windows' dialog
+  complains about a home without it. Under `soft`, the permissions are links
+  into its home, not rights.
+- **`"path": ["bin"]`** puts its CLI in its own terminal, where it hands over
+  to the running instance, and **MinGit as a runtime** gives its git extension
+  a git, which it finds on the run's PATH with no setting.
+- **`"layer": "estargz"`, if its upgrades share files**: VSCodium's recovery
+  release copies 83.5% of the old layer, and its monthly one 24.6%
+  ([layer formats](layer-formats.md#updating)).
+
 ## MSVC
 
 Projects that need Microsoft's compiler can use the Visual Studio installed

@@ -671,3 +671,40 @@
   zigsaw's logins nor Docker's: each logs in for itself, and keeps the
   password unencrypted in its data, where zigsaw keeps its own in Windows'
   Credential Manager.
+- Chromium's and Electron's sandboxes can't start at low integrity or in an
+  AppContainer: Windows refuses them a window station
+  ([findings](findings.md#chromium-and-electron)). So VSCodium's and
+  ungoogled-chromium's images ask for `soft`, and each can write whatever you
+  can; zigsaw keeps their data apart, and doesn't confine them. Run with
+  `--sandbox=low` or `--sandbox=appcontainer` regardless, or with an override
+  that says so, they exit with code 3, with no window and no message. Their
+  processes outside its sandbox, such as VSCodium's extension host and terminal
+  and either's network service, have your rights, as they do outside zigsaw.
+- `--no-sandbox` gets them past that, and takes Chromium's sandbox from every
+  process: at low integrity, code that takes over a renderer can read all you
+  can and use the network, with no second bug. Overrides can't add it, so it's
+  for each run's command line. VSCodium doesn't run in an AppContainer even
+  then, nor does its `codium-cli`: Node's `realpath` walks up from a drive root
+  the container can't read, and Electron refuses most of `NODE_OPTIONS`, which
+  Node's image gets past it with.
+- A command that starts a program and ends takes the program with it, as its
+  run's job ends what's left. VSCodium's `codium-cli <folder>` does that
+  when no instance is running, and works when one is: `codium` is the command
+  for it, and prints nothing for `--version`.
+- VSCodium's terminal and extensions have the run's PATH: its CLI, MinGit's
+  git and Windows' own programs, and none of your tools, nor zigsaw's apps'
+  commands. An extension that looks for `node`, `python` or a compiler doesn't
+  find it. `bin\codium-tunnel.exe` isn't in the image, so `codium-cli tunnel` isn't
+  there. Its longest path is 129 characters, in a deployment 107 characters
+  long at `C:\Users\Test\AppData\Local\zigsaw`: a user name more than about 20
+  characters longer than that one could reach `MAX_PATH`, which wasn't tried.
+- Neither app can be the default browser or take a link from another program,
+  as zigsaw registers no URL schemes: a VSCodium sign-in that comes back through
+  a link wouldn't arrive, which wasn't tried. ungoogled-chromium gets
+  a new version only as a new recipe, which each machine then builds; nothing
+  checks it in CI, as it isn't published.
+- Windows' Save As dialog says "Location is not available" about an app's
+  `home\Documents` if the app's permissions don't name it. Seen with
+  ungoogled-chromium, whose recipe now does; saving worked once that was
+  answered. Other apps that use the dialog without `documents` may show the
+  same: VLC's permissions don't name it, and its dialogs weren't tried.

@@ -351,6 +351,129 @@ VLC 3.0.24, from upstream's archives
 - Both upstream archives that publish hashes (Notepad++, VLC) had the hashes
   pinned. The four images are the same from three stores.
 
+## Chromium and Electron
+
+Iteration 67, 2026-11-01, Windows 11 26300. ungoogled-chromium 156 and
+VSCodium 1.143 (Electron 43), from upstream's zips, in a store of their own.
+These programs bring their own sandbox: the browser process starts renderers
+at untrusted integrity with restricted tokens.
+[`tests/procprobe.zig`](../tests/procprobe.zig) reads what Windows says about
+each process rather than what the program reports.
+
+### Why they stop at low integrity and in an AppContainer
+
+Both exit with code 3 under `--sandbox=low` and `--sandbox=appcontainer`,
+at once and without a window or a log line. It isn't zigsaw: `chrome.exe` at
+low integrity with no zigsaw in the way stops the same, on an `int3` in
+`chrome.dll` with 30 modules loaded (the exit code is the crash handler's).
+Disassembled, the code there initializes the sandbox's broker, tests one
+switch, `no-sandbox`, and otherwise makes the alternate window station its
+renderers run on, and stops if that fails. Windows refuses that:
+
+| [`tests/acprobe.zig`](../tests/acprobe.zig) | medium (`soft`) | low | AppContainer |
+|---|---|---|---|
+| `window-station` | ok | error 5 (ACCESS_DENIED) | error 5 (ACCESS_DENIED) |
+| `desktop` | ok | ok | error 5 (ACCESS_DENIED) |
+
+So Chromium's sandbox can't start inside either of those, whatever zigsaw
+sets, and the only switch past the check turns the whole sandbox off.
+
+### What each combination gives
+
+| | `soft` | `low --no-sandbox` | `appcontainer --no-sandbox` |
+|---|---|---|---|
+| Chromium: page, https, second launch, clean close | ok | ok | ok |
+| Chromium: WebGL | D3D11, the real GPU | the same | the same |
+| Chromium: browser process | medium | low | low, in the container |
+| Chromium: renderers | **untrusted, restricted** | low | low, in the container |
+| Chromium: GPU process | low, restricted | low | low, in the container |
+| Chromium: network service | medium, unsandboxed | low | low, in the container |
+| Chromium's own warning | none | "unsupported command-line flag" on each start | the same |
+| VSCodium: window, terminal, git, CLI, extensions | ok | ok | **fails** |
+| VSCodium: renderer | **untrusted, restricted** | low | |
+| VSCodium: extension host and terminal | medium | low | |
+
+- **VSCodium in an AppContainer** exits 1 with an empty log, GUI and CLI
+  alike. `codium --version` shows where: Node's `lstat`, from its
+  JavaScript `realpath`, which walks up from a drive root the container
+  can't read (`EPERM`). The GUI logs nothing to confirm it's the same.
+  Node's image gets past this with `--preserve-symlinks` in `NODE_OPTIONS`;
+  Electron refuses most of `NODE_OPTIONS` in packaged apps.
+- **Under `soft`, Chromium's sandbox is whole**, with no switch that
+  loosens it. The network service runs unsandboxed at medium, as Chromium
+  starts it: zigsaw passes it no switches. VSCodium's extension host and
+  terminal have the user's rights in every case that works, up to the
+  integrity level they run at.
+- **Under `--no-sandbox`, every process has the browser's rights**, so code
+  that takes over a renderer needs no second bug. At low integrity it can
+  read whatever you can and use the network. In an AppContainer it can't read
+  your other files, but it can read the browser's own data.
+
+### What they leave outside
+
+- **Chromium under `soft` writes the real `HKCU\Software\Chromium`**, its
+  preferences' tamper MACs among it. Declared in the recipe's `registry`
+  ([the registry](#the-registry)), the key is kept with its data, and is
+  gone from `HKCU` after the run.
+- **VSCodium under `soft` made `.vscode-oss\cli` in the real profile**.
+  Left out of the image, `bin\codium-tunnel.exe` makes nothing there, and no
+  other run of it left anything.
+- Everything else follows `USERPROFILE`, as the
+  [known folders](#where-windows-sends-a-program) predict: their data,
+  extensions and `.vscode-oss` are in the app's data.
+
+### Other rows
+
+- **Second launch**: both hand over to the running instance; the second run
+  ends at once with code 0, and the file opens there.
+- **`codium <folder>` through VSCodium's own CLI** (`bin\codium.cmd`) returned
+  in a second, and the editor was gone: the CLI starts the GUI detached and
+  exits, and its run's job ends what's left, as with `pg_ctl start`. Its GUI
+  program parses the same arguments, so `codium` is that, through the
+  windowless shim, and `codium-cli` the CLI, for what only it does
+  (`--version`, `--install-extension`). With an instance running, the CLI
+  hands over and works.
+- **Windows' Save As dialog** said "Location is not available" about the
+  app's `home\Documents` when the image gave Chromium only Downloads: saving
+  still worked, once that was answered. With `documents` in its permissions,
+  which under `soft` is a link and no more right, it doesn't.
+- **ungoogled-chromium asks where to save** each download, in the Downloads
+  it was given. **It plays H.264**: its [Windows build's
+  flags](https://github.com/ungoogled-software/ungoogled-chromium-windows/blob/master/flags.windows.gn)
+  have `proprietary_codecs=true` and `ffmpeg_branding="Chrome"`, which is why
+  it isn't published.
+- **VSCodium's update check**: with `updateUrl` left out of its
+  `product.json`, it logs `updates are disabled as there is no update URL`.
+  Its integrity check doesn't cover that file, and no warning shows.
+- **Git**: with MinGit as a runtime, VSCodium's git extension finds it on the
+  run's PATH (`Using git "2.56.0.windows.1"`), with no setting.
+- **The terminal** is ConPTY through node-pty's native module. A workspace
+  task, which needs no clicking, shows it works in both sandboxes it starts
+  in, at the integrity level of the run.
+- **Paths**: VSCodium's longest entry is 129 characters, so it reaches 236 in
+  a store at `C:\Users\Test\AppData\Local\zigsaw`, which leaves about 20
+  characters of user name before `MAX_PATH`. Chromium's is well short of that.
+- **Cost**: VSCodium's zip holds 675 MB in 3,551 files; without its tunnel
+  program, on eStargz, that's a 229 MB layer. Chromium's holds 443 MB in 75
+  files, a 201 MB layer. Building and installing took 69 and 24 s.
+- **Testing them**: killing Chromium makes its next start ask "Restore
+  pages?", and until something answers, each later close still counts as a
+  crash. A test that kills it, or closes that bubble instead of the window,
+  sees failures of its own making. `timeout`, from Git Bash, crashes it.
+- **The real registry and profile have to be checked before the first run.**
+  These probes' first `soft` runs left `HKCU\Software\Chromium` and
+  `.vscode-oss\cli` on this machine, as no recipe kept them yet.
+
+### What the images ask for
+
+Both ask for `soft`, and neither image has `--no-sandbox`
+([the decision](iteration-67.md#starting-decisions)). A browser takes untrusted
+pages all day, so Chromium's own sandbox is worth more to it than confining
+what the browser process writes. VSCodium's terminal builds programs, as the
+toolchains' images do, which ask for `soft` too. So zigsaw gives these two
+separate data, pinned installs and clean removal, but no confinement of its
+own, and `pull` says so: "whatever you can write".
+
 ## The user's folders
 
 Iteration 18, 2026-10-14, Windows 11 26300. Before giving an app the

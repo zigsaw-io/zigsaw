@@ -157,6 +157,16 @@ pub fn build(b: *std.Build) void {
     const winwait_step = b.step("winwait", "Build the window waiter used by tests/guiapps.sh");
     winwait_step.dependOn(&b.addInstallArtifact(winwait, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // Says how a process and its descendants are confined; see
+    // tests/chromium.sh. Also installed under zig-out\test.
+    const procprobe = b.addExecutable(.{ .name = "zigsaw-procprobe", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/procprobe.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const procprobe_step = b.step("procprobe", "Build the process confinement probe used by tests/chromium.sh");
+    procprobe_step.dependOn(&b.addInstallArtifact(procprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     // A GUI program that records how it was started and exits with the code
     // it's given, for the GUI shim; see tests/shims.sh. Also installed under
     // zig-out\test.

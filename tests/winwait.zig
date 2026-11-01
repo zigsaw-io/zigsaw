@@ -4,7 +4,10 @@
 //! their settings as they close. Built by `zig build winwait` for
 //! tests/guiapps.sh.
 //!
-//!   zigsaw-winwait <pid> <text> <seconds> [--close]
+//!   zigsaw-winwait <pid> <text> <seconds> [--close|--dismiss]
+//!
+//! --dismiss closes the window and doesn't wait for anything: for a dialog,
+//! whose program carries on.
 //!
 //! <pid> is the `zigsaw run` that started the app: windows of other programs
 //! never count, whatever their titles (a browser showing the app's web page
@@ -143,7 +146,7 @@ fn visit(window: HWND, param: LPARAM) callconv(.winapi) BOOL {
 pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 4) {
-        std.debug.print("usage: zigsaw-winwait <pid> <text> <seconds> [--close]\n", .{});
+        std.debug.print("usage: zigsaw-winwait <pid> <text> <seconds> [--close|--dismiss]\n", .{});
         return 1;
     }
     const root = try std.fmt.parseInt(DWORD, args[1], 10);
@@ -166,6 +169,10 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout = std.Io.File.stdout().writerStreaming(init.io, &buf);
     try stdout.interface.print("{s}\n", .{search.title[0..search.title_len]});
     try stdout.interface.flush();
+    if (args.len > 4 and std.mem.eql(u8, args[4], "--dismiss")) {
+        _ = PostMessageW(search.found.?, WM_CLOSE, 0, 0);
+        return 0;
+    }
     if (!close) return 0;
 
     var pid: DWORD = 0;

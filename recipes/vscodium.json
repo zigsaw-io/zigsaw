@@ -1,0 +1,51 @@
+{
+  "id": "com.vscodium.codium",
+  "version": "1.143.17232",
+  "name": "VSCodium",
+  "summary": "Code editor: Visual Studio Code's source, without Microsoft's branding and telemetry",
+  "homepage": "https://vscodium.com/",
+  "license": "MIT",
+  "command": "VSCodium.exe",
+  "path": ["bin"],
+  "layer": "estargz",
+  "permissions": { "sandbox": "soft", "network": true, "filesystem": ["cwd", "desktop", "documents", "downloads"] },
+  "exports": {
+    "codium": { "command": "VSCodium.exe" },
+    "codium-cli": { "command": "bin\\codium.cmd" }
+  },
+  "shortcuts": {
+    "VSCodium": { "command": "codium", "description": "Edit code" }
+  },
+  "associations": {
+    ".json": { "command": "codium", "description": "JSON file" },
+    ".js": { "command": "codium", "description": "JavaScript file" },
+    ".ts": { "command": "codium", "description": "TypeScript file" },
+    ".py": { "command": "codium", "description": "Python file" },
+    ".zig": { "command": "codium", "description": "Zig file" },
+    ".md": { "command": "codium", "description": "Markdown file" }
+  },
+  "runtimes": {
+    "git": "org.git_scm.MinGit:2.56.0.windows.1@sha256:c6457f01e7e3a4c92a77c31d0c63c5ea72c4ce082123d3dfb11fdb1ef3796ec9"
+  },
+  "sdk": {
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "cleanup": ["/bin/codium-tunnel.exe"],
+  "modules": [
+    {
+      "name": "vscodium",
+      "sources": [
+        {
+          "url": "https://github.com/VSCodium/vscodium/releases/download/1.143.17232/VSCodium-win32-x64-1.143.17232.zip",
+          "sha256": "a1090868af8ac0ac04c22d79fdd02246fa115a78daf38a741d8db06df1753c1d"
+        }
+      ],
+      "build": [
+        "grep -q '\"updateUrl\"' resources/app/product.json",
+        "sed -i '/\"updateUrl\"/d' resources/app/product.json",
+        "! grep -q '\"updateUrl\"' resources/app/product.json",
+        "cp -r . \"$PREFIX/\""
+      ]
+    }
+  ]
+}
