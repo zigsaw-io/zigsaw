@@ -66,6 +66,19 @@ per app and extension, with the command, and its name in the extension's
 file to the run's grants as if it were a directory: a low integrity label
 or an entry for the app's capability, on that file alone.
 
+**URL schemes** are keys there too: one of zigsaw's per app and scheme, with the
+command, and the same as `<scheme>` itself, if nothing else has it. The command is
+a shim in `open\<app id>\urls\`, whose `.shim` file names the schemes: it takes
+one argument, a URL of one of them, or refuses, and runs `zigsaw run
+--command=<name> <app> <url>`, granting nothing. An app with either is listed for
+Settings' Default apps, under `HKCU\Software\Zigsaw\Apps\<id>\Capabilities`, which
+`HKCU\Software\RegisteredApplications` names.
+
+**A zigsaw started from inside a run**, as a command under `--share=commands` is,
+sees `ZIGSAW_ID` there, and takes your own variables back first, from
+`CreateEnvironmentBlock`: what it then finds from them, such as your folders, is
+yours and not the run's.
+
 **Runs** get an environment built from scratch: `PATH` is the app's
 directories, then its runtimes', then System32. `USERPROFILE`, `APPDATA`,
 `LOCALAPPDATA` and `TEMP` point into `data\<id>\home`, and the user's folders

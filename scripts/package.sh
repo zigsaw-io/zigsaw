@@ -4,7 +4,7 @@
 # installs them:
 #
 #   zigsaw-x86_64-windows.zip   zigsaw.exe, zigsaw-shim.exe, zigsaw-shimw.exe,
-#                               zigsaw-relay.exe, LICENSE, and Zig's licence
+#                               zigsaw-relay.exe, zigsaw-host.exe, LICENSE, and Zig's licence
 #                               (its standard library is compiled into them)
 #   install.ps1                 scripts/install.ps1
 #   SHA256SUMS                  of the two
@@ -29,7 +29,7 @@ mkdir -p "$out/files"
 # Into a prefix of its own: zig-out/bin keeps the build with debug information.
 zig build -Dstrip -p "$(cygpath -w "$out/build")"
 version=$("$out/build/bin/zigsaw.exe" version | tr -d '\r' | cut -d' ' -f2)
-cp "$out/build/bin/zigsaw.exe" "$out/build/bin/zigsaw-shim.exe" "$out/build/bin/zigsaw-shimw.exe" "$out/build/bin/zigsaw-relay.exe" LICENSE "$out/files/"
+cp "$out/build/bin/zigsaw.exe" "$out/build/bin/zigsaw-shim.exe" "$out/build/bin/zigsaw-shimw.exe" "$out/build/bin/zigsaw-relay.exe" "$out/build/bin/zigsaw-host.exe" LICENSE "$out/files/"
 rm -rf "$out/build"
 # Zig's licence is next to its lib directory.
 zig_lib=$(zig env | tr -d '\r' | sed -n 's/^ *\.lib_dir = "\(.*\)",$/\1/p' | sed 's/\\\\/\\/g')
@@ -47,7 +47,7 @@ sum() { sha256sum <"$1" | cut -d' ' -f1; }
         printf '```powershell\nirm https://github.com/zigsaw-io/zigsaw/releases/download/v%s/install.ps1 | iex\n```\n\n' "$version"
         printf 'Built with Zig %s by `zig build -Dstrip`. A build of this tag has the same programs:\n\n' "$(zig version | tr -d '\r')"
         printf '| Program | SHA-256 |\n|---|---|\n'
-        for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe; do printf '| `%s` | `%s` |\n' "$f" "$(sum "files/$f")"; done
+        for f in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe zigsaw-host.exe; do printf '| `%s` | `%s` |\n' "$f" "$(sum "files/$f")"; done
     } >notes.md
 )
 rm -rf "$out/files"

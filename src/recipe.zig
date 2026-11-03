@@ -148,6 +148,8 @@ pub const Recipe = struct {
     shortcuts: ?std.json.ArrayHashMap(oci.Shortcut) = null,
     /// The kinds of file the app opens, by extension (see oci.AppConfig).
     associations: ?std.json.ArrayHashMap(oci.Association) = null,
+    /// The kinds of link the app opens, by URL scheme (see oci.AppConfig).
+    schemes: ?std.json.ArrayHashMap(oci.Scheme) = null,
     /// Keys in HKEY_CURRENT_USER kept with the app's data (see oci.AppConfig).
     registry: ?[]const []const u8 = null,
     /// Extension points, and the one the image plugs into (see
@@ -200,6 +202,7 @@ pub const Recipe = struct {
             .aliases = r.aliases,
             .shortcuts = r.shortcuts,
             .associations = r.associations,
+            .schemes = r.schemes,
             .registry = r.registry,
             .runtimes = runtimes,
             .extensions = r.extensions,

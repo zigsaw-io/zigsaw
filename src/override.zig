@@ -22,6 +22,11 @@ pub const Sandbox = oci.Sandbox;
 pub const Settings = struct {
     sandbox: ?Sandbox = null,
     network: ?bool = null,
+    /// Whether the store's commands are on the run's PATH (see
+    /// oci.Permissions).
+    commands: ?bool = null,
+    /// Whether `zigsaw-host` is on the run's PATH (see oci.Permissions).
+    host: ?bool = null,
     ephemeral: ?bool = null,
     /// Filesystem permissions granted on top of the app's own, or instead of
     /// one of them for the same location (`documents:ro` for `documents`).
@@ -42,7 +47,7 @@ pub const Settings = struct {
     ports: []const []const u8 = &.{},
 
     pub fn isEmpty(s: Settings) bool {
-        return s.sandbox == null and s.network == null and s.ephemeral == null and
+        return s.sandbox == null and s.network == null and s.commands == null and s.host == null and s.ephemeral == null and
             s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.env.len == 0 and
             s.noextension.len == 0 and s.extension.len == 0 and s.ports.len == 0;
     }
@@ -54,6 +59,8 @@ pub const Settings = struct {
         return .{
             .sandbox = upper.sandbox orelse lower.sandbox,
             .network = upper.network orelse lower.network,
+            .commands = upper.commands orelse lower.commands,
+            .host = upper.host orelse lower.host,
             .ephemeral = upper.ephemeral orelse lower.ephemeral,
             .filesystem = try mergeList(arena, try without(arena, lower.filesystem, upper.nofilesystem, grantPath), upper.filesystem, grantPath),
             .nofilesystem = try mergeList(arena, try without(arena, lower.nofilesystem, upper.filesystem, grantPath), upper.nofilesystem, grantPath),
@@ -100,6 +107,14 @@ pub const Settings = struct {
         }
         if (s.network) |on| {
             try w.print("{s}--{s}=network", .{ sep, if (on) "share" else "unshare" });
+            sep = " ";
+        }
+        if (s.commands) |on| {
+            try w.print("{s}--{s}=commands", .{ sep, if (on) "share" else "unshare" });
+            sep = " ";
+        }
+        if (s.host) |on| {
+            try w.print("{s}--{s}=host", .{ sep, if (on) "share" else "unshare" });
             sep = " ";
         }
         if (s.ephemeral orelse false) {

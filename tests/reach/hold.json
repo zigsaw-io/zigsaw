@@ -1,0 +1,10 @@
+{
+  "id": "test.reach.hold",
+  "version": "1",
+  "command": "hold.cmd",
+  "permissions": { "sandbox": "soft" },
+  "exports": { "reach-hold": { "command": "hold.cmd" } },
+  "modules": [
+    { "name": "hold", "sources": [{ "path": "hold.cmd" }] }
+  ]
+}

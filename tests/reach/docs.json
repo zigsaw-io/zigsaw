@@ -1,0 +1,10 @@
+{
+  "id": "test.reach.docs",
+  "version": "1",
+  "command": "argv.exe",
+  "permissions": { "sandbox": "soft", "filesystem": ["documents"] },
+  "exports": { "reach-docs": { "command": "argv.exe" } },
+  "modules": [
+    { "name": "argv", "sources": [{ "path": "../../zig-out/test/zigsaw-argv.exe", "dest": "argv.exe" }] }
+  ]
+}

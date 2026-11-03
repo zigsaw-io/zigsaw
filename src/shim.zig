@@ -19,6 +19,11 @@
 //! `files = true`, and each of its arguments goes to zigsaw as
 //! `--file=<argument>`, which grants the app that file.
 //!
+//! A URL scheme's shim, in `<root>\open\<app>\urls`, is what Windows starts
+//! with the link someone followed. Its sidecar names the schemes, and it
+//! passes on one argument that is a URL of one of them, or refuses (see
+//! `oneUrl`). The link is granted nothing.
+//!
 //! Builds also copy it, as `B:\bin\<name>.exe`, for each alias their tools
 //! provide. Its `.shim` then holds an alias (Sidecar.Alias), and the shim runs
 //! the alias's command line and the caller's arguments directly. An alias
@@ -102,7 +107,10 @@ fn shim(arena: Allocator, report_failures: bool) !u32 {
     if (sidecar.files) try appendFiles(arena, &command_line, args);
     try command_line.append(arena, ' ');
     try process.appendQuoted(arena, &command_line, sidecar.app);
-    if (!sidecar.files) try appendArguments(arena, &command_line, args);
+    if (sidecar.schemes) |schemes| {
+        try command_line.append(arena, ' ');
+        try process.appendQuoted(arena, &command_line, try urlOrReport(arena, args, schemes));
+    } else if (!sidecar.files) try appendArguments(arena, &command_line, args);
 
     const spec: process.SpawnSpec = .{ .exe = sidecar.zigsaw, .command_line = command_line.items };
     if (!gui) return process.spawn(arena, spec);
@@ -305,6 +313,47 @@ test appendFiles {
         try appendFiles(arena, &out, c.args);
         try std.testing.expectEqualStrings(c.want, out.items);
     }
+}
+
+/// The URL a scheme's shim was given, which Windows passes as `"%1"`. Anyone
+/// who can make someone follow a link chooses its text, and a `"` in it would
+/// end the argument and start another, which programs take as a switch
+/// (Electron's CVE-2018-1000006, Chromium's `--gpu-launcher`): so one argument
+/// and only one, a URL of what the shim is for, whatever the app checks itself.
+fn oneUrl(arena: Allocator, args: []const u8, schemes: []const u8) ![]const u8 {
+    var it = try splitArguments(arena, args);
+    const url = it.next() orelse "";
+    if (it.next() != null) return error.SeveralArguments;
+    if (!Sidecar.hasScheme(schemes, url)) return error.OtherScheme;
+    return url;
+}
+
+/// `oneUrl`, saying why it refuses.
+fn urlOrReport(arena: Allocator, args: []const u8, schemes: []const u8) ![]const u8 {
+    return oneUrl(arena, args, schemes) catch |err| switch (err) {
+        error.SeveralArguments => {
+            std.log.err("a link is one argument, and this came as several, so it wasn't opened:{s}", .{args});
+            return error.Failed;
+        },
+        error.OtherScheme => {
+            std.log.err("this opens links of {s}, and this isn't one, so it wasn't opened:{s}", .{ schemes, args });
+            return error.Failed;
+        },
+        else => |e| return e,
+    };
+}
+
+test oneUrl {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try std.testing.expectEqualStrings("x-app://a b/c", try oneUrl(arena, " \"x-app://a b/c\"", "x-app"));
+    try std.testing.expectEqualStrings("x-app:a", try oneUrl(arena, " x-app:a", "other,x-app"));
+    // What a `"` in a URL makes of Windows' `"%1"`.
+    try std.testing.expectError(error.SeveralArguments, oneUrl(arena, " \"x-app://a\" --gpu-launcher=calc \"\"", "x-app"));
+    try std.testing.expectError(error.OtherScheme, oneUrl(arena, " --gpu-launcher=calc", "x-app"));
+    try std.testing.expectError(error.OtherScheme, oneUrl(arena, " other://a", "x-app"));
+    try std.testing.expectError(error.OtherScheme, oneUrl(arena, "", "x-app"));
 }
 
 /// Appends the caller's arguments, split as the C runtime splits them, less

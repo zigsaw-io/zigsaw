@@ -84,8 +84,13 @@ pub fn writeContents(ctx: *Context, w: *Io.Writer, manifest: oci.Manifest, cfg: 
         for (s.map.keys()) |n| try names.append(arena, try std.fmt.allocPrint(arena, "\"{s}\"", .{n}));
         try writeLine(w, "shortcuts", try std.mem.join(arena, ", ", names.items));
     }
-    if (cfg.associations) |a| try writeLine(w, "opens", try std.mem.join(arena, ", ", a.map.keys()));
+    var opens: std.ArrayList([]const u8) = .empty;
+    if (cfg.associations) |a| try opens.appendSlice(arena, a.map.keys());
+    if (cfg.schemes) |s| for (s.map.keys()) |name| try opens.append(arena, try std.fmt.allocPrint(arena, "{s}:", .{name}));
+    try writeLine(w, "opens", try std.mem.join(arena, ", ", opens.items));
     if (cfg.permissions.services) |s| try writeLine(w, "serves", try oci.describeServices(arena, s));
+    if (cfg.permissions.unsupported) |u| for (std.enums.values(oci.Sandbox)) |sandbox| if (u.of(sandbox)) |why|
+        try writeLine(w, "can't run", try std.fmt.allocPrint(arena, "under {t}: {s}", .{ sandbox, why }));
     try writeAccess(arena, w, try .of(arena, cfg));
 }
 

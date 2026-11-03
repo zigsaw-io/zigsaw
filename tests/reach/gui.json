@@ -1,0 +1,10 @@
+{
+  "id": "test.reach.gui",
+  "version": "1",
+  "command": "gui.exe",
+  "permissions": { "sandbox": "soft", "unsupported": { "low": "the test says it can't" } },
+  "exports": { "reach-gui": { "command": "gui.exe" } },
+  "modules": [
+    { "name": "gui", "sources": [{ "path": "../../zig-out/test/zigsaw-gui.exe", "dest": "gui.exe" }] }
+  ]
+}

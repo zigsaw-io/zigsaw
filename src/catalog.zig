@@ -73,6 +73,8 @@ pub const Entry = struct {
         };
         if (cfg.shortcuts) |s| for (s.map.keys(), s.map.values()) |n, shortcut| try e.shortcuts.map.put(arena, n, shortcut.description orelse "");
         if (cfg.associations) |a| for (a.map.keys(), a.map.values()) |ext, association| try e.associations.map.put(arena, ext, association.description orelse "");
+        // Searched as what it opens too.
+        if (cfg.schemes) |s| for (s.map.keys(), s.map.values()) |n, scheme| try e.associations.map.put(arena, try std.fmt.allocPrint(arena, "{s}:", .{n}), scheme.description orelse "");
         var runtimes: std.ArrayList([]const u8) = .empty;
         for (cfg.runtimes.map.values()) |r| try runtimes.append(arena, try std.fmt.allocPrint(arena, "{s} {s}", .{ r.id, r.version }));
         e.runtimes = runtimes.items;

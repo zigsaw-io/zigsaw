@@ -298,6 +298,10 @@ pub extern "userenv" fn CreateAppContainerProfile(
 ) callconv(.winapi) HRESULT;
 pub extern "userenv" fn DeriveAppContainerSidFromAppContainerName(name: LPCWSTR, sid: *?PSID) callconv(.winapi) HRESULT;
 pub extern "userenv" fn DeleteAppContainerProfile(name: LPCWSTR) callconv(.winapi) HRESULT;
+/// The variables a user's programs start with: from the registry, whatever
+/// this process's own are. With `inherit` false, none of this process's join.
+pub extern "userenv" fn CreateEnvironmentBlock(block: *?[*:0]u16, token: ?HANDLE, inherit: BOOL) callconv(.winapi) BOOL;
+pub extern "userenv" fn DestroyEnvironmentBlock(block: [*:0]u16) callconv(.winapi) BOOL;
 /// The AppContainers exempt from loopback isolation, which may connect to
 /// programs outside their container on this machine. Set replaces the whole
 /// list. Both return a Win32 error code, 0 for success.
@@ -597,6 +601,7 @@ pub extern "shell32" fn SHChangeNotify(event: i32, flags: u32, item1: ?*const an
 pub const HKEY = *anyopaque;
 /// Registry functions return a Win32 error code rather than set the last error.
 pub const LSTATUS = DWORD;
+pub const HKEY_CLASSES_ROOT: HKEY = @ptrFromInt(0x80000000);
 pub const HKEY_CURRENT_USER: HKEY = @ptrFromInt(0x80000001);
 pub const ERROR_SUCCESS: LSTATUS = 0;
 pub const ERROR_NO_MORE_ITEMS: LSTATUS = 259;

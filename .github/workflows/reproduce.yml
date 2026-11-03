@@ -228,6 +228,13 @@ jobs:
         shell: bash
         run: bash tests/network.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/network.txt"
 
+      # What a run may reach of the rest of the machine: the store's commands,
+      # zigsaw-host, URL schemes and Default apps, with small test apps.
+      - name: tests/reach.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/reach.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/reach.txt"
+
       # What the Release workflow publishes, and installing it.
       - name: tests/install.sh
         if: ${{ !cancelled() }}

@@ -380,10 +380,10 @@
   as started from it; whether pinning its window to the taskbar then pins
   the shortcut, and not the app's executable in the store, hasn't been
   checked: it takes pinning one by hand.
-- zigsaw offers an app for a kind of file, and can't make it the default:
-  Windows keeps that choice to the user. Only extensions are registered:
-  no MIME types, no URL schemes, no "New" menu entries, and no command
-  other than opening.
+- zigsaw offers an app for a kind of file or link, and can't make it the default:
+  Windows keeps that choice to the user. Only extensions and URL schemes are
+  registered: no MIME types, no "New" menu entries, and no command other than
+  opening.
 - `--file` gives an app the file and nothing next to it. An app that
   writes a backup or a temporary file beside the document, or reads files
   the document names, needs `--filesystem` for the directory, or a
@@ -677,7 +677,8 @@
   ungoogled-chromium's images ask for `soft`, and each can write whatever you
   can; zigsaw keeps their data apart, and doesn't confine them. Run with
   `--sandbox=low` or `--sandbox=appcontainer` regardless, or with an override
-  that says so, they exit with code 3, with no window and no message. Their
+  that says so, they exit with code 3 and no window, after a warning from
+  zigsaw that says why (in a message box, from a shortcut). Their
   processes outside its sandbox, such as VSCodium's extension host and terminal
   and either's network service, have your rights, as they do outside zigsaw.
 - `--no-sandbox` gets them past that, and takes Chromium's sandbox from every
@@ -691,18 +692,49 @@
   run's job ends what's left. VSCodium's `codium-cli <folder>` does that
   when no instance is running, and works when one is: `codium` is the command
   for it, and prints nothing for `--version`.
-- VSCodium's terminal and extensions have the run's PATH: its CLI, MinGit's
-  git and Windows' own programs, and none of your tools, nor zigsaw's apps'
-  commands. An extension that looks for `node`, `python` or a compiler doesn't
-  find it. `bin\codium-tunnel.exe` isn't in the image, so `codium-cli tunnel` isn't
-  there. Its longest path is 129 characters, in a deployment 107 characters
-  long at `C:\Users\Test\AppData\Local\zigsaw`: a user name more than about 20
-  characters longer than that one could reach `MAX_PATH`, which wasn't tried.
-- Neither app can be the default browser or take a link from another program,
-  as zigsaw registers no URL schemes: a VSCodium sign-in that comes back through
-  a link wouldn't arrive, which wasn't tried. ungoogled-chromium gets
-  a new version only as a new recipe, which each machine then builds; nothing
-  checks it in CI, as it isn't published.
+- VSCodium's terminal and extensions have your zigsaw apps' commands
+  (`--share=commands`) but not programs installed the usual way: an extension
+  that looks for a `node`, `python` or compiler you installed yourself doesn't
+  find it. `zigsaw-host` reaches those from what's typed, or a terminal profile,
+  and an extension can't be told to use it. `bin\codium-tunnel.exe` isn't in the
+  image, so `codium-cli tunnel` isn't there. Its longest path is 129 characters,
+  in a deployment 107 characters long at `C:\Users\Test\AppData\Local\zigsaw`: a
+  user name more than about 20 characters longer than that one could reach
+  `MAX_PATH`, which wasn't tried.
+- `--share=commands` works under `soft` only: a zigsaw at low integrity or in an
+  AppContainer can't open the store, so a run there doesn't get the commands,
+  and says so. Each command runs as its own app, with its permissions: one
+  without `cwd` doesn't see the project it's run from. `zigsaw.exe` is among them
+  when the store's `bin` has it, as an installed zigsaw's does, so a `soft` app
+  can run `zigsaw` itself: it could anyway.
+- `zigsaw-host` changes the environment, not the rights: it isn't a way out of a
+  sandbox, and under `soft` there's nothing to get out of. At low integrity, the
+  program runs at low, with your real environment, so it reads your real settings
+  and may fail to write them. It finds what's on your PATH as saved in the
+  registry, not one a terminal of yours changed. It ends with the run.
+- ungoogled-chromium gets a new version only as a new recipe, which each machine
+  then builds; nothing checks it in CI, as it isn't published.
+- A sign-in that comes back to VSCodium through a link hasn't been tried, only
+  links that open files. VSCodium asks before those, as VS Code does.
+- A scheme something else has already is only offered: installing the app doesn't
+  change where its links go. zigsaw offers an app for `http` and `https` in
+  Settings' Default apps, and Windows keeps the choice to you: whether Settings
+  lists it there, and whether choosing it works, wasn't checked from here
+  ([findings](findings.md#default-apps)).
+- VSCodium's image published in iteration 67 (`4c45eaf4`) writes
+  `HKCU\Software\Classes\vscodium` on each run under `soft`, naming its
+  deployment: an image's patch can't reach it. Updating to the next image, with
+  zigsaw 0.68 or later, takes the key over; `zigsaw rm` or `zigsaw repair` removes
+  one no installed app declares. A zigsaw before 0.68 ignores `schemes`,
+  `commands`, `host` and `unsupported`: the new image runs there without links
+  and without the commands, as it asks for nothing they'd need.
+- An app that registers itself from inside a run is only stopped by its recipe:
+  under `soft`, any program may write `HKCU\Software\Classes`, and zigsaw only
+  notices such a key if it names a program in the store's deployments, at the
+  next `repair` or `rm`.
+- A warning that an image can't run under a sandbox is printed by every run under
+  it, whatever else that run was told: `--no-sandbox` gets Chromium past it, and
+  the warning stays.
 - Windows' Save As dialog says "Location is not available" about an app's
   `home\Documents` if the app's permissions don't name it. Seen with
   ungoogled-chromium, whose recipe now does; saving worked once that was

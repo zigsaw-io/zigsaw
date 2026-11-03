@@ -1,0 +1,20 @@
+{
+  "id": "test.reach.url",
+  "version": "1",
+  "name": "Zigsaw link test",
+  "summary": "Records the link it was given",
+  "command": "rec.cmd",
+  "permissions": { "sandbox": "soft" },
+  "env": { "REACH_RECORD": "${data}\\record.txt" },
+  "exports": { "reach-open": { "command": "rec.cmd" } },
+  "associations": { ".reachtest": { "command": "reach-open" } },
+  "schemes": {
+    "reachtest68": { "command": "reach-open", "description": "Zigsaw test link" },
+    "reachtaken68": { "command": "reach-open" },
+    "reachstale68": { "command": "reach-open" },
+    "http": { "command": "reach-open" }
+  },
+  "modules": [
+    { "name": "rec", "sources": [{ "path": "rec.cmd" }] }
+  ]
+}

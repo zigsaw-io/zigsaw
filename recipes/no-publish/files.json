@@ -10,7 +10,11 @@
   "permissions": {
     "sandbox": "soft",
     "network": true,
-    "filesystem": ["cwd", "desktop", "documents", "downloads", "music", "pictures", "videos"]
+    "filesystem": ["cwd", "desktop", "documents", "downloads", "music", "pictures", "videos"],
+    "unsupported": {
+      "low": "Windows' storage APIs refuse a program without a package there, so it shows no drives",
+      "appcontainer": "Windows' storage APIs refuse a program without a package there, so it shows no drives"
+    }
   },
   "registry": ["Software\\Files Community"],
   "exports": {

@@ -205,10 +205,12 @@ which brings a sandbox of its own: Windows doesn't let that start at low
 integrity or in an AppContainer, so its image asks for `soft`, and it can write
 whatever you can. `codium` opens the editor, a file or a folder; `codium-cli`
 is its command line (`--version`, `--install-extension`). Its extensions come
-from Open VSX, and its terminal has git, from MinGit's image, but not your own
-tools. To confine what its extensions and terminal write instead, at the cost
-of its renderer's sandbox: `zigsaw run --sandbox=low com.vscodium.codium
---no-sandbox`.
+from Open VSX. Its terminal and extensions have git, from MinGit's image, and
+[your zigsaw apps' commands](../README.md#your-apps-commands-and-your-own-programs);
+a program you installed the usual way is `zigsaw-host <program>` in its
+terminal. It opens `vscodium://` links, and asks before one opens a local file.
+To confine what its extensions and terminal write instead, at the cost of its
+renderer's sandbox: `zigsaw run --sandbox=low com.vscodium.codium --no-sandbox`.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.
@@ -259,7 +261,8 @@ Windows build has codecs that patents cover (H.264, AAC): each machine makes
 the image from upstream's zip, so `zigsaw pull` can't find it. Its image asks
 for `soft`, as Windows doesn't let Chromium's sandbox start otherwise. It keeps
 its settings in its data, its registry key too, and asks where to save each
-download.
+download. It's offered for `http` and `https` in Settings' Default apps, where
+you may choose it; installing it doesn't change your default browser.
 
 ## Reproducibility
 

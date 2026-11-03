@@ -7,6 +7,7 @@ const services = @import("services.zig");
 const builder = @import("builder.zig");
 const catalog = @import("catalog.zig");
 const credentials = @import("credentials.zig");
+const environment = @import("environment.zig");
 const exports = @import("exports.zig");
 const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
@@ -101,7 +102,12 @@ const usage =
     \\                                  music, pictures, videos
     \\  --nofilesystem=<location>       take away access the app or an override grants
     \\  --share=network                 allow network access, and pass on your proxy variables
-    \\  --unshare=network               deny network access
+    \\  --share=commands                put your zigsaw apps' commands on its PATH, after the
+    \\                                  system's; each runs as its own app (soft sandbox only)
+    \\  --share=host                    put zigsaw-host on its PATH, which runs your own programs
+    \\                                  in your real environment, with the run's rights (not in
+    \\                                  an AppContainer)
+    \\  --unshare=<what>                take away what --share gives, or the app's image asks for
     \\  --port=<service>=<port>         serve one of the app's services on another port
     \\  --env=NAME=VALUE                set an environment variable
     \\  --noextension=<id>              leave out an installed extension, which otherwise
@@ -128,6 +134,9 @@ const usage =
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
+    // Started from inside a run, as a command of `--share=commands` is: what
+    // zigsaw finds from the environment is to be the user's, not that run's.
+    if (init.environ_map.contains("ZIGSAW_ID")) try environment.restoreUser(arena, init.environ_map);
 
     var ctx: Context = .{
         .io = init.io,
@@ -388,8 +397,14 @@ const SettingsParser = struct {
                 try p.nofilesystem.append(arena, value);
             }
         } else if (std.mem.eql(u8, name, "share") or std.mem.eql(u8, name, "unshare")) {
-            if (!std.mem.eql(u8, value, "network")) return fail("--{s} only supports network", .{name});
-            p.settings.network = std.mem.eql(u8, name, "share");
+            const on = std.mem.eql(u8, name, "share");
+            if (std.mem.eql(u8, value, "network")) {
+                p.settings.network = on;
+            } else if (std.mem.eql(u8, value, "commands")) {
+                p.settings.commands = on;
+            } else if (std.mem.eql(u8, value, "host")) {
+                p.settings.host = on;
+            } else return fail("--{s} takes network, commands or host; got \"{s}\"", .{ name, value });
         } else if (std.mem.eql(u8, name, "env")) {
             if (std.mem.indexOfScalar(u8, value, '=') == null) return fail("--env expects NAME=VALUE, got \"{s}\"", .{value});
             try p.env.append(arena, value);
@@ -525,9 +540,14 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
         try stdout.interface.flush();
         return;
     }
-    if (app) |a| if (try ctx.store.readRef(arena, a) == null) return fail("{s} is not installed", .{a});
+    const ref = if (app) |a| try ctx.store.readRef(arena, a) orelse return fail("{s} is not installed", .{a}) else null;
     const merged = try override.Settings.merge(arena, saved, new);
     try override.save(ctx.store, arena, app, merged);
+    // Said here as well as by each run: a run from a shortcut has no console.
+    if (ref) |r| if (new.sandbox != null) {
+        const image = try ctx.store.readImage(arena, r.id, r.manifest);
+        runtime.warnUnsupported(image.config, new.sandbox.?);
+    };
     if (app) |a| {
         if (merged.isEmpty()) {
             note("{s} has no overrides now", .{a});

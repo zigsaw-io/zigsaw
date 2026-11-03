@@ -1,0 +1,14 @@
+{
+  "id": "test.reach.url",
+  "version": "2",
+  "command": "rec.cmd",
+  "permissions": { "sandbox": "soft" },
+  "env": { "REACH_RECORD": "${data}\\record.txt" },
+  "exports": { "reach-open": { "command": "rec.cmd" } },
+  "schemes": {
+    "reachtest68": { "command": "reach-open" }
+  },
+  "modules": [
+    { "name": "rec", "sources": [{ "path": "rec.cmd" }] }
+  ]
+}

@@ -63,6 +63,9 @@ for recipe in recipes\\no-publish\\ungoogled-chromium recipes\\vscodium; do
     [ -f "$ZIGSAW_HOME\\refs\\$id.json" ] || installed+=("$id")
     "$zigsaw" build "$root\\$recipe.json" >"$work\\build.log" 2>&1 || { echo "building $recipe failed: $(tail -1 "$work\\build.log")"; exit 1; }
 done
+# Another app's command, for VSCodium's terminal.
+(cd "$root" && zig build hostprobe) || { echo "building the host probe failed"; exit 1; }
+"$zigsaw" build "$root\\tests\\reach\\tool.json" >"$work\\build.log" 2>&1 || { echo "building the test tool failed: $(tail -1 "$work\\build.log")"; exit 1; }
 
 failures=0
 gaps=0
@@ -109,6 +112,19 @@ absent_before=()
 for d in "${real_dirs[@]}"; do [ -e "$d" ] || absent_before+=("$d"); done
 had_chromium_key=false
 reg query 'HKCU\Software\Chromium' >/dev/null 2>&1 && had_chromium_key=true
+# What programs write to be found by others: a run that registers itself
+# leaves its mark here. VSCodium did, on each start, until its recipe took
+# that out.
+hkcu_marks() {
+    local k
+    for k in 'HKCU\Software\Classes' 'HKCU\Software\RegisteredApplications' 'HKCU\Software\Clients\StartMenuInternet' \
+        'HKCU\Software\Microsoft\Windows\CurrentVersion\Run'; do
+        reg query "$k" 2>/dev/null
+    done | tr -d '\r' | sort
+}
+marks_before=$(hkcu_marks)
+had_scheme_key=false
+reg query 'HKCU\Software\Classes\vscodium' >/dev/null 2>&1 && had_scheme_key=true
 
 cd "$work" || exit 1
 
@@ -335,11 +351,15 @@ EOF
     printf '@echo off\r\n> term.txt echo started\r\n'
     printf 'whoami /groups | findstr /C:"Mandatory Label" >> term.txt\r\n'
     printf 'git --version >> term.txt 2>&1\r\ngit status --short --branch >> term.txt 2>&1\r\n'
+    printf 'call reach-probe >> term.txt 2>&1\r\n'
+    printf 'zigsaw-host cmd /c set USERPROFILE >> term.txt 2>&1\r\n'
     printf 'call codium --version >> term.txt 2>&1\r\n>> term.txt echo done\r\n'
 } >"$proj\\probe.cmd"
 settings="$(data $CODIUM)\\home\\AppData\\Roaming\\VSCodium\\User"
 mkdir -p "$settings"
-printf '{ "security.workspace.trust.enabled": false, "task.allowAutomaticTasks": "on" }\n' >"$settings\\settings.json"
+# Its own question before a link opens a file stays in the image; a dialog
+# here would only hold the suite up.
+printf '{ "security.workspace.trust.enabled": false, "task.allowAutomaticTasks": "on", "security.promptForLocalFileProtocolHandling": false }\n' >"$settings\\settings.json"
 terminal() {
     local i
     rm -f "$proj\\term.txt"
@@ -360,11 +380,13 @@ terminal() {
     grep -q '^git version .*windows' "$proj\\term.txt" || { echo "git isn't there: $(cat "$proj\\term.txt")"; return 1; }
     grep -q '^## ' "$proj\\term.txt" || { echo "git status failed: $(cat "$proj\\term.txt")"; return 1; }
     grep -qE '^[0-9]+\.[0-9]+\.[0-9]+' "$proj\\term.txt" || { echo "codium isn't on its terminal's PATH: $(cat "$proj\\term.txt")"; return 1; }
+    grep -qF "env USERPROFILE = $ZIGSAW_HOME\\data\\test.reach.tool\\home" "$proj\\term.txt" || { echo "another app's command didn't run as itself: $(tail -5 "$proj\\term.txt")"; return 1; }
+    grep -qF "USERPROFILE=$USERPROFILE" "$proj\\term.txt" || { echo "zigsaw-host didn't give your environment: $(tail -5 "$proj\\term.txt")"; return 1; }
     local log
     log=$(find "$(cygpath -u "$(data $CODIUM)")" -name Git.log 2>/dev/null | xargs -r ls -t 2>/dev/null | head -1)
     grep -q 'Using git .*windows' "$log" || { echo "git's extension didn't find it: $log"; return 1; }
 }
-check "VSCodium's terminal runs a task, with git and codium on its PATH, and its git extension finds git" terminal
+check "VSCodium's terminal runs a task, with git, your apps' commands and zigsaw-host on its PATH, and its git extension finds git" terminal
 
 # saves <sandbox>: a small extension edits a file and saves it, through the
 # editor's own file service.
@@ -421,11 +443,60 @@ shim_stays() {
 }
 check "codium <folder> stays up after its shim's started it, and codium-cli opens a file in it" shim_stays
 
+# Links, through the shims Windows would start. VSCodium's handler is its own:
+# it opens a file named by a vscodium://file/ link. Each row's file is one it
+# has never opened, so that restoring its last session can't show it.
+codium_url="$ZIGSAW_HOME\\open\\$CODIUM\\urls\\codium-url.exe"
+chromium_url="$ZIGSAW_HOME\\open\\$CHROMIUM\\urls\\chromium-url.exe"
+link_to() { printf 'vscodium://file/%s' "$(cygpath -m "$1")"; }
+for f in started handed windows; do printf 'opened by a link\r\n' >"$work\\zigsaw-link-$f.txt"; done
+link_starts() {
+    "$codium_url" "$(link_to "$work\\zigsaw-link-started.txt")" >"$work\\run.log" 2>&1 </dev/null &
+    runner=$!
+    winpid=$(cat /proc/$runner/winpid)
+    window 'zigsaw-link-started.txt - ' 30 || return 1
+    finish 'zigsaw-link-started.txt - '
+}
+check "A vscodium: link starts VSCodium, with the file it names" link_starts
+link_hands_over() {
+    start $CODIUM codium soft "$note"
+    window 'zigsaw-note.txt - ' 30 || return 1
+    "$codium_url" "$(link_to "$work\\zigsaw-link-handed.txt")" >"$work\\second.log" 2>&1 </dev/null || { finish 'zigsaw-note.txt - '; echo "the link's run failed: $(tail -1 "$work\\second.log")"; return 1; }
+    window 'zigsaw-link-handed.txt - ' 15 || return 1
+    finish 'zigsaw-link-handed.txt - '
+}
+check "A vscodium: link goes to the VSCodium that's running" link_hands_over
+link_refused() {
+    local out
+    out=$("$codium_url" "$(link_to "$note")" --disable-extensions 2>&1 </dev/null) && { echo "two arguments were taken"; return 1; }
+    grep -q 'came as several' <<<"$out" || { echo "$out"; return 1; }
+}
+check "A link that comes as two arguments starts nothing" link_refused
+# Nothing listens there: Chromium's error page has the host for its title.
+http_link() {
+    "$chromium_url" 'http://127.0.0.1:9/zigsaw-link' >"$work\\run.log" 2>&1 </dev/null &
+    runner=$!
+    winpid=$(cat /proc/$runner/winpid)
+    window '127.0.0.1' 30 || return 1
+    finish '127.0.0.1'
+}
+check "An http: link opens in Chromium, through --single-argument" http_link
+says_why() {
+    local out sb
+    for sb in low appcontainer; do
+        out=$("$zigsaw" run --sandbox=$sb --command=codium-cli $CODIUM --version 2>&1 </dev/null)
+        grep -q "can't run under the $sb sandbox: Windows refuses Chromium's sandbox a window station" <<<"$out" || { echo "$sb: $out"; return 1; }
+    done
+}
+check "A run under a sandbox it can't use says why" says_why
+
 untouched() {
-    local d
+    local d now
     for d in "${absent_before[@]}"; do [ ! -e "$d" ] || { echo "$d appeared"; return 1; }; done
     $had_chromium_key || ! reg query 'HKCU\Software\Chromium' >/dev/null 2>&1 || { echo "HKCU\\Software\\Chromium appeared"; return 1; }
     ! reg query 'HKCU\Software\VSCodium' >/dev/null 2>&1 || { echo "HKCU\\Software\\VSCodium appeared"; return 1; }
+    now=$(hkcu_marks)
+    [ "$now" = "$marks_before" ] || { echo "new in HKCU: $(comm -13 <(printf '%s\n' "$marks_before") <(printf '%s\n' "$now") | head -3 | tr '\n' ' ')"; return 1; }
 }
 check "They left the real AppData, profile and registry alone" untouched
 
@@ -443,10 +514,55 @@ gui_installed() {
 check "Chromium gets the windowless shim, a shortcut, and .html, .htm, .pdf, .svg" gui_installed $CHROMIUM chromium ungoogled-chromium .html .htm .pdf .svg
 check "VSCodium gets the windowless shim, a shortcut, and .json, .js, .ts, .py, .zig, .md" gui_installed $CODIUM codium VSCodium .json .js .ts .py .zig .md
 check "codium-cli, its command-line program, gets the console shim" cmp -s "$ZIGSAW_HOME\\bin\\codium-cli.exe" "$shim_dir\\zigsaw-shim.exe"
+offered() {
+    local caps="HKCU\\$classes\\Apps\\$CHROMIUM\\Capabilities\\URLAssociations"
+    reg query "$caps" /v http >/dev/null 2>&1 || { echo "http isn't listed"; return 1; }
+    reg query "$caps" /v https >/dev/null 2>&1 || { echo "https isn't listed"; return 1; }
+    ! reg query "HKCU\\$classes\\http" >/dev/null 2>&1 || { echo "it took http's own key"; return 1; }
+    reg query "HKCU\\$classes\\Zigsaw.$CHROMIUM.url.https\\shell\\open\\command" >/dev/null 2>&1 || { echo "nothing to open https with"; return 1; }
+}
+check "Chromium is offered for http and https, and takes neither" offered
+
+# Last, in the real classes, followed through Windows; only if nothing has the
+# scheme, and all of it is taken back.
+through_windows() {
+    local key='HKCU\Software\Classes\vscodium' out i pid
+    ZIGSAW_CLASSES_KEY='Software\Classes' "$zigsaw" build "$root\\recipes\\vscodium.json" >"$work\\build.log" 2>&1 || { echo "installing it failed: $(tail -1 "$work\\build.log")"; return 1; }
+    out=$(reg query "$key\\shell\\open\\command" 2>&1)
+    grep -qF "$ZIGSAW_HOME\\open\\$CODIUM\\urls\\codium-url.exe" <<<"$out" || { echo "$out"; return 1; }
+    powershell -NoProfile -Command "Start-Process '$(link_to "$work\\zigsaw-link-windows.txt")'" || return 1
+    for ((i = 0; i < 40; i++)); do
+        pid=$(powershell -NoProfile -Command "(Get-Process VSCodium -ErrorAction SilentlyContinue | Where-Object { \$_.MainWindowTitle -like 'zigsaw-link-windows.txt*' } | Select-Object -First 1).Id" | tr -d '\r')
+        [ -n "$pid" ] && break
+        sleep 0.5
+    done
+    local result=0
+    if [ -n "$pid" ]; then
+        "$winwait" "$pid" 'zigsaw-link-windows.txt - ' 15 --close >/dev/null
+        sleep 3
+    else
+        echo "no window for the file"
+        result=1
+    fi
+    # It stays as zigsaw wrote it: a run doesn't rewrite it.
+    out=$(reg query "$key\\shell\\open\\command" 2>&1)
+    grep -qF "$ZIGSAW_HOME\\open\\$CODIUM\\urls\\codium-url.exe" <<<"$out" || { echo "the run rewrote it: $out"; result=1; }
+    # Whatever came of that, the real registry goes back as it was.
+    ZIGSAW_CLASSES_KEY='Software\Classes' "$zigsaw" rm "$CODIUM" >/dev/null 2>&1 || { echo "rm failed"; result=1; }
+    ! reg query "$key" >/dev/null 2>&1 || { echo "rm left it"; result=1; }
+    "$zigsaw" build "$root\\recipes\\vscodium.json" >"$work\\build.log" 2>&1
+    return $result
+}
+if $had_scheme_key; then
+    echo "skip  a link followed through Windows: HKCU\\Software\\Classes\\vscodium was there before"
+else
+    check "A link Windows follows starts VSCodium through zigsaw, and rm takes the key out" through_windows
+fi
 
 cd "$root" || exit 1
 acprobe_rm "$zigsaw"
 for id in "${installed[@]}"; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
+"$zigsaw" rm --delete-data test.reach.tool >/dev/null 2>&1
 $had_chromium_key || reg delete 'HKCU\Software\Chromium' /f >/dev/null 2>&1
 for d in "${absent_before[@]}"; do rm -rf "$d"; done
 reg delete "HKCU\\$classes" /f >/dev/null 2>&1

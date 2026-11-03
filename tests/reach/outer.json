@@ -1,0 +1,10 @@
+{
+  "id": "test.reach.outer",
+  "version": "1",
+  "command": "argv.exe",
+  "permissions": { "sandbox": "soft", "unsupported": { "appcontainer": "the test says it can't" } },
+  "exports": {},
+  "modules": [
+    { "name": "argv", "sources": [{ "path": "../../zig-out/test/zigsaw-argv.exe", "dest": "argv.exe" }] }
+  ]
+}

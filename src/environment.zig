@@ -6,6 +6,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const oci = @import("oci.zig");
+const process = @import("process.zig");
+const win32 = @import("win32.zig");
 const Context = @import("Context.zig");
 const fail = Context.fail;
 
@@ -51,6 +53,8 @@ pub const Spec = struct {
     profile: Profile,
     /// Put on PATH ahead of the system directories.
     path: []const []const u8,
+    /// Put on PATH after them, as on the user's own PATH.
+    path_after: []const []const u8 = &.{},
     system_root: []const u8,
     /// Set after zigsaw's own variables, in order.
     vars: []const Var,
@@ -72,6 +76,7 @@ pub fn build(arena: Allocator, host: *const std.process.Environ.Map, spec: Spec)
     var path: std.ArrayList(u8) = .empty;
     for (spec.path) |dir| try path.print(arena, "{s};", .{dir});
     try path.print(arena, "{0s}\\System32;{0s};{0s}\\System32\\Wbem", .{spec.system_root});
+    for (spec.path_after) |dir| try path.print(arena, ";{s}", .{dir});
     try set(arena, &env, "PATH", path.items);
 
     const p = spec.profile;
@@ -94,6 +99,66 @@ pub fn build(arena: Allocator, host: *const std.process.Environ.Map, spec: Spec)
         try set(arena, &env, assignment[0..eq], assignment[eq + 1 ..]);
     }
     return env;
+}
+
+/// Takes the user's own variables back, over those of the run this process
+/// was started from, in `map` and in the process: Windows' own lookups, such
+/// as `SHGetKnownFolderPath`, read them. zigsaw's variables stay, as they say
+/// what the run was told to use (ZIGSAW_HOME, from the shim).
+pub fn restoreUser(arena: Allocator, map: *std.process.Environ.Map) !void {
+    const block = process.userEnvironmentBlock(arena) catch return;
+    var rest = block;
+    while (rest.len > 0 and rest[0] != 0) {
+        const end = std.mem.indexOfScalar(u16, rest, 0) orelse break;
+        const entry = rest[0..end];
+        rest = rest[end + 1 ..];
+        const eq = std.mem.indexOfScalarPos(u16, entry, 1, '=') orelse continue;
+        const name = try std.unicode.wtf16LeToWtf8Alloc(arena, entry[0..eq]);
+        if (std.ascii.startsWithIgnoreCase(name, "ZIGSAW_")) continue;
+        try map.put(name, try std.unicode.wtf16LeToWtf8Alloc(arena, entry[eq + 1 ..]));
+        const name_w = try arena.dupeSentinel(u16, entry[0..eq], 0);
+        const value_w = try arena.dupeSentinel(u16, entry[eq + 1 ..], 0);
+        _ = win32.SetEnvironmentVariableW(name_w, value_w);
+    }
+}
+
+test "build puts directories after the system's" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var host: std.process.Environ.Map = .init(arena);
+    const env = try build(arena, &host, .{
+        .id = "x",
+        .profile = try .init(arena, "D:\\d"),
+        .path = &.{"D:\\app"},
+        .path_after = &.{ "D:\\store\\bin", "D:\\store\\host" },
+        .system_root = "C:\\W",
+        .vars = &.{},
+    });
+    for (env.items) |kv| if (std.mem.eql(u8, kv.name, "PATH"))
+        try std.testing.expectEqualStrings("D:\\app;C:\\W\\System32;C:\\W;C:\\W\\System32\\Wbem;D:\\store\\bin;D:\\store\\host", kv.value);
+}
+
+test restoreUser {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var map: std.process.Environ.Map = .init(arena);
+    try map.put("USERPROFILE", "D:\\store\\data\\app\\home");
+    try map.put("ZIGSAW_HOME", "D:\\store");
+    // Keep this process as it is for the other tests.
+    const name = try win32.wide(arena, "USERPROFILE");
+    var saved: [512]u16 = undefined;
+    const len = win32.GetEnvironmentVariableW(name, &saved, saved.len);
+    try std.testing.expect(len > 0 and len < saved.len);
+    defer {
+        saved[len] = 0;
+        _ = win32.SetEnvironmentVariableW(name, saved[0..len :0]);
+    }
+    try restoreUser(arena, &map);
+    try std.testing.expect(std.mem.indexOf(u8, map.get("USERPROFILE").?, "\\store\\") == null);
+    try std.testing.expectEqualStrings("D:\\store", map.get("ZIGSAW_HOME").?);
+    try std.testing.expect(map.get("PATH") != null);
 }
 
 test "build passes proxies through for apps with the network" {

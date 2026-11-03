@@ -1,0 +1,10 @@
+{
+  "id": "test.reach.shared",
+  "version": "1",
+  "command": "argv.exe",
+  "permissions": { "sandbox": "soft", "commands": true, "host": true },
+  "exports": {},
+  "modules": [
+    { "name": "argv", "sources": [{ "path": "../../zig-out/test/zigsaw-argv.exe", "dest": "argv.exe" }] }
+  ]
+}

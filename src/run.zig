@@ -77,6 +77,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const saved = try override.loadFor(ctx.store, arena, cfg.id);
     const settings = try override.Settings.merge(arena, saved, opts.settings);
     const sandbox = override.sandboxOf(settings, cfg.permissions);
+    warnUnsupported(cfg, sandbox);
     const network = settings.network orelse cfg.permissions.network;
     var host_grants: std.ArrayList(HostGrant) = .empty;
     var folder_grants: std.ArrayList(folders.Grant) = .empty;
@@ -182,6 +183,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .id = cfg.id,
         .profile = profile,
         .path = app_path.items,
+        .path_after = try sharedPath(ctx, cfg, settings, sandbox),
         .system_root = system_root,
         .vars = app_env.items,
         .extra = settings.env,
@@ -305,6 +307,60 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // --ephemeral run's are gone with its data directory.
     if (run_dir == null and exports.hasCommandDirs(cfg)) exports.syncAfterRun(ctx, cfg.id);
     return code;
+}
+
+/// Says so when the app's image says it can't work under `sandbox`. A warning
+/// and not a refusal: a program's own switch may get it past that, as
+/// `--no-sandbox` does Chromium's. Through a GUI shim, it reaches the message
+/// box a failed run shows.
+pub fn warnUnsupported(cfg: oci.AppConfig, sandbox: oci.Sandbox) void {
+    const why = (cfg.permissions.unsupported orelse return).of(sandbox) orelse return;
+    note("warning: {s} can't run under the {t} sandbox: {s}; its image asks for --sandbox={t}", .{ cfg.id, sandbox, why, cfg.permissions.sandbox orelse .low });
+}
+
+/// The directories a run has on its PATH after the system's, for what it may
+/// reach of the user's commands. Neither is any use where it can't work,
+/// which a run told to have them hears about.
+fn sharedPath(ctx: *Context, cfg: oci.AppConfig, settings: override.Settings, sandbox: oci.Sandbox) ![]const []const u8 {
+    const arena = ctx.arena;
+    var dirs: std.ArrayList([]const u8) = .empty;
+    if (settings.commands orelse cfg.permissions.commands orelse false) {
+        // A zigsaw at low integrity or in an AppContainer can't open the store.
+        if (sandbox == .soft)
+            try dirs.append(arena, try ctx.store.path(arena, &.{"bin"}))
+        else
+            note("note: {s} doesn't get your apps' commands under the {t} sandbox, only under soft: zigsaw can't run from it", .{ cfg.id, sandbox });
+    }
+    if (settings.host orelse cfg.permissions.host orelse false) {
+        if (sandbox != .appcontainer)
+            try dirs.append(arena, try hostDir(ctx))
+        else
+            note("note: {s} doesn't get zigsaw-host in an AppContainer: your programs couldn't read their own files from there", .{cfg.id});
+    }
+    return dirs.items;
+}
+
+/// `<store>\host`, with a copy of the zigsaw-host.exe next to zigsaw.exe: the
+/// only thing in it, so that having it on PATH brings nothing else.
+fn hostDir(ctx: *Context) ![]const u8 {
+    const io = ctx.io;
+    const arena = ctx.arena;
+    const self = try win32.selfExePath(arena);
+    const src = try std.fs.path.join(arena, &.{ std.fs.path.dirname(self).?, "zigsaw-host.exe" });
+    const bytes = Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(16 << 20)) catch |err|
+        return fail("reading {s}, which should be installed next to zigsaw.exe: {t}", .{ src, err });
+    const dir = try ctx.store.path(arena, &.{"host"});
+    const dest = try std.fs.path.join(arena, &.{ dir, "zigsaw-host.exe" });
+    const had = Io.Dir.cwd().readFileAlloc(io, dest, arena, .limited(16 << 20)) catch null;
+    if (had != null and std.mem.eql(u8, had.?, bytes)) return dir;
+    const tmp = try ctx.store.tmpPath(arena, "host");
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = tmp, .data = bytes });
+    Io.Dir.rename(.cwd(), tmp, .cwd(), dest, io) catch |err| {
+        Io.Dir.cwd().deleteFile(io, tmp) catch {};
+        // One that's running stays, for the next run.
+        if (had == null) return err;
+    };
+    return dir;
 }
 
 /// Starts the relay in the app's container and job, with the sockets of the

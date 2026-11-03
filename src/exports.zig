@@ -90,6 +90,7 @@ pub fn repair(ctx: *Context) !u32 {
         };
     }
     if (refs.len == 0) note("no apps are installed", .{});
+    try associations.repair(ctx);
     if (failed == 0) return 0;
     note("{d} app(s) couldn't be repaired; close them and run `zigsaw repair` again", .{failed});
     return 1;

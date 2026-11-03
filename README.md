@@ -380,6 +380,8 @@ to finish.
 | `--nofilesystem=<location>` | Take away access that the app's permissions or its overrides give to a location |
 | `--file=<path>` | Have the app open a file of yours: grants it that file, to read and write, and adds the file's path to the app's arguments (see [below](#opening-a-file)) |
 | `--share=network` / `--unshare=network` | Override the app's network permission. With the network, a run gets your `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` |
+| `--share=commands` / `--unshare=commands` | Put [your zigsaw apps' commands](#your-apps-commands-and-your-own-programs) on the run's PATH, or not (`soft` sandbox only) |
+| `--share=host` / `--unshare=host` | Put [`zigsaw-host`](#your-apps-commands-and-your-own-programs) on the run's PATH, or not (not in an AppContainer) |
 | `--port=<name>=<port>` | Serve one of the app's [services](#services) on another port, or reach a port it [uses](#reaching-this-machine) on another |
 | `--env=NAME=VALUE` | Set an environment variable |
 | `--noextension=<id>` | Leave out an installed [extension](docs/recipes.md#extension-points), which otherwise joins the runs of what it extends; `--extension=<id>` has one an override leaves out join again |
@@ -497,6 +499,37 @@ zigsaw run --sandbox=appcontainer --port=postgresql=5433 org.osm2pgsql.osm2pgsql
 ```
 
 ([networking](docs/networking.md), [recipes](docs/recipes.md#ports-an-app-uses))
+
+### Your apps' commands and your own programs
+
+A run's PATH has the app's own directories and the system's, so that what it does
+doesn't depend on what's on the machine. An app that's there to run other things,
+as an editor's terminal is, can ask for more, or you can give it more with an
+override:
+
+```
+zigsaw override --share=commands org.example.Editor
+```
+
+- **`--share=commands`** puts the store's `bin` on its PATH, after the system's. In
+  the app's terminal, `zig` or `rg` then runs the app you installed, as itself: with
+  its own data and sandbox, and ending with the run that started it. An extension
+  that looks for a tool finds it the same way. It works under `soft` only, as a
+  zigsaw at low integrity can't open the store; a run under another sandbox says so.
+- **`--share=host`** puts `zigsaw-host` on its PATH, as `flatpak-spawn --host` is on
+  Linux: `zigsaw-host cargo build` finds `cargo` on your own PATH, and runs it in
+  your real environment, with your real `USERPROFILE`. It keeps the run's rights, so
+  in a low run it runs at low integrity, and it ends with the run. It isn't there in
+  an AppContainer, whose programs couldn't read their own files.
+
+VSCodium's image asks for both. Its terminal gets your real environment with a
+profile in its settings, which an extension's commands don't:
+
+```json
+"terminal.integrated.profiles.windows": {
+  "Host shell": { "path": "zigsaw-host", "args": ["powershell"] }
+}
+```
 
 ### Certificates
 
@@ -739,6 +772,42 @@ As with shortcuts, only the default store registers.
 `ZIGSAW_CLASSES_KEY` names a key under `HKEY_CURRENT_USER` to use in place
 of `Software\Classes`, for any store; the tests use one.
 
+### URL schemes
+
+A recipe can declare the kinds of link its app opens, as Flatpak apps declare
+`x-scheme-handler` types:
+
+```json
+"schemes": {
+  "vscodium": { "command": "codium-url", "description": "VSCodium link" }
+}
+```
+
+Installing the app registers them for your user only, with no administrator, and
+`zigsaw rm` removes them. `zigsaw list` and `zigsaw info` show them with what it
+opens, as `vscodium:`.
+
+- **A scheme nothing else has opens with the app.** One something does have, such
+  as `http` or one a program installed the usual way registered, stays as it is, and
+  the app is only offered for it.
+- **Offered means listed for Settings' Default apps**, with the app's file types,
+  where you may choose it. zigsaw never makes an app the default: Windows keeps
+  that to you.
+- **A link opens through a shim of its own**, in the store's `open` directory, which
+  takes one argument, a URL of a scheme that app declares, and otherwise starts
+  nothing. A link can't reach the app as a switch, whatever the app itself checks
+  ([findings](docs/findings.md#what-windows-does-with-a-link)). It's granted nothing:
+  the app gets the text of the link, in the sandbox it always has.
+- **An export names what goes before the link.** VSCodium's `codium-url` is
+  `VSCodium.exe --open-url --`.
+- A scheme can't be one of Windows' own (`file`, `ms-settings` and the like).
+
+An app that registers itself from inside a run, as Electron apps do, gets a key
+that names its program in the store's deployments, and skips zigsaw. Installing an
+image that declares the scheme takes such a key over, and `zigsaw repair` and
+`zigsaw rm` remove one that nothing declares. A recipe should take that call out
+([Chromium and Electron](docs/recipes.md#chromium-and-electron)).
+
 ### Changing an app's options
 
 `zigsaw override` saves run options for an app, and every run of it gets them,
@@ -782,6 +851,7 @@ zig build test          # unit tests
 bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash, network)
 bash tests/sandbox.sh   # which sandbox a run gets (low by default, the image's, store-wide and app overrides); what the low and appcontainer sandboxes change on the host, how long it lasts, and rm undoes; a working directory low won't label, read-only; --file; your folders (fake ones); registry keys kept with an app
 bash tests/network.sh   # an app's service reached from the host in each sandbox, on its port, one --port or an override moves it to, and not after the run; in an AppContainer, an internal port the app's runs agree on and reach each other on without the network, and a port another program holds; an AppContainer run with the network exempt from loopback isolation while it goes (not without the network, nor with ZIGSAW_LOOPBACK_EXEMPTION=0), a killed run's exemption taken back by repair, one you made kept; a port the app uses reached directly, or through zigsaw's forward when not exempt, and --port moving it; proxy variables passed to runs with the network; eight first AppContainer runs at once; the probe's report of what Windows lets AppContainers do on the loopback and over AF_UNIX (tests/netprobe.zig)
+bash tests/reach.sh     # what a run may reach of the rest of the machine: the store's commands on its PATH, each running as its own app; zigsaw-host, your real environment with the run's rights; an image saying it can't run under a sandbox; URL schemes and Default apps in a scratch key, and one private scheme followed through Windows, which rm removes (30 s; opens a console for a moment)
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
@@ -796,7 +866,7 @@ bash tests/certs.sh     # which apps trust a root CA added to Windows: a test CA
 bash tests/qt.sh        # a Qt Widgets app built against Qt's SDK with CMake, on its runtime, in each sandbox: plugins found from the runtime, image formats, Schannel, translations; a Qt Quick window drawn with Direct3D 11 in each sandbox; the SDK's cmake without a recipe; the qml tool; Designer's and Linguist's windows, shims and shortcuts; Flameshot in each sandbox, and its full command saving a screenshot; Notes in each sandbox, its QML and database (needs QT_HOME or BUILD_HOME; opens windows)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
-bash tests/chromium.sh # ungoogled-chromium and VSCodium in each sandbox, with Windows' word on how their processes are confined: pages, WebGL, H.264, a second launch, downloads, a task in VSCodium's terminal, an extension saving a file; shims, shortcuts and what they leave outside
+bash tests/chromium.sh # ungoogled-chromium and VSCodium in each sandbox, with Windows' word on how their processes are confined: pages, WebGL, H.264, a second launch, downloads, a task in VSCodium's terminal with your apps' commands and zigsaw-host, an extension saving a file; links through the shims and through Windows; shims, shortcuts and what they leave outside, the keys of HKCU's Classes, RegisteredApplications, Clients and Run included
 bash tests/zls.sh       # ZLS's language server sessions over stdio in each sandbox: the standard library's documentation, a module a project's build.zig declares, a syntax error; its shim (needs ZLS_HOME or BUILD_HOME, or builds it)
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API, in an AppContainer through its service too (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)

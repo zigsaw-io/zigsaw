@@ -138,6 +138,41 @@ integrity, and what a low-integrity program writes is labelled low.
   images that don't ask keep their digests.
 - A zigsaw before 0.54 ignores it, and runs every app under `soft`.
 
+An image can say which sandboxes it can't work under, and why, so that a run
+told to use one says so, rather than failing however the program fails:
+
+```json
+"permissions": {
+  "sandbox": "soft",
+  "unsupported": { "low": "PHP's is_writable() is false for everything at low integrity, so Kanboard says its data can't be written" }
+}
+```
+
+Each reason is one line of up to 256 bytes. A run under that sandbox warns before
+it starts, and goes ahead: a program's own switch may get it past that, as
+`--no-sandbox` does Chromium's. Saving it as an override warns too, and `info`
+shows it. Through a GUI shim, which has no console, the warning reaches the
+message box of a run that fails. An image can't say it of the sandbox it asks for.
+
+### Commands and your own programs
+
+```json
+"permissions": { "sandbox": "soft", "commands": true, "host": true }
+```
+
+`commands` puts the store's `bin` on the run's PATH, after the system's, as on
+your own PATH: other apps' commands, each running as its own app, with its own
+data, permissions and sandbox. It works under `soft` only. `host` puts
+`zigsaw-host` there, which runs a program from your own PATH in your real
+environment, with the run's rights. Neither is in an AppContainer. A run that
+was told to have one where it can't work says so.
+
+Both count as access: `pull`, `update` and `info` show them, and an update that
+newly asks for one asks first. `--share=` and `--unshare=` choose over them, as
+for the network. Asking for them makes a run depend on what's on the machine, so
+a recipe that doesn't need them shouldn't, and images that don't ask keep their
+digests.
+
 ## Services
 
 An app that other programs on this machine connect to declares what it
@@ -3198,6 +3233,28 @@ are. What such a recipe needs, from
   of the things that [don't follow `USERPROFILE`](findings.md#where-windows-sends-a-program):
   `.vscode-oss\cli` appeared in the real one until VSCodium's recipe left out
   `bin\codium-tunnel.exe`.
+- **Take out what registers the app.** An Electron app with a `urlProtocol`
+  writes `HKCU\Software\Classes\<scheme>` on every start, naming its program in
+  the deployment, so a link starts it with no zigsaw in the way, and stops working
+  at its next update. Declare the scheme in `schemes` instead, and take the call
+  out, with a check that it was there, as VSCodium's recipe does. VS Code's file
+  is `resources/app/out/mainImpl.js`, which its integrity check doesn't cover:
+
+  ```json
+  "grep -q 'setAsDefaultProtocolClient(' resources/app/out/mainImpl.js",
+  "sed -i -E 's/[A-Za-z0-9_$]+[.]setAsDefaultProtocolClient[(][^)]*[)]/void 0/' resources/app/out/mainImpl.js",
+  "! grep -q 'setAsDefaultProtocolClient(' resources/app/out/mainImpl.js",
+  ```
+
+  [`tests/chromium.sh`](../tests/chromium.sh) compares the keys of
+  `HKCU\Software\Classes`, `RegisteredApplications`, `Clients\StartMenuInternet`
+  and `Run` before and after, which is what catches this.
+- **An export for links, with what the program wants before them.** VSCodium's
+  is `VSCodium.exe --open-url --`, and Chromium's `chrome.exe --single-argument`,
+  which also keep them from reading anything in a link as a switch
+  ([URL schemes](../README.md#url-schemes)).
+- **`unsupported`, to say why**, for the sandboxes in the first point
+  ([Sandbox](#sandbox)).
 - **Turn off the updater.** VSCodium's recipe deletes `updateUrl` from its
   `product.json`, which its integrity check doesn't cover:
 

@@ -171,6 +171,24 @@ pub fn lowIntegrityToken(arena: Allocator) !win32.HANDLE {
     return low.?;
 }
 
+/// The variables this user's programs start with, as a block for
+/// `SpawnSpec.env_block`, whatever this process's own are: what Windows
+/// builds from the registry for a new sign-in, with their real profile.
+pub fn userEnvironmentBlock(arena: Allocator) ![]const u16 {
+    var token: ?win32.HANDLE = null;
+    if (win32.OpenProcessToken(win32.GetCurrentProcess(), win32.TOKEN_QUERY, &token) == 0)
+        return win32.lastErrorFail("OpenProcessToken");
+    defer _ = win32.CloseHandle(token.?);
+    var block: ?[*:0]u16 = null;
+    if (win32.CreateEnvironmentBlock(&block, token, 0) == 0)
+        return win32.lastErrorFail("CreateEnvironmentBlock");
+    defer _ = win32.DestroyEnvironmentBlock(block.?);
+    // It ends with an empty string: two nulls in a row.
+    var len: usize = 0;
+    while (block.?[len] != 0 or block.?[len + 1] != 0) len += 1;
+    return arena.dupe(u16, block.?[0 .. len + 2]);
+}
+
 /// Runs a process to completion and returns its exit code. The child gets
 /// our stdio handles (or `spec.stdio`) and nothing else, and runs in a job
 /// object, so its whole process tree ends when it does, or when we do.

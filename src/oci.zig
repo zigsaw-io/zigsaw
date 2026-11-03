@@ -92,6 +92,34 @@ pub const Permissions = struct {
     /// sandbox, with the network or without (see services.zig). Absent
     /// unless there are some.
     uses: ?[]const Use = null,
+    /// The sandboxes the app can't work under, and why, which a run told to
+    /// use one warns about. Absent unless there are some.
+    unsupported: ?Unsupported = null,
+    /// Whether the commands of the store's apps are on the run's PATH, after
+    /// the system's, each running as its own app. Only under soft: a zigsaw
+    /// at low integrity or in an AppContainer can't open the store. Absent
+    /// unless true, so images without it keep their digests.
+    commands: ?bool = null,
+    /// Whether `zigsaw-host` is on the run's PATH, which runs a program with
+    /// the user's real environment, as `flatpak-spawn --host` does. It gets
+    /// the run's own token and job: it escapes the environment, not the
+    /// sandbox. Absent unless true.
+    host: ?bool = null,
+};
+
+/// Why an app can't work under a sandbox, per sandbox: a line for a warning.
+pub const Unsupported = struct {
+    soft: ?[]const u8 = null,
+    low: ?[]const u8 = null,
+    appcontainer: ?[]const u8 = null,
+
+    pub fn of(u: Unsupported, sandbox: Sandbox) ?[]const u8 {
+        return switch (sandbox) {
+            .soft => u.soft,
+            .low => u.low,
+            .appcontainer => u.appcontainer,
+        };
+    }
 };
 
 /// A port an app listens on for other programs on this machine. Its config
@@ -155,6 +183,21 @@ pub const Association = struct {
     description: ?[]const u8 = null,
     /// A file with the icon such files show, as a shortcut's. Without it,
     /// the export's executable.
+    icon: ?[]const u8 = null,
+};
+
+/// A kind of link the app opens, by URL scheme, like an x-scheme-handler in
+/// a Flatpak's .desktop file. A scheme nothing else has opens with the app;
+/// one something has (http, or one a program installed the usual way
+/// registered) is only offered, in Windows' Default apps. The URL is the
+/// export's one argument, after the export's own, and is granted nothing.
+pub const Scheme = struct {
+    /// The export that opens the link.
+    command: []const u8,
+    /// What Windows calls such a link, e.g. "VSCodium link".
+    description: ?[]const u8 = null,
+    /// A file with the icon, as a shortcut's. Without it, the export's
+    /// executable.
     icon: ?[]const u8 = null,
 };
 
@@ -464,6 +507,9 @@ pub const AppConfig = struct {
     /// The kinds of file the app opens, by extension (".rnote"). Absent
     /// unless there are some.
     associations: ?std.json.ArrayHashMap(Association) = null,
+    /// The kinds of link the app opens, by URL scheme ("vscodium"). Absent
+    /// unless there are some.
+    schemes: ?std.json.ArrayHashMap(Scheme) = null,
     /// Keys in HKEY_CURRENT_USER where the app keeps its settings, such as
     /// "Software\\7-Zip". zigsaw keeps them with the app's data, and puts
     /// them in the registry for its runs (see hkcu.zig). Absent unless there
@@ -603,6 +649,12 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
         return fail("{s}: filesystem permission \"{s}\" must be \"cwd\", one of the user's folders ({s}) or an absolute path, optionally with \":ro\"", .{ what, spec, UserFolder.list });
     try validateServices(what, c);
     try validateUses(what, "", c.permissions.uses, c.permissions.services orelse &.{});
+    if (c.permissions.unsupported) |u| {
+        for (std.enums.values(Sandbox)) |sandbox| if (u.of(sandbox)) |why| if (!isOneLine(why, 256))
+            return fail("{s}: the reason it can't run under {t} must be 1-256 bytes on one line", .{ what, sandbox });
+        if (u.of(c.permissions.sandbox orelse .low) != null)
+            return fail("{s}: it asks for the {t} sandbox and says it can't run under it", .{ what, c.permissions.sandbox orelse .low });
+    }
     var it = c.exports.map.iterator();
     while (it.next()) |e| {
         if (!isValidExportName(e.key_ptr.*))
@@ -643,6 +695,16 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
                 return fail("{s}: association \"{s}\" description must be 1-256 bytes on one line", .{ what, ext });
         }
     }
+    if (c.schemes) |s| for (s.map.keys(), s.map.values()) |name, scheme| {
+        if (!isValidScheme(name))
+            return fail("{s}: scheme \"{s}\" must be a URL scheme of up to 64 bytes: a lowercase letter, then lowercase letters, digits, '+', '-' or '.', and not one of Windows' own, such as file or ms-settings", .{ what, name });
+        if (!c.exports.map.contains(scheme.command))
+            return fail("{s}: scheme \"{s}\" opens with \"{s}\", which isn't one of the app's exports", .{ what, name, scheme.command });
+        if (scheme.icon) |icon| if (!isValidCommand(icon, aliases))
+            return fail("{s}: scheme \"{s}\" icon \"{s}\" must be a relative path inside the app, or start with a runtime's ${{alias}}\\", .{ what, name, icon });
+        if (scheme.description) |d| if (!isOneLine(d, 256))
+            return fail("{s}: scheme \"{s}\" description must be 1-256 bytes on one line", .{ what, name });
+    };
     if (c.registry) |keys| for (keys, 0..) |key, i| {
         if (!isValidRegistryKey(key))
             return fail("{s}: registry key \"{s}\" must be a key of the app's own in HKEY_CURRENT_USER\\Software, such as \"Software\\\\7-Zip\": no other root, not Software itself, nor Classes, Microsoft, Policies, Wow6432Node, AppDataLow or zigsaw in it", .{ what, key });
@@ -819,6 +881,8 @@ fn isValidLicense(l: []const u8) bool {
 pub fn describePermissions(arena: std.mem.Allocator, p: Permissions) ![]const u8 {
     var parts: std.ArrayList([]const u8) = .empty;
     if (p.sandbox == .soft) try parts.append(arena, "whatever you can write (it asks for the soft sandbox)");
+    if (p.commands orelse false) try parts.append(arena, "the commands of your zigsaw apps");
+    if (p.host orelse false) try parts.append(arena, "your own programs, in your real environment (zigsaw-host)");
     if (p.network) try parts.append(arena, "the network");
     var folders: [2]std.ArrayList([]const u8) = .{ .empty, .empty };
     for (p.filesystem) |spec| {
@@ -874,6 +938,7 @@ pub const Access = struct {
 
     pub fn isEmpty(a: Access) bool {
         return a.permissions.sandbox != .soft and !a.permissions.network and a.permissions.filesystem.len == 0 and
+            !(a.permissions.commands orelse false) and !(a.permissions.host orelse false) and
             a.uses.len == 0 and a.registry.len == 0;
     }
 };
@@ -920,6 +985,8 @@ pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Acc
             .sandbox = if (after.permissions.sandbox == .soft and before.permissions.sandbox != .soft) .soft else null,
             .network = after.permissions.network and !before.permissions.network,
             .filesystem = filesystem.items,
+            .commands = if ((after.permissions.commands orelse false) and !(before.permissions.commands orelse false)) true else null,
+            .host = if ((after.permissions.host orelse false) and !(before.permissions.host orelse false)) true else null,
         },
         .uses = uses.items,
         .registry = keys.items,
@@ -1056,6 +1123,89 @@ pub fn isValidExtension(ext: []const u8) bool {
         else => return false,
     };
     return true;
+}
+
+/// A URL scheme an app may ask for: RFC 3986's, in lowercase, as Windows
+/// compares them, and none of those that name Windows' own features, which
+/// an app has no business handling, even as an offer.
+pub fn isValidScheme(scheme: []const u8) bool {
+    if (scheme.len == 0 or scheme.len > 64) return false;
+    if (scheme[0] < 'a' or scheme[0] > 'z') return false;
+    for (scheme) |c| switch (c) {
+        'a'...'z', '0'...'9', '+', '-', '.' => {},
+        else => return false,
+    };
+    for ([_][]const u8{ "file", "shell", "javascript", "vbscript", "data", "about", "res", "blob", "mk", "its", "mhtml" }) |own|
+        if (std.mem.eql(u8, scheme, own)) return false;
+    for ([_][]const u8{ "ms-", "microsoft", "windows", "search", "zigsaw" }) |own|
+        if (std.mem.startsWith(u8, scheme, own)) return false;
+    return true;
+}
+
+test isValidScheme {
+    for ([_][]const u8{ "vscodium", "http", "https", "mailto", "web+x", "a.b-c2" }) |ok|
+        try std.testing.expect(isValidScheme(ok));
+    for ([_][]const u8{ "", "Vscodium", "1a", "-a", "a b", "a:b", "a\\b", "file", "ms-settings", "microsoft-edge", "windows-defender", "search-ms", "shell", "javascript", "zigsaw-x" }) |bad|
+        try std.testing.expect(!isValidScheme(bad));
+    const long: [65]u8 = @splat(0x61);
+    try std.testing.expect(!isValidScheme(&long));
+}
+
+test "unsupported sandboxes and schemes are checked" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var c: AppConfig = .{ .id = "x", .version = "1", .command = "a.exe" };
+    // It can't say so of the sandbox it asks for, low if it asks for none.
+    c.permissions.unsupported = .{ .low = "no" };
+    try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
+    c.permissions.sandbox = .soft;
+    try validateEntryPoints("x", c, &.{});
+    c.permissions.unsupported = .{ .low = "two\nlines" };
+    try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
+    c.permissions.unsupported = .{ .soft = "no" };
+    try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
+
+    c = .{ .id = "x", .version = "1", .command = "a.exe" };
+    var exported: std.json.ArrayHashMap(Export) = .{};
+    try exported.map.put(arena, "open", .{ .command = "a.exe" });
+    c.exports = exported;
+    var schemes: std.json.ArrayHashMap(Scheme) = .{};
+    try schemes.map.put(arena, "x-app", .{ .command = "open" });
+    c.schemes = schemes;
+    try validateEntryPoints("x", c, &.{});
+    schemes = .{};
+    try schemes.map.put(arena, "x-app", .{ .command = "missing" });
+    c.schemes = schemes;
+    try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
+    schemes = .{};
+    try schemes.map.put(arena, "file", .{ .command = "open" });
+    c.schemes = schemes;
+    try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
+}
+
+test "commands and host count as access, and only when added" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const none: Access = .{};
+    const both: Access = .{ .permissions = .{ .commands = true, .host = true } };
+    try std.testing.expect(none.isEmpty());
+    try std.testing.expect(!both.isEmpty());
+    const added = try addedAccess(arena, none, both);
+    try std.testing.expect(added.permissions.commands.? and added.permissions.host.?);
+    try std.testing.expect((try addedAccess(arena, both, both)).isEmpty());
+    try std.testing.expect((try addedAccess(arena, both, none)).isEmpty());
+    const words = try describePermissions(arena, both.permissions);
+    try std.testing.expect(std.mem.indexOf(u8, words, "zigsaw apps") != null);
+    try std.testing.expect(std.mem.indexOf(u8, words, "zigsaw-host") != null);
+}
+
+test "permissions left unset stay out of a config" {
+    const json = try toJson(std.testing.allocator, Permissions{});
+    defer std.testing.allocator.free(json);
+    for ([_][]const u8{ "unsupported", "commands", "host" }) |field|
+        try std.testing.expect(std.mem.indexOf(u8, json, field) == null);
 }
 
 test isValidExtension {

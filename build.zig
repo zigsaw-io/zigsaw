@@ -49,6 +49,15 @@ pub fn build(b: *std.Build) void {
     addWindowsResources(b, relay, "zigsaw service relay");
     b.installArtifact(relay);
 
+    // Runs the user's own programs from runs that have --share=host, from a
+    // copy in the store; small too. zigsaw expects it next to zigsaw.exe.
+    const host = b.addExecutable(.{
+        .name = "zigsaw-host",
+        .root_module = hostModule(b, target, .small),
+    });
+    addWindowsResources(b, host, "zigsaw host command");
+    b.installArtifact(host);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     run_cmd.addPassthruArgs();
@@ -205,6 +214,16 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize, null) })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shimModule(b, target, optimize, true) })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = relayModule(b, target, optimize) })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = hostModule(b, target, optimize) })).step);
+}
+
+fn hostModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path("src/host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = if (optimize == .small) true else null,
+    });
 }
 
 fn relayModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Module {

@@ -8,10 +8,24 @@
   "command": "VSCodium.exe",
   "path": ["bin"],
   "layer": "estargz",
-  "permissions": { "sandbox": "soft", "network": true, "filesystem": ["cwd", "desktop", "documents", "downloads"] },
+  "permissions": {
+    "sandbox": "soft",
+    "network": true,
+    "filesystem": ["cwd", "desktop", "documents", "downloads"],
+    "unsupported": {
+      "low": "Windows refuses Chromium's sandbox a window station there, so it exits with code 3; --no-sandbox gets past that, and takes its sandbox from every process",
+      "appcontainer": "Windows refuses Chromium's sandbox a window station there, so it exits with code 3; even with --no-sandbox, Node can't resolve paths from a container"
+    },
+    "commands": true,
+    "host": true
+  },
   "exports": {
     "codium": { "command": "VSCodium.exe" },
-    "codium-cli": { "command": "bin\\codium.cmd" }
+    "codium-cli": { "command": "bin\\codium.cmd" },
+    "codium-url": { "command": "VSCodium.exe", "args": ["--open-url", "--"] }
+  },
+  "schemes": {
+    "vscodium": { "command": "codium-url", "description": "VSCodium link" }
   },
   "shortcuts": {
     "VSCodium": { "command": "codium", "description": "Edit code" }
@@ -44,6 +58,9 @@
         "grep -q '\"updateUrl\"' resources/app/product.json",
         "sed -i '/\"updateUrl\"/d' resources/app/product.json",
         "! grep -q '\"updateUrl\"' resources/app/product.json",
+        "grep -q 'setAsDefaultProtocolClient(' resources/app/out/mainImpl.js",
+        "sed -i -E 's/[A-Za-z0-9_$]+[.]setAsDefaultProtocolClient[(][^)]*[)]/void 0/' resources/app/out/mainImpl.js",
+        "! grep -q 'setAsDefaultProtocolClient(' resources/app/out/mainImpl.js",
         "cp -r . \"$PREFIX/\""
       ]
     }

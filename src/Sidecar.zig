@@ -23,6 +23,11 @@ gui: bool = false,
 /// shim then passes as `zigsaw run --file=<argument>`: the shims of file
 /// associations, in `<root>\open` (see associations.zig). Absent otherwise.
 files: bool = false,
+/// The URL schemes the shim opens, separated by commas: the shims of an app's
+/// schemes, in `<root>\open\<app>\urls` (see associations.zig). The shim then
+/// takes one argument, a URL of one of them, and nothing else. Absent
+/// otherwise.
+schemes: ?[]const u8 = null,
 
 pub const extension = ".shim";
 
@@ -34,6 +39,7 @@ pub fn parse(bytes: []const u8) error{InvalidShimFile}!Sidecar {
     var command: ?[]const u8 = null;
     var gui = false;
     var files = false;
+    var schemes: ?[]const u8 = null;
     var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t");
@@ -47,6 +53,7 @@ pub fn parse(bytes: []const u8) error{InvalidShimFile}!Sidecar {
         if (std.mem.eql(u8, key, "command")) command = value;
         if (std.mem.eql(u8, key, "gui")) gui = std.mem.eql(u8, value, "true");
         if (std.mem.eql(u8, key, "files")) files = std.mem.eql(u8, value, "true");
+        if (std.mem.eql(u8, key, "schemes")) schemes = value;
     }
     return .{
         .zigsaw = zigsaw orelse return error.InvalidShimFile,
@@ -55,12 +62,14 @@ pub fn parse(bytes: []const u8) error{InvalidShimFile}!Sidecar {
         .command = command orelse return error.InvalidShimFile,
         .gui = gui,
         .files = files,
+        .schemes = schemes,
     };
 }
 
 pub fn eql(a: Sidecar, b: Sidecar) bool {
     return std.mem.eql(u8, a.zigsaw, b.zigsaw) and std.mem.eql(u8, a.home, b.home) and
-        std.mem.eql(u8, a.app, b.app) and std.mem.eql(u8, a.command, b.command) and a.gui == b.gui and a.files == b.files;
+        std.mem.eql(u8, a.app, b.app) and std.mem.eql(u8, a.command, b.command) and a.gui == b.gui and a.files == b.files and
+        std.mem.eql(u8, a.schemes orelse "", b.schemes orelse "");
 }
 
 pub fn format(s: Sidecar, w: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -75,6 +84,27 @@ pub fn format(s: Sidecar, w: *std.Io.Writer) std.Io.Writer.Error!void {
         \\
     , .{ s.zigsaw, s.home, s.app, s.command, s.gui });
     if (s.files) try w.writeAll("files = true\n");
+    if (s.schemes) |schemes| try w.print("schemes = {s}\n", .{schemes});
+}
+
+/// Whether `url` is a URL of one of these schemes, which are separated by
+/// commas: it starts with one, and a ':', in any case.
+pub fn hasScheme(schemes: []const u8, url: []const u8) bool {
+    const colon = std.mem.indexOfScalar(u8, url, ':') orelse return false;
+    var it = std.mem.tokenizeScalar(u8, schemes, ',');
+    while (it.next()) |scheme| if (std.ascii.eqlIgnoreCase(scheme, url[0..colon])) return true;
+    return false;
+}
+
+test hasScheme {
+    try std.testing.expect(hasScheme("http,https", "https://example.com/"));
+    try std.testing.expect(hasScheme("http,https", "HTTP://example.com/"));
+    try std.testing.expect(hasScheme("vscodium", "vscodium:x"));
+    try std.testing.expect(!hasScheme("http", "https://example.com/"));
+    try std.testing.expect(!hasScheme("http", "--gpu-launcher=calc"));
+    try std.testing.expect(!hasScheme("http", "C:\\x\\http:y"));
+    try std.testing.expect(!hasScheme("http", ""));
+    try std.testing.expect(!hasScheme("", "http:x"));
 }
 
 /// The sidecar of an alias shim, which builds and runs put on their PATH for

@@ -227,6 +227,8 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "shortcut \"{s}\" has the icon", .{name}), icon);
     if (config.associations) |a| for (a.map.keys(), a.map.values()) |ext, association| if (association.icon) |icon|
         try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "association \"{s}\" has the icon", .{ext}), icon);
+    if (config.schemes) |s| for (s.map.keys(), s.map.values()) |name, scheme| if (scheme.icon) |icon|
+        try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "scheme \"{s}\" has the icon", .{name}), icon);
 
     const start = ctx.now();
     const layer_file = try tree.writeLayerFile(ctx, r.layer.format());

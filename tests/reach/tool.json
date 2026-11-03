@@ -1,0 +1,9 @@
+{
+  "id": "test.reach.tool",
+  "version": "1",
+  "command": "hostprobe.exe",
+  "exports": { "reach-probe": { "command": "hostprobe.exe" } },
+  "modules": [
+    { "name": "probe", "sources": [{ "path": "../../zig-out/test/zigsaw-hostprobe.exe", "dest": "hostprobe.exe" }] }
+  ]
+}

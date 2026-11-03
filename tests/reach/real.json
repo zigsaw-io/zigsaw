@@ -1,0 +1,15 @@
+{
+  "id": "test.reach.real",
+  "version": "1",
+  "name": "Zigsaw link test",
+  "command": "rec.cmd",
+  "permissions": { "sandbox": "soft" },
+  "env": { "REACH_RECORD": "${data}\\record.txt" },
+  "exports": { "reach-real": { "command": "rec.cmd" } },
+  "schemes": {
+    "reachreal68": { "command": "reach-real", "description": "Zigsaw test link" }
+  },
+  "modules": [
+    { "name": "rec", "sources": [{ "path": "rec.cmd" }] }
+  ]
+}

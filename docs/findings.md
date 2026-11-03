@@ -418,6 +418,17 @@ sets, and the only switch past the check turns the whole sandbox off.
 - **VSCodium under `soft` made `.vscode-oss\cli` in the real profile**.
   Left out of the image, `bin\codium-tunnel.exe` makes nothing there, and no
   other run of it left anything.
+- **VSCodium under `soft` wrote the real `HKCU\Software\Classes\vscodium`, on
+  every start**, naming its program in the deployment:
+  `"<store>\deploy\<layer>\VSCodium.exe" --open-url -- "%1"`. Iteration 67
+  missed this, and said it left nothing else outside: its check looked only at
+  `HKCU\Software\VSCodium`. A link then started the editor with no zigsaw in
+  between, in your real environment, with its data outside the app's. An update
+  left the key naming a deployment that was gone, and `zigsaw rm` left it too.
+  It's `setAsDefaultProtocolClient` in `out\mainImpl.js`, which VS Code skips
+  only when portable, and that file isn't among those its integrity check
+  covers. From iteration 68, the recipe takes that call out, and zigsaw
+  registers the scheme itself ([links](#links-and-what-runs-reach)).
 - Everything else follows `USERPROFILE`, as the
   [known folders](#where-windows-sends-a-program) predict: their data,
   extensions and `.vscode-oss` are in the app's data.
@@ -2005,6 +2016,69 @@ as a runtime in zig's place; zig 0.16's image is pinned by nothing (scratch
   either way).
   librsvg's build hit the same once, and passed when run again. A
   process's CPU affinity doesn't lower cargo's job count.
+
+## Links, and what runs reach
+
+Iteration 68, 2026-11-03, Windows 11 26300. Rows are in
+[`tests/reach.sh`](../tests/reach.sh) and
+[`tests/chromium.sh`](../tests/chromium.sh).
+
+### A zigsaw started from inside a run
+
+A command of another app, started from a run, is zigsaw again, under the first
+app's environment. Under `soft`, its own sandbox and data were right from the
+start, as a run's are built from scratch. What it read from its environment
+wasn't:
+
+| What it read | From inside a run | What went wrong |
+|---|---|---|
+| `SHGetKnownFolderPath(Documents)` | the first app's home | the second app's folder wasn't linked: "missing" |
+| `USERPROFILE` | the first app's home | that home was taken for your profile, and made read-only |
+| `LOCALAPPDATA` | the first app's | the default store wasn't recognized as such |
+
+So a zigsaw with `ZIGSAW_ID` in its environment takes your own variables back
+first (`CreateEnvironmentBlock`, in `environment.restoreUser`), in the process as
+well, as Windows' own lookups read them. Variables starting with `ZIGSAW_` stay,
+as they say what the run was told to use.
+
+**A zigsaw at low integrity can't open the store** (`error: AccessDenied`, before
+it does anything), nor can one in an AppContainer. So `--share=commands` is for
+`soft` only, and a run under the others says so. `zigsaw-host` needs no store, and
+works at low.
+
+### What Windows does with a link
+
+- A key in `HKCU\Software\Classes\<scheme>` with `URL Protocol` and
+  `shell\open\command` is all a link needs, and takes no administrator.
+- Windows normalizes what it passes: `reachreal68://plain` arrives as
+  `reachreal68://plain/`. A link with a raw `"` ran nothing here. `%22` stays as
+  it is.
+- **The first `"` an attacker gets through ends `"%1"`, and what follows is a
+  switch**, for a program that reads switches (Electron's CVE-2018-1000006).
+  Chromium's own answer is `--single-argument`, and VS Code's is `--open-url --`.
+  zigsaw's shim adds its own: exactly one argument, of a scheme the app declares,
+  or nothing runs.
+- VSCodium asks before a link opens a local file ("An external application wants
+  to open..."), through `security.promptForLocalFileProtocolHandling`. zigsaw's
+  image leaves that on. A test that doesn't answer it sees a window called just
+  `VSCodium`, with the file not open.
+- **A row can't use a file the editor has seen**: VSCodium restores its last
+  session, so the window it's waiting for appears whatever the link did. The first
+  version of these rows passed that way.
+
+### Default apps
+
+- `RegisteredApplications` + `Capabilities` is written from the user's hive, and
+  `.html`, through `OpenWithProgids`, is listed by
+  `SHAssocEnumHandlers` while the app is installed, and not after.
+- `SHAssocEnumHandlersForProtocolByApplication("http")` didn't list the app, with
+  zigsaw's keys or with a copy of Firefox's per-user ones
+  (`Clients\StartMenuInternet`, `StartMenu`). So that call can't say whether
+  Settings offers it. Whether Settings' Default apps does has to be looked at.
+- `IApplicationAssociationRegistration::QueryAppIsDefault`, deprecated, says yes
+  for a name nobody registered, so it proves nothing.
+- zigsaw left the `http` default as it was (`ChromeHTML` here), and wrote no
+  `HKCU\Software\Classes\http`.
 
 ## Not yet tested
 

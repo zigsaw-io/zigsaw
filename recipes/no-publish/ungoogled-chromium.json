@@ -6,10 +6,23 @@
   "homepage": "https://github.com/ungoogled-software/ungoogled-chromium",
   "license": "BSD-3-Clause",
   "command": "chrome.exe",
-  "permissions": { "sandbox": "soft", "network": true, "filesystem": ["desktop", "documents", "downloads"] },
+  "permissions": {
+    "sandbox": "soft",
+    "network": true,
+    "filesystem": ["desktop", "documents", "downloads"],
+    "unsupported": {
+      "low": "Windows refuses Chromium's sandbox a window station there, so it exits with code 3; --no-sandbox gets past that, and takes its sandbox from every process",
+      "appcontainer": "Windows refuses Chromium's sandbox a window station there, so it exits with code 3; --no-sandbox gets past that, and takes its sandbox from every process"
+    }
+  },
   "registry": ["Software\\Chromium"],
   "exports": {
-    "chromium": { "command": "chrome.exe" }
+    "chromium": { "command": "chrome.exe" },
+    "chromium-url": { "command": "chrome.exe", "args": ["--single-argument"] }
+  },
+  "schemes": {
+    "http": { "command": "chromium-url", "description": "Web page" },
+    "https": { "command": "chromium-url", "description": "Web page" }
   },
   "shortcuts": {
     "ungoogled-chromium": { "command": "chromium", "description": "Browse the web" }

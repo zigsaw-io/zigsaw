@@ -16,7 +16,10 @@
   "permissions": {
     "sandbox": "soft",
     "network": true,
-    "services": [{ "name": "http", "port": 8471, "command": "kanboard" }]
+    "services": [{ "name": "http", "port": 8471, "command": "kanboard" }],
+    "unsupported": {
+      "low": "PHP's is_writable() is false for everything at low integrity, so Kanboard says its data can't be written"
+    }
   },
   "runtimes": { "php": "net.php.php:8.5.11@sha256:36ad8bf0a5a263e2f93ac5aeb8d7cd5d446dc59432d805e291e378c74adf5a78" },
   "exports": {
