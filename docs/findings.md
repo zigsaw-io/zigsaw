@@ -2074,11 +2074,47 @@ works at low.
 - `SHAssocEnumHandlersForProtocolByApplication("http")` didn't list the app, with
   zigsaw's keys or with a copy of Firefox's per-user ones
   (`Clients\StartMenuInternet`, `StartMenu`). So that call can't say whether
-  Settings offers it. Whether Settings' Default apps does has to be looked at.
+  Settings offers it.
+- **Settings does list it.** Looked at by hand on 2026-11-04, on Windows 11 26300: an
+  app with zigsaw's keys is an option for `http` in Settings' Default apps, and the
+  previous default stays what it was. So no `Clients\StartMenuInternet` is needed for
+  that. Choosing it there, and following a link afterwards, hasn't been tried.
 - `IApplicationAssociationRegistration::QueryAppIsDefault`, deprecated, says yes
   for a name nobody registered, so it proves nothing.
 - zigsaw left the `http` default as it was (`ChromeHTML` here), and wrote no
   `HKCU\Software\Classes\http`.
+
+## Upstream versions
+
+- **A tag or a directory listing isn't a release.** Each of these read as newer in
+  the first report, and wasn't: python.org has a `3.16.0/` directory for its alphas
+  (CPython's tags say `v3.16.0a1`, which the check leaves out); libjpeg-turbo's
+  `3.1.90` is a beta of 3.2; Pango's `1.90.0` is an old snapshot of a Pango 2 that
+  never came; PlantUML's `v8059` is from before its dates; `jdk-25+36` is older than
+  `jdk-25.0.5+8`; Ghostscript's `gs100501` is 10.05.1, older than `gs10080`, 10.08.0.
+- **Requiring the pinned version to be found** catches a wrong pattern, but not
+  those: each pattern was right. A report needs reading against the project's own
+  numbering once, when its row is written.
+- **PHP's libraries**: the directory they download from is ahead of what PHP's builds
+  use. `packages-8.5-vs17-x64-stable.txt`, next to them, is the list: on 2026-11-04,
+  sqlite3 3.53.4 while the directory had 3.54.1.
+- **A `-1` on a PHP Windows build is a rebuild with new libraries**, of the same PHP:
+  `8.5.12-1` has Brotli 1.2.1 for CVE-2026-111497, and `php -v` says 8.5.12.
+- Node's fix for the same CVE is a cherry-pick: `process.versions.brotli` still says
+  1.2.0 in 24.22.2. So a library's version doesn't always say whether it's fixed.
+- A git tag list costs about as much as a page, needs no token and has no rate limit
+  like GitHub's API. All 154 rows take a minute on Windows, where most of it is forks,
+  and 22 s on Linux.
+- With `MSYS_NO_PATHCONV=1`, Git for Windows turns `file:///C:/x` into `/C:/x`, and
+  doesn't find the repository.
+
+### Building on ReFS
+
+`E:` here is a ReFS volume, which zigsaw hadn't built on. sqlite, make and zstd, which
+nothing changed, built there exactly what's published from NTFS, and 15 images built
+the same in two stores. `tests/php.sh`, `tests/store.sh`, `tests/self.sh`,
+`tests/registry.sh` and `tests/matrix.sh` pass with their work there, under all three
+sandboxes. It has no 8.3 short names, and nothing here missed them.
 
 ## Not yet tested
 

@@ -111,6 +111,8 @@ zigsaw override [options] --global     the same for every app, below each app's 
 zigsaw update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
                                        one pulled again that may reach more asks first,
                                        unless given --yes
+zigsaw update --check [<app-id>...]    list the apps a new image waits for, and what it may
+                                       reach beyond theirs, installing nothing
 zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
 zigsaw prune [--dry-run] [--downloads] [--data]
                                        delete what no installed app needs
@@ -217,9 +219,9 @@ image in the default registry:
 
 ```powershell
 zigsaw pull org.nodejs.node                           # ghcr.io/zigsaw-io/org.nodejs.node:latest
-zigsaw pull org.nodejs.node:24.21.0                   # a version
-zigsaw push org.nodejs.node ghcr.io/you/node          # tagged 24.21.0, the app's version
-zigsaw pull ghcr.io/you/node:24.21.0                  # on another machine
+zigsaw pull org.nodejs.node:24.22.2                   # a version
+zigsaw push org.nodejs.node ghcr.io/you/node          # tagged 24.22.2, the app's version
+zigsaw pull ghcr.io/you/node:24.22.2                  # on another machine
 zigsaw pull ghcr.io/you/node@sha256:f25237a3...       # exactly this build
 ```
 
@@ -355,6 +357,21 @@ different image; only the manifest is fetched when it doesn't. If the new
 image may reach more than the installed one, `update` asks first, as `pull`
 does, unless given `--yes`; an app you don't agree to stays as it is, and
 `update` exits with 1. An app pulled by digest is pinned and left alone.
+
+`zigsaw update --check` says what `update` would find, and installs nothing. It
+reads each tag's manifest, and the config of an image that's new, and no
+layers. An app a new image waits for gets a line on stdout, followed by what
+the new version may reach beyond the installed one; nothing on stdout means
+there's nothing to update. Apps with nothing new get a note on stderr. A recipe
+isn't built for this, so an app built from one only says so. It exits with 1 if
+an app couldn't be checked, and with 0 otherwise, whatever it found:
+
+```
+> zigsaw update --check
+org.nodejs.node 24.21.0 -> 24.22.2 (5e1c07a2 -> 91bd44f0)
+com.example.Tool 1.4 -> 1.5 (0a93c6d1 -> 77e2ab10)
+  permits    network
+```
 
 Installing a new version deletes the files of the one it replaces, unless
 that version is still running. `zigsaw prune` deletes everything else no
@@ -854,6 +871,7 @@ bash tests/network.sh   # an app's service reached from the host in each sandbox
 bash tests/reach.sh     # what a run may reach of the rest of the machine: the store's commands on its PATH, each running as its own app; zigsaw-host, your real environment with the run's rights; an image saying it can't run under a sandbox; URL schemes and Default apps in a scratch key, and one private scheme followed through Windows, which rm removes (30 s; opens a console for a moment)
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run
+bash tests/upstream.sh  # scripts/check-upstream.sh with made-up recipes, pages and repositories, and that scripts/upstream.txt covers every recipe's sources (no network; runs on Linux too)
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
 GROUP=langs bash tests/build.sh # only one group of its sections (tests/build.sh --groups lists them), as a CI job does
 bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; dictionaries and an icon through the runtime's extension point; Gaphor's self-test in each sandbox; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows)

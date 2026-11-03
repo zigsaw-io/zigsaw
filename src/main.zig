@@ -63,6 +63,8 @@ const usage =
     \\  update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
     \\                                  one pulled again that may reach more asks first,
     \\                                  unless given --yes
+    \\  update --check [<app-id>...]    list the apps a new image waits for, and what it may
+    \\                                  reach beyond theirs, installing nothing
     \\  rm [--delete-data] <app-id>     uninstall an app and its commands
     \\  prune [--dry-run] [--downloads] [--data]
     \\                                  delete what no installed app needs; also cached
@@ -278,15 +280,20 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     }
     if (std.mem.eql(u8, command, "update")) {
         var consent: remote.Consent = .ask;
+        var only_check = false;
         var ids: std.ArrayList([]const u8) = .empty;
         for (rest) |arg| {
             if (isFlag(arg, "yes")) {
                 consent = .given;
+            } else if (isFlag(arg, "check")) {
+                only_check = true;
             } else if (!std.mem.startsWith(u8, arg, "-")) {
                 try ids.append(ctx.arena, arg);
             } else return usageError();
         }
+        if (only_check and consent == .given) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
+        if (only_check) return update.check(ctx, ids.items);
         return update.update(ctx, ids.items, consent);
     }
     if (std.mem.eql(u8, command, "rm")) {

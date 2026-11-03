@@ -1,0 +1,69 @@
+# Says which of the recipes' sources have newer versions upstream, and what each
+# update would rebuild (scripts/check-upstream.sh), in one issue that it keeps up
+# to date: the open one labelled upstream-report. Editing an issue's text notifies
+# nobody. It's a job of its own, apart from the Reproduce workflow, as it's the
+# only one that may write to the repository's issues.
+#
+# A newer version doesn't fail the run, nor does a host that doesn't answer. A
+# broken row does, once the issue has it: the table needs fixing, or a release a
+# recipe pins is gone. Reproduce's pins job checks on every push that the table
+# covers the recipes, without the network.
+#
+# What reaches the issue is the table's names and URLs and versions that matched a
+# row's pattern, not the text of what upstream serves.
+name: Upstream
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays, 04:47 UTC.
+    - cron: '47 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The report
+        id: report
+        run: |
+          code=0
+          bash scripts/check-upstream.sh >report.md || code=$?
+          cat report.md >>"$GITHUB_STEP_SUMMARY"
+          echo "code=$code" >>"$GITHUB_OUTPUT"
+
+      - name: Keep it in the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # GitHub takes up to 65,536 characters; the report's about 12,000.
+          {
+            head -c 60000 report.md
+            printf '\nFrom [this run](%s).\n' "$RUN_URL"
+          } >body.md
+          gh label create upstream-report --repo "$GITHUB_REPOSITORY" --force \
+            --description 'Kept up to date by the Upstream workflow' --color ededed
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label upstream-report --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "What's out of date upstream" \
+              --label upstream-report --body-file body.md
+          fi
+
+      - name: Broken rows fail the run
+        env:
+          CODE: ${{ steps.report.outputs.code }}
+        run: |
+          [ "$CODE" = 0 ] || { echo "the report has broken rows, or the table and the recipes disagree; see the step above" >&2; exit 1; }

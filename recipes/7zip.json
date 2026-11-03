@@ -1,6 +1,6 @@
 {
   "id": "org.7_zip.7zip",
-  "version": "26.04",
+  "version": "26.05",
   "name": "7-Zip",
   "summary": "A file archiver with a high compression ratio",
   "homepage": "https://7-zip.org/",
@@ -32,16 +32,16 @@
       "name": "7zip",
       "sources": [
         {
-          "url": "https://github.com/ip7z/7zip/releases/download/26.04/7zr.exe",
-          "sha256": "256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282"
+          "url": "https://github.com/ip7z/7zip/releases/download/26.05/7zr.exe",
+          "sha256": "9bf582b894dfa665f852d7e9112b02290a1c303c2d95a21fcdc41ffcb03143b7"
         },
         {
-          "url": "https://github.com/ip7z/7zip/releases/download/26.04/7z2604-x64.exe",
-          "sha256": "d54bf805f9f3704d1e8db2fa3498ae7ef2df0312b40b558e7c71c734430a665d"
+          "url": "https://github.com/ip7z/7zip/releases/download/26.05/7z2605-x64.exe",
+          "sha256": "fd99e86f57d8f429ef5ed045bf98315af962e2309b0f1ba87a147a44c71647d0"
         }
       ],
       "build": [
-        "./7zr.exe x -y -bd -o\"$PREFIX\" 7z2604-x64.exe"
+        "./7zr.exe x -y -bd -o\"$PREFIX\" 7z2605-x64.exe"
       ]
     }
   ]

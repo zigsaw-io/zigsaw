@@ -1,0 +1,367 @@
+# Where scripts/check-upstream.sh looks for newer versions of what the recipes
+# download. Every source URL in a recipe has to be covered here, which CI checks:
+# a recipe with a new source needs a row, and a row nothing uses goes.
+#
+#   <name> git  <repository> <pattern> [options]      its tags
+#   <name> page <URL>        <pattern> [options]      the page's text
+#   <name> skip <why>                                 not checked, saying why
+#     <source URL>...                                 indented: the sources it covers
+#
+# A pattern is what's around {version} there, with nothing else in it that varies.
+# For git it's the whole tag; on a page, have something after {version} as well,
+# or "1.2.3" also matches "1.2.3rc1". In a source URL, {version} is the version
+# the recipe pins (the first one, if it's there twice), and * is anything. The
+# first row that matches a URL has it.
+#
+# A version is digits with . _ - or + between them, all compared as dots, so one
+# with letters in it counts as a pre-release and is left out. Options:
+#   ver=<regex>   what a version looks like here instead (extended regex, no spaces)
+#   series=<n>    how many leading numbers make a series (default 2); 0: no series,
+#                 every newer version is simply an update
+#   even          leave out odd minor versions, some projects' development series
+#   exclude=<regex>  leave out versions that match, as compared (with dots): those
+#                 a project numbers as pre-releases, or old ones that sort high
+#   latest        the page shows only the newest version, so finding the pinned one
+#                 can't show the row is right: use only when there's no better page
+#
+# A recipe holding on purpose to a series keeps its row, and shows under "Only a
+# new series": ICU 72 is Windows' own (PostgreSQL's collations), OpenSSL 3.5 the
+# long-term series, Node 24 the LTS, GTK 3 and GtkSourceView 4 what their apps use.
+
+# --- Not checked ---------------------------------------------------------------
+
+texlive skip scripts/texlive-pins.sh pins its packages from a rolling repository
+  https://mirrors.mit.edu/*
+libreoffice-dictionaries skip a commit of a repository without releases
+  https://raw.githubusercontent.com/LibreOffice/dictionaries/*
+kanboard-composer-files skip the commit of Kanboard's release, which has its own row
+  https://raw.githubusercontent.com/kanboard/kanboard/*
+qautostart skip a commit, as Notes needs
+  https://github.com/b00f/qautostart/archive/*
+qhotkey skip a commit, as Flameshot needs
+  https://github.com/flameshot-org/QHotkey/archive/*
+qmarkdowntextedit skip a commit, as Notes needs
+  https://github.com/pbek/qmarkdowntextedit/archive/*
+qt-color-widgets skip a commit, as Flameshot needs
+  https://gitlab.com/mattbas/Qt-Color-Widgets/*
+wrapdb-patches skip Meson's build files for one version of libffi and of SQLite, which have their own rows
+  https://wrapdb.mesonbuild.com/v2/*
+
+# --- Toolchains ----------------------------------------------------------------
+
+busybox page https://frippery.org/files/busybox/ busybox-w64-FRP-{version}-g series=0
+  https://frippery.org/files/busybox/busybox-w64-FRP-{version}-g*.exe
+zig page https://ziglang.org/download/index.json "{version}":
+  https://ziglang.org/download/{version}/zig-x86_64-windows-*.zip
+llvm-mingw git https://github.com/mstorsjo/llvm-mingw {version} series=0
+  https://github.com/mstorsjo/llvm-mingw/releases/download/{version}/llvm-mingw-*-ucrt-x86_64.zip
+rust git https://github.com/rust-lang/rust {version}
+  https://static.rust-lang.org/dist/*-{version}-x86_64-pc-windows-gnu.tar.xz
+go git https://github.com/golang/go go{version}
+  https://go.dev/dl/go{version}.windows-amd64.zip
+cmake git https://github.com/Kitware/CMake v{version}
+  https://github.com/Kitware/CMake/releases/download/v{version}/cmake-*-windows-x86_64.zip
+ninja git https://github.com/ninja-build/ninja v{version}
+  https://github.com/ninja-build/ninja/releases/download/v{version}/ninja-win.zip
+meson git https://github.com/mesonbuild/meson {version}
+  https://github.com/mesonbuild/meson/releases/download/{version}/meson-*.tar.gz
+make page https://ftp.gnu.org/gnu/make/ make-{version}.tar.gz
+  https://ftp.gnu.org/gnu/make/make-{version}.tar.gz
+pkgconf page https://distfiles.ariadne.space/pkgconf/ pkgconf-{version}.tar.xz
+  https://distfiles.ariadne.space/pkgconf/pkgconf-{version}.tar.xz
+gettext page https://ftp.gnu.org/gnu/gettext/ gettext-{version}.tar.xz
+  https://ftp.gnu.org/gnu/gettext/gettext-{version}.tar.xz
+intltool page https://launchpad.net/intltool/+download intltool-{version}.tar.gz
+  https://launchpad.net/intltool/trunk/{version}/+download/intltool-*.tar.gz
+winflexbison git https://github.com/lexxmark/winflexbison v{version}
+  https://github.com/lexxmark/winflexbison/releases/download/v{version}/win_flex_bison-*.zip
+cargo-c page https://index.crates.io/ca/rg/cargo-c "vers":"{version}" ver=[0-9.]+\+cargo-[0-9.]+
+  https://static.crates.io/crates/cargo-c/cargo-c-{version}.crate
+setuptools page https://pypi.org/simple/setuptools/ setuptools-{version}-py3-none-any.whl series=1
+  https://files.pythonhosted.org/packages/*/setuptools-{version}-py3-none-any.whl
+
+# --- Languages and their tools -------------------------------------------------
+
+node git https://github.com/nodejs/node v{version} series=1
+  https://nodejs.org/dist/v{version}/node-*-win-x64.zip
+python git https://github.com/python/cpython v{version}
+  https://www.python.org/ftp/python/{version}/python-*-embed-amd64.zip
+python-nuget page https://api.nuget.org/v3-flatcontainer/python/index.json "{version}"
+  https://www.nuget.org/api/v2/package/python/{version}
+perl-strawberry git https://github.com/StrawberryPerl/Perl-Dist-Strawberry SP_{version}_64bit series=0
+  https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_{version}_64bit/strawberry-perl-*-64bit-portable.zip
+php page https://downloads.php.net/~windows/releases/archives/ php-{version}-nts-Win32-vs17-x64.zip
+  https://downloads.php.net/~windows/releases/archives/php-devel-pack-{version}-nts-Win32-vs17-x64.zip
+  https://downloads.php.net/~windows/releases/archives/php-{version}-nts-Win32-vs17-x64.zip
+composer page https://getcomposer.org/download/ /download/{version}/composer.phar series=1
+  https://getcomposer.org/download/{version}/composer.phar
+temurin git https://github.com/adoptium/temurin25-binaries jdk-{version} ver=[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?\+[0-9]+
+  https://github.com/adoptium/temurin25-binaries/releases/download/jdk-{version}/OpenJDK25U-*.zip
+openjfx git https://github.com/openjdk/jfx26u {version}-ga
+  https://download2.gluonhq.com/openjfx/{version}/openjfx-*_windows-x64_bin-sdk.zip
+maven page https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/maven-metadata.xml <version>{version}</version>
+  https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/{version}/apache-maven-*-bin.zip
+gradle page https://services.gradle.org/versions/all gradle-{version}-bin.zip ver=[0-9]+(\.[0-9]+)+
+  https://services.gradle.org/distributions/gradle-{version}-bin.zip
+dotnet-sdk git https://github.com/dotnet/sdk v{version}
+  https://builds.dotnet.microsoft.com/dotnet/Sdk/{version}/dotnet-sdk-*-win-x64.zip
+windows-sdk-contracts page https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.contracts/index.json "{version}" series=3
+  https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.contracts/{version}/microsoft.windows.sdk.contracts.*.nupkg
+
+# --- PHP's extensions, and the libraries PHP's Windows builds ship ------------
+# PHP's list of what its 8.5 builds use decides for those, not what's newest in the
+# directory it downloads them from, which is often ahead (sqlite3).
+
+apcu page https://pecl.php.net/rest/r/apcu/allreleases.xml <v>{version}</v>
+  https://pecl.php.net/get/apcu-{version}.tgz
+igbinary page https://pecl.php.net/rest/r/igbinary/allreleases.xml <v>{version}</v> ver=[0-9]+\.[0-9]+\.[0-9]+(RC[0-9]+)?
+  https://pecl.php.net/get/igbinary-{version}.tgz
+redis page https://pecl.php.net/rest/r/redis/allreleases.xml <v>{version}</v>
+  https://pecl.php.net/get/redis-{version}.tgz
+ssh2 page https://pecl.php.net/rest/r/ssh2/allreleases.xml <v>{version}</v>
+  https://pecl.php.net/get/ssh2-{version}.tgz
+xdebug page https://pecl.php.net/rest/r/xdebug/allreleases.xml <v>{version}</v>
+  https://pecl.php.net/get/xdebug-{version}.tgz
+yaml-pecl page https://pecl.php.net/rest/r/yaml/allreleases.xml <v>{version}</v>
+  https://pecl.php.net/get/yaml-{version}.tgz
+zstd-pecl page https://pecl.php.net/rest/r/zstd/allreleases.xml <v>{version}</v>
+  https://pecl.php.net/get/zstd-{version}.tgz
+php-deps/icu page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt ICU-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/ICU-{version}-vs17-x64.zip
+php-deps/brotli page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt brotli-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/brotli-{version}-vs17-x64.zip
+php-deps/glib page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt glib-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/glib-{version}-vs17-x64.zip
+php-deps/libenchant2 page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt libenchant2-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libenchant2-{version}-vs17-x64.zip
+php-deps/libiconv page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt libiconv-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libiconv-{version}-vs17-x64.zip
+php-deps/libpq page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt libpq-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libpq-{version}-vs17-x64.zip
+php-deps/libsasl page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt libsasl-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libsasl-{version}-vs17-x64.zip
+php-deps/libsodium page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt libsodium-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libsodium-{version}-vs17-x64.zip
+php-deps/libssh2 page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt libssh2-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libssh2-{version}-vs17-x64.zip
+php-deps/libxml2 page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt libxml2-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libxml2-{version}-vs17-x64.zip
+php-deps/nghttp2 page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt nghttp2-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/nghttp2-{version}-vs17-x64.zip
+php-deps/openssl page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt openssl-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/openssl-{version}-vs17-x64.zip
+php-deps/sqlite3 page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt sqlite3-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/sqlite3-{version}-vs17-x64.zip
+php-deps/zlib page https://downloads.php.net/~windows/php-sdk/deps/series/packages-8.5-vs17-x64-stable.txt zlib-{version}-vs17-x64.zip series=0 latest
+  https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/zlib-{version}-vs17-x64.zip
+
+# --- GNOME's and GTK's ---------------------------------------------------------
+
+adwaita-icon-theme page https://download.gnome.org/sources/adwaita-icon-theme/cache.json adwaita-icon-theme-{version}.tar.xz series=1
+  https://download.gnome.org/sources/adwaita-icon-theme/*/adwaita-icon-theme-{version}.tar.xz
+adwaita-icon-theme-legacy page https://download.gnome.org/sources/adwaita-icon-theme-legacy/cache.json adwaita-icon-theme-legacy-{version}.tar.xz series=1
+  https://download.gnome.org/sources/adwaita-icon-theme-legacy/*/adwaita-icon-theme-legacy-{version}.tar.xz
+at-spi2-core page https://download.gnome.org/sources/at-spi2-core/cache.json at-spi2-core-{version}.tar.xz even
+  https://download.gnome.org/sources/at-spi2-core/*/at-spi2-core-{version}.tar.xz
+gdk-pixbuf page https://download.gnome.org/sources/gdk-pixbuf/cache.json gdk-pixbuf-{version}.tar.xz
+  https://download.gnome.org/sources/gdk-pixbuf/*/gdk-pixbuf-{version}.tar.xz
+glib-networking page https://download.gnome.org/sources/glib-networking/cache.json glib-networking-{version}.tar.xz even
+  https://download.gnome.org/sources/glib-networking/*/glib-networking-{version}.tar.xz
+glib page https://download.gnome.org/sources/glib/cache.json glib-{version}.tar.xz even
+  https://download.gnome.org/sources/glib/*/glib-{version}.tar.xz
+gnome-text-editor page https://download.gnome.org/sources/gnome-text-editor/cache.json gnome-text-editor-{version}.tar.xz series=1
+  https://download.gnome.org/sources/gnome-text-editor/*/gnome-text-editor-{version}.tar.xz
+gnumeric page https://download.gnome.org/sources/gnumeric/cache.json gnumeric-{version}.tar.xz
+  https://download.gnome.org/sources/gnumeric/*/gnumeric-{version}.tar.xz
+gobject-introspection page https://download.gnome.org/sources/gobject-introspection/cache.json gobject-introspection-{version}.tar.xz even
+  https://download.gnome.org/sources/gobject-introspection/*/gobject-introspection-{version}.tar.xz
+goffice page https://download.gnome.org/sources/goffice/cache.json goffice-{version}.tar.xz
+  https://download.gnome.org/sources/goffice/*/goffice-{version}.tar.xz
+graphene page https://download.gnome.org/sources/graphene/cache.json graphene-{version}.tar.xz
+  https://download.gnome.org/sources/graphene/*/graphene-{version}.tar.xz
+gtk3 page https://download.gnome.org/sources/gtk/cache.json gtk-{version}.tar.xz ver=3\.24\.[0-9]+
+  https://download.gnome.org/sources/gtk/3.24/gtk-{version}.tar.xz
+gtk page https://download.gnome.org/sources/gtk/cache.json gtk-{version}.tar.xz even
+  https://download.gnome.org/sources/gtk/*/gtk-{version}.tar.xz
+gtksourceview4 page https://download.gnome.org/sources/gtksourceview/cache.json gtksourceview-{version}.tar.xz ver=4\.8\.[0-9]+
+  https://download.gnome.org/sources/gtksourceview/4.8/gtksourceview-{version}.tar.xz
+gtksourceview page https://download.gnome.org/sources/gtksourceview/cache.json gtksourceview-{version}.tar.xz even
+  https://download.gnome.org/sources/gtksourceview/*/gtksourceview-{version}.tar.xz
+libadwaita page https://download.gnome.org/sources/libadwaita/cache.json libadwaita-{version}.tar.xz
+  https://download.gnome.org/sources/libadwaita/*/libadwaita-{version}.tar.xz
+libepoxy page https://download.gnome.org/sources/libepoxy/cache.json libepoxy-{version}.tar.xz
+  https://download.gnome.org/sources/libepoxy/*/libepoxy-{version}.tar.xz
+libgsf page https://download.gnome.org/sources/libgsf/cache.json libgsf-{version}.tar.xz
+  https://download.gnome.org/sources/libgsf/*/libgsf-{version}.tar.xz
+librsvg page https://download.gnome.org/sources/librsvg/cache.json librsvg-{version}.tar.xz
+  https://download.gnome.org/sources/librsvg/*/librsvg-{version}.tar.xz
+libsoup page https://download.gnome.org/sources/libsoup/cache.json libsoup-{version}.tar.xz even
+  https://download.gnome.org/sources/libsoup/*/libsoup-{version}.tar.xz
+libspelling page https://download.gnome.org/sources/libspelling/cache.json libspelling-{version}.tar.xz
+  https://download.gnome.org/sources/libspelling/*/libspelling-{version}.tar.xz
+libxml2 page https://download.gnome.org/sources/libxml2/cache.json libxml2-{version}.tar.xz
+  https://download.gnome.org/sources/libxml2/*/libxml2-{version}.tar.xz
+libxslt page https://download.gnome.org/sources/libxslt/cache.json libxslt-{version}.tar.xz
+  https://download.gnome.org/sources/libxslt/*/libxslt-{version}.tar.xz
+meld page https://download.gnome.org/sources/meld/cache.json meld-{version}.tar.xz even
+  https://download.gnome.org/sources/meld/*/meld-{version}.tar.xz
+pango page https://download.gnome.org/sources/pango/cache.json pango-{version}.tar.xz even exclude=^1\.9[0-9]\.
+  https://download.gnome.org/sources/pango/*/pango-{version}.tar.xz
+pygobject page https://download.gnome.org/sources/pygobject/cache.json pygobject-{version}.tar.gz even
+  https://download.gnome.org/sources/pygobject/*/pygobject-{version}.tar.gz
+cairo page https://cairographics.org/releases/ cairo-{version}.tar.xz even
+  https://cairographics.org/releases/cairo-{version}.tar.xz
+pixman page https://cairographics.org/releases/ pixman-{version}.tar.xz even
+  https://cairographics.org/releases/pixman-{version}.tar.xz
+hicolor-icon-theme page https://icon-theme.freedesktop.org/releases/ hicolor-icon-theme-{version}.tar.xz
+  https://icon-theme.freedesktop.org/releases/hicolor-icon-theme-{version}.tar.xz
+freetype git https://gitlab.freedesktop.org/freetype/freetype VER-{version} series=1
+  https://downloads.sourceforge.net/project/freetype/freetype2/{version}/freetype-*.tar.xz
+harfbuzz git https://github.com/harfbuzz/harfbuzz {version} series=1
+  https://github.com/harfbuzz/harfbuzz/releases/download/{version}/harfbuzz-*.tar.xz
+fribidi git https://github.com/fribidi/fribidi v{version}
+  https://github.com/fribidi/fribidi/releases/download/v{version}/fribidi-*.tar.xz
+pcre2 git https://github.com/PCRE2Project/pcre2 pcre2-{version} series=1
+  https://github.com/PCRE2Project/pcre2/releases/download/pcre2-{version}/pcre2-*.tar.gz
+proxy-libintl git https://github.com/frida/proxy-libintl {version}
+  https://github.com/frida/proxy-libintl/archive/refs/tags/{version}.tar.gz
+directx-headers git https://github.com/microsoft/DirectX-Headers v{version} series=1
+  https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v{version}.tar.gz
+hunspell git https://github.com/hunspell/hunspell v{version}
+  https://github.com/hunspell/hunspell/releases/download/v{version}/hunspell-*.tar.gz
+enchant git https://github.com/rrthomas/enchant v{version}
+  https://github.com/rrthomas/enchant/releases/download/v{version}/enchant-*.tar.gz
+editorconfig git https://github.com/editorconfig/editorconfig-core-c v{version}
+  https://github.com/editorconfig/editorconfig-core-c/archive/refs/tags/v{version}.tar.gz
+pycairo git https://github.com/pygobject/pycairo v{version}
+  https://github.com/pygobject/pycairo/releases/download/v{version}/pycairo-*.tar.gz
+graphviz git https://gitlab.com/graphviz/graphviz {version} series=1
+  https://gitlab.com/graphviz/graphviz/-/archive/{version}/graphviz-*.zip
+
+# --- Libraries -----------------------------------------------------------------
+
+openssl git https://github.com/openssl/openssl openssl-{version}
+  https://github.com/openssl/openssl/releases/download/openssl-{version}/openssl-*.tar.gz
+zlib git https://github.com/madler/zlib v{version}
+  https://github.com/madler/zlib/releases/download/v{version}/zlib-*.tar.xz
+zstd git https://github.com/facebook/zstd v{version}
+  https://github.com/facebook/zstd/releases/download/v{version}/zstd-*.tar.gz
+lz4 git https://github.com/lz4/lz4 v{version}
+  https://github.com/lz4/lz4/releases/download/v{version}/lz4-*.tar.gz
+bzip2 page https://sourceware.org/pub/bzip2/ bzip2-{version}.tar.gz
+  https://sourceware.org/pub/bzip2/bzip2-{version}.tar.gz
+libiconv page https://ftp.gnu.org/gnu/libiconv/ libiconv-{version}.tar.gz
+  https://ftp.gnu.org/gnu/libiconv/libiconv-{version}.tar.gz
+libffi git https://github.com/libffi/libffi v{version} series=1
+  https://github.com/libffi/libffi/releases/download/v{version}/libffi-*.tar.gz
+libpng git https://github.com/pnggroup/libpng v{version}
+  https://github.com/pnggroup/libpng/archive/v{version}.tar.gz
+libjpeg-turbo git https://github.com/libjpeg-turbo/libjpeg-turbo {version} exclude=\.9[0-9]$
+  https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/{version}/libjpeg-turbo-*.tar.gz
+libtiff page https://download.osgeo.org/libtiff/ tiff-{version}.tar.xz
+  https://download.osgeo.org/libtiff/tiff-{version}.tar.xz
+libpsl git https://github.com/rockdaboot/libpsl {version}
+  https://github.com/rockdaboot/libpsl/releases/download/{version}/libpsl-*.tar.gz
+nghttp2 git https://github.com/nghttp2/nghttp2 v{version} series=1
+  https://github.com/nghttp2/nghttp2/releases/download/v{version}/nghttp2-*.tar.xz
+expat git https://github.com/libexpat/libexpat R_{version} series=1
+  https://github.com/libexpat/libexpat/releases/download/R_{version}/expat-*.tar.gz
+icu git https://github.com/unicode-org/icu release-{version} series=1
+  https://github.com/unicode-org/icu/releases/download/release-{version}/icu4c-*-src.tgz
+libyaml git https://github.com/yaml/libyaml {version}
+  https://github.com/yaml/libyaml/archive/refs/tags/{version}.tar.gz
+json-c page https://s3.amazonaws.com/json-c_releases/ releases/json-c-{version}.tar.gz
+  https://s3.amazonaws.com/json-c_releases/releases/json-c-{version}.tar.gz
+nlohmann-json git https://github.com/nlohmann/json v{version}
+  https://github.com/nlohmann/json/releases/download/v{version}/include.zip
+boost git https://github.com/boostorg/boost boost-{version}
+  https://github.com/boostorg/boost/releases/download/boost-{version}/boost-*-b2-nodocs.tar.xz
+lua page https://www.lua.org/ftp/ lua-{version}.tar.gz
+  https://www.lua.org/ftp/lua-{version}.tar.gz
+sqlite page https://sqlite.org/download.html sqlite-amalgamation-{version}.zip series=0 latest
+  https://sqlite.org/*/sqlite-amalgamation-{version}.zip
+kdsingleapplication git https://github.com/KDAB/KDSingleApplication v{version}
+  https://github.com/KDAB/KDSingleApplication/archive/refs/tags/v{version}.tar.gz
+
+# --- Qt's ----------------------------------------------------------------------
+
+qt git https://github.com/qt/qtbase v{version}
+  https://github.com/qt/*/archive/refs/tags/v{version}.tar.gz
+
+# --- GIS and databases ---------------------------------------------------------
+
+postgresql page https://ftp.postgresql.org/pub/source/ href="v{version}/" series=1
+  https://ftp.postgresql.org/pub/source/v{version}/postgresql-*.tar.gz
+pgvector git https://github.com/pgvector/pgvector v{version}
+  https://github.com/pgvector/pgvector/archive/refs/tags/v{version}.tar.gz
+pg_cron git https://github.com/citusdata/pg_cron v{version}
+  https://github.com/citusdata/pg_cron/archive/refs/tags/v{version}.tar.gz
+postgis page https://download.osgeo.org/postgis/source/ postgis-{version}.tar.gz
+  https://download.osgeo.org/postgis/source/postgis-{version}.tar.gz
+gdal git https://github.com/OSGeo/gdal v{version}
+  https://download.osgeo.org/gdal/{version}/gdal-*.tar.gz
+proj page https://download.osgeo.org/proj/ proj-{version}.tar.gz
+  https://download.osgeo.org/proj/proj-{version}.tar.gz
+geos git https://github.com/libgeos/geos {version}
+  https://github.com/libgeos/geos/archive/refs/tags/{version}.tar.gz
+osm2pgsql git https://github.com/osm2pgsql-dev/osm2pgsql {version}
+  https://github.com/osm2pgsql-dev/osm2pgsql/archive/refs/tags/{version}.tar.gz
+
+# --- Apps ----------------------------------------------------------------------
+
+7zip git https://github.com/ip7z/7zip {version} series=1
+  https://github.com/ip7z/7zip/releases/download/{version}/*.exe
+bat page https://index.crates.io/3/b/bat "vers":"{version}"
+  https://static.crates.io/crates/bat/bat-{version}.crate
+ripgrep page https://index.crates.io/ri/pg/ripgrep "vers":"{version}" series=1
+  https://static.crates.io/crates/ripgrep/ripgrep-{version}.crate
+fzf git https://github.com/junegunn/fzf v{version}
+  https://proxy.golang.org/github.com/junegunn/fzf/@v/v{version}.zip
+cosign git https://github.com/sigstore/cosign v{version}
+  https://proxy.golang.org/github.com/sigstore/cosign/v3/@v/v{version}.zip
+oras git https://github.com/oras-project/oras v{version}
+  https://proxy.golang.org/oras.land/oras/@v/v{version}.zip
+skopeo git https://github.com/containers/skopeo v{version}
+  https://proxy.golang.org/go.podman.io/skopeo/@v/v{version}.zip
+zot git https://github.com/project-zot/zot v{version}
+  https://proxy.golang.org/zotregistry.dev/zot/v2/@v/v{version}.zip
+prettier git https://github.com/prettier/prettier {version}
+  https://registry.npmjs.org/prettier/-/prettier-{version}.tgz
+mingit git https://github.com/git-for-windows/git v{version} ver=[0-9]+\.[0-9]+\.[0-9]+\.windows\.[0-9]+
+  https://github.com/git-for-windows/git/releases/download/v{version}/MinGit-*-64-bit.zip
+vscodium git https://github.com/VSCodium/vscodium {version}
+  https://github.com/VSCodium/vscodium/releases/download/{version}/VSCodium-win32-x64-*.zip
+ungoogled-chromium git https://github.com/ungoogled-software/ungoogled-chromium-windows {version} series=1
+  https://github.com/ungoogled-software/ungoogled-chromium-windows/releases/download/{version}/ungoogled-chromium_*_windows_x64.zip
+notepad-plus-plus git https://github.com/notepad-plus-plus/notepad-plus-plus v{version}
+  https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v{version}/npp.*.portable.x64.zip
+sumatrapdf git https://github.com/sumatrapdfreader/sumatrapdf {version}rel
+  https://www.sumatrapdfreader.org/dl/rel/{version}/SumatraPDF-*-64.zip
+vlc page https://get.videolan.org/vlc/ href="{version}/"
+  https://get.videolan.org/vlc/{version}/win64/vlc-*-win64.zip
+ghostscript page https://github.com/ArtifexSoftware/ghostpdl-downloads/releases.atom {version}</title> latest exclude=^[0-9]+$
+  https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/*/ghostscript-{version}.tar.xz
+files git https://github.com/files-community/Files v{version}
+  https://github.com/files-community/Files/archive/refs/tags/v{version}.tar.gz
+pinta git https://github.com/PintaProject/Pinta {version}
+  https://github.com/PintaProject/Pinta/releases/download/{version}/pinta-*.tar.gz
+flameshot git https://github.com/flameshot-org/flameshot v{version} series=1
+  https://github.com/flameshot-org/flameshot/archive/refs/tags/v{version}.tar.gz
+notes git https://github.com/nuttyartist/notes v{version}
+  https://github.com/nuttyartist/notes/archive/refs/tags/v{version}.tar.gz
+rnote git https://github.com/flxzt/rnote v{version}
+  https://github.com/flxzt/rnote/releases/download/v{version}/rnote-*.tar.xz
+kanboard git https://github.com/kanboard/kanboard v{version}
+  https://github.com/kanboard/kanboard/archive/refs/tags/v{version}.tar.gz
+logisim-evolution git https://github.com/logisim-evolution/logisim-evolution v{version} series=1
+  https://github.com/logisim-evolution/logisim-evolution/archive/refs/tags/v{version}.tar.gz
+scenebuilder git https://github.com/gluonhq/scenebuilder {version} series=1
+  https://github.com/gluonhq/scenebuilder/archive/refs/tags/{version}.tar.gz
+plantuml git https://github.com/plantuml/plantuml v{version} ver=1\.[0-9]+\.[0-9]+
+  https://github.com/plantuml/plantuml/archive/refs/tags/v{version}.tar.gz
+pdfbox page https://repo.maven.apache.org/maven2/org/apache/pdfbox/pdfbox-reactor/maven-metadata.xml <version>{version}</version>
+  https://repo.maven.apache.org/maven2/org/apache/pdfbox/pdfbox-reactor/{version}/pdfbox-reactor-*-source-release.zip
+gaphor page https://pypi.org/simple/gaphor/ gaphor-{version}.tar.gz
+  https://files.pythonhosted.org/packages/*/gaphor-{version}.tar.gz
+zls git https://github.com/zigtools/zls {version}
+  https://github.com/zigtools/zls/archive/refs/tags/{version}.tar.gz

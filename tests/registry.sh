@@ -179,10 +179,60 @@ sgz_mismatch() {
     grep -q "isn't the blob its digest names; downloading it whole" <<<"$out" || { echo "$out" | tail -2; return 1; }
     [ "$(zbad list | awk -v id=$SGZ '$1 == id { print $3 }')" = "$(za list | awk -v id=$SGZ '$1 == id { print $3 }')" ]
 }
+# update --check says what update would find, and does nothing about it.
+sgzcheck() { ZIGSAW_HOME="$work\\sgz" "$zigsaw" update --check "$@"; }
+blob_count() { ls "$work\\sgz\\blobs\\sha256" | wc -l; }
+check_unchanged() {
+    local out
+    out=$(sgzcheck $SGZ 2>"$work\\check-err") || return 1
+    [ -z "$out" ] && grep -q "^$SGZ 1: up to date" "$work\\check-err"
+}
+check_moved() {
+    local out before installed
+    before=$(ls "$work\\sgz\\blobs\\sha256")
+    installed=$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" list | awk -v id=$SGZ '$1 == id { print $3 }')
+    out=$(sgzcheck $SGZ 2>/dev/null) || return 1
+    grep -q "^$SGZ 1 -> 2 (" <<<"$out" || { echo "$out"; return 1; }
+    # The new config only; no layer, and the same app installed.
+    [ "$(comm -13 <(echo "$before") <(ls "$work\\sgz\\blobs\\sha256") | wc -l)" = 1 ] &&
+        [ "$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" list | awk -v id=$SGZ '$1 == id { print $3 }')" = "$installed" ]
+}
+check_pinned() { zb update --check net.frippery.busybox 2>&1 | grep -q ': pinned to '; }
+check_recipe() {
+    local out
+    out=$(za update --check net.frippery.busybox 2>&1) || return 1
+    grep -q 'only rebuilding it tells' <<<"$out"
+}
+check "update --check: nothing new is a note, and nothing on stdout" check_unchanged
+check "update --check: --yes makes no sense with it" fails zb update --check --yes
+check "update --check: an app pulled by digest is pinned" check_pinned
+check "update --check: an app built from a recipe isn't built" check_recipe
 check "  version 2 pushed under the same tag" sgz_v2_pushed
+check "update --check: a moved tag is listed, with no layer fetched or anything installed" check_moved
 check "  update builds it from the old blob, fetching under a quarter" sgz_delta
 check "  the updated app runs, with the new file" sgz_v2_runs
 check "  a damaged old blob: the blob built is refused, then downloaded whole" sgz_mismatch
+
+# A new version that may reach more says so; a registry that doesn't answer
+# is an app that couldn't be checked, and the others are still checked.
+check_reaches_more() {
+    local out
+    sed 's/"version": "2"/"version": "3", "permissions": { "network": true }/' "$work\\estargz2.json" >"$work\\estargz3.json"
+    za build "$work\\estargz3.json" >/dev/null 2>&1 && za push $SGZ "$repo/estargz:1" >/dev/null 2>&1 || return 1
+    out=$(sgzcheck $SGZ 2>/dev/null) || return 1
+    grep -q "^$SGZ 2 -> 3 (" <<<"$out" && grep -q '^  permits  *.*network' <<<"$out" || { echo "$out"; return 1; }
+    # The app stays on version 2, which the build above replaced in store a.
+    za build "$work\\estargz2.json" >/dev/null 2>&1
+}
+check_unreachable() {
+    local out code
+    sed -i "s#$repo/estargz:1#localhost:1/estargz:1#" "$work\\sgzbad\\refs\\$SGZ.json"
+    out=$(ZIGSAW_HOME="$work\\sgzbad" "$zigsaw" update --check 2>&1)
+    code=$?
+    [ "$code" = 1 ] && grep -q "couldn't be checked" <<<"$out" || { echo "exit $code: $out" | tail -3; return 1; }
+}
+check "update --check: says what a new version may reach beyond the installed one" check_reaches_more
+check "update --check: exit 1 when a registry doesn't answer" check_unreachable
 
 # A download that breaks off goes on from where it got to (a Range
 # request), into the same blob.
@@ -549,7 +599,7 @@ check "a vendor step whose commands fail takes what they make from next to the i
 za build "$root\\recipes\\node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
 node_chunks() { ZIGSAW_UPLOAD_CHUNK_SIZE=16777216 za -v push org.nodejs.node "$repo/node" 2>&1 | grep -q "sent .* in 3 chunks"; }
 check "push node (100 MB, 38 MB compressed), in 16 MiB chunks" node_chunks
-check "pull node" zb pull --yes "$repo/node:24.21.0"
+check "pull node" zb pull --yes "$repo/node:24.22.2"
 check "the pulled node runs" zb run org.nodejs.node -e 'process.exit(0)'
 
 # An app with a runtime: the runtime's layer travels in the app's image, and
@@ -558,8 +608,8 @@ za build "$root\\recipes\\prettier.json" >/dev/null 2>&1 || { echo "building pre
 store_d="$work\\d"
 zd() { ZIGSAW_HOME="$store_d" "$zigsaw" "$@"; }
 check "push an app with a runtime" za push io.prettier.prettier "$repo/prettier"
-check "pull it into an empty store" zd pull --yes "$repo/prettier:3.9.9"
-check "it runs on the runtime its image brought" sh -c "ZIGSAW_HOME='$store_d' \"\$0\" run io.prettier.prettier --version | grep -q '^3.9.9'" "$zigsaw"
+check "pull it into an empty store" zd pull --yes "$repo/prettier:3.9.10"
+check "it runs on the runtime its image brought" sh -c "ZIGSAW_HOME='$store_d' \"\$0\" run io.prettier.prettier --version | grep -q '^3.9.10'" "$zigsaw"
 check "the runtime isn't installed as an app" sh -c "! ZIGSAW_HOME='$store_d' \"\$0\" list | grep -q '^org.nodejs.node '" "$zigsaw"
 
 # Mounts. Pushed by app id, a runtime's image is where pushing an app on it

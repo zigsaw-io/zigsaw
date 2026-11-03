@@ -8,7 +8,7 @@
   "command": "${php}\\php.exe",
   "args": ["${app}\\composer.phar"],
   "permissions": { "network": true, "filesystem": ["cwd"] },
-  "runtimes": { "php": "net.php.php:8.5.11@sha256:36ad8bf0a5a263e2f93ac5aeb8d7cd5d446dc59432d805e291e378c74adf5a78" },
+  "runtimes": { "php": "net.php.php:8.5.12-1@sha256:8a904f33897e35b52209736681644209e013e7ff27e6dede93bada047a36c8b6" },
   "exports": {
     "composer": { "command": "${php}\\php.exe", "args": ["${app}\\composer.phar"] }
   },

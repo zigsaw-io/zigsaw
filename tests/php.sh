@@ -90,7 +90,7 @@ runtime_runs() {
     local sb out
     for sb in soft low appcontainer; do
         out=$(cd "$work\\cwd" && z run --sandbox=$sb $PHP -r 'echo PHP_VERSION, " ", php_ini_loaded_file(), "\n"; foreach (["curl", "fileinfo", "gd", "intl", "mbstring", "openssl", "pdo_sqlite", "sqlite3", "sodium", "zip"] as $e) if (!extension_loaded($e)) echo "no $e\n";' | tr -d '\r')
-        [ "$out" = "8.5.11 $php_dir\\php.ini" ] || { echo "$sb, got: $out"; return 1; }
+        [ "$out" = "8.5.12 $php_dir\\php.ini" ] || { echo "$sb, got: $out"; return 1; }
     done
 }
 check "the runtime runs PHP with its php.ini and extensions, under soft, low and appcontainer" runtime_runs
@@ -145,7 +145,7 @@ lib_ext_files() {
     done
 }
 check "yaml's and zstd's images have their library's licence, and not its headers or static library" lib_ext_files
-about() { z run $APCU | tr -d '\r' | grep -q '^This image is the PHP extension apcu, for PHP 8.5.11'; }
+about() { z run $APCU | tr -d '\r' | grep -q '^This image is the PHP extension apcu, for PHP 8.5.12'; }
 check "an extension image run as an app says what it is" about
 
 # Installed, the extensions join PHP's runs, through the runtime's

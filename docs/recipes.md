@@ -267,7 +267,7 @@ digest of Node's image:
 ```json
 "command": "${node}\\node.exe",
 "args": ["${app}\\bin\\prettier.cjs"],
-"runtimes": { "node": "org.nodejs.node:24.21.0@sha256:cb9c0bf069bdeb47..." },
+"runtimes": { "node": "org.nodejs.node:24.22.2@sha256:cb9c0bf069bdeb47..." },
 "exports": {
   "prettier": { "command": "${node}\\node.exe", "args": ["${app}\\bin\\prettier.cjs"] }
 }
@@ -381,6 +381,11 @@ so the runtime depends only on the SDK image, and builds again with the same
 digest without building the SDK.
 
 ## Building from source
+
+A published recipe with a new source also needs a row in
+[`scripts/upstream.txt`](scripts/upstream.txt), saying where to look for its newer
+versions ([what's out of date](published-apps.md#whats-out-of-date)); CI fails
+otherwise.
 
 A module with `build` commands compiles its sources instead of placing them.
 [`recipes/sqlite.json`](recipes/sqlite.json) builds zlib and then SQLite with
@@ -2574,7 +2579,7 @@ An extension's image ([`recipes/php-xdebug.json`](recipes/php-xdebug.json)):
 "env": { "PHP_EXT_XDEBUG": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d" },
 "extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17" },
 "exports": {},
-"sdk": { "phpsdk": "net.php.php.Sdk:8.5.11@sha256:..." },
+"sdk": { "phpsdk": "net.php.php.Sdk:8.5.12-1@sha256:..." },
 "modules": [
   {
     "name": "xdebug",
@@ -2627,7 +2632,7 @@ headers and static library out of the image; its licence stays
 
 ```json
 "sdk": {
-  "phpsdk": "net.php.php.Sdk:8.5.11@sha256:...",
+  "phpsdk": "net.php.php.Sdk:8.5.12-1@sha256:...",
   "cmake": "org.cmake.cmake:4.4.4@sha256:..."
 },
 "cleanup": ["/cmake", "/include", "/lib/libyaml.a", "/lib/libyaml_a.lib"],
@@ -2704,7 +2709,7 @@ installed one of the same id doesn't join:
 "command": "${php}\\php.exe",
 "args": ["${app}\\check.php"],
 "runtimes": {
-  "php": "net.php.php:8.5.11@sha256:...",
+  "php": "net.php.php:8.5.12-1@sha256:...",
   "apcu": "net.php.php.APCu:5.1.28@sha256:...",
   "xdebug": "net.php.php.Xdebug:3.5.3@sha256:..."
 },
@@ -2732,7 +2737,7 @@ a recipe installs an app's dependencies from its lock file in a
 ([`recipes/kanboard.json`](recipes/kanboard.json)):
 
 ```json
-"runtimes": { "php": "net.php.php:8.5.11@sha256:..." },
+"runtimes": { "php": "net.php.php:8.5.12-1@sha256:..." },
 "sdk": {
   "composer": "org.getcomposer.composer:2.10.3@sha256:...",
   "busybox": "net.frippery.busybox:...@sha256:..."
@@ -2741,7 +2746,7 @@ a recipe installs an app's dependencies from its lock file in a
   {
     "name": "kanboard",
     "sources": [
-      { "url": "https://github.com/kanboard/kanboard/archive/refs/tags/v1.2.54.tar.gz", "sha256": "...", "strip": 1 },
+      { "url": "https://github.com/kanboard/kanboard/archive/refs/tags/v1.2.57.tar.gz", "sha256": "...", "strip": 1 },
       { "url": "https://raw.githubusercontent.com/kanboard/kanboard/<commit>/composer.json", "sha256": "...", "dest": "composer.json" },
       { "url": "https://raw.githubusercontent.com/kanboard/kanboard/<commit>/composer.lock", "sha256": "...", "dest": "composer.lock" }
     ],

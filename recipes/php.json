@@ -1,6 +1,6 @@
 {
   "id": "net.php.php",
-  "version": "8.5.11",
+  "version": "8.5.12-1",
   "name": "PHP",
   "summary": "PHP 8.5 (NTS, x64), the scripting language, as php.net builds it for Windows; needs the Visual C++ Redistributable",
   "homepage": "https://www.php.net/",
@@ -20,7 +20,7 @@
   "modules": [
     {
       "name": "php",
-      "sources": [{ "image": "net.php.php.Sdk:8.5.11@sha256:095dc2d756745242ac59c0609bcf858f0b883d9d0ae77ee99cef4569e1cf8edb" }]
+      "sources": [{ "image": "net.php.php.Sdk:8.5.12-1@sha256:2e0bfb6e3555a368c25ec5b318f508fed836f8a032ed35b0560e642aa102ae2a" }]
     }
   ]
 }

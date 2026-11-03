@@ -1,6 +1,6 @@
 {
   "id": "org.kanboard.Kanboard",
-  "version": "1.2.54",
+  "version": "1.2.57",
   "name": "Kanboard",
   "summary": "Kanban project management, served by PHP's built-in web server and opened in your browser, with its database in the app's data",
   "homepage": "https://kanboard.org/",
@@ -21,7 +21,7 @@
       "low": "PHP's is_writable() is false for everything at low integrity, so Kanboard says its data can't be written"
     }
   },
-  "runtimes": { "php": "net.php.php:8.5.11@sha256:36ad8bf0a5a263e2f93ac5aeb8d7cd5d446dc59432d805e291e378c74adf5a78" },
+  "runtimes": { "php": "net.php.php:8.5.12-1@sha256:8a904f33897e35b52209736681644209e013e7ff27e6dede93bada047a36c8b6" },
   "exports": {
     "kanboard": { "command": "${php}\\php.exe", "args": ["${app}\\serve.php"] },
     "kanboard-cli": { "command": "${php}\\php.exe", "args": ["${app}\\kanboard\\cli"] }
@@ -30,7 +30,7 @@
     "Kanboard": { "command": "kanboard", "description": "Serve Kanboard and open it in your browser", "icon": "kanboard\\favicon.ico" }
   },
   "sdk": {
-    "composer": "org.getcomposer.composer:2.10.3@sha256:efa6252da974912f402c850c3c5c70ab27f2ee5edf51850b25c8b747a1c21865",
+    "composer": "org.getcomposer.composer:2.10.3@sha256:a29589eec81f4de9d3cbe97c9b3669a515a13f870c4e96d1110edc79a8abb8e8",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [
@@ -38,17 +38,17 @@
       "name": "kanboard",
       "sources": [
         {
-          "url": "https://github.com/kanboard/kanboard/archive/refs/tags/v1.2.54.tar.gz",
-          "sha256": "6548946b406bc8640dfe20a884dd9cdf708d8d6c25eeacdabd374a36d5e98237",
+          "url": "https://github.com/kanboard/kanboard/archive/refs/tags/v1.2.57.tar.gz",
+          "sha256": "0af576021bd4ebb417cef6d187a3d10dd0d807bd668bb9dcfc6f8b40c6896e31",
           "strip": 1
         },
         {
-          "url": "https://raw.githubusercontent.com/kanboard/kanboard/9ce6a5edc5b646ef15780cb445bc6d2c39d9898f/composer.json",
+          "url": "https://raw.githubusercontent.com/kanboard/kanboard/2ddb31bf72d355727d0639fc3423630f3bae1a9c/composer.json",
           "sha256": "48da225091408b7ccb372ff6699050af937784fca05a6d6015e659c329413295",
           "dest": "composer.json"
         },
         {
-          "url": "https://raw.githubusercontent.com/kanboard/kanboard/9ce6a5edc5b646ef15780cb445bc6d2c39d9898f/composer.lock",
+          "url": "https://raw.githubusercontent.com/kanboard/kanboard/2ddb31bf72d355727d0639fc3423630f3bae1a9c/composer.lock",
           "sha256": "be22d1d4427e19cb6f907fd9a7d6e4d577a9cb1b98c04839656c15c0ab2384a4",
           "dest": "composer.lock"
         }

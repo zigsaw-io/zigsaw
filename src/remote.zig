@@ -157,12 +157,26 @@ pub fn fetchInfo(ctx: *Context, image_text: []const u8) !Info {
 /// As `fetchInfo`, leaving `registry` open for reading the image's blobs;
 /// the caller deinits it.
 pub fn fetchInfoOpen(ctx: *Context, image_text: []const u8, registry_out: *Registry) !Info {
+    return (try openInfo(ctx, image_text, registry_out, null)).?;
+}
+
+/// As `fetchInfo`, or null, having read only the manifest, if the image is
+/// still the one with the digest `unless`: what `update --check` asks.
+pub fn fetchInfoUnless(ctx: *Context, image_text: []const u8, unless: []const u8) !?Info {
+    var registry: Registry = undefined;
+    const app = try openInfo(ctx, image_text, &registry, unless);
+    registry.deinit();
+    return app;
+}
+
+/// Opens `registry_out`, which the caller deinits unless this fails.
+fn openInfo(ctx: *Context, image_text: []const u8, registry_out: *Registry, unless: ?[]const u8) !?Info {
     const arena = ctx.arena;
     const target = try resolve(ctx, image_text);
     const registry = registry_out;
     try registry.init(ctx, target.ref, "pull");
     errdefer registry.deinit();
-    const fetched = (try resolveImage(registry, target.ref, null)).?;
+    const fetched = try resolveImage(registry, target.ref, unless) orelse return null;
     const manifest = fetched.manifest;
     if (!oci.isConfigType(manifest.config.mediaType))
         return fail("{f} is not a zigsaw app (its config type is {s}; it may be a container image)", .{ target.ref, manifest.config.mediaType });
@@ -190,12 +204,7 @@ fn agree(ctx: *Context, manifest: oci.Manifest, cfg: oci.AppConfig, opts: FetchO
             return;
         }
         try w.print("{s} {s} may reach more than {s}:\n", .{ cfg.id, cfg.version, before.version });
-        if (added.permissions.sandbox != null or added.permissions.network or added.permissions.filesystem.len > 0)
-            try info.writeLine(w, "permits", try oci.describePermissions(arena, added.permissions));
-        if (added.uses.len > 0)
-            try info.writeLine(w, "uses", try oci.describeUses(arena, added.uses));
-        if (added.registry.len > 0)
-            try info.writeLine(w, "keeps", try std.fmt.allocPrint(arena, "{s} with its data", .{try oci.describeRegistry(arena, added.registry)}));
+        try writeAddedAccess(arena, w, added);
     } else {
         try info.writeName(w, cfg);
         try info.writeContents(ctx, w, manifest, cfg);
@@ -209,6 +218,17 @@ fn agree(ctx: *Context, manifest: oci.Manifest, cfg: oci.AppConfig, opts: FetchO
         .no => return fail("{s} {s} wasn't {s}", .{ cfg.id, cfg.version, what }),
         .none => return fail("{s} {s} wasn't {s}: nothing answered whether to go on. Run it at a console, or add --yes", .{ cfg.id, cfg.version, what }),
     }
+}
+
+/// What a new version may reach beyond the installed one, a line for each
+/// kind of thing.
+pub fn writeAddedAccess(arena: std.mem.Allocator, w: *Io.Writer, added: oci.Access) !void {
+    if (added.permissions.sandbox != null or added.permissions.network or added.permissions.filesystem.len > 0)
+        try info.writeLine(w, "permits", try oci.describePermissions(arena, added.permissions));
+    if (added.uses.len > 0)
+        try info.writeLine(w, "uses", try oci.describeUses(arena, added.uses));
+    if (added.registry.len > 0)
+        try info.writeLine(w, "keeps", try std.fmt.allocPrint(arena, "{s} with its data", .{try oci.describeRegistry(arena, added.registry)}));
 }
 
 /// Downloads the blobs the store doesn't have, several at a time: an app's

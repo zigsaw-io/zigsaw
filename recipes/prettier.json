@@ -1,6 +1,6 @@
 {
   "id": "io.prettier.prettier",
-  "version": "3.9.9",
+  "version": "3.9.10",
   "name": "Prettier",
   "summary": "An opinionated code formatter for JavaScript, TypeScript, CSS, HTML, Markdown and more",
   "homepage": "https://prettier.io/",
@@ -8,7 +8,7 @@
   "command": "${node}\\node.exe",
   "args": ["${app}\\bin\\prettier.cjs"],
   "permissions": { "filesystem": ["cwd"] },
-  "runtimes": { "node": "org.nodejs.node:24.21.0@sha256:3f86c9ebda5d5b84abd3551eccc834102e7f9934ce5c64e19ca557fe82e8c6cb" },
+  "runtimes": { "node": "org.nodejs.node:24.22.2@sha256:cab43fbbd7944f841db320f6cb3530df85afe92709fe93c240db4f0ca75ff4b4" },
   "exports": {
     "prettier": { "command": "${node}\\node.exe", "args": ["${app}\\bin\\prettier.cjs"] }
   },
@@ -17,8 +17,8 @@
       "name": "prettier",
       "sources": [
         {
-          "url": "https://registry.npmjs.org/prettier/-/prettier-3.9.9.tgz",
-          "sha256": "c3b162d30c45126873cc6338a539383e92120a390d10de78f373f42c2045b338",
+          "url": "https://registry.npmjs.org/prettier/-/prettier-3.9.10.tgz",
+          "sha256": "9dc72045591793dff972432fb78722f7ab91aaa90a7fa8c1261ede55969246b7",
           "strip": 1
         }
       ]

@@ -716,10 +716,21 @@
   then builds; nothing checks it in CI, as it isn't published.
 - A sign-in that comes back to VSCodium through a link hasn't been tried, only
   links that open files. VSCodium asks before those, as VS Code does.
+- `zigsaw update --check` says what `update` would do, so an app pulled at a
+  version tag (`:15.2.0`) reads as up to date when `latest` has moved on, as
+  `update` wouldn't move it either. An app built from a recipe isn't checked,
+  as only building it would tell.
+- `scripts/check-upstream.sh` sees the sources recipes name, so not what they bring
+  along: dependencies in `Cargo.lock`, `go.sum`, `composer.lock` or a vendor step,
+  or the libraries inside a prebuilt app. It knows versions, not advisories: a
+  critical fix looks like any other update. Its rows for PHP's libraries and SQLite
+  read a page with only what's current, so they can't show that the pinned version
+  ever existed, and neither can Ghostscript's, whose tags don't sort. Commits and
+  TeX Live aren't checked: the report counts them.
 - A scheme something else has already is only offered: installing the app doesn't
   change where its links go. zigsaw offers an app for `http` and `https` in
-  Settings' Default apps, and Windows keeps the choice to you: whether Settings
-  lists it there, and whether choosing it works, wasn't checked from here
+  Settings' Default apps, which lists it, and Windows keeps the choice to you:
+  whether choosing it there works hasn't been tried
   ([findings](findings.md#default-apps)).
 - VSCodium's image published in iteration 67 (`4c45eaf4`) writes
   `HKCU\Software\Classes\vscodium` on each run under `soft`, naming its

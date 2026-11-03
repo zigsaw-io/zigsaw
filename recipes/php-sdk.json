@@ -1,6 +1,6 @@
 {
   "id": "net.php.php.Sdk",
-  "version": "8.5.11",
+  "version": "8.5.12-1",
   "name": "PHP SDK",
   "summary": "PHP 8.5 with its headers and those of the libraries it ships, and php-ext to build extensions with zig; needs the Visual C++ Redistributable",
   "homepage": "https://www.php.net/",
@@ -11,7 +11,7 @@
   "runtimes": {
     "zig": "org.ziglang.zig:0.17.0@sha256:93ec2b6b36708ae80ffac87872e70dafaee350cd2d49a95dd2fa5847d0a10449",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d",
-    "node": "org.nodejs.node:24.21.0@sha256:3f86c9ebda5d5b84abd3551eccc834102e7f9934ce5c64e19ca557fe82e8c6cb"
+    "node": "org.nodejs.node:24.22.2@sha256:cab43fbbd7944f841db320f6cb3530df85afe92709fe93c240db4f0ca75ff4b4"
   },
   "aliases": {
     "php-ext": { "command": "php.exe", "args": ["${app}\\dev\\zigsaw\\php-ext.php"] }
@@ -58,8 +58,8 @@
       "name": "php",
       "sources": [
         {
-          "url": "https://downloads.php.net/~windows/releases/archives/php-8.5.11-nts-Win32-vs17-x64.zip",
-          "sha256": "0ea96e0d2b9b737a6036f05cf4e95c49313faa6d0f27bd97edb2742503f0c043"
+          "url": "https://downloads.php.net/~windows/releases/archives/php-8.5.12-1-nts-Win32-vs17-x64.zip",
+          "sha256": "2a36a2edcb7a5b9252f638fd5e4cf84d7f6e066092654220dc0b63e5cf4e9723"
         }
       ]
     },
@@ -67,8 +67,8 @@
       "name": "devel",
       "sources": [
         {
-          "url": "https://downloads.php.net/~windows/releases/archives/php-devel-pack-8.5.11-nts-Win32-vs17-x64.zip",
-          "sha256": "d85e734238d45d02ddc35b5bca4ab47ad12e005fad970c792c520683ae3b0f33",
+          "url": "https://downloads.php.net/~windows/releases/archives/php-devel-pack-8.5.12-1-nts-Win32-vs17-x64.zip",
+          "sha256": "c0d9632a542e11578bc1374fb9e30ba4c5589e1977023e7d3b76cc4c1e4f61c6",
           "dest": "dev",
           "strip": 1
         }
@@ -78,8 +78,8 @@
       "name": "deps",
       "sources": [
         {
-          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/zlib-1.3.2-vs17-x64.zip",
-          "sha256": "3038dbd503d494718898a150f93d79627df442c344d1d6e77ec413cdeec7999e",
+          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/zlib-1.3.2-1-vs17-x64.zip",
+          "sha256": "2d47f60a56fd435137aae6aa874eab5eddacb5611e82ea0eaf21687382f312da",
           "dest": "dev/deps"
         },
         {
@@ -93,13 +93,13 @@
           "dest": "dev/deps"
         },
         {
-          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/openssl-3.5.8-vs17-x64.zip",
-          "sha256": "aece13ab9c6522feda4ee531880e90dee75111e6c1a9d6c8b4bdd438383afd92",
+          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/openssl-3.5.9-vs17-x64.zip",
+          "sha256": "889b08e67ff0f7aae59f58619f4f73da7b4998ae2b6f96e1a4b0acaf89d6c280",
           "dest": "dev/deps"
         },
         {
-          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libssh2-1.11.1-7-vs17-x64.zip",
-          "sha256": "b7400503d7ad437d5e4b9b87cf03b3077c3c5d97e087670f288adc801f2de7ac",
+          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libssh2-1.11.1-10-vs17-x64.zip",
+          "sha256": "41b6faddea9a2c32176538f2884a9581967d07ab93291274ead94ab477fc37a9",
           "dest": "dev/deps"
         },
         {
@@ -118,8 +118,8 @@
           "dest": "dev/deps"
         },
         {
-          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libpq-16.15-vs17-x64.zip",
-          "sha256": "f5fa47ebb2cf650428870e24ab2b8a7ce9663a782ddb9d790dfb432fd22e4728",
+          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libpq-16.15-4-vs17-x64.zip",
+          "sha256": "f16404405334143bfc5cbcc16d30d6723a29e82758e900bb2fa7e6f67a6eee28",
           "dest": "dev/deps"
         },
         {
@@ -128,23 +128,23 @@
           "dest": "dev/deps"
         },
         {
-          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/brotli-1.2.0-vs17-x64.zip",
-          "sha256": "61aec2187d4317826b374f4f2d8ef4b652edb46ae9d5b68820a840c94427644e",
+          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/brotli-1.2.1-vs17-x64.zip",
+          "sha256": "f82e5af774bd7e0810bdaef2571107aff9621f5da998c56fc64a53982505d5b3",
           "dest": "dev/deps"
         },
         {
-          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/glib-2.88.3-vs17-x64.zip",
-          "sha256": "49b8184bffba1b5016429e1cc103f4a6c94259b6bccf1b0f9f8744504263133d",
+          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/glib-2.90.1-vs17-x64.zip",
+          "sha256": "0434c377d431f35dad36a00c8b4ed99284de743246afaf11b665b0284fc0fe72",
           "dest": "dev/deps"
         },
         {
-          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libenchant2-2.8.19-vs17-x64.zip",
-          "sha256": "6ffb42f66a0212ea42427cb2fd32ba830f1025109bc16383733676fc6140801c",
+          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libenchant2-2.8.21-1-vs17-x64.zip",
+          "sha256": "7b13e4a8a2b60bd5ed6aab4c54148aee3cba250fb66f969a9f4d0ce1129a67f5",
           "dest": "dev/deps"
         },
         {
-          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libsasl-2.1.28-vs17-x64.zip",
-          "sha256": "eb8d9c910eac8b4b0690a15b331a51d397007dd5136dd727cb2d49e4ee3f50f6",
+          "url": "https://downloads.php.net/~windows/php-sdk/deps/vs17/x64/libsasl-2.1.28-5-vs17-x64.zip",
+          "sha256": "96638496e6a36dcb8c561cc5350481c19dcb8268141d5f6fa0da4e1859882f82",
           "dest": "dev/deps"
         }
       ]

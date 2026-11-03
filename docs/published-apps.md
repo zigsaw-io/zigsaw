@@ -10,8 +10,8 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 |---|---|---|---|
 | BusyBox | `net.frippery.busybox` | FRP-6075-g169694ebd | `busybox` |
 | Git (MinGit) | `org.git_scm.MinGit` | 2.56.0.windows.1 | `git` |
-| Node.js | `org.nodejs.node` | 24.21.0 | `node`, `npm`, `npx` |
-| Prettier (on Node.js) | `io.prettier.prettier` | 3.9.9 | `prettier` |
+| Node.js | `org.nodejs.node` | 24.22.2 | `node`, `npm`, `npx` |
+| Prettier (on Node.js) | `io.prettier.prettier` | 3.9.10 | `prettier` |
 | Python | `org.python.python` | 3.14.7 | `python` |
 | zig | `org.ziglang.zig` | 0.17.0 (SQLite, ripgrep, bat and zstd build on it from iteration 59, and Meson, make, cargo-c, Ghostscript and PHP's SDK, with the extensions it builds, from iteration 60; 0.16.0, which GTK's and gettext's chains pinned until iteration 63, is pinned by nothing) | `zig` |
 | SQLite (built from source) | `org.sqlite.sqlite3` | 3.53.4 | `sqlite3` |
@@ -19,7 +19,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | ripgrep (built from source) | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
 | bat (built from source) | `com.github.sharkdp.bat` | 0.26.1 | `bat` |
 | Go | `org.golang.go` | 1.27.1 | `go`, `gofmt` |
-| fzf (built from source) | `com.github.junegunn.fzf` | 0.74.4 | `fzf` |
+| fzf (built from source) | `com.github.junegunn.fzf` | 0.74.5 | `fzf` |
 | zot, minimal (built from source) | `dev.zotregistry.zot` | 2.1.21 | `zot` |
 | ORAS, files and artifacts in OCI registries (built from source) | `land.oras.oras` | 1.3.6 | `oras` |
 | skopeo, container images in registries and on disk (built from source) | `io.podman.skopeo` | 1.24.1 | `skopeo` |
@@ -47,12 +47,12 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | PyGObject, with Python 3.14 and pycairo (from its SDK) | `org.gnome.PyGObject` | 3.58.1 | |
 | Meld (built from source, on GTK, GTK 3 and PyGObject) | `org.gnome.Meld` | 3.24.1 | `meld` |
 | Gaphor, with Graphviz's dot (built from source, on GTK and PyGObject; packages from PyPI) | `org.gaphor.Gaphor` | 3.3.2 | `gaphor` |
-| 7-Zip | `org.7_zip.7zip` | 26.04 | `7z`, `7zfm`, `7zg` |
+| 7-Zip | `org.7_zip.7zip` | 26.05 | `7z`, `7zfm`, `7zg` |
 | Notepad++ | `org.notepad_plus_plus.NotepadPlusPlus` | 8.9.8.1 | `notepad++` |
 | SumatraPDF | `org.sumatrapdfreader.SumatraPDF` | 3.6.1 | `sumatrapdf` |
 | VLC media player | `org.videolan.VLC` | 3.0.24 | `vlc` |
-| PHP SDK, with php-ext (with zig, BusyBox and Node) | `net.php.php.Sdk` | 8.5.11 | `php-ext` |
-| PHP (from its SDK) | `net.php.php` | 8.5.11 | `php`, `php-cgi`, `phpdbg` |
+| PHP SDK, with php-ext (with zig, BusyBox and Node) | `net.php.php.Sdk` | 8.5.12-1 | `php-ext` |
+| PHP (from its SDK) | `net.php.php` | 8.5.12-1 | `php`, `php-cgi`, `phpdbg` |
 | APCu for PHP 8.5 (built from source) | `net.php.php.APCu` | 5.1.28 | |
 | Xdebug for PHP 8.5 (built from source) | `net.php.php.Xdebug` | 3.5.3 | |
 | igbinary for PHP 8.5 (built from source) | `net.php.php.Igbinary` | 3.2.17RC1 | |
@@ -61,7 +61,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | YAML for PHP 8.5, with libyaml (built from source) | `net.php.php.Yaml` | 2.3.0 | |
 | Zstandard for PHP 8.5, with libzstd (built from source) | `net.php.php.Zstd` | 0.18.0 | |
 | Composer (on PHP) | `org.getcomposer.composer` | 2.10.3 | `composer` |
-| Kanboard (on PHP; dependencies installed by Composer) | `org.kanboard.Kanboard` | 1.2.54 | `kanboard`, `kanboard-cli` |
+| Kanboard (on PHP; dependencies installed by Composer) | `org.kanboard.Kanboard` | 1.2.57 | `kanboard`, `kanboard-cli` |
 | OpenJDK, Eclipse Temurin's JDK | `org.openjdk.java.Sdk` | 25.0.5_8 | `java`, `javaw`, `javac`, `jar`, `jshell`, `javadoc`, `jdeps`, `jlink`, `keytool` |
 | OpenJDK Runtime, Eclipse Temurin's JRE | `org.openjdk.java` | 25.0.5_8 | |
 | Apache Maven (on the JDK) | `org.apache.maven` | 3.10.0 | `mvn` |
@@ -298,3 +298,29 @@ checks everything.
 The workflow only checks. Images are published by hand
 ([`scripts/publish.sh`](../scripts/publish.sh)); zigsaw's own releases by the
 Release workflow (see [Installing zigsaw](#installing-zigsaw)).
+
+## What's out of date
+
+Recipes pin their sources, so nothing moves until someone moves it.
+[`scripts/check-upstream.sh`](../scripts/check-upstream.sh) says what there is to
+move: which sources have newer versions, split into updates within a series (18.6
+to 18.7, usually fixes) and new series (18 to 19), and how many images each would
+rebuild, down the pins. It takes about a minute, and only reads tag lists and index
+pages. `--all` lists the current ones and those it doesn't check as well.
+
+The Upstream workflow runs it weekly, and keeps the result in one issue labelled
+`upstream-report`. A newer version doesn't fail that run, nor does a host that
+doesn't answer. A row that's broken does: it found no versions, the place it looks
+at is gone, or the version a recipe pins isn't among those it found.
+
+Where to look is in [`scripts/upstream.txt`](../scripts/upstream.txt), whose top says
+how to read it. Every source of every recipe has to be covered there, which the
+Reproduce workflow's pins job checks without the network, so **a recipe with a new
+source needs a row**. Sources it can't compare, such as a commit, have a row that
+says why they're skipped, and the report counts them.
+
+It's a list of what could be done, not of what should: read the release notes.
+It doesn't know which versions are security releases, which the changelogs do. In
+its first report, PHP 8.5.12 fixed two critical remote code execution bugs, and
+looked just like any other update. A recipe may also hold to a series on purpose:
+ICU 72 is Windows' own, and OpenSSL 3.5 the long-term series.
