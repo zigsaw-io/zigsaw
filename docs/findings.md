@@ -2144,6 +2144,54 @@ the same in two stores. `tests/php.sh`, `tests/store.sh`, `tests/self.sh`,
 `tests/registry.sh` and `tests/matrix.sh` pass with their work there, under all three
 sandboxes. It has no 8.3 short names, and nothing here missed them.
 
+### Advisories
+
+Iteration 71 asks [OSV](https://osv.dev) about the pinned versions.
+
+- **OSV's `GIT` ecosystem takes a repository and a tag**, which covers C libraries with no
+  package ecosystem at all, and the `git` rows of `scripts/upstream.txt` already had both.
+  The repository has to be the one it indexes: GLib's GitHub mirror has no records, and
+  its GitLab home has 14. The same goes for VLC's (3 and 21) and Ghostscript's (0 and 197).
+- **Its coverage is uneven, and a 0 alone can't show that.** What each listed on
+  2026-11-05, for one tag, compared with an older one:
+
+  | | a recent tag | an older one |
+  |---|---|---|
+  | Node | `v24.22.2`: 0 | `v24.0.0`: 18 |
+  | OpenSSL | `openssl-3.5.9`: 0 | `openssl-3.5.0`: 61 |
+  | SQLite | `version-3.53.4`: 0 | `version-3.50.0`: 18 |
+  | CPython | `v3.14.10`: 0 | `v3.14.7`: 21 |
+  | PHP | `php-8.5.11`: 0 | `php-8.4.0`: 0 |
+  | PostgreSQL | `REL_18_0`: 0 | `REL_16_0`: 0 |
+  | Qt | `v6.12.0`: 0 | `v6.5.0`: 0 |
+  | GLib | `2.90.0`: 0 | `2.80.0`: 0 |
+
+  PHP 8.5.11 had the two critical RCEs of [iteration 69](iteration-69.md), and nothing here
+  shows it: PHP's 292 records are nearly all old fuzzing bugs. "It has records for this
+  repository" doesn't help, then. Hence `osv-thin`, set by hand from the older tags.
+- **One advisory has several IDs**: CPython 3.14.7's 21 IDs are 11 advisories, by the
+  `aliases` in each record.
+- **A vector's "high impact" includes availability**, which put three denial-of-service bugs
+  in expat above a heap overflow in zlib. So the report's flag asks for a high loss of
+  confidentiality or integrity. The vectors still judge alone: a heap overflow in zlib's
+  `gzwrite` says `AV:N`, though what reaches it depends on the program.
+- **Go's advisories have no vectors at all**, so Go 1.27.1 with 16 of them, including many in
+  `net/http`, reads as "not stated", and below others in the table. Nothing in the report
+  can say how much that matters.
+- **What a new Go leaves.** `go version -m` on the rebuilt programs, with each module asked
+  about at OSV: no standard-library advisories in any of them, but 1 to 20 in their modules.
+
+  | Program | Modules | Advisories it still lists, by module |
+  |---|---|---|
+  | zot 2.1.23 | 175 | `aws-sdk-go` 2, `x/crypto` 1, `x/net` 2 |
+  | cosign 3.1.4 | 256 | `docker-credential-acr-env` 1, `go-chi` 1, `x/crypto` 1, `x/net` 2 |
+  | ORAS 1.3.6 | 23 | `x/crypto` 1 |
+  | skopeo 1.24.1 | 87 | `docker/distribution` 1, `go-jose` 3, `x/crypto` 4, `x/net` 7, `x/text` 1, `grpc` 4 |
+  | fzf 0.74.5 | 11 | `x/sys` 1, `x/text` 2 |
+
+  These are matches by module version, not by whether a program calls what's affected, which
+  `govulncheck` would say. They're upstream's to move, and the report doesn't see them.
+
 ## As a real standard user
 
 Until iteration 70, nothing had run as one: this machine's account is an

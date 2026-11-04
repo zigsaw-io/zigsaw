@@ -18,9 +18,9 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Rust (windows-gnu) | `org.rust-lang.rust` | 1.99.0 | `cargo`, `rustc` |
 | ripgrep (built from source) | `com.github.BurntSushi.ripgrep` | 15.2.0 | `rg` |
 | bat (built from source) | `com.github.sharkdp.bat` | 0.26.1 | `bat` |
-| Go | `org.golang.go` | 1.27.1 | `go`, `gofmt` |
+| Go | `org.golang.go` | 1.27.3 | `go`, `gofmt` |
 | fzf (built from source) | `com.github.junegunn.fzf` | 0.74.5 | `fzf` |
-| zot, minimal (built from source) | `dev.zotregistry.zot` | 2.1.21 | `zot` |
+| zot, minimal (built from source) | `dev.zotregistry.zot` | 2.1.23 | `zot` |
 | ORAS, files and artifacts in OCI registries (built from source) | `land.oras.oras` | 1.3.6 | `oras` |
 | skopeo, container images in registries and on disk (built from source) | `io.podman.skopeo` | 1.24.1 | `skopeo` |
 | cosign, signatures for container images (built from source) | `dev.sigstore.cosign` | 3.1.4 | `cosign` |
@@ -304,14 +304,18 @@ Release workflow (see [Installing zigsaw](#installing-zigsaw)).
 Recipes pin their sources, so nothing moves until someone moves it.
 [`scripts/check-upstream.sh`](../scripts/check-upstream.sh) says what there is to
 move: which sources have newer versions, split into updates within a series (18.6
-to 18.7, usually fixes) and new series (18 to 19), and how many images each would
-rebuild, down the pins. It takes about a minute, and only reads tag lists and index
-pages. `--all` lists the current ones and those it doesn't check as well.
+to 18.7, usually fixes) and new series (18 to 19), what advisories
+[OSV](https://osv.dev) lists against the pinned versions, and how many images each
+would rebuild, down the pins. It takes about two minutes, and only reads tag lists,
+index pages and OSV's answers. `--all` lists the current ones, those it doesn't check,
+and those OSV lists nothing for or has no record of.
 
 The Upstream workflow runs it weekly, and keeps the result in one issue labelled
-`upstream-report`. A newer version doesn't fail that run, nor does a host that
-doesn't answer. A row that's broken does: it found no versions, the place it looks
-at is gone, or the version a recipe pins isn't among those it found.
+`upstream-report`. Editing an issue notifies nobody, so advisories the last report
+didn't have also get a comment, which reaches you if you're subscribed to that issue
+or watch the repository. A newer version doesn't fail that run, an advisory doesn't,
+nor does a host that doesn't answer. A row that's broken does: it found no versions,
+the place it looks at is gone, or the version a recipe pins isn't among those it found.
 
 Where to look is in [`scripts/upstream.txt`](../scripts/upstream.txt), whose top says
 how to read it. Every source of every recipe has to be covered there, which the
@@ -319,8 +323,37 @@ Reproduce workflow's pins job checks without the network, so **a recipe with a n
 source needs a row**. Sources it can't compare, such as a commit, have a row that
 says why they're skipped, and the report counts them.
 
-It's a list of what could be done, not of what should: read the release notes.
-It doesn't know which versions are security releases, which the changelogs do. In
-its first report, PHP 8.5.12 fixed two critical remote code execution bugs, and
-looked just like any other update. A recipe may also hold to a series on purpose:
-ICU 72 is Windows' own, and OpenSSL 3.5 the long-term series.
+It's a list of what could be done, not of what should: read the release notes. A
+recipe may also hold to a series on purpose: ICU 72 is Windows' own, and OpenSSL 3.5
+the long-term series.
+
+### Reading the advisories
+
+"Known advisories" comes first in the report, most urgent first. For each pinned version
+it gives OSV's IDs, how many are reachable over a network with no login and no user
+action and put data at high risk, as their CVSS vectors state ("not stated" where there's
+no vector, as with all of Go's), and how many are left at the newest version in the
+series, which says whether an update is enough.
+
+These are OSV's matches, not checked against these Windows builds. Some won't apply: read
+the advisory before rebuilding 29 images for it.
+
+**None listed doesn't mean clean.** The report keeps apart what it can tell:
+
+- **None listed**: OSV knows the repository or package, and lists nothing for this
+  version. Worth something for projects it covers well, such as Node, OpenSSL and SQLite.
+- **OSV's records are thin here** (`osv-thin` in the table): it lists about as little for
+  older releases with known problems, so this says nothing. PHP is the clearest case: it
+  lists nothing for 8.5.11, which [iteration 69](iteration-69.md) left for two critical
+  RCEs. PostgreSQL, Qt and GLib are marked too. Read their own notices.
+- **No record**: OSV has never heard of the repository.
+- **Not looked up**: a row with no `osv=`, such as PHP's prebuilt libraries.
+- **Couldn't be read**: the report says so, and lists nothing as clear.
+
+And like the versions, it only sees the sources recipes name: what's in `go.sum` or
+`Cargo.lock` isn't asked about.
+
+### Rebuilding
+
+[`scripts/rebuild.sh`](../scripts/rebuild.sh) does the rest once a recipe's source has
+moved: see [recipes.md](recipes.md#rebuilding-what-pins-what).

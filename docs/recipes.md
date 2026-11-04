@@ -603,6 +603,36 @@ directory, such as `cargo vendor`, `go mod vendor` or `pip download`
 fetching the same files every time, which a lockfile gives; the pinned hash
 catches it if not.
 
+## Rebuilding what pins what
+
+A recipe pins its SDKs, runtimes and image sources by digest, so a new Go means a new image
+of everything built with it, and each of those has a digest of its own for what pins it.
+[`scripts/rebuild.sh`](../scripts/rebuild.sh) does that in order. Change the source by hand
+first (its URL and hash, the recipe's version, and a vendor hash if it changes), then:
+
+```
+scripts/rebuild.sh --plan go.json zot.json     # what would build, in what order
+ZIGSAW_HOME=path\to\store ZIGSAW=path\to\zigsaw.exe scripts/rebuild.sh go.json zot.json
+```
+
+It builds the recipes named and everything that pins them, each after what it pins, and points
+their pins at what was just built, version included. It stops at the first failure, with the
+end of that build's log; fix it and run the same command, as what's done is a cache hit. It
+ends with the `scripts/publish.sh` line to run. Publish before pushing: CI compares its builds
+with the registry.
+
+`--no-pin` only builds. In a second store, after a run that pinned, its digests should be the
+first's, which is worth checking before publishing:
+
+```
+ZIGSAW_HOME=path\to\store2 ZIGSAW=path\to\zigsaw.exe scripts/rebuild.sh --no-pin go.json zot.json
+```
+
+`ZIGSAW_HOME` has to be set, so it can't build into your own store by accident. A frozen copy
+of zigsaw keeps the cache valid while you work, as its keys include the program. Recipes in
+`no-publish` aren't built or re-pinned, and it lists those it left on the old pins; an image
+pinned in a test's fixture isn't looked for.
+
 ## Projects
 
 A recipe can live in the project it builds, at its root, as `zigsaw.json`.
@@ -1915,7 +1945,7 @@ A Go module vendors its dependencies, then builds offline from them:
 
 ```json
 "sdk": {
-  "go": "org.golang.go:1.27.1@sha256:...",
+  "go": "org.golang.go:1.27.3@sha256:...",
   "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
 },
 "modules": [
@@ -1953,7 +1983,7 @@ build ID:
 
 ```json
 "sdk": {
-  "go": "org.golang.go:1.27.1@sha256:...",
+  "go": "org.golang.go:1.27.3@sha256:...",
   "zig": "org.ziglang.zig:0.16.0@sha256:...",
   "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
 },

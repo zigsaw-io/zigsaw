@@ -755,11 +755,19 @@
   as only building it would tell.
 - `scripts/check-upstream.sh` sees the sources recipes name, so not what they bring
   along: dependencies in `Cargo.lock`, `go.sum`, `composer.lock` or a vendor step,
-  or the libraries inside a prebuilt app. It knows versions, not advisories: a
-  critical fix looks like any other update. Its rows for PHP's libraries and SQLite
+  or the libraries inside a prebuilt app. Its rows for PHP's libraries and SQLite
   read a page with only what's current, so they can't show that the pinned version
   ever existed, and neither can Ghostscript's, whose tags don't sort. Commits and
   TeX Live aren't checked: the report counts them.
+- The advisories in that report are only as good as OSV's records, which are uneven:
+  PHP's critical RCEs in 8.5.11 aren't there, nor anything recent for PostgreSQL, Qt or
+  GLib, which are marked as thin; others may be just as thin without being marked. A
+  match isn't checked against these Windows builds either. So a critical fix can still
+  look like any other update, and an update can be flagged for a bug that can't happen
+  here.
+- Those Go apps carry advisories in modules they pin, which a new Go doesn't touch (see
+  [findings](findings.md#advisories)). Moving those is upstream's: a recipe builds what
+  upstream's `go.mod` says.
 - A scheme something else has already is only offered: installing the app doesn't
   change where its links go. zigsaw offers an app for `http` and `https` in
   Settings' Default apps, which lists it, and Windows keeps the choice to you:

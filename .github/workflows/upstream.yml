@@ -1,16 +1,19 @@
-# Says which of the recipes' sources have newer versions upstream, and what each
-# update would rebuild (scripts/check-upstream.sh), in one issue that it keeps up
-# to date: the open one labelled upstream-report. Editing an issue's text notifies
-# nobody. It's a job of its own, apart from the Reproduce workflow, as it's the
-# only one that may write to the repository's issues.
+# Says which of the recipes' sources have newer versions upstream, what advisories
+# OSV lists against the pinned ones, and what each update would rebuild
+# (scripts/check-upstream.sh), in one issue that it keeps up to date: the open one
+# labelled upstream-report. Editing an issue's text notifies nobody, so advisories
+# the last report didn't have also get a comment, which notifies those subscribed to
+# the issue or watching the repository. It's a job of its own, apart from the Reproduce
+# workflow, as it's the only one that may write to the repository's issues.
 #
 # A newer version doesn't fail the run, nor does a host that doesn't answer. A
 # broken row does, once the issue has it: the table needs fixing, or a release a
 # recipe pins is gone. Reproduce's pins job checks on every push that the table
 # covers the recipes, without the network.
 #
-# What reaches the issue is the table's names and URLs and versions that matched a
-# row's pattern, not the text of what upstream serves.
+# What reaches the issue is the table's names and URLs, versions that matched a row's
+# pattern, and advisory IDs that look like IDs, not the text of what upstream or OSV
+# serves.
 name: Upstream
 
 on:
@@ -47,7 +50,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # GitHub takes up to 65,536 characters; the report's about 12,000.
+          # GitHub takes up to 65,536 characters; the report's about 16,000.
           {
             head -c 60000 report.md
             printf '\nFrom [this run](%s).\n' "$RUN_URL"
@@ -56,7 +59,16 @@ jobs:
             --description 'Kept up to date by the Upstream workflow' --color ededed
           number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label upstream-report --state open --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$number" ]; then
+            gh issue view "$number" --repo "$GITHUB_REPOSITORY" --json body --jq .body >last.md
             gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file body.md
+            bash scripts/check-upstream.sh --new-advisories last.md report.md >new.md
+            if [ -s new.md ]; then
+              {
+                printf 'OSV lists new advisories against pinned versions:\n\n'
+                head -c 60000 new.md
+              } >comment.md
+              gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body-file comment.md
+            fi
           else
             gh issue create --repo "$GITHUB_REPOSITORY" --title "What's out of date upstream" \
               --label upstream-report --body-file body.md

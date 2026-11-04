@@ -24,8 +24,9 @@
 # - groups: the groups the published and build jobs are made from, and
 #   whether GTK's and Qt's families are checked;
 # - pins: every image the published recipes pin is on the registry, so a
-#   fresh store can build them (scripts/check-pins.sh), and scripts/upstream.txt
-#   covers their sources (tests/upstream.sh).
+#   fresh store can build them (scripts/check-pins.sh), scripts/upstream.txt
+#   covers their sources (tests/upstream.sh), and scripts/rebuild.sh works
+#   (tests/rebuild.sh).
 # It only verifies; scripts/publish.sh publishes. The Upstream workflow says what
 # has newer versions.
 name: Reproduce
@@ -63,6 +64,9 @@ jobs:
 
       - name: The upstream checker, and its table against the recipes
         run: bash tests/upstream.sh
+
+      - name: What rebuilds in what order
+        run: bash tests/rebuild.sh
 
   # The groups of scripts/published-groups.txt this run checks, and those of
   # tests/build.sh, as JSON lists, and whether gtk-suites runs.

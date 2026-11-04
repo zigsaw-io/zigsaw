@@ -217,9 +217,12 @@ app_window() {
         [ -n "$title" ] && break
         sleep 1
     done
+    # No title: was it running without a window, or had it gone?
+    local running=""
+    [ -n "$title" ] || running=$(powershell -NoProfile -Command "(@(Get-Process $process -ErrorAction SilentlyContinue)).Count" | tr -d '\r')
     powershell -NoProfile -Command "Get-Process $process -ErrorAction SilentlyContinue | Stop-Process -Force"
     sleep 1
-    [ "$title" = "$want" ] || { echo "window: $title"; return 1; }
+    [ "$title" = "$want" ] || { echo "window: \"$title\"${running:+, $running $process process(es) still running}"; return 1; }
 }
 designer_window() { app_window designer "Qt Widgets Designer" "$@" io.qt.Qt6; }
 linguist_window() { app_window linguist "Qt Linguist" "$@" --command=linguist io.qt.Qt6; }
