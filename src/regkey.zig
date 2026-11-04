@@ -88,6 +88,24 @@ pub const Key = struct {
         return out.items;
     }
 
+    /// The names of the key's values, without its default value.
+    pub fn valueNames(k: Key, arena: Allocator) ![]const []const u8 {
+        var max_name: win32.DWORD = 0;
+        try check("reading", "a key", win32.RegQueryInfoKeyW(k.handle, null, null, null, null, null, null, null, &max_name, null, null, null));
+        // In characters, without the terminator.
+        const name = try arena.alloc(u16, max_name + 1);
+        var out: std.ArrayList([]const u8) = .empty;
+        var index: win32.DWORD = 0;
+        while (true) : (index += 1) {
+            var len: win32.DWORD = @intCast(name.len);
+            const status = win32.RegEnumValueW(k.handle, index, name.ptr, &len, null, null, null, null);
+            if (status == win32.ERROR_NO_MORE_ITEMS) break;
+            try check("listing", "values", status);
+            if (len > 0) try out.append(arena, try std.unicode.wtf16LeToWtf8Alloc(arena, name[0..len]));
+        }
+        return out.items;
+    }
+
     /// Whether the key has no keys and no values, its default included.
     pub fn isEmpty(k: Key) !bool {
         var keys: win32.DWORD = 0;

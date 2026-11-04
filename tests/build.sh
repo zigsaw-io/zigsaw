@@ -330,7 +330,8 @@ check "it has that extension once, as its runtime" \
 sandboxed_ext() {
     local sb
     for sb in low appcontainer; do
-        [ "$(z run --sandbox=$sb $XAPP sh -c 'cat "$EXT_A/marker.txt"' 2>/dev/null | tr -d '\r')" = "marker a" ] || { echo "$sb: can't read test.ext.a's file"; return 1; }
+        # (`; true`: in an AppContainer, sh may not wait for its last command, gaps.md.)
+        [ "$(z run --sandbox=$sb $XAPP sh -c 'cat "$EXT_A/marker.txt"; true' 2>/dev/null | tr -d '\r')" = "marker a" ] || { echo "$sb: can't read test.ext.a's file"; return 1; }
     done
 }
 check "the low and appcontainer sandboxes can read an extension's files" sandboxed_ext

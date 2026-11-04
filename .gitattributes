@@ -17,6 +17,11 @@ tests/install/*.cmd text eol=crlf
 # Hashed for releases (SHA256SUMS), so the same bytes on every checkout.
 *.ps1 text eol=lf
 
+# Built into zigsaw's programs: without this, a runner's checkout
+# (core.autocrlf=true) gave releases up to v0.69.0 a CRLF manifest, and a build
+# of the tag on a checkout that keeps LF differed by it.
+src/windows/* text eol=lf
+
 # Every file a recipe carries (patches, headers, scripts, a ._pth): an image
 # records each one's hash, so it must have the same bytes on every checkout,
 # a runner's (core.autocrlf=true) too. Rnote's and Text Editor's lacked this

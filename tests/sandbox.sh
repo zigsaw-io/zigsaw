@@ -22,6 +22,10 @@ zigsaw=${1:-$root/zig-out/bin/zigsaw.exe}
 ZIGSAW_HOME=$(cygpath -w "$(mktemp -d)")
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
+# The record of what stores changed (src/ledger.zig): one of this run's own.
+suite_key="Software\\ZigsawTest\\sandbox-$$-grants"
+export ZIGSAW_GRANTS_KEY="$suite_key"
+trap 'reg delete "HKCU\\$suite_key" /f >/dev/null 2>&1' EXIT
 # SEED_DOWNLOADS: another store's cache\downloads, whose files are linked, or
 # copied, into this one's, so as not to download them again.
 if [ -n "${SEED_DOWNLOADS:-}" ]; then
@@ -715,6 +719,125 @@ data_first_soft() {
 check "while another run of the app goes on, a soft run keeps the data folder's label and says so" data_held
 check "soft: an app's first run says nothing of its data folder" data_first_soft
 check "rm forgets the programs, which stay medium" rm_forgets
+
+# --- What's changed outside the stores: `zigsaw grants`, and its record ---------
+#
+# Two more stores, on a record of their own, and fake folders, so nothing here
+# touches or reads your real ones. The fake folders mean the store-wide
+# --real-folders can only be seen as saved: refusing the real ones takes real
+# ones, in the account tests/standard-user.sh runs in.
+
+export ZIGSAW_GRANTS_KEY="Software\\ZigsawTest\\sandbox-ledger-$$"
+ledger_key="HKCU\\$ZIGSAW_GRANTS_KEY"
+store_a="$work\\store-a"
+store_b="$work\\store-b"
+for s in "$store_a" "$store_b"; do
+    mkdir -p "$s\\cache\\downloads"
+    cp -l "$(cygpath -u "$ZIGSAW_HOME")"/cache/downloads/* "$(cygpath -u "$s")/cache/downloads/" 2>/dev/null ||
+        cp "$(cygpath -u "$ZIGSAW_HOME")"/cache/downloads/* "$(cygpath -u "$s")/cache/downloads/"
+done
+za() { ZIGSAW_HOME="$store_a" "$zigsaw" "$@" </dev/null; }
+zb() { ZIGSAW_HOME="$store_b" "$zigsaw" "$@" </dev/null; }
+LEDGER=test.sandbox.ledger
+sed -e "s/\"net.frippery.busybox\"/\"$LEDGER\"/" "$root/recipes/busybox.json" >"$work\\ledger.json"
+za build "$work\\ledger.json" >/dev/null 2>&1 && zb build "$work\\ledger.json" >/dev/null 2>&1 ||
+    { echo "building the record's app failed"; exit 1; }
+ufolders="$work\\ledger-folders"
+mkdir -p "$ufolders\\Documents" "$work\\both" "$work\\left-low" "$work\\left-ac"
+export ZIGSAW_USER_FOLDERS="$ufolders"
+recorded() { reg query "$ledger_key" 2>/dev/null | tr -d '\r' | grep -F "$1"; }
+
+nothing_said() { za grants | grep -q 'changed nothing outside its stores'; }
+check "grants: nothing changed, nothing to say" nothing_said
+lists_own() {
+    za override --filesystem="$work\\both" $LEDGER >/dev/null 2>&1 && za run $LEDGER true >/dev/null 2>&1 && low_label "$work\\both" || return 1
+    za grants | grep -q "low label on $(sed 's/\\/\\\\/g' <<<"$work\\both"): its permissions name it"
+}
+check "grants: a label this store's app's permissions give, and why" lists_own
+in_record() { recorded "$LEDGER|low $work\\both"; }
+check "the record outside the store has it" in_record
+lists_other() { zb grants | grep -q "Other stores" && zb grants | grep -qF "$LEDGER: low label on $work\\both"; }
+check "grants in another store lists it under other stores" lists_other
+one_app() { za grants $LEDGER | grep -q "low label" && za grants test.sandbox.nobody | grep -q 'Nothing recorded'; }
+check "grants <app> says only that app's" one_app
+stores_share() {
+    zb override --filesystem="$work\\both" $LEDGER >/dev/null 2>&1 && zb run $LEDGER true >/dev/null 2>&1 || return 1
+    za rm $LEDGER 2>&1 | grep -q 'kept the low integrity label' && low_label "$work\\both" || return 1
+    [ -z "$(recorded "$store_a|$LEDGER|low")" ] || { echo "rm left it in the record"; return 1; }
+    zb rm $LEDGER >/dev/null 2>&1 && no_label "$work\\both" && [ -z "$(recorded "|low $work\\both")" ]
+}
+check "two stores label one path: rm in one keeps it, rm in the other takes it back" stores_share
+
+za build "$work\\ledger.json" >/dev/null 2>&1 && zb build "$work\\ledger.json" >/dev/null 2>&1 ||
+    { echo "building the record's app failed"; exit 1; }
+za override --filesystem="$work\\left-low" --filesystem="$work\\left-ac" $LEDGER >/dev/null 2>&1
+za run $LEDGER true >/dev/null 2>&1
+za run --sandbox=appcontainer $LEDGER true >/dev/null 2>&1
+# As it would be deleted by hand: no `rm`.
+rm -rf "$store_a"
+left_listed() {
+    zb grants | grep -q 'Stores since deleted' && zb grants | grep -qF "$store_a, $LEDGER: low label on $work\\left-low" || return 1
+    zb list 2>&1 >/dev/null | grep -q 'stores since deleted are still in place'
+}
+check "a store deleted by hand: grants still lists what it left, and list says so" left_listed
+left_kept_label() { low_label "$work\\left-low"; }
+check "  its label is still there, until" left_kept_label
+left_repaired() {
+    zb repair >/dev/null 2>&1 || return 1
+    no_label "$work\\left-low" && ! has_ace "$work\\left-ac" 'S-1-15-3-' && [ -z "$(recorded "$store_a|")" ]
+}
+check "  repair from another store takes it back, label and grant, and forgets them" left_repaired
+absent_drive=
+for d in Q P O N M L; do
+    [ -e "$d:\\" ] || { absent_drive=$d; break; }
+done
+if [ -n "$absent_drive" ]; then
+    away="$absent_drive:\\store|$LEDGER|low $work\\left-low"
+    reg add "$ledger_key" /v "$away" /f >/dev/null 2>&1
+    away_kept() {
+        zb grants | grep -q "Other stores" && zb repair >/dev/null 2>&1 && [ -n "$(recorded "$absent_drive:\\store|")" ]
+    }
+    check "a store on a drive that isn't there is kept, not taken for gone" away_kept
+    reg delete "$ledger_key" /v "$away" /f >/dev/null 2>&1
+fi
+path_gone_dropped() {
+    reg add "$ledger_key" /v "$store_a|$LEDGER|low $work\\no-such-path" /f >/dev/null 2>&1 || return 1
+    ! zb grants | grep -q 'no-such-path' && zb repair >/dev/null 2>&1 && [ -z "$(recorded "no-such-path")" ]
+}
+check "what a deleted store left on a path that's gone too isn't listed, and repair forgets it" path_gone_dropped
+
+not_explained() {
+    icacls "$ufolders\\Documents" /setintegritylevel '(OI)(CI)L' >/dev/null || return 1
+    zb grants | grep -q 'Not explained' && zb grants | grep -qF "$ufolders\\Documents" && zb list 2>&1 >/dev/null | grep -q 'no record explains'
+}
+check "a low label on a folder of yours that no record has is Not explained" not_explained
+takes_back_unexplained() {
+    zb grants --take-back "$ufolders\\Documents" >/dev/null 2>&1 && no_label "$ufolders\\Documents" &&
+        ! zb grants | grep -q 'Not explained'
+}
+check "grants --take-back removes it" takes_back_unexplained
+refuses_recorded() {
+    zb override --filesystem=documents $LEDGER >/dev/null 2>&1 && zb run $LEDGER true >/dev/null 2>&1 && low_label "$ufolders\\Documents" || return 1
+    zb grants --take-back "$ufolders\\Documents" 2>&1 | grep -q 'is labelled for' && low_label "$ufolders\\Documents" || return 1
+    ! zb grants | grep -q 'Not explained'
+}
+check "  and refuses one a record has, naming the app, which isn't Not explained" refuses_recorded
+relative_refused() { ! zb grants --take-back 'relative\path' >/dev/null 2>&1; }
+check "  and a relative path" relative_refused
+real_folders_saved() {
+    zb override --global --real-folders >/dev/null 2>&1 && zb override --global | grep -q -- '--real-folders' &&
+        zb override --global --noreal-folders >/dev/null 2>&1 && zb override --global | grep -q -- '--noreal-folders' &&
+        zb override --reset --global >/dev/null 2>&1
+}
+check "--real-folders is saved store-wide" real_folders_saved
+real_folders_store_wide_only() {
+    ! zb override --real-folders $LEDGER >/dev/null 2>&1 && ! zb run --real-folders $LEDGER true >/dev/null 2>&1
+}
+check "  and nowhere else" real_folders_store_wide_only
+rm_clears_record() { zb rm $LEDGER >/dev/null 2>&1 && no_label "$ufolders\\Documents" && [ -z "$(recorded "$LEDGER")" ]; }
+check "rm takes it back, and the record has nothing left of the app" rm_clears_record
+reg delete "$ledger_key" /f >/dev/null 2>&1
+unset ZIGSAW_USER_FOLDERS
 
 rm -rf "$ZIGSAW_HOME" "$work"
 echo

@@ -62,7 +62,10 @@ With parameters (`-Version`, `-Dir`, `-NoPath`, `-Uninstall`):
 `-Uninstall` removes zigsaw and its PATH entry once no app is installed
 (`zigsaw rm` undoes what zigsaw changed for each app, which deleting its
 files wouldn't). The rest of `%LOCALAPPDATA%\zigsaw`, downloads and apps'
-data, stays until you delete it.
+data, stays until you delete it. Windows won't let anyone delete an installed
+app's files by hand, as they're kept read-only: `zigsaw rm` them first. If a
+store has gone that way regardless, `zigsaw repair` from any other takes back
+what it changed ([what zigsaw changed](#what-zigsaw-changed-outside-its-stores)).
 
 Releases are published by the [Release workflow](.github/workflows/release.yml)
 when a `v<version>` tag is pushed. Their programs are built with
@@ -77,6 +80,14 @@ of 0.19.0, 0.20.0 and 0.21.0 here gave their releases' bytes. From 0.22.0
 the programs carry version information, which Explorer's Properties show,
 and an application manifest ([`src/windows/`](src/windows/)); they aren't
 signed. [`scripts/package.sh`](scripts/package.sh) makes the release's files.
+Up to v0.69.0, the manifest's line endings followed the checkout's: those
+releases were built with CRLF, so a build gives their bytes only on a checkout
+with `core.autocrlf=true`. From 0.70.0 they're pinned.
+
+Microsoft Defender's machine learning has flagged some builds of zigsaw by their
+exact bytes, as `Trojan:Win32/Bearfoos.A!ml` ([findings](docs/findings.md#defender-and-exact-bytes)).
+So the Release workflow scans the programs before publishing them, and
+[`scripts/defender-scan.sh`](scripts/defender-scan.sh) does the same here.
 
 ## Commands
 
@@ -107,7 +118,14 @@ zigsaw list                            list installed apps, their commands and s
                                        and the kinds of file they open
 zigsaw override [options] <app-id>     save run options that every run of the app gets;
                                        --show shows them, --reset removes them
-zigsaw override [options] --global     the same for every app, below each app's own
+zigsaw override [options] --global     the same for every app, below each app's own; also
+                                       --real-folders lets the apps of a store that isn't your
+                                       default one use your real folders, --noreal-folders
+                                       stops them
+zigsaw grants [<app-id>]               list what zigsaw changed outside its store for apps, in
+                                       this store and others, what stores since deleted left,
+                                       and low labels on your folders no record explains
+zigsaw grants --take-back <path>       remove a low label that no record explains
 zigsaw update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
                                        one pulled again that may reach more asks first,
                                        unless given --yes
@@ -117,7 +135,9 @@ zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
 zigsaw prune [--dry-run] [--downloads] [--data]
                                        delete what no installed app needs
 zigsaw repair                          write every app's commands, shortcuts and file
-                                       associations again, as after installing a new zigsaw
+                                       associations again, as after installing a new zigsaw,
+                                       and take back what apps may no longer reach, and what
+                                       stores since deleted left
 zigsaw version                         print zigsaw's version
 ```
 
@@ -598,8 +618,30 @@ zigsaw override --nofilesystem=documents org.gnome.TextEditor
   instead of linking.
 - Deleting the app's data (`zigsaw rm --delete-data`, `prune --data`,
   `--ephemeral`) removes the links, never what's in your folders.
+- A store that isn't your default one, `%LOCALAPPDATA%\zigsaw`, leaves your real
+  folders out of its apps' runs, and says so, until `zigsaw override --global
+  --real-folders`, which is saved in that store. If `ZIGSAW_HOME` is your real
+  store, run that once: from 0.70.0 its apps lose your folders until you do. A
+  folder named by its path, or a working directory, isn't affected.
 - `ZIGSAW_USER_FOLDERS=<dir>` makes `<dir>\Documents` and so on stand in for
-  yours: the tests use it, so that no run labels or grants your folders.
+  yours, in any store: the tests use it.
+
+#### What zigsaw changed outside its stores
+
+`zigsaw grants` lists it: for each app, the low labels on your paths and what its
+container was given, and why each is there and how long it lasts; what other
+stores of yours changed; and what stores since deleted left behind. Windows keeps
+a label until something takes it away, so deleting a store doesn't. A copy of each
+store's list is kept outside it, in `HKCU\Software\Zigsaw\Grants`, for that:
+`zigsaw repair`, from any store, takes back what a deleted one left, unless a
+store that's still there needs it. `install.ps1` runs `repair` on an upgrade.
+
+It also looks at your six folders and your profile, and lists under **Not
+explained** a low label that no record has, as a program other than zigsaw could
+leave, or a zigsaw before 0.70. `zigsaw grants --take-back <path>` removes one; a
+label a record has goes the way it came, with `zigsaw rm` or an override, as the
+app would only make it again. `zigsaw list` says, in one line, when anything is
+left over or unexplained.
 
 The GUI apps zigsaw publishes declare the folders they open files from:
 7-Zip, Notepad++, SumatraPDF, Text Editor and Rnote your Desktop, Documents
@@ -874,6 +916,9 @@ bash tests/store.sh     # update, prune, and what they keep while apps run
 bash tests/upstream.sh  # scripts/check-upstream.sh with made-up recipes, pages and repositories, and that scripts/upstream.txt covers every recipe's sources (no network; runs on Linux too)
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
 GROUP=langs bash tests/build.sh # only one group of its sections (tests/build.sh --groups lists them), as a CI job does
+SECTIONS=php bash tests/build.sh # only these sections
+bash tests/standard-user.sh account.txt # zigsaw as a real standard user, in an account of its own you've made: the Quick start, your real folders (safe there), a guard's refusal, a store deleted by hand, and the suites that need no app's image
+bash scripts/defender-scan.sh # what Defender makes of a package's programs (scripts/package.sh first)
 bash tests/gtk.sh       # a GTK and libadwaita app built against GTK's SDK, on its runtime, in each sandbox; the GUI shim, shortcuts and their icons; translations; Text Editor, Rnote and Pinta (C#, on .NET), their file associations, and opening a file with --file; dictionaries and an icon through the runtime's extension point; Gaphor's self-test in each sandbox; GTK with MSVC if the store has it (needs GTK_HOME or BUILD_HOME; opens windows)
 bash tests/gtk3.sh      # a GTK 3 app built against GTK 3's SDK and GTK's, on both runtimes, in each sandbox; GTK 3's demos; Gnumeric's ssconvert between CSV, Excel and OpenDocument in each sandbox, its file associations, and opening a file with --file; PyGObject loading GTK 3 and GTK 4, Meld comparing files and folders and showing a git repository's changes in each sandbox, and the published apps all on one build of each GTK runtime (needs GTK_HOME or BUILD_HOME; opens windows)
 bash tests/texlive.sh   # TeX Live: pdfLaTeX, XeLaTeX and LuaLaTeX with fonts found by name and formats made on first use in the data directory, BibTeX, MakeIndex, Biber, MetaPost, latexmk on Perl's image, epstopdf and ps2pdf on Ghostscript's, reproducible PDFs, at low integrity too; the AppContainer row is a known gap where Windows hides the drive root (needs TEXLIVE_HOME or BUILD_HOME)

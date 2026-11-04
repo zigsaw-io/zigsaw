@@ -1392,6 +1392,9 @@ JDK's image, and compiled on the JRE's):
   Reporting the false positive to Microsoft, with the flagged file, is a
   form only its author can send.
 
+  Iteration 70 corrects part of this: see
+  [Defender and exact bytes](#defender-and-exact-bytes).
+
 - **v0.18.0's programs are built for the CPU of GitHub's runner.**
   `build.zig` set only the target's OS, so Zig compiled for the CPU of the
   machine that built them: the released `zigsaw.exe` has 18,697 AVX2
@@ -2140,6 +2143,89 @@ nothing changed, built there exactly what's published from NTFS, and 15 images b
 the same in two stores. `tests/php.sh`, `tests/store.sh`, `tests/self.sh`,
 `tests/registry.sh` and `tests/matrix.sh` pass with their work there, under all three
 sandboxes. It has no 8.3 short names, and nothing here missed them.
+
+## As a real standard user
+
+Until iteration 70, nothing had run as one: this machine's account is an
+administrator's with UAC's filtered token, and GitHub's runners are elevated.
+`tests/standard-user.sh` runs in an account in `Users` only, proving that first
+(no Administrators group in its token, medium integrity, `net session` refused).
+It starts from another account with `CreateProcessWithLogonW`, with the account's
+profile loaded, in `tests/asuser.zig`. On Windows 11 26300:
+
+| What | As a standard user |
+|---|---|
+| `install.ps1` into the default store, `pull` from ghcr.io, soft, low and appcontainer | works |
+| A Start menu shortcut, a kind of file, Credential Manager | works |
+| The real Documents labelled, kept by an override, taken back | works |
+| A recipe built, on the account's own `B:` | works |
+| The loopback exemption | **works**: 2 to 7 ms, and taken back in 2. This was the open question |
+| A folder it made itself on a second drive that gives users Modify | works |
+| A folder it may modify but neither owns nor may change the permissions of | refused, naming why, as [gaps.md](gaps.md) says |
+| `store`, `shims`, `sandbox`, `batch`, `ctrlc`, `network`, `reach`, `install` suites, `build.sh`'s base group but MSVC | pass |
+
+So "non-admin first" holds. What differed from the filtered administrator's
+results, all told:
+
+- **`build.sh` on MSVC left a build folder behind.** Windows' WebCache process
+  (`dllhost.exe`) starts during the build under the build's redirected profile,
+  and stays, with `home\AppData\Local\Microsoft\Windows\WebCache` open. In an
+  account nobody has signed in to, nothing has started it under the real profile
+  yet. Not seen where someone's signed in. zigsaw warns, and `prune` retries.
+- **A row of `build.sh` that had been passing by luck** failed: `sh -c 'cat ...'`
+  in an AppContainer, the [known gap](gaps.md) of `sh` not waiting for its last
+  command. `echo`, a builtin, doesn't show it.
+
+And some that looked like differences, and weren't:
+
+- `icacls /setintegritylevel` is refused on a second drive that gives users only
+  Modify, to this administrator's unelevated account as well.
+- Deleting a store's installed files by hand is refused to both: `acl.protect`
+  denies the owner. Rows that deleted a store ignored `rm`'s failure.
+
+## Defender and exact bytes
+
+Iteration 70's first run as the standard user stopped at `zigsaw.exe`: "Operation
+did not complete successfully because the file contains a virus or potentially
+unwanted software", which Git Bash reports as "Permission denied". `Get-MpThreatDetection`
+said `Trojan:Win32/Bearfoos.A!ml` (threat ID 2147731250), for the store's copy and the
+installer's unpacked one.
+
+| Build, as `scripts/package.sh` makes it unless said | Scanned, and run |
+|---|---|
+| v0.69.0's release, and v0.68.0's | clean; both ran `pull`, all three sandboxes and `rm`, clean 25 s later |
+| The working tree, as 0.69.0 | **flagged**, by `MpCmdRun`, as me and as the standard user |
+| **The same files with the version changed to 0.70.0** | clean; as the release, and still clean afterwards |
+| The working tree with debug information (`zig-out\bin`) | clean, the same |
+| v0.69.0's commit, built here | clean |
+
+So it's the bytes, not what the code does: nothing but the version string separates
+the flagged build from a clean one, and running the clean ones raised nothing.
+Why these bytes, Defender doesn't say. A build could be flagged at any release, so
+the Release workflow now scans what it's about to publish
+(`scripts/defender-scan.sh`), and stops if it's flagged, and that script and the
+harness's first row do the same here. Changing a release's bytes to get past a false
+positive is no fix: reporting one to Microsoft is, which only zigsaw's author can do.
+
+Two things iteration 22 and later write-ups said are out of date here:
+
+- **"This machine allows `Bearfoos.A!ml`, so a local scan can't show it."** A scan
+  run as this machine's own account reported it. `Get-MpPreference`'s allow list
+  reads empty unelevated, though it may hide what's there. Local scans do see this
+  detection now.
+- **Local scans weren't of the bytes CI ships anyway**, for the reason below.
+
+### A release's bytes, and line endings
+
+v0.69.0's `zigsaw.exe` and a `zig build -Dstrip` of its commit here have the same
+size and differ in 840 bytes around its application manifest, and a few bytes of
+header that follow from it. `.gitattributes` pinned `*.zig` and the like, not
+`src/windows/*`, so a runner's checkout (`core.autocrlf=true`) built the manifest in
+with CRLF, and this one with LF. Building from another directory gives the same bytes
+as here, so the path isn't it. With those two files changed to CRLF, a build here
+**is byte for byte the release's `zigsaw.exe`** (`8a190e2c…`), so that's all of it. From
+0.70.0 they're pinned, and `tests/self.sh` checks that they are. Iteration 22's check
+of 0.19.0 to 0.21.0 predates the manifest.
 
 ## Not yet tested
 

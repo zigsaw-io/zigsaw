@@ -27,6 +27,9 @@ work=$(cygpath -w "$(mktemp -d)")
 ZIGSAW_HOME="$work\\store"
 export ZIGSAW_HOME
 export ZIGSAW_SHORTCUTS_DIR="$work\\links"
+# Its own record of what stores changed: the rows below look at what's left of
+# zigsaw in the real registry, which a real store's record would be part of.
+export ZIGSAW_GRANTS_KEY="Software\\ZigsawTest\\reach-$$-grants"
 classes="Software\\ZigsawTest\\reach-$$"
 export ZIGSAW_CLASSES_KEY="$classes"
 bin="$ZIGSAW_HOME\\bin"
@@ -89,14 +92,29 @@ commands_own_app() {
     has "$out" "env USERPROFILE = $ZIGSAW_HOME\\data\\test.reach.tool\\home" || return 1
 }
 check "commands: a tool runs as its own app, with its data and its sandbox" commands_own_app
-commands_folders() {
-    local out real target
-    in_run --share=commands -- 'reach-docs' >/dev/null || return 1
-    real=$(powershell -NoProfile -Command "[Environment]::GetFolderPath('MyDocuments')" | tr -d '\r')
-    target=$(powershell -NoProfile -Command "(Get-Item -LiteralPath '$ZIGSAW_HOME\\data\\test.reach.docs\\home\\Documents').Target" | tr -d '\r')
-    [ "$target" = "$real" ] || { echo "linked to \"$target\", not \"$real\""; return 1; }
-}
-check "commands: a tool's folders are yours, not the app's that started it" commands_folders
+docs_link() { powershell -NoProfile -Command "(Get-Item -LiteralPath '$ZIGSAW_HOME\\data\\test.reach.docs\\home\\Documents' -ErrorAction SilentlyContinue).Target" | tr -d '\r'; }
+# This store isn't the default one, so its apps don't get your real folders. In
+# a throwaway account (tests/standard-user.sh), it's told they may: a tool's
+# folders are then the user's, as the nested zigsaw finds them, not those of the
+# app that started it. The tool asks for soft, so nothing's labelled.
+if [ -n "${REACH_REAL_FOLDERS:-}" ]; then
+    commands_folders() {
+        local real target
+        "$zigsaw" override --global --real-folders >/dev/null 2>&1 || return 1
+        in_run --share=commands -- 'reach-docs' >/dev/null || return 1
+        real=$(powershell -NoProfile -Command "[Environment]::GetFolderPath('MyDocuments')" | tr -d '\r')
+        target=$(docs_link)
+        "$zigsaw" override --reset --global >/dev/null 2>&1
+        [ "$target" = "$real" ] || { echo "linked to \"$target\", not \"$real\""; return 1; }
+    }
+    check "commands: a tool's folders are yours, not the app's that started it" commands_folders
+else
+    commands_folders() {
+        in_run --share=commands -- 'reach-docs' >/dev/null || return 1
+        [ -z "$(docs_link)" ] || { echo "linked to \"$(docs_link)\""; return 1; }
+    }
+    check "commands: a tool in a store that isn't the default gets none of your folders" commands_folders
+fi
 commands_ends() {
     local out n
     in_run --share=commands -- 'start /b reach-hold & ping -n 3 127.0.0.1 >nul' >/dev/null

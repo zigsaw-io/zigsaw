@@ -330,11 +330,63 @@ jobs:
           LOG_DIR: ${{ runner.temp }}\logs
         run: bash tests/matrix.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/matrix.txt"
 
+      # What all of the above left on this user's own folders: a suite's store
+      # isn't the default one, so none should have got them.
+      - name: No suite labelled the runner's folders
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          ZIGSAW_HOME: ${{ runner.temp }}\store
+        run: |
+          zig-out/bin/zigsaw.exe grants | tee "$(cygpath -u "$LOG_DIR")/grants.txt"
+          ! grep -q 'Not explained' "$(cygpath -u "$LOG_DIR")/grants.txt"
+
       - name: Upload the logs
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-suites
+          path: ${{ runner.temp }}\logs
+          if-no-files-found: ignore
+
+  # zigsaw as a real standard user, which the runner's own account isn't: it's
+  # elevated. It makes one, that lasts as long as the runner does.
+  standard-user:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.0
+
+      - name: A throwaway standard user
+        shell: bash
+        run: |
+          # 14 characters: above that, net user asks whether to go on, and with no
+          # one to answer, gives up. The account lasts as long as the runner.
+          password="$(od -An -tx1 -N5 /dev/urandom | tr -d ' \n')Aa1-"
+          echo "::add-mask::$password"
+          # (Or Git Bash takes /add for a path.)
+          MSYS_NO_PATHCONV=1 net user zstest "$password" /add
+          printf 'zstest\n%s\n' "$password" >"$RUNNER_TEMP/account.txt"
+          t=$RUNNER_TEMP
+          printf '%s\n' "TMP=$t" "TEMP=$t" "LOG_DIR=$t\\logs" >>"$GITHUB_ENV"
+          mkdir -p "$t/logs"
+
+      - name: tests/standard-user.sh
+        shell: bash
+        run: bash tests/standard-user.sh "$RUNNER_TEMP/account.txt" 2>&1 | tee "$(cygpath -u "$LOG_DIR")/standard-user.txt"
+
+      - name: Upload the logs
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: logs-standard-user
           path: ${{ runner.temp }}\logs
           if-no-files-found: ignore
 

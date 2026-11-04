@@ -34,11 +34,13 @@ const win32 = @import("win32.zig");
 const acl = @import("acl.zig");
 const appcontainer = @import("appcontainer.zig");
 const folders = @import("folders.zig");
+const ledger = @import("ledger.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const written = @import("written.zig");
+const fail = Context.fail;
 const note = Context.note;
 
 /// What no run may write, nor make writable to other programs: zigsaw's
@@ -186,6 +188,198 @@ pub fn undoAll(ctx: *Context, id: []const u8) !void {
     try ctx.store.deleteGrants(arena, id);
 }
 
+// ---------------------------------------------------------------------------
+// What's recorded outside the store (see ledger.zig)
+
+/// What the record has, and what it doesn't explain.
+const Survey = struct {
+    /// Other stores', that stand or may be back.
+    others: []const ledger.Entry = &.{},
+    /// Those no store stands behind, on paths that still exist.
+    orphans: []const ledger.Entry = &.{},
+    /// The user's folders with a low label no record has.
+    unexplained: []const []const u8 = &.{},
+
+    fn of(ctx: *Context) !Survey {
+        const arena = ctx.arena;
+        const entries = try entriesOf(ctx);
+        const root = ctx.store.fullRoot(arena);
+        var others: std.ArrayList(ledger.Entry) = .empty;
+        var orphans: std.ArrayList(ledger.Entry) = .empty;
+        for (entries) |e| switch (try ledger.stateOf(ctx.io, arena, e)) {
+            .live => if (!e.ofStore(root)) try others.append(arena, e),
+            .away => try others.append(arena, e),
+            .orphan => if (e.grant.kind == .loopback or try Store.exists(ctx.io, e.grant.path)) try orphans.append(arena, e),
+        };
+        var unexplained: std.ArrayList([]const u8) = .empty;
+        for (try folders.allHostPaths(ctx)) |p| {
+            const rid = acl.ownLabel(arena, p) catch |err| switch (err) {
+                error.Failed => continue,
+                else => |e| return e,
+            } orelse continue;
+            if (rid > win32.SECURITY_MANDATORY_LOW_RID or try recordedLow(ctx, entries, p) != null) continue;
+            try unexplained.append(arena, p);
+        }
+        return .{ .others = others.items, .orphans = orphans.items, .unexplained = unexplained.items };
+    }
+};
+
+fn entriesOf(ctx: *Context) ![]const ledger.Entry {
+    const key = ctx.store.ledger_key orelse return &.{};
+    return ledger.list(ctx.arena, key) catch |err| switch (err) {
+        error.Failed => &.{},
+        else => |e| return e,
+    };
+}
+
+/// Who has a low label on `path` recorded, this store's files first, which an
+/// app that hasn't changed its grants since zigsaw 0.70 has only there.
+fn recordedLow(ctx: *Context, entries: []const ledger.Entry, path: []const u8) !?ledger.Entry {
+    const arena = ctx.arena;
+    const root = ctx.store.fullRoot(arena);
+    for (try ctx.store.listGrantIds(arena)) |id| for (try ctx.store.readGrants(arena, id)) |g| {
+        if (g.kind == .low and samePath(g.path, path)) return .{ .store = root, .id = id, .grant = g };
+    };
+    for (entries) |e| if (e.grant.kind == .low and samePath(e.grant.path, path)) return e;
+    return null;
+}
+
+/// One line on stderr if something's left that no store will take back.
+pub fn noteLeftovers(ctx: *Context) !void {
+    const s = try Survey.of(ctx);
+    if (s.orphans.len > 0) note("note: {d} change(s) outside the store by stores since deleted are still in place: `zigsaw grants` lists them, `zigsaw repair` takes them back", .{s.orphans.len});
+    if (s.unexplained.len > 0) note("note: {s} labelled low, which no record explains: `zigsaw grants` says more", .{try std.mem.join(ctx.arena, ", ", s.unexplained)});
+}
+
+/// `zigsaw grants`: what's changed outside the store, this store's from its
+/// files, the rest from the record.
+pub fn show(ctx: *Context, only: ?[]const u8) !void {
+    const arena = ctx.arena;
+    var buf: [4096]u8 = undefined;
+    var stdout = Context.stdout().writerStreaming(ctx.io, &buf);
+    const w = &stdout.interface;
+    var any = false;
+
+    var heading = false;
+    for (try ctx.store.listGrantIds(arena)) |id| {
+        if (only) |o| if (!std.os.windows.eqlIgnoreCaseWtf8(o, id)) continue;
+        const recorded = try ctx.store.readGrants(arena, id);
+        if (recorded.len == 0) continue;
+        if (!heading) try w.print("This store, {s}\n", .{ctx.store.root});
+        heading = true;
+        any = true;
+        try w.print("  {s}\n", .{id});
+        const standing = try Standing.of(ctx, id);
+        const cwds = try ctx.store.readCwdGrants(arena, id);
+        for (recorded) |g| try w.print("    {f}: {s}\n", .{ Line{ .grant = g }, why(standing, g, containsPath(cwds, g.path)) });
+    }
+    const s = try Survey.of(ctx);
+    any = try showEntries(w, "Other stores", "", s.others, only) or any;
+    any = try showEntries(w, "Stores since deleted", " (`zigsaw repair` takes these back)", s.orphans, only) or any;
+    if (only == null and s.unexplained.len > 0) {
+        any = true;
+        try w.writeAll("Not explained: labelled low, in no store's record (`zigsaw grants --take-back <path>` removes one)\n");
+        for (s.unexplained) |p| try w.print("  {s}\n", .{p});
+    }
+    if (!any) try w.writeAll(if (only != null) "Nothing recorded for that app.\n" else "zigsaw has changed nothing outside its stores.\n");
+    try w.flush();
+}
+
+fn showEntries(w: *Io.Writer, title: []const u8, hint: []const u8, entries: []const ledger.Entry, only: ?[]const u8) !bool {
+    var any = false;
+    for (entries) |e| {
+        if (only) |o| if (!std.os.windows.eqlIgnoreCaseWtf8(o, e.id)) continue;
+        if (!any) try w.print("{s}{s}\n", .{ title, hint });
+        any = true;
+        try w.print("  {s}, {s}: {f}\n", .{ e.store, e.id, Line{ .grant = e.grant } });
+    }
+    return any;
+}
+
+/// A change as `zigsaw grants` says it.
+const Line = struct {
+    grant: Store.Grant,
+
+    pub fn format(l: Line, w: *Io.Writer) Io.Writer.Error!void {
+        switch (l.grant.kind) {
+            .low => try w.print("low label on {s}", .{l.grant.path}),
+            .appcontainer => try w.print("its container may use {s}", .{l.grant.path}),
+            .loopback => try w.writeAll("its container is exempt from loopback isolation"),
+        }
+    }
+};
+
+/// How long a change of this store's lasts.
+fn why(standing: Standing, g: Store.Grant, was_cwd: bool) []const u8 {
+    if (g.kind == .loopback) return "while its runs go";
+    if (standing.keeps(g, was_cwd) == null) return "goes when its last run ends, or at `zigsaw repair`";
+    return if (was_cwd) "a working directory, kept while it has cwd" else "its permissions name it, kept until they don't";
+}
+
+/// Takes back what no store stands behind, for `zigsaw repair`, unless a store
+/// that stands has the same. Returns how many failed (reported).
+pub fn settleOrphans(ctx: *Context) !usize {
+    const key = ctx.store.ledger_key orelse return 0;
+    if (try acl.belowMedium()) return 0;
+    const arena = ctx.arena;
+    const changes = try ctx.store.lockGrantChanges(arena);
+    defer changes.release(ctx.io);
+    const entries = try entriesOf(ctx);
+    var failed: usize = 0;
+    for (entries) |e| {
+        if (try ledger.stateOf(ctx.io, arena, e) != .orphan) continue;
+        const present = e.grant.kind == .loopback or try Store.exists(ctx.io, e.grant.path);
+        if (present and !try wantedElsewhere(ctx, entries, e)) {
+            note("{s} is no longer there to take this back: {f} ({s})", .{ e.store, Line{ .grant = e.grant }, e.id });
+            if (!try takeBack(ctx, e.grant, try .of(arena, e.id), true)) {
+                failed += 1;
+                continue;
+            }
+        }
+        try ledger.remove(arena, key, e);
+    }
+    ledger.dropIfEmpty(arena, key) catch {};
+    return failed;
+}
+
+/// Whether a store that stands has this change too: any app, for a label, as
+/// there's one to a path; the same app, for what's granted to its identities.
+fn wantedElsewhere(ctx: *Context, entries: []const ledger.Entry, orphan: ledger.Entry) !bool {
+    // This store's files, for an app that hasn't changed its grants since 0.70.
+    if (orphan.grant.kind == .low and try ctx.store.grantedToOthers(ctx.arena, "", orphan.grant)) return true;
+    for (entries) |e| {
+        if (!e.grant.eql(orphan.grant)) continue;
+        if (orphan.grant.kind != .low and !std.os.windows.eqlIgnoreCaseWtf8(e.id, orphan.id)) continue;
+        if (try ledger.stateOf(ctx.io, ctx.arena, e) != .orphan) return true;
+    }
+    return false;
+}
+
+/// `zigsaw grants --take-back <path>`: removes a low label that no record
+/// explains. One that a record has goes the way it's recorded, or the app
+/// would only make it again.
+pub fn takeBackLabel(ctx: *Context, path: []const u8) !void {
+    const arena = ctx.arena;
+    if (!std.fs.path.isAbsolute(path)) return fail("--take-back takes an absolute path; got \"{s}\"", .{path});
+    const changes = try ctx.store.lockGrantChanges(arena);
+    defer changes.release(ctx.io);
+    const entries = try entriesOf(ctx);
+    if (try recordedLow(ctx, entries, path)) |e| switch (try ledger.stateOf(ctx.io, arena, e)) {
+        .orphan => return fail("{s} was labelled for {s} by a store since deleted, {s}: `zigsaw repair` takes it back", .{ path, e.id, e.store }),
+        else => return fail("{s} is labelled for {s} in {s}: `zigsaw rm {s}` there takes it back, or an override that takes the permission away", .{ path, e.id, e.store, e.id }),
+    };
+    // Windows' own, for low-integrity programs to write in.
+    if (ctx.env.get("USERPROFILE")) |home| {
+        if (samePath(path, try std.fs.path.join(arena, &.{ home, "AppData", "LocalLow" })))
+            return fail("{s} is labelled low by Windows, for programs at low integrity", .{path});
+    }
+    const rid = try acl.ownLabel(arena, path) orelse return note("{s} has no label of its own", .{path});
+    if (rid > win32.SECURITY_MANDATORY_LOW_RID) return note("{s} isn't labelled low", .{path});
+    const start = Io.Timestamp.now(ctx.io, .awake);
+    try acl.unlabel(arena, path);
+    note("removed the low integrity label of {s} ({d} ms)", .{ path, millis(ctx, start) });
+}
+
 /// The app's AppContainer identities, whether or not its profile exists.
 const Sids = struct {
     /// The profile's name, as messages call it.
@@ -207,6 +401,15 @@ const Sids = struct {
 /// is told only when `tell_kept`: `rm` asked for it to go, a run's end didn't.
 /// So is the loopback exemption's end, which every run's end would tell.
 fn undo(ctx: *Context, id: []const u8, g: Store.Grant, sids: Sids, tell_kept: bool) !bool {
+    if (g.kind == .low and try ctx.store.grantedToOthers(ctx.arena, id, g)) {
+        if (tell_kept) note("kept the low integrity label of {s}, which other apps' runs need", .{g.path});
+        return true;
+    }
+    return takeBack(ctx, g, sids, tell_kept);
+}
+
+/// Takes back one change, whoever else may want it.
+fn takeBack(ctx: *Context, g: Store.Grant, sids: Sids, tell_kept: bool) !bool {
     const arena = ctx.arena;
     const start = Io.Timestamp.now(ctx.io, .awake);
     switch (g.kind) {
@@ -219,10 +422,6 @@ fn undo(ctx: *Context, id: []const u8, g: Store.Grant, sids: Sids, tell_kept: bo
             if (changed) note("revoked {s} access to {s} ({d} ms)", .{ sids.name, g.path, millis(ctx, start) });
         },
         .low => {
-            if (try ctx.store.grantedToOthers(arena, id, g)) {
-                if (tell_kept) note("kept the low integrity label of {s}, which other apps' runs need", .{g.path});
-                return true;
-            }
             const label = acl.ownLabel(arena, g.path) catch |err| switch (err) {
                 error.Failed => return false,
                 else => |e| return e,

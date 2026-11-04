@@ -28,6 +28,7 @@ export ZIGSAW_SHORTCUTS_DIR="$work\\links"
 # Environment.
 env_key="Software\\ZigsawTest\\install-$$"
 export ZIGSAW_INSTALL_ENV_KEY="$env_key"
+export ZIGSAW_GRANTS_KEY="Software\\ZigsawTest\\install-$$-grants"
 script="$root\\scripts\\install.ps1"
 APP=test.install.wait
 
@@ -148,7 +149,20 @@ uninstalls() {
     path_value | grep -q 'REG_EXPAND_SZ.*%USERPROFILE%\\tools;C:\\other$' || { path_value; return 1; }
 }
 check "uninstalling removes the programs and the PATH entry, and nothing else of PATH" uninstalls
+record_gone() { ! reg query "HKCU\\$ZIGSAW_GRANTS_KEY" >/dev/null 2>&1; }
+check "and the record of what stores changed, which has nothing left" record_gone
+reinstall_with_record() {
+    local out
+    install >/dev/null 2>&1 || return 1
+    # Another store, still there, has something recorded.
+    reg add "HKCU\\$ZIGSAW_GRANTS_KEY" /v "$work\\kept|test.other|low $work" /f >/dev/null 2>&1 &&
+        mkdir -p "$work\\kept\\grants" && printf 'low %s\n' "$work" >"$work\\kept\\grants\\test.other.txt" || return 1
+    out=$(install -Uninstall 2>&1) || { echo "$out"; return 1; }
+    grep -q "still has what other stores changed" <<<"$out" && reg query "HKCU\\$ZIGSAW_GRANTS_KEY" 2>/dev/null | grep -qF 'test.other'
+}
+check "uninstalling leaves what another store still needs in the record, and says so" reinstall_with_record
 
+reg delete "HKCU\\$ZIGSAW_GRANTS_KEY" /f >/dev/null 2>&1
 reg delete "HKCU\\$env_key" /f >/dev/null 2>&1
 reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1
 rm -rf "$work"

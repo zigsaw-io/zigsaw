@@ -176,6 +176,16 @@ pub fn build(b: *std.Build) void {
     const procprobe_step = b.step("procprobe", "Build the process confinement probe used by tests/chromium.sh");
     procprobe_step.dependOn(&b.addInstallArtifact(procprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // Runs a command as another account; see tests/standard-user.sh. Also
+    // installed under zig-out\test.
+    const asuser = b.addExecutable(.{ .name = "zigsaw-asuser", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/asuser.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const asuser_step = b.step("asuser", "Build the program tests/standard-user.sh runs commands as another account with");
+    asuser_step.dependOn(&b.addInstallArtifact(asuser, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     // A GUI program that records how it was started and exits with the code
     // it's given, for the GUI shim; see tests/shims.sh. Also installed under
     // zig-out\test.

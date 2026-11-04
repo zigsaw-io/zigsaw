@@ -24,9 +24,22 @@
   run's command line doesn't take back a grant that stands for that run:
   an AppContainer run can still reach the path by its name. A run that
   didn't end (zigsaw was killed, or its console closed) leaves its grants
-  until the app's next run ends, `zigsaw repair` or `zigsaw rm`. Two stores
-  don't know each other's labels: taking one back for an app in one store
-  takes it from an app of the other that needs it too.
+  until the app's next run ends, `zigsaw repair` or `zigsaw rm`.
+- Stores know each other's labels only from zigsaw 0.70 on, and only once a
+  store's app has changed its grants since, or `zigsaw repair` ran there: until
+  then, taking a label back in one can take it from an app of the other. Each
+  store has its own lock on the changes it makes, so two stores deciding about one
+  label at the very same moment could disagree. What a deleted store left waits
+  for a `zigsaw repair`, which `zigsaw list` says when it sees it. An app's
+  AppContainer profile left by a deleted store stays in your profile, harmless.
+  A deleted store's programs that lost their low label keep their medium one.
+- `zigsaw grants` looks for unexplained labels only on your six folders and your
+  profile, not on the rest of your drives, and only for one of a path's own:
+  something inside `Documents`, labelled by itself, isn't listed.
+- An installed app's files can't be deleted by hand, by anyone, as they're
+  read-only (`rm -rf` and Explorer are refused): a store with apps needs `zigsaw
+  rm` first. To delete one regardless, `icacls <store> /reset /T` first, then
+  `zigsaw repair` from another.
 - At low integrity, an app with `cwd` run from your user profile, a folder
   that holds it, or a drive's root gets its working directory read-only for
   that run, with a warning, as labelling it would let every low-integrity
@@ -91,12 +104,28 @@
   exempt container reaches this machine's programs whatever its
   capabilities: a run of the same app without the network, at the same
   time, reaches them too.
-- The loopback exemption is a setting of Windows for the whole machine,
-  which this account (an administrator's, unelevated) and GitHub's runners
-  may change. A standard user's account is untested: where Windows refuses,
-  the run says so, and the app reaches only the ports it uses. Two users'
-  zigsaws changing the list at the same moment could undo each other's
-  change, as the lock zigsaw takes for it is per session.
+- The loopback exemption is a setting of Windows for the whole machine, which
+  a standard user's account may change, as may an administrator's and GitHub's
+  runners (tested on Windows 11 26300 in iteration 70; a domain's policy could
+  say otherwise). Where Windows refuses, the run says so, and the app reaches
+  only the ports it uses. Two users' zigsaws changing the list at the same
+  moment could undo each other's change, as the lock zigsaw takes for it is
+  per session.
+- Tests run as a standard user start from another account's logon, with that
+  user's profile loaded: nobody has signed in to that account and used its
+  desktop, Explorer, the Start menu or Settings with zigsaw's apps. Two people
+  using one machine's zigsaw hasn't been tried, nor has an account a domain's
+  policies restrict.
+- A store on a drive whose root gives users only Modify, as a fresh second
+  drive's does, can't run a low app that may write a folder the user neither owns
+  nor may change the permissions of: the run stops, and says so. `icacls
+  /setintegritylevel` is refused on such a drive, even for an administrator's
+  unelevated account and folders it made, though zigsaw manages for those.
+- An MSVC build in an account nobody has signed in to can leave its build folder
+  behind, with a warning: Windows' WebCache process starts during the build, under
+  the build's profile, and stays. `zigsaw prune` deletes the folder once that's
+  gone. Where someone's signed in, the process is running already, under their
+  real profile.
 - Apps trust the roots in Windows' certificate stores
   ([certificate trust](networking.md#certificate-trust)), but BusyBox's
   `wget` doesn't check certificates at all.
@@ -353,10 +382,14 @@
   pins (`scripts/texlive-pins.sh`).
 - Microsoft Defender quarantined a development build of zigsaw 0.19.0 as
   `Trojan:Win32/Bearfoos.A!ml`, which ends a build or run in progress
-  ([findings](findings.md#other-findings)). The released programs scan
-  clean, and from 0.22.0 they carry version information and a manifest, but
-  Defender's machine learning may still flag an unsigned build by what it
-  does; zigsaw's programs aren't signed.
+  ([findings](findings.md#other-findings)), and flagged a build of what became
+  0.70.0 by its exact bytes ([findings](findings.md#defender-and-exact-bytes)).
+  Released programs have scanned clean, and from 0.22.0 they carry version
+  information and a manifest, but zigsaw's programs aren't signed, and any
+  change to their bytes could be flagged. A release is scanned before it's
+  published, where its runner's Defender can scan: a verdict that comes later, on
+  a released file, wouldn't be seen. Where one is, Windows says the file "contains
+  a virus or potentially unwanted software", and it doesn't start, or copy.
 - A Go vendor step downloads every module its `go.mod` names, whatever the
   build uses: zot's takes 14 minutes and 5 GB of temporary space, for the
   68 MB it keeps.

@@ -63,6 +63,12 @@ jobs:
           PACKAGE_DIR: zig-out\release
         run: bash tests/self.sh
 
+      # Not published if Defender flags these bytes: Windows wouldn't start them
+      # (docs/findings.md). Says so and goes on where it can't scan.
+      - name: What Defender makes of the programs
+        shell: bash
+        run: bash scripts/defender-scan.sh zig-out/release
+
       - name: Publish the release
         shell: bash
         env:

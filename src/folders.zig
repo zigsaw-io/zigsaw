@@ -9,6 +9,12 @@
 //! path. A junction, unlike a symbolic link, needs no privilege. Deleting a
 //! data directory, and changing its ACL through inheritance, remove or change
 //! the junction itself, never what it points to.
+//!
+//! A store that isn't the default one, %LOCALAPPDATA%\zigsaw, leaves the real
+//! folders out until told otherwise (`zigsaw override --global --real-folders`).
+//! Such a store is most often a test's or an experiment's, and a run in it that
+//! labelled your Documents low leaves it so when the store is deleted, as
+//! happened twice while building zigsaw.
 
 const std = @import("std");
 const Io = std.Io;
@@ -16,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const win32 = @import("win32.zig");
 const oci = @import("oci.zig");
 const environment = @import("environment.zig");
+const override = @import("override.zig");
 const Context = @import("Context.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -33,7 +40,12 @@ pub const HostPath = struct { path: []const u8, read_only: bool };
 /// looks.
 pub fn apply(ctx: *Context, data_dir: []const u8, env: []const environment.Var, granted: []const Grant) ![]const HostPath {
     var out: std.ArrayList(HostPath) = .empty;
-    for (std.enums.values(oci.UserFolder)) |folder| try applyOne(ctx, data_dir, env, folder, granted, &out);
+    var left_out: std.ArrayList([]const u8) = .empty;
+    for (std.enums.values(oci.UserFolder)) |folder| try applyOne(ctx, data_dir, env, folder, granted, &out, &left_out);
+    if (left_out.items.len > 0) note("note: left out your {s}: this store, {s}, isn't your default one, so its apps don't get your real folders. `zigsaw override --global --real-folders` lets them", .{
+        try std.mem.join(ctx.arena, ", ", left_out.items),
+        ctx.store.root,
+    });
     return out.items;
 }
 
@@ -44,6 +56,7 @@ fn applyOne(
     folder: oci.UserFolder,
     granted: []const Grant,
     out: *std.ArrayList(HostPath),
+    left_out: *std.ArrayList([]const u8),
 ) !void {
     const io = ctx.io;
     const arena = ctx.arena;
@@ -60,6 +73,11 @@ fn applyOne(
         if (in_data) try unlink(io, arena, app_path);
         return;
     };
+    if (!try mayUseFolders(ctx)) {
+        try left_out.append(arena, info(folder).name);
+        if (in_data) try unlink(io, arena, app_path);
+        return;
+    }
     const host = try hostPath(io, arena, folder, hook) orelse {
         if (ctx.verbose) note("folder   {t}: you have no such folder", .{folder});
         if (in_data) try unlink(io, arena, app_path);
@@ -92,7 +110,49 @@ fn applyOne(
 /// Where the user's folder is, as runs grant it; null if they don't have
 /// it.
 pub fn hostPathOf(ctx: *Context, folder: oci.UserFolder) !?[]const u8 {
+    if (!try mayUseFolders(ctx)) return null;
     return hostPath(ctx.io, ctx.arena, folder, testFolders(ctx));
+}
+
+/// The profile and those of the user's folders they have, whether this
+/// store's apps may use them or not: where `zigsaw grants` looks for labels
+/// no record explains. With ZIGSAW_USER_FOLDERS, that directory and the
+/// folders in it.
+pub fn allHostPaths(ctx: *Context) ![]const []const u8 {
+    const arena = ctx.arena;
+    const hook = testFolders(ctx);
+    var out: std.ArrayList([]const u8) = .empty;
+    if (hook orelse ctx.env.get("USERPROFILE")) |profile| try out.append(arena, profile);
+    for (std.enums.values(oci.UserFolder)) |folder|
+        if (try hostPath(ctx.io, arena, folder, hook)) |p| try out.append(arena, p);
+    return out.items;
+}
+
+/// Whether a run in this store gets the folders it names: test folders
+/// always, the real ones as `realFoldersAllowed` says.
+fn mayUseFolders(ctx: *Context) !bool {
+    if (testFolders(ctx) != null) return true;
+    const saved = (try override.load(ctx.store, ctx.arena, null)).real_folders;
+    return realFoldersAllowed(try isDefaultStore(ctx), saved);
+}
+
+/// What's saved goes; without that, only the default store's apps get them.
+fn realFoldersAllowed(default_store: bool, saved: ?bool) bool {
+    return saved orelse default_store;
+}
+
+/// Whether the store is the one zigsaw uses when ZIGSAW_HOME isn't set. A shim
+/// sets ZIGSAW_HOME to its own store, so whether it's set doesn't say.
+fn isDefaultStore(ctx: *Context) !bool {
+    const arena = ctx.arena;
+    const local = ctx.env.get("LOCALAPPDATA") orelse return false;
+    const default = try std.fs.path.join(arena, &.{ local, "zigsaw" });
+    if (samePath(ctx.store.root, default)) return true;
+    // The same place by another name: a short name, or a link.
+    const dir = Io.Dir.cwd();
+    const a = dir.realPathFileAlloc(ctx.io, ctx.store.root, arena) catch return false;
+    const b = dir.realPathFileAlloc(ctx.io, default, arena) catch return false;
+    return samePath(a, b);
 }
 
 /// Where the user's folder is, or null if they don't have it. With
@@ -371,6 +431,13 @@ test expand {
     try std.testing.expectEqualStrings("%OneDrive%\\Documents", try expand(arena, "%OneDrive%\\Documents", env));
     try std.testing.expectEqualStrings("50%C:\\x", try expand(arena, "50%%SystemDrive%\\x", env));
     try std.testing.expectEqualStrings("a%b", try expand(arena, "a%b", env));
+}
+
+test realFoldersAllowed {
+    try std.testing.expect(realFoldersAllowed(true, null));
+    try std.testing.expect(!realFoldersAllowed(false, null));
+    try std.testing.expect(realFoldersAllowed(false, true));
+    try std.testing.expect(!realFoldersAllowed(true, false));
 }
 
 test isInside {

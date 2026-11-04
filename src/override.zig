@@ -45,11 +45,15 @@ pub const Settings = struct {
     /// "NAME=PORT": where other programs reach the app's service NAME,
     /// instead of the port its config says (see services.zig).
     ports: []const []const u8 = &.{},
+    /// Whether this store's apps get the user's real folders, for a store
+    /// that isn't the default one, whose apps otherwise don't (see
+    /// folders.zig). Saved store-wide only.
+    real_folders: ?bool = null,
 
     pub fn isEmpty(s: Settings) bool {
         return s.sandbox == null and s.network == null and s.commands == null and s.host == null and s.ephemeral == null and
             s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.env.len == 0 and
-            s.noextension.len == 0 and s.extension.len == 0 and s.ports.len == 0;
+            s.noextension.len == 0 and s.extension.len == 0 and s.ports.len == 0 and s.real_folders == null;
     }
 
     /// `upper` over `lower`. For the lists, an entry of `upper` replaces
@@ -67,6 +71,7 @@ pub const Settings = struct {
             .env = try mergeList(arena, lower.env, upper.env, envName),
             .noextension = try mergeList(arena, try without(arena, lower.noextension, upper.extension, itself), upper.noextension, itself),
             .ports = try mergeList(arena, lower.ports, upper.ports, envName),
+            .real_folders = upper.real_folders orelse lower.real_folders,
         };
     }
 
@@ -143,6 +148,10 @@ pub const Settings = struct {
         }
         for (s.ports) |p| {
             try w.print("{s}--port={s}", .{ sep, p });
+            sep = " ";
+        }
+        if (s.real_folders) |on| {
+            try w.print("{s}--{s}real-folders", .{ sep, if (on) "" else "no" });
             sep = " ";
         }
     }

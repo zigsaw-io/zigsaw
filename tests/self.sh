@@ -51,6 +51,14 @@ z() { "$zigsaw" "$@"; }
 version=$(sed -n 's/^ *\.version = "\(.*\)",$/\1/p' "$root\\build.zig.zon")
 same_version() { grep -q "^  \"version\": \"$version\",\$" "$root\\zigsaw.json"; }
 check "zigsaw.json has build.zig.zon's version, $version" same_version
+# So that a checkout's line endings don't change what's built, and a build of a
+# tag has the release's bytes wherever it's made.
+line_endings_pinned() {
+    local attrs
+    attrs=$(cd "$root" && git ls-files src/windows 'src/*.zig' build.zig build.zig.zon | git check-attr --stdin eol) || return 1
+    [ -n "$attrs" ] && ! grep -v ': eol: lf$' <<<"$attrs"
+}
+check "what's built into the programs has its line endings pinned" line_endings_pinned
 
 builds() { (cd "$root" && z build); }
 start=$SECONDS

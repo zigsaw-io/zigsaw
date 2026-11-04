@@ -111,6 +111,8 @@ param(
             if ($apps.Count -gt 0) {
                 throw "These apps are still installed: $($apps -join ', '). Remove each with 'zigsaw rm <id>' first: zigsaw undoes what it changed for them, which deleting its files wouldn't."
             }
+            # What stores since deleted left; later, no zigsaw is here to.
+            & $zigsaw repair | Out-Null
         }
         foreach ($name in $programs) {
             $path = Join-Path $Dir $name
@@ -118,6 +120,14 @@ param(
         }
         Remove-Leftovers
         if (-not $NoPath -and (Set-UserPath $false)) { Write-Host "Removed $Dir from your PATH." }
+        # The record of what stores changed outside themselves: it goes once it
+        # has nothing in it, and until then says what another store still needs.
+        $record = 'HKCU:\' + $(if ($env:ZIGSAW_GRANTS_KEY) { $env:ZIGSAW_GRANTS_KEY } else { 'Software\Zigsaw\Grants' })
+        if (Test-Path -LiteralPath $record) {
+            $left = @((Get-Item -LiteralPath $record).Property)
+            if ($left.Count -eq 0) { Remove-Item -LiteralPath $record -Force }
+            else { Write-Warning "zigsaw's record still has what other stores changed: $($left -join '; '). A zigsaw using them takes it back." }
+        }
         $store = if ($env:ZIGSAW_HOME) { $env:ZIGSAW_HOME } else { Join-Path $env:LOCALAPPDATA 'zigsaw' }
         Write-Host "zigsaw is removed from $Dir. Its store, with downloads and apps' data, is $store; delete that too if you don't want them."
         return

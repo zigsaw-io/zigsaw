@@ -188,6 +188,15 @@ an earlier zigsaw kept until `rm`, or a label on a folder that holds the
 store, which zigsaw no longer gives. A run that didn't end (zigsaw was
 killed) leaves its grants until the app's next run ends.
 
+A store's `grants\<id>.txt` is what it goes by. Each is copied to
+`HKCU\Software\Zigsaw\Grants`, one value per change, named `<store>|<app>|<change>`,
+as Windows keeps a label after a store is deleted, which takes the file with it.
+From that copy, `zigsaw grants` lists what any store changed, one store keeps a
+label another still needs, and `zigsaw repair` takes back what a deleted store
+left. A store counts as deleted when its `grants` folder is gone from a drive
+that's there: one on a drive that's unplugged, or on a share, stays as it is. The
+key goes when nothing's left in it.
+
 The programs the app's runs wrote are listed in `grants\<id>.programs`:
 medium between runs, low while its low and `appcontainer` runs go. `zigsaw
 rm` forgets them, and they stay medium.

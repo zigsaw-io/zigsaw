@@ -61,7 +61,6 @@ passed only if a message went there and back.
 
 Not tried yet:
 
-- the exemption from a standard user;
 - two exempt containers talking to each other;
 - `-is`, the exemption's inbound mode.
 
@@ -175,8 +174,10 @@ where Windows lets you.
   That's what `network` means in principle 1.
 - `ZIGSAW_LOOPBACK_EXEMPTION=0` turns it off, for whoever doesn't want the
   machine's setting changed.
-- It works for this account, and on GitHub's runners. A standard user's is
-  untested.
+- It works for this account, on GitHub's runners, and, from iteration 70, for a
+  real standard user on Windows 11 26300, which Windows lets exempt its own
+  container (2 to 7 ms; `tests/network.sh` passes there too). A domain's policy
+  could say otherwise.
 
 **(b) Forwards.** Built in iteration 51. An app, a runtime or an extension
 declares the ports it uses (`permissions.uses`): another app's service, or

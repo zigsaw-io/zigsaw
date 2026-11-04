@@ -36,6 +36,7 @@ const acl = @import("acl.zig");
 const win32 = @import("win32.zig");
 const oci = @import("oci.zig");
 const format = @import("format.zig");
+const ledger = @import("ledger.zig");
 const Context = @import("Context.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -44,6 +45,10 @@ io: Io,
 root: []const u8,
 /// Report step timings, as `zigsaw -v` asks for.
 verbose: bool = false,
+/// The key under HKCU that keeps a copy of the store's grants (see
+/// ledger.zig). None for a store a test makes itself, or for one looked at
+/// from another.
+ledger_key: ?[]const u8 = null,
 
 const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
 
@@ -55,9 +60,14 @@ pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Stor
     else
         return fail("neither ZIGSAW_HOME nor LOCALAPPDATA is set", .{});
 
-    const store: Store = .{ .io = io, .root = root };
+    const store: Store = .{ .io = io, .root = root, .ledger_key = env.get("ZIGSAW_GRANTS_KEY") orelse ledger.default_key };
     for (subdirs) |sub| try Io.Dir.cwd().createDirPath(io, try store.path(arena, &.{sub}));
     return store;
+}
+
+/// The store's path as the ledger names it: whole, whatever ZIGSAW_HOME said.
+pub fn fullRoot(s: Store, arena: Allocator) []const u8 {
+    return Io.Dir.cwd().realPathFileAlloc(s.io, s.root, arena) catch s.root;
 }
 
 pub fn path(s: Store, arena: Allocator, parts: []const []const u8) ![]u8 {
@@ -562,13 +572,13 @@ pub const Grant = struct {
     /// The app's container's loopback exemption (see appcontainer.loopback).
     pub const loopback: Grant = .{ .kind = .loopback, .path = "" };
 
-    fn parse(line: []const u8) Grant {
+    pub fn parse(line: []const u8) Grant {
         if (std.mem.startsWith(u8, line, label_prefix)) return .{ .kind = .low, .path = line[label_prefix.len..] };
         if (std.mem.eql(u8, line, loopback_line)) return loopback;
         return .{ .kind = .appcontainer, .path = line };
     }
 
-    fn eql(a: Grant, b: Grant) bool {
+    pub fn eql(a: Grant, b: Grant) bool {
         return a.kind == b.kind and std.os.windows.eqlIgnoreCaseWtf8(a.path, b.path);
     }
 
@@ -623,6 +633,13 @@ pub fn writeGrants(s: Store, arena: Allocator, id: []const u8, grants: []const G
     var out: std.ArrayList(u8) = .empty;
     for (grants) |g| try out.print(arena, "{f}\n", .{g});
     try s.replaceFile(arena, try s.grantsPath(arena, id), out.items);
+    // After the file: the file is what the store goes by, and the record says
+    // what's left if the store is deleted. A failure was reported, and the next
+    // change to the app's grants, or `zigsaw repair`, tries again.
+    if (s.ledger_key) |key| ledger.sync(arena, key, s.fullRoot(arena), id, grants) catch |err| switch (err) {
+        error.Failed => {},
+        else => |e| return e,
+    };
 }
 
 fn cwdGrantsPath(s: Store, arena: Allocator, id: []const u8) ![]u8 {
@@ -708,8 +725,8 @@ pub fn lockGrantChanges(s: Store, arena: Allocator) !Lock {
     return openLock(s.io, p, .exclusive, .wait);
 }
 
-/// Whether an app other than `id` has `grant` recorded: a label another
-/// app's runs still need, say.
+/// Whether an app other than `id` has `grant` recorded, in this store or in
+/// another that still stands: a label another app's runs still need, say.
 pub fn grantedToOthers(s: Store, arena: Allocator, id: []const u8, grant: Grant) !bool {
     var dir = try Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{"grants"}), .{ .iterate = true });
     defer dir.close(s.io);
@@ -720,6 +737,16 @@ pub fn grantedToOthers(s: Store, arena: Allocator, id: []const u8, grant: Grant)
         if (std.ascii.eqlIgnoreCase(entry.name, own)) continue;
         const bytes = try dir.readFileAlloc(s.io, entry.name, arena, .limited(1 << 20));
         for (try parseGrants(arena, bytes)) |g| if (g.eql(grant)) return true;
+    }
+    const key = s.ledger_key orelse return false;
+    const root = s.fullRoot(arena);
+    const entries = ledger.list(arena, key) catch |err| switch (err) {
+        error.Failed => return false,
+        else => |e| return e,
+    };
+    for (entries) |e| {
+        if (e.ofStore(root) or !e.grant.eql(grant)) continue;
+        if (try ledger.stateOf(s.io, arena, e) != .orphan) return true;
     }
     return false;
 }

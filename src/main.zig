@@ -59,7 +59,14 @@ const usage =
     \\                                  and the kinds of file they open
     \\  override [options] <app-id>     save run options that every run of the app gets;
     \\                                  --show shows them, --reset removes them
-    \\  override [options] --global     the same for every app, below each app's own
+    \\  override [options] --global     the same for every app, below each app's own; also
+    \\                                  --real-folders lets the apps of a store that isn't your
+    \\                                  default one use your real folders, --noreal-folders
+    \\                                  stops them
+    \\  grants [<app-id>]               list what zigsaw changed outside its store for apps, in
+    \\                                  this store and others, what stores since deleted left,
+    \\                                  and low labels on your folders no record explains
+    \\  grants --take-back <path>       remove a low label that no record explains
     \\  update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
     \\                                  one pulled again that may reach more asks first,
     \\                                  unless given --yes
@@ -72,7 +79,8 @@ const usage =
     \\                                  uninstalled apps
     \\  repair                          write every app's commands, shortcuts and file
     \\                                  associations again, as after installing a new zigsaw,
-    \\                                  and take back what apps may no longer reach
+    \\                                  and take back what apps may no longer reach, and what
+    \\                                  stores since deleted left
     \\  version                         print zigsaw's version
     \\
     \\An image is <registry>/<repository>[:tag][@digest], e.g. ghcr.io/owner/node:24.21.0,
@@ -129,7 +137,8 @@ const usage =
     \\loopback isolation while the app's runs go, so that it reaches other programs on this
     \\machine; with ZIGSAW_LOOPBACK_EXEMPTION=0, zigsaw never exempts one.
     \\
-    \\Data lives in %ZIGSAW_HOME%, or %LOCALAPPDATA%\zigsaw when that isn't set.
+    \\Data lives in %ZIGSAW_HOME%, or %LOCALAPPDATA%\zigsaw when that isn't set. Apps of a
+    \\store elsewhere don't get your real folders until `override --global --real-folders`.
     \\
 ;
 
@@ -332,9 +341,28 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         // installing a zigsaw, maybe over one that was killed; and what they
         // were granted and no longer stands, by older zigsaws too.
         try hkcu.settleLeftovers(ctx, null);
-        const unsettled = try grants.settleAll(ctx);
+        const unsettled = try grants.settleAll(ctx) + try grants.settleOrphans(ctx);
         const code = try exports.repair(ctx);
         return if (unsettled > 0) 1 else code;
+    }
+    if (std.mem.eql(u8, command, "grants")) {
+        var id: ?[]const u8 = null;
+        var take_back: ?[]const u8 = null;
+        var i: usize = 0;
+        while (i < rest.len) : (i += 1) {
+            if (!std.mem.startsWith(u8, rest[i], "--")) {
+                if (id != null) return usageError();
+                id = rest[i];
+                continue;
+            }
+            const opt = try Option.read(rest, &i, &.{});
+            if (!std.mem.eql(u8, opt.name, "take-back")) return usageError();
+            take_back = opt.value;
+        }
+        if (id != null and take_back != null) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        if (take_back) |p| try grants.takeBackLabel(ctx, p) else try grants.show(ctx, id);
+        return 0;
     }
     return usageError();
 }
@@ -505,6 +533,7 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
     var id: ?[]const u8 = null;
     var reset = false;
     var global = false;
+    var real_folders: ?bool = null;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (!std.mem.startsWith(u8, args[i], "--")) {
@@ -512,13 +541,17 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
             id = args[i];
             continue;
         }
-        const opt = try Option.read(args, &i, &(SettingsParser.flags ++ [_][]const u8{ "show", "reset", "global" }));
+        const opt = try Option.read(args, &i, &(SettingsParser.flags ++ [_][]const u8{ "show", "reset", "global", "real-folders", "noreal-folders" }));
         if (opt.value == null and std.mem.eql(u8, opt.name, "reset")) {
             reset = true;
         } else if (opt.value == null and std.mem.eql(u8, opt.name, "global")) {
             global = true;
         } else if (opt.value == null and std.mem.eql(u8, opt.name, "show")) {
             // Showing is what happens anyway.
+        } else if (opt.value == null and std.mem.eql(u8, opt.name, "real-folders")) {
+            real_folders = true;
+        } else if (opt.value == null and std.mem.eql(u8, opt.name, "noreal-folders")) {
+            real_folders = false;
         } else if (!try settings.apply(arena, opt)) {
             return fail("--{s} can't be saved as an override", .{opt.name});
         }
@@ -527,7 +560,9 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
     if (global == (id != null)) return usageError();
     const app: ?[]const u8 = id;
     const whose = app orelse "every app";
-    const new = settings.finish();
+    if (real_folders != null and app != null) return fail("--real-folders is for a whole store: use it with --global", .{});
+    var new = settings.finish();
+    new.real_folders = real_folders;
 
     if (reset) {
         if (!new.isEmpty()) return fail("--reset removes all of {s}'s overrides; add new ones separately", .{whose});
@@ -599,6 +634,7 @@ fn list(ctx: *Context) !void {
         try w.writeByte('\n');
     }
     try w.flush();
+    try grants.noteLeftovers(ctx);
 }
 
 fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
@@ -677,6 +713,7 @@ test {
     _ = @import("remote.zig");
     _ = @import("roots.zig");
     _ = @import("layer.zig");
+    _ = @import("ledger.zig");
     _ = @import("run.zig");
     _ = @import("services.zig");
     _ = @import("shortcuts.zig");
