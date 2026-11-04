@@ -893,6 +893,31 @@ Kanboard won't start ("The directory ... must be writeable by your web
 server user"), and checks its files and plugins directories the same way.
 Composer, which doesn't, installs at low.
 
+### PHP 8.5.12's memory limit and an extension's `zend_try`
+
+From PHP 8.5.12, going over `memory_limit` doesn't reach a `zend_try` in an
+extension around the code that went over it. `Zend/zend_alloc.c` gained 405
+lines: going over the limit now queues a delayed error, raised at the VM's next
+interrupt, and the allocation goes on up to a hard limit. The extension's
+`zend_catch` doesn't run, and the fatal error's stack trace loses the PHP frames.
+
+| Fatal error, in a closure inside `zprobe_guard` | 8.5.11 | 8.5.12-1 |
+|---|---|---|
+| A class declared twice | caught, 7 frames | caught, 7 frames |
+| `trigger_error(..., E_USER_ERROR)` | caught, 7 frames | caught, 7 frames |
+| `str_repeat` past `memory_limit` | caught, 7 frames | **not caught, 2 frames** |
+| An array growing past `memory_limit` | caught, 7 frames | **not caught, 2 frames** |
+
+So a bailout still unwinds through an extension zig built, which is what the test
+extension checks, now with a class declared twice. An extension that counts on
+`zend_try` to clean up after running out of memory no longer gets to; shutdown
+functions still run. It looks deliberate upstream, and it isn't zigsaw's or zig's:
+the extension is the same on both.
+
+This showed in iteration 69's Reproduce run only once the row before it was fixed:
+a version number written into the test hid it. Iteration 69 had run `tests/php.sh`
+and not `tests/build.sh`'s PHP section, which is `SECTIONS=php tests/build.sh`.
+
 ### Composer and Kanboard
 
 - **Kanboard's release tarball leaves out `composer.json` and

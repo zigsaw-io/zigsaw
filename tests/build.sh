@@ -12,7 +12,8 @@
 #   tests/build.sh --groups
 #
 # GROUP runs only that group's sections (see groups below), as each of the
-# Reproduce workflow's build jobs does; --groups lists the groups.
+# Reproduce workflow's build jobs does; --groups lists the groups. SECTIONS runs
+# only those sections (SECTIONS=php), for checking one thing here.
 #
 # Needs Git Bash (and its git) and network access (busybox, Node, Prettier, zig, CMake,
 # zlib, SQLite, Rust, Go, .NET, OpenJDK, Maven and Gradle downloads, crates
@@ -51,6 +52,10 @@ problems=$({ printf '%s\n' $sections $grouped | sort | uniq -u; printf '%s\n' $g
 [ -z "${GROUP:-}" ] || printf '%s\n' "${groups[@]%%:*}" | grep -qx "$GROUP" || { echo "no group $GROUP"; exit 1; }
 # section <name>: whether this run checks that section: all do without GROUP.
 section() {
+    if [ -n "${SECTIONS:-}" ]; then
+        [[ " $SECTIONS " == *" $1 "* ]]
+        return
+    fi
     [ -n "${GROUP:-}" ] || return 0
     local g
     for g in "${groups[@]}"; do
@@ -1377,7 +1382,7 @@ php_ext_runs() {
     for sb in soft low appcontainer; do
         out=$(cd "$work\\phpcwd" && z run --sandbox=$sb $PHPAPP 2>&1 | tr -d '\r')
         ! grep -q '^FAIL' <<<"$out" && [ "$(grep -c '^ok ' <<<"$out")" -eq 27 ] && grep -q '^shutdown ok$' <<<"$out" ||
-            { echo "$sb: $(grep -E '^FAIL|rror' <<<"$out" | head -2 | tr '\n' ' ')"; return 1; }
+            { echo "$sb: $(grep -c '^ok ' <<<"$out") ok, then: $(grep '^FAIL' <<<"$out" | head -2 | tr '\n' ' ') $(tail -3 <<<"$out" | tr '\n' ' ')"; return 1; }
     done
 }
 check "PHP loads it, and its 27 checks pass, under soft, low and appcontainer" php_ext_runs
@@ -1388,7 +1393,8 @@ zprobe_joins() {
     local php='echo extension_loaded("zprobe") ? zprobe_libs() : "not loaded", "\n";' out
     # (What zigsaw notes, as a first low run's label, goes to stderr.)
     out=$(cd "$work\\phpcwd" && z run net.php.php -r "$php" 2>"$work\\stderr" | tr -d '\r')
-    [ "$out" = "zlib 1.3.2 crc 3610a686, from libxml2, OpenSSL 3.5.8" ] || { echo "installed: $out $(tr '\r\n' '  ' <"$work\\stderr")"; return 1; }
+    # (Which versions they are moves with PHP's.)
+    [ "$(sed -E 's/[0-9]+(\.[0-9]+)+/N/g' <<<"$out")" = "zlib N crc 3610a686, from libxml2, OpenSSL N" ] || { echo "installed: $out $(tr '\r\n' '  ' <"$work\\stderr")"; return 1; }
     out=$(cd "$work\\phpcwd" && z run --noextension=$PHPEXT net.php.php -r "$php" 2>"$work\\stderr" | tr -d '\r')
     [ "$out" = "not loaded" ] || { echo "left out: $out $(tr '\r\n' '  ' <"$work\\stderr")"; return 1; }
 }

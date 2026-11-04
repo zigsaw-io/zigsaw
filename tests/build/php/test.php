@@ -12,7 +12,8 @@ check("loaded", extension_loaded("zprobe"), true);
 check("constant", ZPROBE_ANSWER, 42);
 check("loaded by its image's .ini", str_contains((string) php_ini_scanned_files(), "zprobe.ini"), true);
 check("config.w32", zprobe_config(), "hello from config.w32, version info: yes");
-check("libraries PHP has", zprobe_libs(), "zlib 1.3.2 crc 3610a686, from libxml2, OpenSSL 3.5.8");
+// That it links them; which versions they are moves with PHP's.
+check("libraries PHP has", preg_replace('/\d+(\.\d+)+/', 'N', zprobe_libs()), "zlib N crc 3610a686, from libxml2, OpenSSL N");
 check("repeat", zprobe_repeat("ab", 3), "ab,ab,ab");
 check("repeat sep", zprobe_repeat("x", 4, "--"), "x--x--x--x");
 check("repeat 0", zprobe_repeat("x", 0), "");
@@ -50,7 +51,8 @@ register_shutdown_function(function () {
     echo (zprobe_bailed() ? "ok   " : "FAIL ") . "fatal error unwound through zend_try in the extension\n";
     echo "shutdown ok\n";
 });
-ini_set("memory_limit", "16M");
 echo "fatal next:\n";
-zprobe_guard(function () { return zprobe_map([1], fn() => str_repeat("x", 64 * 1024 * 1024)); });
+// A class declared twice, rather than the memory limit: from PHP 8.5.12, its
+// fatal error doesn't reach a zend_try in an extension (docs/findings.md).
+zprobe_guard(function () { return zprobe_map([1], fn() => eval("class Twice {} class Twice {}")); });
 echo "FAIL not reached\n";
