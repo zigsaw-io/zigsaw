@@ -2116,6 +2116,30 @@ the same in two stores. `tests/php.sh`, `tests/store.sh`, `tests/self.sh`,
 `tests/registry.sh` and `tests/matrix.sh` pass with their work there, under all three
 sandboxes. It has no 8.3 short names, and nothing here missed them.
 
+## Lazy running with the Cloud Files API (experiment, 2026-11-04)
+
+An eStargz layer's files as placeholders, fetched as they're first opened: see
+[experiment-cloud-files.md](experiment-cloud-files.md). In short:
+
+- **It needs no admin, and works under low integrity and AppContainer**: reading,
+  mapping, loading and starting dehydrated files, with zigsaw's deny entry and grants
+  on them. `zigsaw run`, `rm` and `prune` work on such a folder unchanged. A Dev Drive
+  refuses it (error 478).
+- **Placeholders are ten times cheaper than an unpack** (0.55 s against 5.8 s for
+  llvm-mingw), and first use comes 1.7 to 8 times sooner, by how little of an image is
+  used. One request per file loses to a full pull; blocks of 1 MiB don't.
+- **A plain open fetches the whole file**, so what's lazy is the file, not the page.
+- **A file's first open costs ~7.5 ms more**, it looks like Defender's, which an unpack
+  pays for while writing.
+- **Creating an image section for a hydrated 77 MB DLL takes 60 ms each time**, against
+  0.5 ms for a plain copy, even once it's reverted and unregistered. We didn't find the
+  cause. Renaming a copy over it cures it.
+- **One provider per root, and it must stay.** Without one, a dehydrated program or DLL
+  fails with `BAD_EXE_FORMAT`. A provider's own process can't start a dehydrated program.
+
+Worth building as a bridge to a normal deployment, not as a way of keeping apps; not
+built.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

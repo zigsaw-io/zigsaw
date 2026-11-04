@@ -267,7 +267,8 @@ A gzip layer is named as one that can't be read without pulling.
 ### Not in this design
 
 - **Lazy running**: needs a filesystem driver. ProjFS needs admin to turn
-  on; the Cloud Files API is untested with AppContainer and low IL.
+  on. The Cloud Files API needs none, and works under AppContainer and low IL:
+  see [the experiment](experiment-cloud-files.md).
 - **zstd:chunked**: Zig's std has no zstd compressor. Its TOC fits the
   model; it can come when a compressor does.
 - **SOCI**: keeps layers unchanged, but needs resumable gzip checkpoints.
