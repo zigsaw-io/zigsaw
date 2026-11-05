@@ -52,8 +52,8 @@
       "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
       "sources": [
         {
-          "url": "https://github.com/pnggroup/libpng/archive/v1.6.49.tar.gz",
-          "sha256": "e425762fdfb9bb30a5d2da29c0067570e96b5d41d79c659cf0dad861e9df738e",
+          "url": "https://github.com/pnggroup/libpng/archive/v1.6.59.tar.gz",
+          "sha256": "2540302a1844ad2b2b501977abecfa850f265f97b78f065a712ab4074a89f5b5",
           "strip": 1
         }
       ],
@@ -61,7 +61,7 @@
         "cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\"$PREFIX\" -DPNG_STATIC=OFF -DPNG_TESTS=OFF -DPNG_TOOLS=OFF",
         "cmake --build out",
         "cmake --install out",
-        "printf '%s\\n' 'prefix=${pcfiledir}/../..' 'libdir=${prefix}/lib' 'includedir=${prefix}/include/libpng16' 'Name: libpng' 'Description: Loads and saves PNG files' 'Version: 1.6.49' 'Requires.private: zlib' 'Libs: -L${libdir} -llibpng16' 'Cflags: -I${includedir}' > \"$PREFIX/lib/pkgconfig/libpng16.pc\"",
+        "printf '%s\\n' 'prefix=${pcfiledir}/../..' 'libdir=${prefix}/lib' 'includedir=${prefix}/include/libpng16' 'Name: libpng' 'Description: Loads and saves PNG files' 'Version: 1.6.59' 'Requires.private: zlib' 'Libs: -L${libdir} -llibpng16' 'Cflags: -I${includedir}' > \"$PREFIX/lib/pkgconfig/libpng16.pc\"",
         "cp \"$PREFIX/lib/pkgconfig/libpng16.pc\" \"$PREFIX/lib/pkgconfig/libpng.pc\""
       ]
     },
@@ -70,8 +70,8 @@
       "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
       "sources": [
         {
-          "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.1/libjpeg-turbo-3.1.1.tar.gz",
-          "sha256": "aadc97ea91f6ef078b0ae3a62bba69e008d9a7db19b34e4ac973b19b71b4217c",
+          "url": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.4.1/libjpeg-turbo-3.1.4.1.tar.gz",
+          "sha256": "ecae8008e2cc9ade2f2c1bb9d5e6d4fb73e7c433866a056bd82980741571a022",
           "strip": 1
         }
       ],
@@ -86,8 +86,8 @@
       "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
       "sources": [
         {
-          "url": "https://download.osgeo.org/libtiff/tiff-4.7.0.tar.xz",
-          "sha256": "273a0a73b1f0bed640afee4a5df0337357ced5b53d3d5d1c405b936501f71017",
+          "url": "https://download.osgeo.org/libtiff/tiff-4.7.2.tar.xz",
+          "sha256": "4996f0c4f93094719b1ca5c6279b20e588773ba8a247533e486416fb662ddb88",
           "strip": 1
         }
       ],
@@ -102,8 +102,8 @@
       "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
       "sources": [
         {
-          "url": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.46/pcre2-10.46.tar.gz",
-          "sha256": "8d28d7f2c3b970c3a4bf3776bcbb5adfc923183ce74bc8df1ebaad8c1985bd07",
+          "url": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.gz",
+          "sha256": "929f0b20e62879252a15886b06c89f1edef61a363cbd5826fb041080a5e557ae",
           "strip": 1
         }
       ],
@@ -155,8 +155,8 @@
       "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
       "sources": [
         {
-          "url": "https://download.gnome.org/sources/glib/2.90/glib-2.90.0.tar.xz",
-          "sha256": "17d15cac2af80a33271127408e0abc2748eb297c595c2a26409e81e14e7d1b8f",
+          "url": "https://download.gnome.org/sources/glib/2.90/glib-2.90.1.tar.xz",
+          "sha256": "93c941aa17d5eb1d53fe838365f29a8b4e539c222a256d974ec8f30fc413e396",
           "strip": 1
         }
       ],
@@ -200,8 +200,8 @@
       "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
       "sources": [
         {
-          "url": "https://github.com/harfbuzz/harfbuzz/releases/download/14.4.0/harfbuzz-14.4.0.tar.xz",
-          "sha256": "2357ed966c6ced7bfa720b0640c0231065af01158fbea215093ffa15aed44371",
+          "url": "https://github.com/harfbuzz/harfbuzz/releases/download/14.6.0/harfbuzz-14.6.0.tar.xz",
+          "sha256": "d07a007327277708a2a73ae437887cdbaf282937f6d03ca5467723e9099af586",
           "strip": 1
         }
       ],
@@ -277,8 +277,8 @@
       "env": { "CL": "/Brepro /IB:\\prefix\\include", "LINK": "/Brepro /LIBPATH:B:\\prefix\\lib" },
       "sources": [
         {
-          "url": "https://download.gnome.org/sources/gdk-pixbuf/2.43/gdk-pixbuf-2.43.3.tar.xz",
-          "sha256": "ed4c5d16346a5b4e95326731de9700fad70d03bbd2f9324732e6c94f42d869d7",
+          "url": "https://download.gnome.org/sources/gdk-pixbuf/2.43/gdk-pixbuf-2.43.5.tar.xz",
+          "sha256": "a723ec2428427f857b8727dfbbe9dab77142a13fb6d0c47f95222251ae36ff15",
           "strip": 1
         }
       ],

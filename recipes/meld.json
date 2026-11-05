@@ -23,15 +23,15 @@
     "Meld": { "command": "meld", "description": "Compare and merge files and folders", "icon": "share/icons/org.gnome.Meld.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:ce922465155eb14a4573d1d99fee58893759a736e2b8eaee35f58322c5490317",
-    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:c9d1b7616f6194cfac334a07eb0ff34a0c0beffb80297d8134e0652a7d5ba13e",
-    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:ff7ea152ddeb9e4170412634baf2ebb900b3c47e0ed974cb343583a61bece483",
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:121bdd39952aac50e7a799898e646251aef2ea399db4fd2efefcd06359d93292",
+    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:53af52434d6d3008d73985994c9363ecf3cff29702472a7d8ab2f55088297642",
+    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:b2a5ae924bf321caaceb781516d9f90989fa1ba5c2a71d2c2c07940e1dbe8e73",
     "git": "org.git_scm.MinGit:2.56.0.windows.1@sha256:c6457f01e7e3a4c92a77c31d0c63c5ea72c4ce082123d3dfb11fdb1ef3796ec9"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369",
-    "gtk3sdk": "org.gtk.Gtk3.Sdk:3.24.52@sha256:6b4223ff1344a73717ab21107caa346cfeb3af2aa72962f22ec8990972a7c37f",
-    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:e24980b80ecedecfecb24a69825d4e77b4ecec04ff265ba7393b116c7e6532c9"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:6a709d2c64ec13cd7e03d9cea29f661fbe647549332c58a2aaba1719e5a8cd76",
+    "gtk3sdk": "org.gtk.Gtk3.Sdk:3.24.52@sha256:a6695ebad1d2715e4506e34e6642d4a185c2221fc561076eabbd7924fbdb897c",
+    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:6c6210a064d98f00d5eb807a2730e00ae0e875e708d7fac4371b1b362945a69b"
   },
   "cleanup": [
     "/include",

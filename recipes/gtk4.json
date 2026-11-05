@@ -36,7 +36,7 @@
     "Adwaita Demo": { "command": "adwaita-1-demo", "description": "libadwaita's widgets at work", "icon": "share/icons/org.gnome.Adwaita1.Demo.ico" }
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:6a709d2c64ec13cd7e03d9cea29f661fbe647549332c58a2aaba1719e5a8cd76"
   },
   "cleanup": [
     "/include",
@@ -114,7 +114,7 @@
   "modules": [
     {
       "name": "gtk",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk:4.24.1@sha256:6a709d2c64ec13cd7e03d9cea29f661fbe647549332c58a2aaba1719e5a8cd76" }]
     },
     {
       "name": "icons",

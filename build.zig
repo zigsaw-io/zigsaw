@@ -156,6 +156,16 @@ pub fn build(b: *std.Build) void {
     const regprobe_step = b.step("regprobe", "Build the registry probe");
     regprobe_step.dependOn(&b.addInstallArtifact(regprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // Resets connections part way through a response; see tests/registry.sh.
+    // Also installed under zig-out\test.
+    const resetproxy = b.addExecutable(.{ .name = "zigsaw-resetproxy", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/resetproxy.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const resetproxy_step = b.step("resetproxy", "Build the proxy that resets connections");
+    resetproxy_step.dependOn(&b.addInstallArtifact(resetproxy, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     // Waits for a window by its title, and closes it; see tests/guiapps.sh.
     // Also installed under zig-out\test.
     const winwait = b.addExecutable(.{ .name = "zigsaw-winwait", .root_module = b.createModule(.{

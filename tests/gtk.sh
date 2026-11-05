@@ -162,11 +162,11 @@ soup() {
         grep -qE "^GET $untrusted: error: (Error receiving data|Error sending data|Could not connect|Connection terminated unexpectedly|Socket I/O timed out|Error resolving)" <<<"$out" || break
         [ $try = 1 ] && echo "a network error on $untrusted; once more" >&2
     done
-    grep -q '^libsoup 3\.8\.0$' <<<"$out" && grep -q '^tls backend GTlsBackendOpenssl$' <<<"$out" &&
+    grep -q '^libsoup 3\.8\.1$' <<<"$out" && grep -q '^tls backend GTlsBackendOpenssl$' <<<"$out" &&
         grep -qF 'GET https://ghcr.io/v2/: 401 over HTTP/2' <<<"$out" &&
         grep -qF "GET $untrusted: error: Unacceptable TLS certificate" <<<"$out" || { echo "got: $out"; return 1; }
 }
-check "libsoup 3.8.0 gets an HTTPS URL over HTTP/2, trusting Windows' root certificates, and refuses an untrusted root" soup
+check "libsoup 3.8.1 gets an HTTPS URL over HTTP/2, trusting Windows' root certificates, and refuses an untrusted root" soup
 check "with --sandbox=soft" soup --sandbox=soft
 check "with --sandbox=appcontainer" soup --sandbox=appcontainer
 [ -z "$soup_server" ] || { kill "$soup_server" 2>/dev/null; wait "$soup_server" 2>/dev/null; }

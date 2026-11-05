@@ -839,23 +839,34 @@ fn exchangeUnchecked(r: *Registry, req: Request, authorization: ?[]const u8) !Re
     } else if (req.sink != null and res.status.class() == .success) {
         if (req.break_after) |n| {
             body.streamExact64(req.sink.?, n) catch |err| switch (err) {
-                error.ReadFailed => return response.bodyErr().?,
+                error.ReadFailed => return bodyFailure(&hreq, &response),
                 error.WriteFailed => return error.WriteFailed,
                 error.EndOfStream => return error.EndOfStream,
             };
             return error.ConnectionResetByPeer;
         }
         _ = body.streamRemaining(req.sink.?) catch |err| switch (err) {
-            error.ReadFailed => return response.bodyErr().?,
+            error.ReadFailed => return bodyFailure(&hreq, &response),
             error.WriteFailed => return error.WriteFailed,
         };
     } else {
         res.body = body.allocRemaining(arena, .limited(16 << 20)) catch |err| switch (err) {
-            error.ReadFailed => return response.bodyErr().?,
+            error.ReadFailed => return bodyFailure(&hreq, &response),
             else => |e| return e,
         };
     }
     return res;
+}
+
+const BodyFailure = http.Reader.BodyError || http.Client.Connection.ReadError || error{ConnectionResetByPeer};
+
+/// What broke off reading a response's body. Zig's client notes that itself only
+/// for chunked bodies. With a Content-Length, which is what registries send for
+/// blobs, the read failed on the connection, so that's where the reason is.
+fn bodyFailure(hreq: *const http.Client.Request, response: *const http.Client.Response) BodyFailure {
+    if (response.bodyErr()) |err| return err;
+    const connection = hreq.connection orelse return error.ConnectionResetByPeer;
+    return connection.getReadError() orelse error.ConnectionResetByPeer;
 }
 
 // ---------------------------------------------------------------------------

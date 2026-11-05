@@ -16,7 +16,7 @@
     "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:1fd5d6d8ada26770ad03d85e375e007e4b3bfcfa6d07201e93f5ad01a72c025e",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d",
     "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85",
-    "python": "org.python.python:3.14.7@sha256:fa12bbaf83e7ba1ad30551c90eb85b3655e8ecea933ea9ee6b1728de02fe809d"
+    "python": "org.python.python:3.14.10@sha256:ccd0d0e3ef77fd28cfa787f19405ffe747d47f1483312df00819dce1a356c5b4"
   },
   "cleanup": ["/lib/cmake", "/share/doc", "/share/man", "/bin/xml2-config", "/bin/xmllint.exe", "/bin/xmlcatalog.exe", "/bin/test_cloexec.exe"],
   "modules": [
@@ -145,8 +145,8 @@
       "name": "python-dev",
       "sources": [
         {
-          "url": "https://www.nuget.org/api/v2/package/python/3.14.7",
-          "sha256": "46a4da5529a92d18ff894911f6e6033a8253198d705b8161bf28c9123c87d46b",
+          "url": "https://www.nuget.org/api/v2/package/python/3.14.10",
+          "sha256": "f54ba67c9951c3d773ea47d2bb095150c037c399f0423a968bcda22809241784",
           "type": "zip",
           "dest": "nupkg"
         }

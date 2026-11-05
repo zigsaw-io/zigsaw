@@ -10,15 +10,15 @@
   "exports": {},
   "cleanup": ["__pycache__"],
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:6a709d2c64ec13cd7e03d9cea29f661fbe647549332c58a2aaba1719e5a8cd76"
   },
   "modules": [
     {
       "name": "python",
       "sources": [
         {
-          "url": "https://www.nuget.org/api/v2/package/python/3.14.7",
-          "sha256": "46a4da5529a92d18ff894911f6e6033a8253198d705b8161bf28c9123c87d46b",
+          "url": "https://www.nuget.org/api/v2/package/python/3.14.10",
+          "sha256": "f54ba67c9951c3d773ea47d2bb095150c037c399f0423a968bcda22809241784",
           "type": "zip",
           "dest": "nupkg"
         },

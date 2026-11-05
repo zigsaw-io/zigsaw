@@ -1408,7 +1408,7 @@ GTK 3's add ATK, GDK 3 and GTK 3. The runtime keeps GLib's
 
 GTK's SDK builds gobject-introspection 1.86 early, after GLib, cairo and
 their libraries, and then GLib again, with introspection, which needs GI's
-scanner. GI's scanner is Python: the SDK has Python 3.14.7 in `python`, the
+scanner. GI's scanner is Python: the SDK has Python 3.14.10 in `python`, the
 NuGet package of python.org's build (the embeddable one with headers and
 `python314.lib`, for the scanner's C module), with setuptools, whose copy
 of distutils the scanner uses since Python 3.12 has none. GI's build needs
@@ -1655,7 +1655,7 @@ PyGObject, Python's binding of GLib and GTK through their typelibs, comes
 as an add-on to GTK's images, like GTK 3's:
 
 - **[`org.gnome.PyGObject.Sdk`](recipes/pygobject-sdk.json)** is built with
-  GTK's SDK as its SDK: Python 3.14.7 (the same NuGet package as GTK's SDK
+  GTK's SDK as its SDK: Python 3.14.10 (the same NuGet package as GTK's SDK
   has), pycairo 1.29.2 and PyGObject 3.58.1, which build with Meson and Clang
   against python.org's build of Python. It keeps their headers and
   pkg-config files, and has pkg-config files for Python itself

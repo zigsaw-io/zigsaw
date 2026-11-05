@@ -12,7 +12,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | Git (MinGit) | `org.git_scm.MinGit` | 2.56.0.windows.1 | `git` |
 | Node.js | `org.nodejs.node` | 24.22.2 | `node`, `npm`, `npx` |
 | Prettier (on Node.js) | `io.prettier.prettier` | 3.9.10 | `prettier` |
-| Python | `org.python.python` | 3.14.7 | `python` |
+| Python | `org.python.python` | 3.14.10 | `python` |
 | zig | `org.ziglang.zig` | 0.17.0 (SQLite, ripgrep, bat and zstd build on it from iteration 59, and Meson, make, cargo-c, Ghostscript and PHP's SDK, with the extensions it builds, from iteration 60; 0.16.0, which GTK's and gettext's chains pinned until iteration 63, is pinned by nothing) | `zig` |
 | SQLite (built from source) | `org.sqlite.sqlite3` | 3.53.4 | `sqlite3` |
 | Rust (windows-gnu) | `org.rust-lang.rust` | 1.99.0 | `cargo`, `rustc` |

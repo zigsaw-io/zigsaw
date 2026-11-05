@@ -2191,6 +2191,46 @@ Iteration 71 asks [OSV](https://osv.dev) about the pinned versions.
 
   These are matches by module version, not by whether a program calls what's affected, which
   `govulncheck` would say. They're upstream's to move, and the report doesn't see them.
+- **A 0 is unreliable on rows not marked thin too.** Iteration 72's report showed nothing
+  for glib-networking 2.90.0, whose row isn't `osv-thin`. Its 2.90.1 notes fix five CVEs,
+  among them CVE-2026-113622, an extended key usage bypass in the OpenSSL backend, the
+  one GTK's SDK builds. The report's "none listed" was only ever a statement about OSV.
+- **An update can add a row without adding a bug.** Moving libjpeg-turbo from 3.1.1 to
+  3.1.4.1 added `OSV-2026-1068`, an OSS-Fuzz read crash in `jpeg_abort` under
+  `tj3Compress8`. Three things say it isn't ours to act on. The range it gives doesn't
+  point at code: the "introduced" commit, `489dac0`, edits an RPM spec, and the "fixed"
+  one, `76b7fea`, adds a `jpegtran` test and documentation. Neither commit is an ancestor
+  of the tags it lists as affected. And the crash goes through the TurboJPEG API, which
+  the recipes turn off (`-DWITH_TURBOJPEG=OFF`). The first two also mean the record can't
+  say whether 3.1.1 had it. This is from reading the record and those commits; nobody ran
+  the crash against this build. 3.1.4's own notes harden the libjpeg API, so the update
+  stayed.
+
+## A connection reset while downloading
+
+Up to 0.70.0, zigsaw panicked when a registry's connection was reset during a body with a
+`Content-Length`, which is how registries send blobs and manifests:
+`attempt to use null value`, exit 3. Iteration 72 hit it for real, pulling
+MinGit while building Meld.
+
+- **Why.** `Registry.zig` read a failed body's reason with `response.bodyErr().?`. Zig 0.17's
+  HTTP client sets that only on its chunked paths. `contentLengthStream` passes on the
+  connection's `ReadFailed` with `body_err` still null. The reason is on the connection,
+  in `Connection.getReadError()`, which `bodyFailure` now reads.
+- **Why nothing caught it.** The unwrap dates from iteration 1. Iteration 66 built resuming
+  on top of it, and tested that with `ZIGSAW_TEST_DOWNLOAD_BREAK`, which breaks the transfer
+  inside zigsaw and never reached this line. So resuming had never survived a real reset
+  from a real connection.
+- **How to test it.** A real reset, not a simulated one: `tests/resetproxy.zig` sits in front
+  of zot, passes some bytes on, waits half a second so they're read, then sets
+  `SO_LINGER {1, 0}` and closes, which sends an RST.
+
+  | Reset during | 0.70.0 | 0.72.0 |
+  |---|---|---|
+  | a layer | panic, exit 3 | `resuming sha256:... at N bytes, after ConnectionResetByPeer`, right digest |
+  | a manifest | panic, exit 3 | `error: GET ...: ConnectionResetByPeer`, exit 1 |
+
+  A manifest isn't resumed, as before: a broken one is an error, and running it again is cheap.
 
 ## As a real standard user
 

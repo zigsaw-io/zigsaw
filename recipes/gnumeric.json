@@ -27,12 +27,12 @@
     ".csv": { "command": "gnumeric", "description": "Comma-separated values", "icon": "share/icons/gnumeric.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:ce922465155eb14a4573d1d99fee58893759a736e2b8eaee35f58322c5490317",
-    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:c9d1b7616f6194cfac334a07eb0ff34a0c0beffb80297d8134e0652a7d5ba13e"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:121bdd39952aac50e7a799898e646251aef2ea399db4fd2efefcd06359d93292",
+    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:53af52434d6d3008d73985994c9363ecf3cff29702472a7d8ab2f55088297642"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:cb3f94b1fc33196011390d2da72459cd7d7e3004e82de96e2943e9cb65e7f369",
-    "gtk3sdk": "org.gtk.Gtk3.Sdk:3.24.52@sha256:6b4223ff1344a73717ab21107caa346cfeb3af2aa72962f22ec8990972a7c37f",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:6a709d2c64ec13cd7e03d9cea29f661fbe647549332c58a2aaba1719e5a8cd76",
+    "gtk3sdk": "org.gtk.Gtk3.Sdk:3.24.52@sha256:a6695ebad1d2715e4506e34e6642d4a185c2221fc561076eabbd7924fbdb897c",
     "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
     "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85"
   },

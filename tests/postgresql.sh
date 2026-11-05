@@ -217,7 +217,7 @@ check "zstd compresses WAL" is "zstd" "set wal_compression = zstd" "show wal_com
 check "XML is parsed with libxml2" is "{zigsaw}" "select xpath('/a/b/text()', '<a><b>zigsaw</b></a>')::text"
 check "a PL/Perl function runs on Perl's image" is "perl 5.42.3" \
     "create extension plperl" "create function perlv() returns text as \$\$ return sprintf('perl %vd', \$^V); \$\$ language plperl" "select perlv()"
-check "a PL/Python function runs on Python's image" is "python 3.14.7" \
+check "a PL/Python function runs on Python's image" is "python 3.14.10" \
     "create extension plpython3u" "create function pyv() returns text as \$\$ import sys; return 'python %d.%d.%d' % sys.version_info[:3] \$\$ language plpython3u" "select pyv()"
 errors() {
     local out
@@ -233,7 +233,7 @@ check "errors raised through PL/Perl, PL/Python and PL/pgSQL leave the session w
 dump() {
     pg pg_dump -Fc -f "$data\\postgres.dump" postgres &&
         pg createdb restored && pg pg_restore -d restored "$data\\postgres.dump" &&
-        [ "$(pg psql -XAt -d restored -c 'select perlv() || pyv() || count(*) from big' | tr -d '\r')" = "perl 5.42.3python 3.14.71" ]
+        [ "$(pg psql -XAt -d restored -c 'select perlv() || pyv() || count(*) from big' | tr -d '\r')" = "perl 5.42.3python 3.14.101" ]
 }
 check "pg_dump's dump restores into another database" dump
 backup() {
@@ -272,7 +272,7 @@ for SANDBOX in soft appcontainer; do
         "create extension plperlu" \
         "create function booted() returns int as \$\$ return \$main::booted; \$\$ language plperlu" \
         "select booted()"
-    check "$SANDBOX: PL/Python runs" is "python 3.14.7" \
+    check "$SANDBOX: PL/Python runs" is "python 3.14.10" \
         "create extension plpython3u" \
         "create function pyv() returns text as \$\$ import sys; return 'python %d.%d.%d' % sys.version_info[:3] \$\$ language plpython3u" \
         "select pyv()"

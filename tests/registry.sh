@@ -244,6 +244,33 @@ resumed() {
 }
 check "a download that breaks off goes on where it got to" resumed
 
+# And when the network really does it: ZIGSAW_TEST_DOWNLOAD_BREAK doesn't reach the
+# code that asks the connection why, which panicked up to 0.70.0.
+(cd "$root" && zig build resetproxy) || echo "building the proxy failed"
+proxy="$root\\zig-out\\test\\zigsaw-resetproxy.exe"
+upstream=${registry##*:}
+"$proxy" 5002 "$upstream" /blobs/ 100000 >/dev/null 2>&1 &
+blob_proxy=$!
+"$proxy" 5003 "$upstream" /manifests/ 100 >/dev/null 2>&1 &
+manifest_proxy=$!
+sleep 1
+reset_in_layer() {
+    local out
+    out=$(ZIGSAW_HOME="$work\\reset-layer" "$zigsaw" -v pull --yes "127.0.0.1:5002/${repo#*/}/busybox:FRP-6075-g169694ebd" 2>&1) || { echo "$out" | tail -2; return 1; }
+    grep -q 'resuming sha256:[0-9a-f]* at [0-9]* bytes, after ConnectionResetByPeer' <<<"$out" || { echo "$out" | tail -3; return 1; }
+    [ "$(ZIGSAW_HOME="$work\\reset-layer" "$zigsaw" list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]
+}
+reset_in_manifest() {
+    local out code
+    out=$(ZIGSAW_HOME="$work\\reset-manifest" "$zigsaw" pull --yes "127.0.0.1:5003/${repo#*/}/busybox:FRP-6075-g169694ebd" 2>&1)
+    code=$?
+    [ "$code" = 1 ] && grep -q 'ConnectionResetByPeer' <<<"$out" || { echo "exit $code: $out" | tail -3; return 1; }
+}
+check "a connection reset during a layer goes on where it got to" reset_in_layer
+check "a connection reset during a manifest is an error, not a crash" reset_in_manifest
+kill "$blob_proxy" "$manifest_proxy" 2>/dev/null
+wait "$blob_proxy" "$manifest_proxy" 2>/dev/null
+
 # Blobs bigger than a chunk go up in chunks (64 KiB here, 64 MiB unless
 # ZIGSAW_UPLOAD_CHUNK_SIZE says), and one that breaks off goes on from where
 # the registry got to.

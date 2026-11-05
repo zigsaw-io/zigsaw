@@ -761,10 +761,12 @@
   TeX Live aren't checked: the report counts them.
 - The advisories in that report are only as good as OSV's records, which are uneven:
   PHP's critical RCEs in 8.5.11 aren't there, nor anything recent for PostgreSQL, Qt or
-  GLib, which are marked as thin; others may be just as thin without being marked. A
-  match isn't checked against these Windows builds either. So a critical fix can still
-  look like any other update, and an update can be flagged for a bug that can't happen
-  here.
+  GLib, which are marked as thin; others may be just as thin without being marked, as
+  glib-networking was, whose five CVEs fixed in 2.90.1 OSV didn't list. A match isn't
+  checked against these Windows builds either, and libjpeg-turbo 3.1.4.1 has a row for
+  a crash in an API its recipes don't build (see
+  [findings](findings.md#advisories)). So a critical fix can still look like any other
+  update, and an update can be flagged for a bug that can't happen here.
 - Those Go apps carry advisories in modules they pin, which a new Go doesn't touch (see
   [findings](findings.md#advisories)). Moving those is upstream's: a recipe builds what
   upstream's `go.mod` says.
