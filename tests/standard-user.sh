@@ -37,6 +37,8 @@ if [ "${1:-}" != --inner ]; then
     icacls "$stage" /grant "$user:(OI)(CI)M" >/dev/null || { echo "$user can't be given $stage"; exit 1; }
     bash "$(cygpath -u "$repo")/scripts/package.sh" "$(cygpath -u "$stage\\package")" >"$stage\\package.log" 2>&1 ||
         { echo "packaging failed: $(tail -1 "$stage\\package.log")"; exit 1; }
+    # For tests/install.sh, as packaging needs git and Zig, which the account hasn't.
+    bash "$(cygpath -u "$repo")/tests/next-release.sh" "$stage\\next-package" || exit 1
     for d in tests recipes scripts build.zig.zon; do cp -r "$(cygpath -u "$repo")/$d" "$(cygpath -u "$stage")/"; done
     mkdir -p "$stage\\zig-out" "$stage\\tmp" "$stage\\bin" "$stage\\seed"
     cp -r "$(cygpath -u "$repo")/zig-out/bin" "$(cygpath -u "$repo")/zig-out/test" "$(cygpath -u "$stage")/zig-out/"
@@ -61,6 +63,8 @@ if [ "${1:-}" != --inner ]; then
     code=$?
     sleep 1
     kill "$tailer" 2>/dev/null
+    # Each suite's rows, of which the above shows only what failed.
+    [ -z "${LOG_DIR:-}" ] || cp "$(cygpath -u "$stage")"/*.txt "$(cygpath -u "$LOG_DIR")/" 2>/dev/null
     if [ -z "${KEEP_STAGE:-}" ] && [ "$code" -eq 0 ]; then
         rm -rf "$stage" 2>/dev/null || echo "note: couldn't delete all of $stage"
     else
@@ -118,6 +122,8 @@ store="$LOCALAPPDATA\\zigsaw"
 zigsaw="$store\\bin\\zigsaw.exe"
 BB=net.frippery.busybox
 z() { "$zigsaw" "$@" </dev/null; }
+sch="$(cygpath -u "$WINDIR")/System32/schtasks.exe"
+task="Zigsaw update check"
 
 # What a run of this that didn't finish left, as the account's deployments are
 # read-only.
@@ -142,6 +148,15 @@ installs() {
 check "install.ps1 installs it in the default store, with no administrator" installs
 on_path() { reg query 'HKCU\Environment' /v Path | grep -qF "$store\\bin"; }
 check "  and puts it on this user's PATH" on_path
+# What only a standard user's own account can show: whether Windows lets it have one.
+# (Nothing here has a desktop, so nothing starts it: see tests/updates.sh.)
+daily_check_on() {
+    local out
+    out=$(z grants) || { echo "$out"; return 1; }
+    grep -qF "scheduled task \"$task\", for " <<<"$out" || { echo "grants says: $out"; return 1; }
+    "$sch" /query /tn "$task" >/dev/null
+}
+check "  and starts its daily check, as a scheduled task of this user's" daily_check_on
 pulls() { z pull --yes $BB; }
 check "pull gets an app from ghcr.io" pulls
 for sb in soft low appcontainer; do
@@ -260,7 +275,14 @@ check "a recipe builds, on its own B:" builds
 
 removes() { z rm --delete-data $BB; }
 check "rm removes the app" removes
-real_clean() { no_label "$docs" && no_label "$USERPROFILE" && [ "$(z grants)" = "zigsaw has changed nothing outside its stores." ]; }
+# Only the daily check is left, which goes with zigsaw.
+real_clean() {
+    no_label "$docs" || { echo "$docs is labelled"; return 1; }
+    no_label "$USERPROFILE" || { echo "$USERPROFILE is labelled"; return 1; }
+    local out
+    out=$(z grants | tr -d '\r' | grep -vE '^Daily checks for updates|^  scheduled task ')
+    [ -z "$out" ] || { echo "grants says: $out"; return 1; }
+}
 check "nothing it changed is left on your folders" real_clean
 uninstalls() {
     powershell -NoProfile -ExecutionPolicy Bypass -File "$stage\\scripts\\install.ps1" -Uninstall &&
@@ -268,6 +290,8 @@ uninstalls() {
         ! reg query 'HKCU\Software\Zigsaw\Grants' >/dev/null 2>&1
 }
 check "the uninstaller removes it, from PATH too, and its record" uninstalls
+no_task_left() { ! "$sch" /query /tn "$task" >/dev/null 2>&1; }
+check "  and its daily check" no_task_left
 rm -f "$docs"/su-*.txt
 rm -rf "$store"
 
@@ -277,7 +301,7 @@ rm -rf "$store"
 # may change what it owns as it does in its profile: a second drive that lets
 # users only modify keeps icacls from labelling, which rows set up with.
 export TMPDIR=$(cygpath -u "$own_temp") TMP="$own_temp" TEMP="$own_temp"
-export PACKAGE_DIR="$stage\\package"
+export PACKAGE_DIR="$stage\\package" NEXT_PACKAGE_DIR="$stage\\next-package"
 cd "$stage_u" || exit 1
 [ "$suites" = none ] && suites=
 for s in $suites; do
@@ -292,7 +316,11 @@ for s in $suites; do
     esac | tr -d '\r' | tee "$stage\\$s.txt" | grep -E '^FAIL|^      |check\(s\) failed|^[0-9]+ (failed|known)'
     code=${PIPESTATUS[0]}
     echo "$s: exit $code, $(grep -c '^ok ' "$stage\\$s.txt") ok, $(grep -c '^FAIL' "$stage\\$s.txt") failed, $((SECONDS - start)) s"
-    [ "$code" -eq 0 ] || failures=$((failures + 1))
+    # A suite that stopped says why on its last line, which the filter above drops.
+    if [ "$code" -ne 0 ]; then
+        failures=$((failures + 1))
+        tail -2 "$stage\\$s.txt" | cut -c1-200
+    fi
 done
 
 echo

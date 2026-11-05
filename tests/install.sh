@@ -13,7 +13,9 @@
 #
 # Needs Git Bash, Zig and Windows PowerShell; downloads nothing. Packages into
 # a temporary directory unless PACKAGE_DIR names one that scripts/package.sh
-# filled already, as the Release workflow does.
+# filled already, as the Release workflow does, and the later release unless
+# NEXT_PACKAGE_DIR names one that tests/next-release.sh filled, as
+# tests/standard-user.sh does for an account without git or Zig.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -174,14 +176,10 @@ check "uninstalling leaves what another store still needs in the record, and say
 # A later release of the same code: the only way to have a zigsaw that says it's newer.
 this_version=$(sed -n 's/^ *\.version = "\(.*\)",$/\1/p' "$root\\build.zig.zon")
 next_version="${this_version%.*}.$((${this_version##*.} + 1))"
-copy="$work\\copy"
-mkdir -p "$copy" && (cd "$root" && git ls-files -co --exclude-standard -z | tar --null -T - -cf - | tar -xf - -C "$(cygpath -u "$copy")") ||
-    { echo "copying the checkout failed"; exit 1; }
-sed -i "s/\.version = \"$this_version\"/.version = \"$next_version\"/" "$(cygpath -u "$copy\\build.zig.zon")"
-sed -i "s/\"version\": \"$this_version\"/\"version\": \"$next_version\"/" "$(cygpath -u "$copy\\zigsaw.json")"
-next="$work\\next"
-(cd "$copy" && bash scripts/package.sh "$(cygpath -u "$next")") >"$work\\next.log" 2>&1 ||
-    { echo "packaging the later release failed: $(tail -1 "$work\\next.log")"; exit 1; }
+next=$(cygpath -aw "${NEXT_PACKAGE_DIR:-$work\\next-package}")
+if [ -z "${NEXT_PACKAGE_DIR:-}" ]; then
+    bash "$(cygpath -u "$root")/tests/next-release.sh" "$next" || exit 1
+fi
 
 install >/dev/null 2>&1 || { echo "installing again failed"; exit 1; }
 "$bin\\zigsaw.exe" build "$root\\tests\\install\\app.json" >/dev/null 2>&1 || { echo "building the test app failed"; exit 1; }
@@ -203,7 +201,7 @@ up_to_date() {
 }
 check "upgrade: with nothing newer, it says so" up_to_date
 
-from="$work\\next"
+from="$next"
 no_answer() {
     local out
     out=$(up 2>&1 </dev/null) && { echo "it upgraded"; return 1; }
@@ -219,7 +217,7 @@ check "upgrade: it asks, naming both versions, and no means no" answer_no
 
 corrupt_next="$work\\corrupt-next"
 mkdir -p "$corrupt_next"
-cp "$work\\next\\zigsaw-x86_64-windows.zip" "$work\\next\\SHA256SUMS" "$work\\next\\VERSION" "$corrupt_next\\"
+cp "$next\\zigsaw-x86_64-windows.zip" "$next\\SHA256SUMS" "$next\\VERSION" "$corrupt_next\\"
 printf 'x' >>"$corrupt_next\\zigsaw-x86_64-windows.zip"
 from="$corrupt_next"
 refuses_hash() {
@@ -254,7 +252,7 @@ check "upgrade: no release there is an error, and nothing changes" refuses_missi
 
 elsewhere() {
     local out
-    out=$(ZIGSAW_UPGRADE_FROM="$work\\next" "$root\\zig-out\\bin\\zigsaw.exe" upgrade --yes 2>&1) && { echo "it upgraded"; return 1; }
+    out=$(ZIGSAW_UPGRADE_FROM="$next" "$root\\zig-out\\bin\\zigsaw.exe" upgrade --yes 2>&1) && { echo "it upgraded"; return 1; }
     grep -q "isn't in its store's bin" <<<"$out" && grep -q "install.ps1" <<<"$out" && [ -f "$root\\zig-out\\bin\\zigsaw.exe" ]
 }
 check "upgrade: a zigsaw that isn't in its store's bin, as a dev build, won't replace itself" elsewhere
@@ -263,13 +261,13 @@ check "upgrade: a zigsaw that isn't in its store's bin, as a dev build, won't re
 "$bin\\install-wait.exe" 12 &
 waiter=$!
 sleep 2
-from="$work\\next"
+from="$next"
 upgrades() {
     local out
     out=$(up --yes 2>&1) || { echo "$out"; return 1; }
     grep -q "upgraded zigsaw $this_version to $next_version" <<<"$out" || { echo "$out"; return 1; }
     [ "$("$bin\\zigsaw.exe" version | tr -d '\r')" = "zigsaw $next_version" ] || return 1
-    same_as_package "$work\\next" || return 1
+    same_as_package "$next" || return 1
     ! ls "$(cygpath -u "$bin")" | grep -q '\.new-' || { echo "something was left behind"; return 1; }
     ls "$(cygpath -u "$bin")"/zigsaw.exe.old-* >/dev/null 2>&1 || { echo "nothing was moved aside"; return 1; }
 }
@@ -327,7 +325,7 @@ env -u ZIGSAW_HOME LOCALAPPDATA="$default_home" "$default_bin\\zigsaw.exe" updat
 upgrade_default() {
     env -u ZIGSAW_HOME LOCALAPPDATA="$default_home" "$default_bin\\zigsaw.exe" updates off >/dev/null 2>&1
     rm -f "$default_home\\zigsaw\\updates\\off"
-    env -u ZIGSAW_HOME LOCALAPPDATA="$default_home" ZIGSAW_UPGRADE_FROM="$work\\next" "$default_bin\\zigsaw.exe" upgrade --yes >/dev/null 2>&1 || return 1
+    env -u ZIGSAW_HOME LOCALAPPDATA="$default_home" ZIGSAW_UPGRADE_FROM="$next" "$default_bin\\zigsaw.exe" upgrade --yes >/dev/null 2>&1 || return 1
     has_task "$ZIGSAW_TASK_NAME"
 }
 check "upgrade starts it too, for the default store, unless turned off" upgrade_default
