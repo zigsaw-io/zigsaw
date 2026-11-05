@@ -853,3 +853,17 @@
   build`, in Zig 0.17's std (`client.now.?` in `connectTcpOptions`, which only a first
   request over TLS sets). No published recipe has such a source. `https://` from the
   start is fine, redirects included.
+- `zigsaw rollback` changes an app's files, not its data: the data directory stays as
+  the newer version left it. An app that changed how it keeps its data may not read it
+  after going back, as PostgreSQL's server doesn't read a cluster a newer major version
+  made, and nothing warns about it.
+- Only one version is kept to go back to: the one the installed version replaced. Two
+  updates in a row, and the first version is gone, as before 0.76.
+- Going back brings back whatever the newer version fixed. Updates pass over only the
+  very version a rollback left, so the next one reaches the app, but until then it
+  runs the older one, and the daily check says nothing about it.
+- A rollback isn't checked against signatures: the image was when it came in. A key
+  removed since, or one that never signed it (a warning then), doesn't stop it.
+- A zigsaw before 0.76 doesn't know of `versions\`: its `update` moves a held app, and
+  takes the version a rollback left, and its `prune` deletes the blobs kept for
+  `rollback`, which then says how to have the version back.

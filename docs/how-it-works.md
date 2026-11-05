@@ -27,6 +27,9 @@ under `tmp\`, mapped to `B:`, and make the layer from what ends up in
 ```
 blobs\sha256\<hex>     manifests, configs, layers
 refs\<id>.json         installed app -> manifest digest
+versions\<id>.previous.json  the version the installed one replaced, whose blobs prune keeps
+versions\<id>.skip.json      the version a rollback left, which updates pass over
+versions\<id>.held     there while `zigsaw hold` keeps updates away from the app
 deploy\<hex>\          an unpacked layer, by layer digest, shared by all runs and apps
 data\<id>\             per-app writable state, kept across runs
 grants\<id>.txt        host paths granted to the app's AppContainer, or labelled low for its runs
@@ -179,8 +182,30 @@ is gone.
 
 A check writes `updates\state.json` in the store: what's waiting, when it last told
 and about what, and what was waiting when the user last looked. What's waiting is
-compared with the store when it's read, so an app updated since the check isn't
-listed. An app that can't be checked keeps what the last check found for it.
+compared with the store when it's read, so an app updated, held or gone back from
+that version since the check isn't listed. An app that can't be checked keeps what
+the last check found for it.
+
+## Going back
+
+`install` writes the ref it replaces to `versions\<id>.previous.json` before moving
+the app's ref, so an install that stops between the two still has the replaced
+version in one of them. `prune` adds those manifests to the blobs it keeps, and not to
+the deployments it keeps, which are by layer and much larger. `rollback` reads the
+previous version's image from the store (`Store.readCompleteImage`, which refuses an
+image with a missing blob), asks as an update would about what it may reach beyond
+the installed one, installs it with the source it came from, and writes the version
+it left to `versions\<id>.skip.json`. Any install of another version deletes that.
+
+These are files of their own, rather than fields of the ref, because refs and
+overrides are parsed strictly: a zigsaw before 0.76 would refuse a ref with a field it
+doesn't know, and on the same store, every ref. Each concern has its own file, so that
+`hold` and an update never rewrite the same one.
+
+`update` treats a held app as it treats one pinned by digest: a note, and no request.
+With a skip, it asks the registry for the tag's digest first (`remote.manifestDigest`,
+which resolves an index to its windows/amd64 image, as refs record), so that nothing of
+the version passed over is downloaded or asked about.
 
 ## Signatures
 

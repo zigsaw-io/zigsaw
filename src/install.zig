@@ -22,7 +22,9 @@ pub const Image = struct {
 
 /// Deploys the image's layers, points the app's ref at it, and syncs its
 /// command shims. The deployments of the version it replaces are deleted,
-/// unless they are in use.
+/// unless they are in use; its blobs are kept, as the app's previous version,
+/// which `rollback` goes back to. Whatever a rollback said to skip is
+/// forgotten: installing another version is asking for it.
 pub fn install(ctx: *Context, image: Image) !void {
     const arena = ctx.arena;
     const cfg = image.config;
@@ -30,16 +32,22 @@ pub fn install(ctx: *Context, image: Image) !void {
     const start = ctx.now();
     for (image.manifest.layers) |l| _ = try ctx.store.deploy(arena, l);
     ctx.timed(start, "deploy", .{});
+    const replaced = if (previous) |p| !std.mem.eql(u8, p.manifest, image.manifest_digest) else false;
+    // Before the ref moves, so that an install that stops between the two
+    // still has the replaced version in one of them.
+    if (replaced) try ctx.store.writePrevious(arena, previous.?);
     try ctx.store.writeRef(arena, .{
         .id = cfg.id,
         .version = cfg.version,
         .manifest = image.manifest_digest,
         .source = image.source,
     });
-    if (previous) |p| if (!std.mem.eql(u8, p.manifest, image.manifest_digest)) {
+    if (replaced) {
+        try ctx.store.deleteSkip(arena, cfg.id);
+        const p = previous.?;
         if (try ctx.store.deleteUnusedDeployments(arena, p.manifest))
             note("  kept     {s} {s}, which is still running; `zigsaw prune` removes it later", .{ cfg.id, p.version });
-    };
+    }
 
     note("installed {s} {s}\n  manifest {s}", .{ cfg.id, cfg.version, image.manifest_digest });
     var runtimes = cfg.runtimes.map.iterator();

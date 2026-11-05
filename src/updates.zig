@@ -69,14 +69,18 @@ fn save(ctx: *Context, state: State) !void {
     try Store.renameRetrying(ctx.io, tmp, dest, 2000);
 }
 
-/// What the file says that's still so: an app since updated or removed isn't
-/// waiting any more, whenever the last check was.
+/// What the file says that's still so: an app since updated, removed or held,
+/// or whose new version is one a rollback since left, isn't waiting any more,
+/// whenever the last check was.
 fn stillWaiting(ctx: *Context, state: State) !State {
     const arena = ctx.arena;
     var apps: std.ArrayList(update.Waiting) = .empty;
     for (state.apps) |app| {
         const ref = try ctx.store.readRef(arena, app.id) orelse continue;
-        if (std.mem.eql(u8, ref.manifest, app.from_digest)) try apps.append(arena, app);
+        if (!std.mem.eql(u8, ref.manifest, app.from_digest)) continue;
+        if (try ctx.store.isHeld(arena, app.id)) continue;
+        if (update.passesOver(try ctx.store.readSkip(arena, app.id), app.to_digest) != null) continue;
+        try apps.append(arena, app);
     }
     var live = state;
     live.apps = apps.items;

@@ -338,14 +338,21 @@ fn openInfo(ctx: *Context, image_text: []const u8, registry_out: *Registry, unle
     return .{ .target = target, .manifest_digest = fetched.digest, .index = fetched.index, .manifest = manifest, .config = config };
 }
 
-/// Tells what an app about to be installed is and may reach, and asks
-/// whether to go on; for an update, only what it may reach beyond the
-/// installed version, if anything, and asks only then.
+/// What installing an image does to its app, as `agreeTo` tells and asks.
+pub const Change = enum { install, update, rollback };
+
 fn agree(ctx: *Context, manifest: oci.Manifest, cfg: oci.AppConfig, opts: FetchOptions) !void {
+    try agreeTo(ctx, manifest, cfg, opts.installed, opts.consent, if (opts.installed != null) .update else .install);
+}
+
+/// Tells what an app about to be installed is and may reach, and asks
+/// whether to go on; over an installed version (an update, a rollback), only
+/// what it may reach beyond that one, if anything, and asks only then.
+pub fn agreeTo(ctx: *Context, manifest: oci.Manifest, cfg: oci.AppConfig, installed: ?FetchOptions.Installed, consent: Consent, change: Change) !void {
     const arena = ctx.arena;
     var out: Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
-    if (opts.installed) |before| {
+    if (installed) |before| {
         const added = try oci.addedAccess(arena, before.access, try .of(arena, cfg));
         if (added.isEmpty()) {
             const permits = try oci.describePermissions(arena, cfg.permissions);
@@ -360,14 +367,21 @@ fn agree(ctx: *Context, manifest: oci.Manifest, cfg: oci.AppConfig, opts: FetchO
         try info.writeContents(ctx, w, manifest, cfg);
     }
     Context.printStderr("{s}", .{out.written()});
-    if (opts.consent != .ask) return;
+    if (consent != .ask) return;
 
-    const what = if (opts.installed != null) "updated" else "installed";
-    switch (try prompt.askYesNo(ctx, if (opts.installed != null) "Update it?" else "Install it?")) {
-        .yes => {},
-        .no => return fail("{s} {s} wasn't {s}", .{ cfg.id, cfg.version, what }),
-        .none => return fail("{s} {s} wasn't {s}: nothing answered whether to go on. Run it at a console, or add --yes", .{ cfg.id, cfg.version, what }),
-    }
+    const question = switch (change) {
+        .install => "Install it?",
+        .update => "Update it?",
+        .rollback => "Go back to it?",
+    };
+    const answer = try prompt.askYesNo(ctx, question);
+    if (answer == .yes) return;
+    const why = if (answer == .none) ": nothing answered whether to go on. Run it at a console, or add --yes" else "";
+    return switch (change) {
+        .install => fail("{s} {s} wasn't installed{s}", .{ cfg.id, cfg.version, why }),
+        .update => fail("{s} {s} wasn't updated{s}", .{ cfg.id, cfg.version, why }),
+        .rollback => fail("{s} stays at {s}{s}", .{ cfg.id, installed.?.version, why }),
+    };
 }
 
 /// What a new version may reach beyond the installed one, a line for each

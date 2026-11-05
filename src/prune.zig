@@ -1,8 +1,10 @@
 //! `zigsaw prune`: deletes what no installed app needs: the blobs and
 //! deployments of versions that were replaced or removed, and leftovers in
-//! tmp\. On request, also cached downloads, build tools' caches, projects'
-//! kept work directories, and the data of apps that are no longer installed.
-//! Anything a running app uses is kept.
+//! tmp\. Each app's previous version keeps its blobs, for `rollback`, though
+//! not its deployments. On request, also cached downloads, build tools'
+//! caches, projects' kept work directories, the data of apps that are no
+//! longer installed, and those previous versions. Anything a running app uses
+//! is kept.
 
 const std = @import("std");
 const Io = std.Io;
@@ -23,6 +25,8 @@ pub const Options = struct {
     downloads: bool = false,
     /// Also delete the data directories of apps that aren't installed.
     data: bool = false,
+    /// Also forget the versions kept for `rollback`, so that their blobs go.
+    previous: bool = false,
 };
 
 const Tally = struct {
@@ -44,10 +48,23 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     const refs = try store.listRefs(arena);
     const build_images = try store.listBuildImages(arena);
 
-    // Everything the installed apps refer to, by hex digest, and unless
-    // downloads go too, the images that builds use.
+    // The versions kept for rollback, of installed apps only: what an app
+    // that's gone kept goes with the rest of what it left in versions\.
+    var previous: std.ArrayList(Store.Ref) = .empty;
+    for (try store.listPrevious(arena)) |p| if (isInstalled(refs, p.id)) try previous.append(arena, p);
+    const kept_previous = !opts.previous;
+
+    // Everything the installed apps refer to, by hex digest, their previous
+    // versions too, unless they go, and unless downloads go too, the images
+    // that builds use.
     var manifests: std.ArrayList([]const u8) = .empty;
     for (refs) |ref| try manifests.append(arena, ref.manifest);
+    if (kept_previous) for (previous.items) |p| {
+        // Only one whose manifest is still here: one an older zigsaw pruned
+        // is gone already, and `rollback` says how to have it back.
+        if (try Store.exists(io, try store.blobPath(arena, oci.digestHex(p.manifest) orelse continue)))
+            try manifests.append(arena, p.manifest);
+    };
     if (!opts.downloads) try manifests.appendSlice(arena, build_images);
     var blobs_used: std.StringHashMapUnmanaged(void) = .empty;
     for (manifests.items) |digest| {
@@ -56,6 +73,39 @@ pub fn prune(ctx: *Context, opts: Options) !void {
             for (descs) |d| try blobs_used.put(arena, oci.digestHex(d.digest) orelse continue, {});
         }
         try blobs_used.put(arena, oci.digestHex(digest).?, {});
+    }
+    // What only the previous versions keep, to say what they cost.
+    var previous_only: Tally = .{};
+    if (kept_previous) {
+        var others: std.StringHashMapUnmanaged(void) = .empty;
+        for (refs) |ref| {
+            const m = try store.readManifest(arena, ref.manifest);
+            try others.put(arena, oci.digestHex(ref.manifest).?, {});
+            try others.put(arena, oci.digestHex(m.config.digest) orelse continue, {});
+            for (m.layers) |l| try others.put(arena, oci.digestHex(l.digest) orelse continue, {});
+        }
+        var counted: std.StringHashMapUnmanaged(void) = .empty;
+        for (previous.items) |p| {
+            const hex = oci.digestHex(p.manifest) orelse continue;
+            // One that's the installed version, as an install that stopped
+            // halfway leaves, isn't anything to go back to.
+            if (others.contains(hex) or !try Store.exists(io, try store.blobPath(arena, hex))) continue;
+            previous_only.count += 1;
+            const m = try store.readManifest(arena, p.manifest);
+            var descs: std.ArrayList(oci.Descriptor) = .empty;
+            try descs.append(arena, m.config);
+            try descs.appendSlice(arena, m.layers);
+            for (descs.items) |d| {
+                const h = oci.digestHex(d.digest) orelse continue;
+                if (others.contains(h) or counted.contains(h)) continue;
+                try counted.put(arena, h, {});
+                const bp = try store.blobPath(arena, h);
+                if (try Store.exists(io, bp)) previous_only.bytes += try treeSize(io, arena, bp);
+            }
+        }
+    } else if (!opts.dry_run) {
+        // Forgotten before the blobs go, so that none is left naming them.
+        for (previous.items) |p| _ = try store.forgetPrevious(arena, p.id);
     }
     const deployments_used = try store.usedLayers(arena, .{ .build_images = !opts.downloads });
 
@@ -183,6 +233,9 @@ pub fn prune(ctx: *Context, opts: Options) !void {
             if (entry.kind != .directory or isInstalled(refs, entry.name)) continue;
             Store.deleteTree(io, arena, try std.fs.path.join(arena, &.{ open_dir, entry.name })) catch {};
         }
+        // And what versions\ says of them, which `rm` deletes, though an
+        // older zigsaw's doesn't.
+        for (try store.listVersionIds(arena)) |id| if (!isInstalled(refs, id)) try store.forgetVersions(arena, id);
         // And their internal ports, and relays an earlier zigsaw copied.
         const ids = try arena.alloc([]const u8, refs.len);
         for (ids, refs) |*i, r| i.* = r.id;
@@ -231,6 +284,10 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         note("kept the work directories of {d} project(s) ({Bi:.1}) for incremental builds; --downloads deletes them", .{ work.count, work.bytes });
     if (!opts.downloads and build_only > 0)
         note("kept {d} image(s) that builds use as runtimes or SDKs; --downloads deletes them", .{build_only});
+    if (kept_previous and previous_only.count > 0)
+        note("kept {d} previous version(s) ({Bi:.1}) for `zigsaw rollback`; --previous deletes them", .{ previous_only.count, previous_only.bytes });
+    if (!kept_previous and previous.items.len > 0)
+        note("{s} {d} previous version(s): `zigsaw rollback` has nothing to go back to", .{ if (opts.dry_run) "would forget" else "forgot", previous.items.len });
 }
 
 const Entry = struct { name: []const u8, kind: Io.File.Kind };

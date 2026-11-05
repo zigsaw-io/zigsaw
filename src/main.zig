@@ -18,6 +18,7 @@ const oci = @import("oci.zig");
 const override = @import("override.zig");
 const prune = @import("prune.zig");
 const remote = @import("remote.zig");
+const rollback = @import("rollback.zig");
 const runtime = @import("run.zig");
 const shortcuts = @import("shortcuts.zig");
 const associations = @import("associations.zig");
@@ -77,6 +78,11 @@ const usage =
     \\                                  unless given --yes
     \\  update --check [<app-id>...]    list the apps a new image waits for, and what it may
     \\                                  reach beyond theirs, installing nothing
+    \\  rollback [--yes] <app-id>       go back to the version the installed one replaced, with
+    \\                                  no network; updates then pass over the version left,
+    \\                                  though not a newer one
+    \\  hold <app-id>...                have updates, and the daily check, leave the apps alone
+    \\  unhold <app-id>...              let updates reach them again
     \\  updates                         say what the last check found waiting, and whether a
     \\                                  daily check is on; neither installs anything
     \\  updates check                   look for updates of apps and zigsaw now
@@ -94,10 +100,10 @@ const usage =
     \\                                  put that signature beside the image, where pull looks
     \\  signature check <image>         say whether an image has a good signature
     \\  rm [--delete-data] <app-id>     uninstall an app and its commands
-    \\  prune [--dry-run] [--downloads] [--data]
+    \\  prune [--dry-run] [--downloads] [--data] [--previous]
     \\                                  delete what no installed app needs; also cached
-    \\                                  downloads and tool caches, and the data of
-    \\                                  uninstalled apps
+    \\                                  downloads and tool caches, the data of uninstalled
+    \\                                  apps, and the versions kept for rollback
     \\  repair                          write every app's commands, shortcuts and file
     \\                                  associations again, as after installing a new zigsaw,
     \\                                  and take back what apps may no longer reach, and what
@@ -326,6 +332,27 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         if (only_check) return update.check(ctx, ids.items);
         return update.update(ctx, ids.items, consent);
     }
+    if (std.mem.eql(u8, command, "rollback")) {
+        var consent: remote.Consent = .ask;
+        var id: ?[]const u8 = null;
+        for (rest) |arg| {
+            if (isFlag(arg, "yes")) {
+                consent = .given;
+            } else if (id == null and !std.mem.startsWith(u8, arg, "-")) {
+                id = arg;
+            } else return usageError();
+        }
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try rollback.rollback(ctx, id orelse return usageError(), consent);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "hold") or std.mem.eql(u8, command, "unhold")) {
+        if (rest.len == 0) return usageError();
+        for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try rollback.setHeld(ctx, @ptrCast(rest), std.mem.eql(u8, command, "hold"));
+        return 0;
+    }
     if (std.mem.eql(u8, command, "updates")) return updatesCommand(ctx, rest);
     if (std.mem.eql(u8, command, "trust")) return trustCommand(ctx, rest);
     if (std.mem.eql(u8, command, "signature")) return signatureCommand(ctx, rest);
@@ -360,6 +387,8 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
                 opts.downloads = true;
             } else if (isFlag(arg, "data")) {
                 opts.data = true;
+            } else if (isFlag(arg, "previous")) {
+                opts.previous = true;
             } else return usageError();
         }
         _ = try ctx.store.lock(ctx.arena, .exclusive);
@@ -762,6 +791,9 @@ fn list(ctx: *Context) !void {
         if (image.config.registry) |keys| for (keys) |k| try w.print("  (keeps HKCU\\{s})", .{k});
         const saved = try override.load(ctx.store, arena, ref.id);
         if (!saved.isEmpty()) try w.print("  (override {f})", .{saved});
+        if (try ctx.store.isHeld(arena, ref.id)) try w.writeAll("  (held)");
+        if (try ctx.store.readPrevious(arena, ref.id)) |p| if (!std.mem.eql(u8, p.manifest, ref.manifest)) try w.print("  (previous {s})", .{p.version});
+        if (try ctx.store.readSkip(arena, ref.id)) |s| try w.print("  (skips {s})", .{s.version});
         try w.writeByte('\n');
     }
     try w.flush();
@@ -797,6 +829,9 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     try hkcu.settleLeftovers(ctx, id);
 
     try store.deleteRef(arena, id);
+    // Its previous version, whose blobs prune then deletes, and whether it
+    // was held: a new install starts afresh.
+    try store.forgetVersions(arena, id);
     {
         const aliases_lock = try store.lockAliases(arena, id);
         defer aliases_lock.release(io);
@@ -844,6 +879,7 @@ test {
     _ = @import("Registry.zig");
     _ = @import("remote.zig");
     _ = @import("roots.zig");
+    _ = @import("rollback.zig");
     _ = @import("layer.zig");
     _ = @import("ledger.zig");
     _ = @import("run.zig");
@@ -856,6 +892,7 @@ test {
     _ = @import("Store.zig");
     _ = @import("testing.zig");
     _ = @import("Tree.zig");
+    _ = @import("update.zig");
     _ = @import("updates.zig");
     _ = @import("upgrade.zig");
     _ = @import("written.zig");

@@ -2,6 +2,11 @@
 //!
 //!   <root>\blobs\sha256\<hex>     OCI blobs: manifests, configs, layers
 //!   <root>\refs\<id>.json         installed app -> manifest digest
+//!   <root>\versions\<id>.previous.json
+//!                                 the version the installed one replaced, whose
+//!                                 blobs prune keeps for `rollback` (see rollback.zig)
+//!   <root>\versions\<id>.skip.json  the version a rollback left, which updates pass over
+//!   <root>\versions\<id>.held     there while updates leave the app alone (`hold`)
 //!   <root>\deploy\<hex>\          an unpacked layer, by layer digest: an app's own
 //!                                 files, or a runtime's, shared by the apps using it
 //!   <root>\data\<id>\             per-app writable state, kept across runs
@@ -50,7 +55,7 @@ verbose: bool = false,
 /// from another.
 ledger_key: ?[]const u8 = null,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "deploy", "data", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "deploy", "data", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|
@@ -323,6 +328,130 @@ pub fn listRefs(s: Store, arena: Allocator) ![]Ref {
         }
     }.lessThan);
     return refs.items;
+}
+
+// ---------------------------------------------------------------------------
+// Versions: what an app may move between (see rollback.zig), each in a file of
+// its own, so that `hold` and an update never rewrite the same file, and that
+// zigsaws before 0.76, which read refs strictly, never see them.
+
+/// The version a rollback left, which updates pass over.
+pub const Skip = struct {
+    version: []const u8,
+    manifest: []const u8,
+};
+
+const previous_suffix = ".previous.json";
+const skip_suffix = ".skip.json";
+const held_suffix = ".held";
+const version_suffixes = [_][]const u8{ previous_suffix, skip_suffix, held_suffix };
+
+fn versionPath(s: Store, arena: Allocator, id: []const u8, suffix: []const u8) ![]u8 {
+    return s.path(arena, &.{ "versions", try std.mem.concat(arena, u8, &.{ id, suffix }) });
+}
+
+fn readVersionFile(s: Store, arena: Allocator, id: []const u8, suffix: []const u8) !?[]u8 {
+    if (!oci.isValidId(id)) return null;
+    return Io.Dir.cwd().readFileAlloc(s.io, try s.versionPath(arena, id, suffix), arena, .limited(64 << 10)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => |e| return e,
+    };
+}
+
+fn writeVersionFile(s: Store, arena: Allocator, id: []const u8, suffix: []const u8, data: []const u8) !void {
+    const tmp = try s.tmpPath(arena, "version");
+    try Io.Dir.cwd().writeFile(s.io, .{ .sub_path = tmp, .data = data });
+    try Io.Dir.rename(.cwd(), tmp, .cwd(), try s.versionPath(arena, id, suffix), s.io);
+}
+
+/// Deletes the file, if there is one; returns whether there was.
+fn deleteVersionFile(s: Store, arena: Allocator, id: []const u8, suffix: []const u8) !bool {
+    Io.Dir.cwd().deleteFile(s.io, try s.versionPath(arena, id, suffix)) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => |e| return e,
+    };
+    return true;
+}
+
+/// The version the installed one replaced, kept so that `rollback` can go
+/// back to it; null if none is.
+pub fn readPrevious(s: Store, arena: Allocator, id: []const u8) !?Ref {
+    const bytes = try s.readVersionFile(arena, id, previous_suffix) orelse return null;
+    return try std.json.parseFromSliceLeaky(Ref, arena, bytes, .{});
+}
+
+pub fn writePrevious(s: Store, arena: Allocator, ref: Ref) !void {
+    try s.writeVersionFile(arena, ref.id, previous_suffix, try oci.toJson(arena, ref));
+}
+
+/// Forgets the app's previous version, whose blobs `prune` then deletes.
+pub fn forgetPrevious(s: Store, arena: Allocator, id: []const u8) !bool {
+    return s.deleteVersionFile(arena, id, previous_suffix);
+}
+
+/// Every previous version kept, sorted by app id.
+pub fn listPrevious(s: Store, arena: Allocator) ![]Ref {
+    var found: std.ArrayList(Ref) = .empty;
+    for (try s.listVersionIds(arena)) |id| if (try s.readPrevious(arena, id)) |ref| try found.append(arena, ref);
+    return found.items;
+}
+
+pub fn readSkip(s: Store, arena: Allocator, id: []const u8) !?Skip {
+    const bytes = try s.readVersionFile(arena, id, skip_suffix) orelse return null;
+    return try std.json.parseFromSliceLeaky(Skip, arena, bytes, .{});
+}
+
+pub fn writeSkip(s: Store, arena: Allocator, id: []const u8, skip: Skip) !void {
+    try s.writeVersionFile(arena, id, skip_suffix, try oci.toJson(arena, skip));
+}
+
+pub fn deleteSkip(s: Store, arena: Allocator, id: []const u8) !void {
+    _ = try s.deleteVersionFile(arena, id, skip_suffix);
+}
+
+/// Whether the app is held: updates leave it alone.
+pub fn isHeld(s: Store, arena: Allocator, id: []const u8) !bool {
+    if (!oci.isValidId(id)) return false;
+    return exists(s.io, try s.versionPath(arena, id, held_suffix));
+}
+
+/// Holds the app, or stops holding it; returns whether that changed anything.
+pub fn setHeld(s: Store, arena: Allocator, id: []const u8, held: bool) !bool {
+    if (!held) return s.deleteVersionFile(arena, id, held_suffix);
+    if (try s.isHeld(arena, id)) return false;
+    try s.writeVersionFile(arena, id, held_suffix, "");
+    return true;
+}
+
+/// Forgets all of it, as when the app is removed.
+pub fn forgetVersions(s: Store, arena: Allocator, id: []const u8) !void {
+    for (version_suffixes) |suffix| _ = try s.deleteVersionFile(arena, id, suffix);
+}
+
+/// The ids of the apps with any file in versions\, each once, sorted.
+pub fn listVersionIds(s: Store, arena: Allocator) ![]const []const u8 {
+    var dir = try Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{"versions"}), .{ .iterate = true });
+    defer dir.close(s.io);
+    var ids: std.ArrayList([]const u8) = .empty;
+    var it = dir.iterate();
+    while (try it.next(s.io)) |entry| {
+        if (entry.kind != .file) continue;
+        const suffix = for (version_suffixes) |x| {
+            if (std.mem.endsWith(u8, entry.name, x)) break x;
+        } else continue;
+        const id = entry.name[0 .. entry.name.len - suffix.len];
+        if (!oci.isValidId(id)) continue;
+        const seen = for (ids.items) |known| {
+            if (std.ascii.eqlIgnoreCase(known, id)) break true;
+        } else false;
+        if (!seen) try ids.append(arena, try arena.dupe(u8, id));
+    }
+    std.mem.sort([]const u8, ids.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.ascii.lessThanIgnoreCase(a, b);
+        }
+    }.lessThan);
+    return ids.items;
 }
 
 // ---------------------------------------------------------------------------
@@ -937,6 +1066,57 @@ test "grants: every kind round-trips, once each; others' found by kind and path"
     try std.testing.expectEqual(0, (try s.readGrants(arena, "a.app")).len);
     try std.testing.expectEqual(0, (try s.readCwdGrants(arena, "a.app")).len);
     try std.testing.expectEqual(1, (try s.listGrantIds(arena)).len);
+}
+
+test "versions: previous, skip and held round-trip, apart, and go together" {
+    const io = std.testing.io;
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const s: Store = .{ .io = io, .root = try tmp.dir.realPathFileAlloc(io, ".", arena) };
+    try tmp.dir.createDirPath(io, "versions");
+    try tmp.dir.createDirPath(io, "tmp");
+
+    try std.testing.expectEqual(null, try s.readPrevious(arena, "a.app"));
+    try std.testing.expectEqual(null, try s.readSkip(arena, "a.app"));
+    try std.testing.expect(!try s.isHeld(arena, "a.app"));
+    try std.testing.expectEqual(0, (try s.listVersionIds(arena)).len);
+
+    try s.writePrevious(arena, .{ .id = "a.app", .version = "1", .manifest = "sha256:aa", .source = "localhost:5000/a:latest" });
+    try s.writePrevious(arena, .{ .id = "b.app", .version = "2", .manifest = "sha256:bb" });
+    try s.writeSkip(arena, "a.app", .{ .version = "2", .manifest = "sha256:cc" });
+    try std.testing.expect(try s.setHeld(arena, "c.app", true));
+    try std.testing.expect(!try s.setHeld(arena, "c.app", true));
+
+    const a = (try s.readPrevious(arena, "a.app")).?;
+    try std.testing.expectEqualStrings("1", a.version);
+    try std.testing.expectEqualStrings("sha256:aa", a.manifest);
+    try std.testing.expectEqualStrings("localhost:5000/a:latest", a.source.?);
+    try std.testing.expectEqual(null, (try s.readPrevious(arena, "b.app")).?.source);
+    try std.testing.expectEqualStrings("sha256:cc", (try s.readSkip(arena, "a.app")).?.manifest);
+    try std.testing.expect(try s.isHeld(arena, "c.app"));
+    try std.testing.expect(!try s.isHeld(arena, "a.app"));
+    // Not an id: never a path out of versions\.
+    try std.testing.expect(!try s.isHeld(arena, "..\\c.app"));
+
+    // Each id once, whatever it has.
+    const ids = try s.listVersionIds(arena);
+    try std.testing.expectEqual(3, ids.len);
+    try std.testing.expectEqualStrings("a.app", ids[0]);
+    try std.testing.expectEqualStrings("c.app", ids[2]);
+    try std.testing.expectEqual(2, (try s.listPrevious(arena)).len);
+
+    try s.deleteSkip(arena, "a.app");
+    try s.deleteSkip(arena, "a.app");
+    try std.testing.expectEqual(null, try s.readSkip(arena, "a.app"));
+    try std.testing.expect(try s.forgetPrevious(arena, "b.app"));
+    try std.testing.expect(!try s.forgetPrevious(arena, "b.app"));
+    try std.testing.expect(try s.setHeld(arena, "c.app", false));
+    try std.testing.expect(!try s.setHeld(arena, "c.app", false));
+    try s.forgetVersions(arena, "a.app");
+    try std.testing.expectEqual(0, (try s.listVersionIds(arena)).len);
 }
 
 pub const FileHash = struct {

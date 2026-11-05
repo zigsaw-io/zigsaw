@@ -147,6 +147,11 @@ zigsaw upgrade [--yes]                 install zigsaw's latest release over this
                                        agree; --yes agrees without asking
 zigsaw update --check [<app-id>...]    list the apps a new image waits for, and what it may
                                        reach beyond theirs, installing nothing
+zigsaw rollback [--yes] <app-id>       go back to the version the installed one replaced, with
+                                       no network; updates then pass over the version left,
+                                       though not a newer one
+zigsaw hold <app-id>...                have updates, and the daily check, leave the apps alone
+zigsaw unhold <app-id>...              let updates reach them again
 zigsaw trust                           list the keys images' signatures are checked against
 zigsaw trust add <registry/path> <key> check images under that path against a public key, as
                                        `cosign generate-key-pair` makes in cosign.pub
@@ -157,8 +162,9 @@ zigsaw signature push <image> <payload file> <signature file>
                                        put that signature beside the image, where pull looks
 zigsaw signature check <image>         say whether an image has a good signature
 zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
-zigsaw prune [--dry-run] [--downloads] [--data]
-                                       delete what no installed app needs
+zigsaw prune [--dry-run] [--downloads] [--data] [--previous]
+                                       delete what no installed app needs; --previous also
+                                       the versions kept for rollback
 zigsaw repair                          write every app's commands, shortcuts and file
                                        associations again, as after installing a new zigsaw,
                                        and take back what apps may no longer reach, and what
@@ -465,7 +471,8 @@ version. An app pulled by tag is pulled again if the tag now points at a
 different image; only the manifest is fetched when it doesn't. If the new
 image may reach more than the installed one, `update` asks first, as `pull`
 does, unless given `--yes`; an app you don't agree to stays as it is, and
-`update` exits with 1. An app pulled by digest is pinned and left alone.
+`update` exits with 1. An app pulled by digest is pinned and left alone, and
+so is one you [hold](#going-back-and-holding).
 
 `zigsaw update --check` says what `update` would find, and installs nothing. It
 reads each tag's manifest, and the config of an image that's new, and no
@@ -481,6 +488,47 @@ org.nodejs.node 24.21.0 -> 24.22.2 (5e1c07a2 -> 91bd44f0)
 com.example.Tool 1.4 -> 1.5 (0a93c6d1 -> 77e2ab10)
   permits    network
 ```
+
+### Going back, and holding
+
+An update that breaks something can be undone. When a new version of an app is
+installed, by `update`, `pull` or `build`, the store keeps the blobs of the version
+it replaced, and `zigsaw rollback <app-id>` installs that one again. It needs no
+network, as everything is in the store already; its files are unpacked again, so it
+takes about as long as an install that downloads nothing. Should the earlier version
+reach more than the installed one, it asks first, as `update` does, unless given
+`--yes`. The image was checked against its signature when it came in, and isn't again.
+
+```
+> zigsaw rollback com.github.junegunn.fzf
+installed com.github.junegunn.fzf 0.74.4
+  ...
+went back: com.github.junegunn.fzf 0.74.5 -> 0.74.4 (sha256:703f25eb6bc0 -> sha256:4d8759253203)
+  `zigsaw update` passes over 0.74.5 from now on, and takes a newer version; `zigsaw rollback com.github.junegunn.fzf` returns to it
+```
+
+From then on, `update`, `update --check` and the [daily check](#being-told-about-updates)
+pass over the version you went back from, with a note, but not a newer one: when the
+next version comes out, it's an update as any other. `rollback` again returns to the
+version you left. `zigsaw list` shows `(previous <version>)` while there's one to go
+back to, and `(skips <version>)` after a rollback.
+
+Only one version is kept, the one the installed version replaced, and only its blobs:
+`prune` keeps them, and deletes its unpacked files as before. `prune --previous` forgets
+those versions, and deletes their blobs. A zigsaw before 0.76 doesn't know of them, and
+its `prune` deletes them; `rollback` then says how to have the version back, as
+`zigsaw pull <image>@<digest>` while its registry still has it.
+
+**Going back changes the app's files, not its data.** An app's data directory stays as
+the newer version left it, and an app that changed how it keeps its data, as
+PostgreSQL's server does from one major version to the next, may not read it any more.
+
+`zigsaw hold <app-id>...` keeps updates away from apps altogether, until
+`zigsaw unhold <app-id>...`. `update` notes that a held app is held and leaves it, named
+or not, and nothing contacts its registry: `update --check` and the daily check never
+list it, and what a check found before goes from `zigsaw updates`. `pull`, `build` and
+`rollback` still install what they're asked to, and the app stays held. `zigsaw list`
+shows `(held)`. `rm` forgets all of this along with the app.
 
 ### Being told about updates
 
@@ -519,8 +567,9 @@ A daily check is on; it installs nothing. `zigsaw updates off` stops it.
 ```
 
 `zigsaw updates` only reads what the last check kept; `zigsaw updates check` looks
-now. An app pulled by digest is pinned, and one built from a recipe only rebuilding
-can tell about: neither is ever listed. `zigsaw updates off` removes the task and
+now. An app pulled by digest is pinned, one built from a recipe only rebuilding
+can tell about, and one you hold is left alone: none is ever listed. Nor is a version
+you went back from with `rollback`. `zigsaw updates off` removes the task and
 remembers, in `updates\off` in the store; `zigsaw updates on` starts it again. A store
 that isn't the default one gets a task only if `updates on` is run for it, and that
 task, should the store be deleted, is removed by `zigsaw repair` or when it next runs.
@@ -538,7 +587,9 @@ build of your own, says how to install one instead, and isn't told about new rel
 Installing a new version deletes the files of the one it replaces, unless
 that version is still running. `zigsaw prune` deletes everything else no
 installed app needs: the blobs of old versions, files kept because they were
-running, and whatever an interrupted build left in `tmp\`. `--dry-run` shows
+running, and whatever an interrupted build left in `tmp\`. It keeps the blobs
+of each app's previous version, for [`rollback`](#going-back-and-holding), and
+says how much they take; `--previous` deletes them too. `--dry-run` shows
 what it would delete. Cached downloads, the runtimes that builds used, and
 build tools' caches are kept for rebuilds unless you add `--downloads`. The data of uninstalled
 apps is kept unless you add `--data`.
@@ -1056,7 +1107,7 @@ bash tests/sandbox.sh   # which sandbox a run gets (low by default, the image's,
 bash tests/network.sh   # an app's service reached from the host in each sandbox, on its port, one --port or an override moves it to, and not after the run; in an AppContainer, an internal port the app's runs agree on and reach each other on without the network, and a port another program holds; an AppContainer run with the network exempt from loopback isolation while it goes (not without the network, nor with ZIGSAW_LOOPBACK_EXEMPTION=0), a killed run's exemption taken back by repair, one you made kept; a port the app uses reached directly, or through zigsaw's forward when not exempt, and --port moving it; proxy variables passed to runs with the network; eight first AppContainer runs at once; the probe's report of what Windows lets AppContainers do on the loopback and over AF_UNIX (tests/netprobe.zig)
 bash tests/reach.sh     # what a run may reach of the rest of the machine: the store's commands on its PATH, each running as its own app; zigsaw-host, your real environment with the run's rights; an image saying it can't run under a sandbox; URL schemes and Default apps in a scratch key, and one private scheme followed through Windows, which rm removes (30 s; opens a console for a moment)
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
-bash tests/store.sh     # update, prune, and what they keep while apps run
+bash tests/store.sh     # update, prune, and what they keep while apps run, and for rollback
 bash tests/upstream.sh  # scripts/check-upstream.sh with made-up recipes, pages, repositories and OSV answers, and that scripts/upstream.txt covers every recipe's sources (no network; runs on Linux too)
 bash tests/rebuild.sh   # scripts/rebuild.sh with made-up recipes and a stand-in zigsaw: its order, pins, stopping and going on (no network; runs on Linux too)
 bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
@@ -1079,6 +1130,7 @@ bash tests/zls.sh       # ZLS's language server sessions over stdio in each sand
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API, in an AppContainer through its service too (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key); `zigsaw upgrade` from a later release of the same code, a running program moved aside and every way of refusing; the daily check in a scratch default store (about 2 min)
 bash tests/zot.sh bash tests/updates.sh # what a check finds, keeps and tells, and that nothing installs anything; real scheduled tasks under this run's own name, which it removes, and the real one untouched (under 1 min; without a registry, only the task rows)
+bash tests/zot.sh bash tests/rollback.sh # the version an update replaces is kept, rollback goes back to it without the network and updates pass over the version left, a newer one gets through, hold and unhold (under 1 min)
 bash tests/zot.sh bash tests/signing.sh # what pull, update and info do with an image's good, wrong and missing signature, with keys `zigsaw trust` adds (under 1 min)
 bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package); an incremental build of a copy after a change makes what --clean does
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole

@@ -90,12 +90,15 @@ wait $running
 status=$?
 check "the running app finishes normally" test $status -eq 0
 
-# The earlier prune already removed the running version's blobs: only its
-# files were in use.
-dry_run() { z prune --dry-run 2>&1 | grep -q '^would remove 1 deployment' && expect_count deployments 2 && expect_count blobs 3; }
+# The running version is the one test-3 replaced, so its blobs stay, for
+# `rollback`; the earlier prune removed those of the first version. Only its
+# files were in use, and they go.
+dry_run() { z prune --dry-run 2>&1 | grep -q '^would remove 1 deployment' && expect_count deployments 2 && expect_count blobs 6; }
 check "prune --dry-run deletes nothing" dry_run
-prune_after_exit() { z prune >/dev/null 2>&1 && expect_count deployments 1 && expect_count blobs 3; }
-check "prune: removes it once unused" prune_after_exit
+prune_after_exit() { z prune >/dev/null 2>&1 && expect_count deployments 1 && expect_count blobs 6; }
+check "prune: removes it once unused, and keeps the previous version's blobs" prune_after_exit
+prune_previous() { z prune --previous 2>&1 | grep -q 'forgot 1 previous version' && expect_count deployments 1 && expect_count blobs 3; }
+check "prune --previous: removes those too" prune_previous
 
 # --- tmp\ ----------------------------------------------------------------------
 

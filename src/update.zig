@@ -1,6 +1,8 @@
 //! `zigsaw update`: brings installed apps up to date with the source their ref
 //! records. An app built from a recipe is rebuilt from it; one pulled by tag
-//! is pulled again if the tag has moved. One pulled by digest is pinned.
+//! is pulled again if the tag has moved. One pulled by digest is pinned, and
+//! one held (`zigsaw hold`) is left alone too. The version a rollback left is
+//! passed over, and a newer one isn't (see rollback.zig).
 
 const std = @import("std");
 const Context = @import("Context.zig");
@@ -87,10 +89,32 @@ pub const Waiting = struct {
     }
 };
 
+/// Whether the app is held, which updates leave alone, after a note saying so.
+fn held(ctx: *Context, ref: Store.Ref) !bool {
+    if (!try ctx.store.isHeld(ctx.arena, ref.id)) return false;
+    note("{s} {s}: held; `zigsaw unhold {s}` lets updates in", .{ ref.id, ref.version, ref.id });
+    return true;
+}
+
+/// The version a rollback left, if `digest` is it: an update passes over that.
+pub fn passesOver(skip: ?Store.Skip, digest: []const u8) ?Store.Skip {
+    const s = skip orelse return null;
+    return if (std.mem.eql(u8, s.manifest, digest)) s else null;
+}
+
+/// Whether a new image with this digest is the one a rollback left, after a note
+/// saying so.
+fn skipped(ctx: *Context, ref: Store.Ref, digest: []const u8) !bool {
+    const s = passesOver(try ctx.store.readSkip(ctx.arena, ref.id), digest) orelse return false;
+    note("{s} {s}: skipping {s} ({s}), which it went back from", .{ ref.id, ref.version, s.version, oci.shortDigest(s.manifest) });
+    return true;
+}
+
 /// What a new image waits for the app, reading no layers; null, after a note
 /// saying why, if there's none, or nothing could tell.
 pub fn newImage(ctx: *Context, ref: Store.Ref) !?Waiting {
     const arena = ctx.arena;
+    if (try held(ctx, ref)) return null;
     const source = ref.source orelse {
         note("{s}: doesn't record where it came from; build or pull it again to update it", .{ref.id});
         return null;
@@ -110,6 +134,7 @@ pub fn newImage(ctx: *Context, ref: Store.Ref) !?Waiting {
         note("{s} {s}: up to date", .{ ref.id, ref.version });
         return null;
     };
+    if (try skipped(ctx, ref, new.manifest_digest)) return null;
     if (!std.mem.eql(u8, new.config.id, ref.id))
         return fail("{s}: {s} now provides {s}; build or pull that explicitly", .{ ref.id, source, new.config.id });
     const installed = try ctx.store.readImage(arena, ref.id, ref.manifest);
@@ -127,6 +152,7 @@ pub fn newImage(ctx: *Context, ref: Store.Ref) !?Waiting {
 }
 
 fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent) !void {
+    if (try held(ctx, ref)) return;
     const source = ref.source orelse {
         note("{s}: doesn't record where it came from; build or pull it again to update it", .{ref.id});
         return;
@@ -134,6 +160,7 @@ fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent) !void {
     const newer = if (std.fs.path.isAbsoluteWindows(source)) newer: {
         if (!try Store.exists(ctx.io, source)) return fail("{s}: its recipe {s} is gone", .{ ref.id, source });
         const image = try builder.build(ctx, source, .{});
+        if (!std.mem.eql(u8, image.manifest_digest, ref.manifest) and try skipped(ctx, ref, image.manifest_digest)) return;
         break :newer if (std.mem.eql(u8, image.manifest_digest, ref.manifest)) null else image;
     } else newer: {
         const reference = Registry.Reference.parse(source) catch
@@ -141,6 +168,13 @@ fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent) !void {
         if (reference.digest != null) {
             note("{s} {s}: pinned to {s}", .{ ref.id, ref.version, source });
             return;
+        }
+        // With a version to pass over, what the tag names first, so that
+        // nothing of that version is downloaded, or asked about.
+        if (try ctx.store.readSkip(ctx.arena, ref.id) != null) {
+            const digest = try remote.manifestDigest(ctx, source);
+            if (std.mem.eql(u8, digest, ref.manifest)) break :newer null;
+            if (try skipped(ctx, ref, digest)) return;
         }
         const installed = try ctx.store.readImage(ctx.arena, ref.id, ref.manifest);
         break :newer try remote.fetch(ctx, source, .{
@@ -161,4 +195,11 @@ fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent) !void {
         ref.id,                        ref.version,                            image.config.version,
         oci.shortDigest(ref.manifest), oci.shortDigest(image.manifest_digest),
     });
+}
+
+test "passesOver: only the very version a rollback left" {
+    const skip: Store.Skip = .{ .version = "2", .manifest = "sha256:bb" };
+    try std.testing.expectEqualStrings("2", passesOver(skip, "sha256:bb").?.version);
+    try std.testing.expectEqual(null, passesOver(skip, "sha256:cc"));
+    try std.testing.expectEqual(null, passesOver(null, "sha256:bb"));
 }
