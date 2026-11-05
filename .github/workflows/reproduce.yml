@@ -263,6 +263,12 @@ jobs:
         shell: bash
         run: bash tests/zot.sh bash tests/updates.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/updates.txt"
 
+      # What pull and update do with images' signatures, against a registry.
+      - name: tests/signing.sh, against a local zot registry
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/zot.sh bash tests/signing.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/signing.txt"
+
       # ORAS, skopeo and cosign as published, in the seeded store, against
       # two local zot registries again.
       - name: tests/oci.sh, against two local zot registries

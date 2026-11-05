@@ -22,6 +22,9 @@
 # It refuses recipes in recipes/no-publish/, whose images mustn't be
 # published.
 #
+# On the default registry, COSIGN_KEY must name the key that signs them, and it's
+# used as scripts/sign-images.sh says. Elsewhere, nothing's signed here.
+#
 # Needs Git Bash, a built zigsaw (zig build), and credentials for the
 # registry: a login saved with `zigsaw login ghcr.io`, or
 # ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD. For ghcr.io, that's a
@@ -75,6 +78,15 @@ for recipe in "$@"; do
     esac
 done
 
+# What's published here gets signed, as pull warns about what isn't: better found out
+# now than after an hour of building.
+sign=false
+if [ "$registry" = ghcr.io/zigsaw-io ]; then
+    sign=true
+    [ -n "${COSIGN_KEY:-}" ] && [ -f "$COSIGN_KEY" ] ||
+        { echo "error: COSIGN_KEY must name the key that signs what's published here: see scripts/signing-key.sh" >&2; exit 1; }
+fi
+
 own_store=false
 if [ -z "${ZIGSAW_HOME:-}" ]; then
     ZIGSAW_HOME=$(cygpath -w "$(mktemp -d)")
@@ -116,6 +128,12 @@ for recipe in "${todo[@]}"; do
     digest=$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$id.json")
     published+=("$id $version $digest")
 done
+
+# Each beside its image, by digest of what was just pushed.
+if [ "$sign" = true ] && [ ${#todo[@]} -gt 0 ]; then
+    echo "== signatures"
+    ZIGSAW="$zigsaw" bash "$root/scripts/sign-images.sh" "${todo[@]}"
+fi
 
 # The catalog `zigsaw search` reads lists every app published-recipes.txt
 # names, as the registry has it now: those published before this run too.

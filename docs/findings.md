@@ -2297,6 +2297,40 @@ And some that looked like differences, and weren't:
 - Deleting a store's installed files by hand is refused to both: `acl.protect`
   denies the owner. Rows that deleted a store ignored `rm`'s failure.
 
+## Signing with cosign
+
+Tried in iteration 74, with cosign 3.1.4 and a local zot, through the program in a store
+rather than `zigsaw run`:
+
+- **`sign-blob` signs offline with an encrypted key**, the passphrase from
+  `COSIGN_PASSWORD`, with no internet and a home of its own. Left to its defaults it writes
+  a bundle and no signature: `--output-signature` needs `--new-bundle-format=false`, and
+  that needs `--use-signing-config=false --tlog-upload=false`.
+- **Its signature is what Zig's std takes**: base64 of DER, which
+  `EcdsaP256Sha256.Signature.fromDer` reads and `verify` passes; a changed byte fails. Its
+  `cosign.pub` is PKIX, 91 bytes: 26 of algorithm identifiers, then the point in SEC1.
+- **Stock `cosign verify --key ... --insecure-ignore-tlog` reads the classic layout**
+  (a `sha256-<digest>.sig` tag) with no flag, though `sign` writes referrers by default, as
+  [above](#the-oci-tools-iteration-57) says. So a signature pushed by something else entirely
+  passes. The payload has to be the same JSON `sign` would write; zot takes the rest as it
+  is.
+- **`cosign verify` doesn't compare `docker-reference` with the image's name**: an image
+  and its signature copied to another repository still verify, with the key alone, as far
+  as was tried. It's why zigsaw checks that field: on its own, a signed app could be served
+  under the name of another. The rest of what's checked is in
+  [how it works](how-it-works.md#signatures).
+- **`cosign generate-key-pair` makes P-256**, in a file headed `ENCRYPTED SIGSTORE PRIVATE
+  KEY`. How it's encrypted wasn't looked at.
+
+Natively cosign can also sign with `--new-bundle-format=false`, which pushes the same
+layout, but that gives cosign the registry login, and its flags for that are the ones it
+deprecates. `sign-blob` needs only the key.
+
+Two traps in the tests, which cost a run each: `curl -o /dev/null` under
+`MSYS_NO_PATHCONV` fails, as it reaches a native program as a path (`-o NUL` works), and
+with `-f` the failure shows; and a Bash-tool heredoc broke on a Python script's backslashes,
+again.
+
 ## Defender and exact bytes
 
 Iteration 70's first run as the standard user stopped at `zigsaw.exe`: "Operation

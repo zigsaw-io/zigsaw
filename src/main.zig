@@ -22,6 +22,8 @@ const runtime = @import("run.zig");
 const shortcuts = @import("shortcuts.zig");
 const associations = @import("associations.zig");
 const schedule = @import("schedule.zig");
+const signature = @import("signature.zig");
+const trust = @import("trust.zig");
 const update = @import("update.zig");
 const updates = @import("updates.zig");
 const upgrade = @import("upgrade.zig");
@@ -82,6 +84,15 @@ const usage =
     \\                                  that installing or upgrading zigsaw leaves it off
     \\  upgrade [--yes]                 install zigsaw's latest release over this one, once you
     \\                                  agree; --yes agrees without asking
+    \\  trust                           list the keys that images' signatures are checked against
+    \\  trust add <registry/path> <key> check images under that path against a public key, as
+    \\                                  `cosign generate-key-pair` makes in cosign.pub
+    \\  trust rm <registry/path> [<fingerprint>]
+    \\                                  stop checking them against keys added there
+    \\  signature payload <image>       print what to sign for an image, for `cosign sign-blob`
+    \\  signature push <image> <payload file> <signature file>
+    \\                                  put that signature beside the image, where pull looks
+    \\  signature check <image>         say whether an image has a good signature
     \\  rm [--delete-data] <app-id>     uninstall an app and its commands
     \\  prune [--dry-run] [--downloads] [--data]
     \\                                  delete what no installed app needs; also cached
@@ -316,6 +327,8 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         return update.update(ctx, ids.items, consent);
     }
     if (std.mem.eql(u8, command, "updates")) return updatesCommand(ctx, rest);
+    if (std.mem.eql(u8, command, "trust")) return trustCommand(ctx, rest);
+    if (std.mem.eql(u8, command, "signature")) return signatureCommand(ctx, rest);
     if (std.mem.eql(u8, command, "upgrade")) {
         var consent: remote.Consent = .ask;
         for (rest) |arg| {
@@ -419,6 +432,68 @@ fn updatesCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
         if (rest.len != 0) return usageError();
         try schedule.turnOff(ctx);
         return 0;
+    }
+    return usageError();
+}
+
+/// `zigsaw trust`: which keys count for which images.
+fn trustCommand(ctx: *Context, rest: []const []const u8) !u32 {
+    _ = try ctx.store.lock(ctx.arena, .shared);
+    if (rest.len == 0) {
+        try trust.list(ctx);
+        return 0;
+    }
+    if (std.mem.eql(u8, rest[0], "add") and rest.len == 3) {
+        try trust.add(ctx, rest[1], rest[2]);
+        return 0;
+    }
+    if (std.mem.eql(u8, rest[0], "rm") and (rest.len == 2 or rest.len == 3)) {
+        try trust.remove(ctx, rest[1], if (rest.len == 3) rest[2] else null);
+        return 0;
+    }
+    return usageError();
+}
+
+/// `zigsaw signature`: what scripts/sign-images.sh needs, on either side of cosign's
+/// `sign-blob`, which is what holds the key.
+fn signatureCommand(ctx: *Context, rest: []const []const u8) !u32 {
+    if (rest.len < 2) return usageError();
+    _ = try ctx.store.lock(ctx.arena, .shared);
+    const what = rest[0];
+    const image = rest[1];
+    if (std.mem.startsWith(u8, image, "-")) return usageError();
+    if (std.mem.eql(u8, what, "payload") and rest.len == 2) {
+        const payload = try remote.signaturePayload(ctx, image);
+        var buf: [4096]u8 = undefined;
+        var stdout = Context.stdout().writerStreaming(ctx.io, &buf);
+        try stdout.interface.writeAll(payload);
+        try stdout.interface.flush();
+        return 0;
+    }
+    if (std.mem.eql(u8, what, "push") and rest.len == 4) {
+        const cwd = std.Io.Dir.cwd();
+        const payload = cwd.readFileAlloc(ctx.io, rest[2], ctx.arena, .limited(signature.max_payload_size)) catch |err|
+            return fail("reading {s}: {t}", .{ rest[2], err });
+        const text = cwd.readFileAlloc(ctx.io, rest[3], ctx.arena, .limited(4096)) catch |err|
+            return fail("reading {s}: {t}", .{ rest[3], err });
+        try remote.pushSignature(ctx, image, payload, text);
+        return 0;
+    }
+    if (std.mem.eql(u8, what, "check") and rest.len == 2) {
+        const target = try remote.resolve(ctx, image);
+        var registry: @import("Registry.zig") = undefined;
+        try registry.init(ctx, target.ref, "pull");
+        defer registry.deinit();
+        const digest = try remote.manifestDigest(ctx, image);
+        return switch (try remote.checkSignature(ctx, &registry, target.ref, null, digest)) {
+            .no_key => fail("{s}: no key here for its registry", .{image}),
+            .missing => fail("{s}: not signed", .{image}),
+            .wrong => |why| fail("{s}: {s}", .{ image, why }),
+            .signed => |fingerprint| signed: {
+                note("{s}: signed, by key {s}", .{ image, fingerprint });
+                break :signed 0;
+            },
+        };
     }
     return usageError();
 }
@@ -774,6 +849,8 @@ test {
     _ = @import("run.zig");
     _ = @import("schedule.zig");
     _ = @import("services.zig");
+    _ = @import("signature.zig");
+    _ = @import("trust.zig");
     _ = @import("shortcuts.zig");
     _ = @import("Sidecar.zig");
     _ = @import("Store.zig");

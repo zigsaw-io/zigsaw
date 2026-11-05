@@ -31,7 +31,7 @@ if [ "${1:-}" != --inner ]; then
     account=$(cygpath -aw "$1")
     user=$(head -1 "$1" | tr -d '\r')
     repo=$(cygpath -w "$(cd "$(dirname "$0")/.." && pwd)")
-    (cd "$repo" && zig build && zig build asuser gui-fixture argv-echo hostprobe ctrlc-driver netprobe cred-helper imports acprobe procprobe) ||
+    (cd "$repo" && zig build && zig build asuser gui-fixture argv-echo hostprobe ctrlc-driver netprobe cred-helper imports acprobe procprobe p256sign) ||
         { echo "building zigsaw failed"; exit 1; }
     stage=$(cygpath -wl "$(mktemp -d)")
     icacls "$stage" /grant "$user:(OI)(CI)M" >/dev/null || { echo "$user can't be given $stage"; exit 1; }

@@ -181,6 +181,16 @@ pub fn build(b: *std.Build) void {
     const resetproxy_step = b.step("resetproxy", "Build the proxy that resets connections");
     resetproxy_step.dependOn(&b.addInstallArtifact(resetproxy, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // Signs as cosign does, with a key made from a word; see tests/signing.sh.
+    // Also installed under zig-out\test.
+    const p256sign = b.addExecutable(.{ .name = "zigsaw-p256sign", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/p256sign.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const p256sign_step = b.step("p256sign", "Build the program tests sign with");
+    p256sign_step.dependOn(&b.addInstallArtifact(p256sign, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     // Waits for a window by its title, and closes it; see tests/guiapps.sh.
     // Also installed under zig-out\test.
     const winwait = b.addExecutable(.{ .name = "zigsaw-winwait", .root_module = b.createModule(.{

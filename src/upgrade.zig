@@ -1,9 +1,13 @@
 //! `zigsaw upgrade`: installs zigsaw's latest release over this one, as install.ps1
-//! does, and only when the user runs it. A release's files are the zip, SHA256SUMS,
-//! and VERSION, one line saying which release it is. The hashes come from the same
-//! place as the zip, so this trusts that place as install.ps1 does.
+//! does, and only when the user runs it. A release's files are the zip, VERSION, one
+//! line saying which release it is, SHA256SUMS, which lists both, and SHA256SUMS.sig,
+//! a signature of that by a key built into this zigsaw. So, unlike install.ps1, this
+//! doesn't trust the place the files come from. The signature is made by hand after a
+//! release is published (scripts/sign-release.sh), so until then, there's no release
+//! to tell anyone about.
 //!
-//! ZIGSAW_UPGRADE_FROM names a URL or a directory with those files, for tests.
+//! ZIGSAW_UPGRADE_FROM names a URL or a directory with those files, and
+//! ZIGSAW_UPGRADE_KEY a key that counts too, for tests.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -15,6 +19,7 @@ const process = @import("process.zig");
 const prompt = @import("prompt.zig");
 const remote = @import("remote.zig");
 const repeat = @import("testing.zig").repeat;
+const trust = @import("trust.zig");
 const win32 = @import("win32.zig");
 const zipfile = @import("zipfile.zig");
 const fail = Context.fail;
@@ -56,10 +61,47 @@ pub fn isNewer(version: []const u8) bool {
     return theirs.order(ours) == .gt;
 }
 
-/// The latest release's version, if it's later than this zigsaw.
+/// The latest release's version, if it's later than this zigsaw and signed. One not
+/// signed yet is on its way, or isn't what it says, and either way isn't worth telling
+/// anyone about. A signature that's wrong fails, as any failed check does.
 pub fn newer(ctx: *Context) !?[]const u8 {
     const latest = try latestVersion(ctx);
-    return if (isNewer(latest)) latest else null;
+    if (!isNewer(latest)) return null;
+    return switch ((try readSums(ctx, latest)).state) {
+        .signed => latest,
+        .not_signed_yet => null,
+    };
+}
+
+const Sums = struct { state: enum { signed, not_signed_yet }, text: []const u8 = "" };
+
+/// The SHA256SUMS of the release at `from`, if it has a good signature of it, and it
+/// says the release is `version`.
+fn readSums(ctx: *Context, version: []const u8) !Sums {
+    const arena = ctx.arena;
+    const io = ctx.io;
+    const sums_path = try ctx.store.tmpPath(arena, "sums");
+    const sig_path = try ctx.store.tmpPath(arena, "sums-sig");
+    defer Io.Dir.cwd().deleteFile(io, sums_path) catch {};
+    defer Io.Dir.cwd().deleteFile(io, sig_path) catch {};
+    if (!try getIfThere(ctx, "SHA256SUMS.sig", sig_path)) return .{ .state = .not_signed_yet };
+    try get(ctx, "SHA256SUMS", sums_path);
+    const sums = try Io.Dir.cwd().readFileAlloc(io, sums_path, arena, .limited(64 << 10));
+    const text = try Io.Dir.cwd().readFileAlloc(io, sig_path, arena, .limited(4096));
+    const keys = try trust.forRelease(ctx);
+    for (keys) |key| {
+        if (!key.verifies(sums, text)) continue;
+        // Signed, so what it lists is what the release is: VERSION can't be from another.
+        const listed = try listedHash(arena, sums, "VERSION") orelse
+            return fail("the signed SHA256SUMS from {s} doesn't list VERSION. Nothing was changed", .{from(ctx)});
+        const version_line = try std.fmt.allocPrint(arena, "{s}\n", .{version});
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(version_line, &hash, .{});
+        if (!std.mem.eql(u8, listed, &std.fmt.bytesToHex(hash, .lower)))
+            return fail("the VERSION from {s} says {s}, which isn't what the release's signed SHA256SUMS lists. Nothing was changed", .{ from(ctx), version });
+        return .{ .state = .signed, .text = sums };
+    }
+    return fail("the signature of SHA256SUMS from {s} isn't by any key this zigsaw knows. Nothing was changed", .{from(ctx)});
 }
 
 fn latestVersion(ctx: *Context) ![]const u8 {
@@ -74,14 +116,22 @@ fn latestVersion(ctx: *Context) ![]const u8 {
 
 /// Gets a file of the release into `dest`.
 fn get(ctx: *Context, name: []const u8, dest: []const u8) !void {
+    if (!try getIfThere(ctx, name, dest)) return fail("downloading {s}/{s}: HTTP 404", .{ from(ctx), name });
+}
+
+/// As `get`, or false if the release has no such file. Anything else going wrong is
+/// an error: a network that's down says nothing about whether it's there.
+fn getIfThere(ctx: *Context, name: []const u8, dest: []const u8) !bool {
     const arena = ctx.arena;
     const where = from(ctx);
     if (!isUrl(where)) {
         const src = try std.fs.path.join(arena, &.{ where, name });
-        const bytes = Io.Dir.cwd().readFileAlloc(ctx.io, src, arena, .limited(256 << 20)) catch |err|
-            return fail("reading {s}: {t}", .{ src, err });
+        const bytes = Io.Dir.cwd().readFileAlloc(ctx.io, src, arena, .limited(256 << 20)) catch |err| switch (err) {
+            error.FileNotFound => return false,
+            else => return fail("reading {s}: {t}", .{ src, err }),
+        };
         try Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = dest, .data = bytes });
-        return;
+        return true;
     }
     const url = try std.fmt.allocPrint(arena, "{s}/{s}", .{ where, name });
     var client: std.http.Client = .{ .allocator = ctx.gpa, .io = ctx.io };
@@ -96,7 +146,9 @@ fn get(ctx: *Context, name: []const u8, dest: []const u8) !void {
         .response_writer = &writer.interface,
     }) catch |err| return fail("downloading {s}: {t}", .{ url, err });
     try writer.interface.flush();
+    if (result.status == .not_found) return false;
     if (result.status != .ok) return fail("downloading {s}: HTTP {d}", .{ url, @backingInt(result.status) });
+    return true;
 }
 
 /// The hash SHA256SUMS lists for `name`, in lower case.
@@ -128,6 +180,10 @@ pub fn upgrade(ctx: *Context, consent: remote.Consent) !u32 {
         note("zigsaw {s} is up to date (the latest release is {s})", .{ this_version, latest });
         return 0;
     }
+    // Before asking, and before the download: whether there's anything to agree to.
+    const release = try readSums(ctx, latest);
+    if (release.state == .not_signed_yet)
+        return fail("zigsaw {s} is out, but isn't signed yet, so zigsaw stays at {s}. Nothing was changed; try again later", .{ latest, this_version });
     if (consent != .given) switch (try prompt.askYesNo(ctx, try std.fmt.allocPrint(arena, "Upgrade zigsaw {s} to {s}?", .{ this_version, latest }))) {
         .yes => {},
         .no => return fail("zigsaw stays at {s}", .{this_version}),
@@ -139,11 +195,8 @@ pub fn upgrade(ctx: *Context, consent: remote.Consent) !u32 {
     const tmp = try ctx.store.makeTmpDir(arena, "upgrade");
     defer Store.deleteTree(io, arena, tmp) catch {};
     const zip_path = try std.fs.path.join(arena, &.{ tmp, archive });
-    const sums_path = try std.fs.path.join(arena, &.{ tmp, "SHA256SUMS" });
     try get(ctx, archive, zip_path);
-    try get(ctx, "SHA256SUMS", sums_path);
-    const sums = try Io.Dir.cwd().readFileAlloc(io, sums_path, arena, .limited(64 << 10));
-    const want = try listedHash(arena, sums, archive) orelse return fail("SHA256SUMS from {s} doesn't list {s}. Nothing was changed", .{ from(ctx), archive });
+    const want = try listedHash(arena, release.text, archive) orelse return fail("SHA256SUMS from {s} doesn't list {s}. Nothing was changed", .{ from(ctx), archive });
     const got = try Store.sha256File(io, zip_path);
     if (!std.mem.eql(u8, want, &got.hex))
         return fail("{s} from {s} isn't the file its SHA256SUMS lists: expected {s}, got {s}. Nothing was changed", .{ archive, from(ctx), want, &got.hex });

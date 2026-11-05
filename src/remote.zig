@@ -21,6 +21,8 @@ const install = @import("install.zig");
 const oci = @import("oci.zig");
 const prompt = @import("prompt.zig");
 const repeat = @import("testing.zig").repeat;
+const signature = @import("signature.zig");
+const trust = @import("trust.zig");
 const fail = Context.fail;
 const note = Context.note;
 
@@ -104,6 +106,15 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
     if (fetched.index) |index| note("{f} is a multi-platform index ({s}): its image for windows/amd64 is {s}", .{ ref, oci.shortDigest(index), fetched.digest });
     const manifest = fetched.manifest;
 
+    // Before anything of the image is downloaded. A build's images aren't checked:
+    // its recipe pins them by digest, which says exactly what they are.
+    if (opts.consent != .not_asked) switch (try checkSignature(ctx, &registry, ref, fetched.index, fetched.digest)) {
+        .no_key => note("{f}: no key here for its registry, so its signature wasn't checked (`zigsaw trust add` gives one)", .{ref}),
+        .signed => |fingerprint| note("{f}: signed, by key {s}", .{ ref, fingerprint }),
+        .missing => note("warning: {f} isn't signed, though zigsaw knows a key for it. Whoever made it isn't known; in a later release, this will be refused", .{ref}),
+        .wrong => |why| return fail("{f}: {s}. Nothing was installed", .{ ref, why }),
+    };
+
     // The config first: the image has to be a zigsaw app, and the one asked
     // for, before any layer is worth downloading.
     if (!oci.isConfigType(manifest.config.mediaType))
@@ -132,6 +143,145 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
         .source = target.text,
         .described = true,
     };
+}
+
+/// What a look for an image's signature found.
+pub const SignatureCheck = union(enum) {
+    /// Nothing says which key would count for this registry.
+    no_key,
+    /// A key counts here, and the image has no signature at all.
+    missing,
+    /// The fingerprint of the key whose signature is good.
+    signed: []const u8,
+    /// There's something where the signature goes, and it isn't good: why.
+    wrong: []const u8,
+};
+
+/// Looks for a signature of the image `digest`, or of the index it's in, by a key
+/// that counts for its repository. A registry that won't say is an error, not
+/// `missing`.
+pub fn checkSignature(ctx: *Context, registry: *Registry, ref: Registry.Reference, index: ?[]const u8, digest: []const u8) !SignatureCheck {
+    const repository = try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ ref.host, ref.repository });
+    const keys = try trust.forImage(ctx, repository);
+    if (keys.len == 0) return .no_key;
+    if (index) |i| switch (try checkSignatureOf(ctx, registry, keys, repository, i)) {
+        .missing => {},
+        else => |found| return found,
+    };
+    return checkSignatureOf(ctx, registry, keys, repository, digest);
+}
+
+fn checkSignatureOf(ctx: *Context, registry: *Registry, keys: []const signature.Key, repository: []const u8, digest: []const u8) !SignatureCheck {
+    const arena = ctx.arena;
+    const found = try registry.fetchManifestIfThere(try signature.tagFor(arena, digest)) orelse return .missing;
+    const manifest = switch (try classify(arena, registry.ref, found.bytes)) {
+        .image => |m| m,
+        .index => return .{ .wrong = "what's where its signature goes isn't a signature" },
+    };
+    // Any good one will do: there may be several, and any of them wrong says nothing
+    // about the others. If none is, what a trusted key signed says the most.
+    var why: []const u8 = "what's where its signature goes has no signature in it";
+    var by_a_key = false;
+    for (manifest.layers) |layer| {
+        if (!std.mem.eql(u8, layer.mediaType, signature.payload_media_type)) continue;
+        const annotations = layer.annotations orelse continue;
+        const text = annotations.map.get(signature.signature_annotation) orelse continue;
+        if (layer.size > signature.max_payload_size) {
+            why = "its signature is about something too big to be an image's";
+            continue;
+        }
+        const payload = try arena.alloc(u8, @intCast(layer.size));
+        var sink: Io.Writer = .fixed(payload);
+        const there = registry.getBlob(layer.digest, .{ .len = layer.size }, &sink) catch |err| switch (err) {
+            error.WriteFailed => {
+                why = "its signature is about something bigger than it says";
+                continue;
+            },
+            else => |e| return e,
+        };
+        if (!there or sink.end != payload.len) {
+            why = "what its signature is about isn't there";
+            continue;
+        }
+        const key = for (keys) |k| {
+            if (k.verifies(payload, text)) break k;
+        } else {
+            if (!by_a_key) why = "it's signed, but not by any key that counts for it";
+            continue;
+        };
+        by_a_key = true;
+        signature.checkPayload(arena, payload, repository, digest) catch |err| {
+            why = switch (err) {
+                error.OutOfMemory => |e| return e,
+                error.NotAPayload => "what its signature says isn't what an image's says",
+                error.OtherImage => "its signature is of another image",
+                error.OtherRepository => "its signature is of an image in another repository",
+            };
+            continue;
+        };
+        return .{ .signed = try arena.dupe(u8, &key.fingerprint) };
+    }
+    return .{ .wrong = why };
+}
+
+/// What to sign for the image `image_text` names, as it is in its registry now.
+pub fn signaturePayload(ctx: *Context, image_text: []const u8) ![]const u8 {
+    const target = try resolve(ctx, image_text);
+    const repository = try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ target.ref.host, target.ref.repository });
+    return signature.makePayload(ctx.arena, repository, try manifestDigest(ctx, image_text));
+}
+
+/// Puts a signature someone made of `payload` beside the image it names, in cosign's
+/// classic layout, keeping those already there: during a change of keys, an image has
+/// both. Which image it is comes from the payload, so that the tag can't have moved
+/// since it was signed.
+pub fn pushSignature(ctx: *Context, image_text: []const u8, payload: []const u8, text: []const u8) !void {
+    const arena = ctx.arena;
+    const target = try resolve(ctx, image_text);
+    const named = signature.parsePayload(arena, payload) catch |err| switch (err) {
+        error.OutOfMemory => |e| return e,
+        error.NotAPayload => return fail("that isn't what `zigsaw signature payload` prints", .{}),
+    };
+    const repository = try std.fmt.allocPrint(arena, "{s}/{s}", .{ target.ref.host, target.ref.repository });
+    if (!std.ascii.eqlIgnoreCase(named.repository, repository))
+        return fail("that payload is about {s}, not {s}", .{ named.repository, repository });
+    if (oci.digestHex(named.digest) == null) return fail("that payload's digest isn't one: {s}", .{named.digest});
+
+    var registry: Registry = undefined;
+    try registry.init(ctx, target.ref, "pull,push");
+    defer registry.deinit();
+    const tag = try signature.tagFor(arena, named.digest);
+
+    var layers: std.ArrayList(oci.Descriptor) = .empty;
+    if (try registry.fetchManifestIfThere(tag)) |found| switch (try classify(arena, target.ref, found.bytes)) {
+        .image => |m| try layers.appendSlice(arena, m.layers),
+        .index => return fail("{s} in {f} isn't a signature, so it stays", .{ tag, target.ref }),
+    };
+    const trimmed = std.mem.trim(u8, text, " \t\r\n");
+    for (layers.items) |layer| if (layer.annotations) |a| if (a.map.get(signature.signature_annotation)) |existing|
+        if (std.mem.eql(u8, existing, trimmed)) {
+            note("{s} has that signature already", .{tag});
+            return;
+        };
+
+    var annotations: std.json.ArrayHashMap([]const u8) = .{};
+    try annotations.map.put(arena, signature.signature_annotation, trimmed);
+    var layer = try ctx.store.putBlob(arena, payload, signature.payload_media_type);
+    layer.annotations = annotations;
+    try uploadIfMissing(ctx, &registry, layer, try ctx.store.blobPath(arena, oci.digestHex(layer.digest).?), null);
+    try layers.append(arena, layer);
+
+    // A config as cosign writes one: it names each layer, and that's all it does.
+    var diff_ids: std.ArrayList(u8) = .empty;
+    for (layers.items, 0..) |l, i| try diff_ids.print(arena, "{s}\"{s}\"", .{ if (i == 0) "" else ",", l.digest });
+    const config = try ctx.store.putBlob(arena, try std.fmt.allocPrint(arena,
+        \\{{"architecture":"","config":{{}},"created":"0001-01-01T00:00:00Z","history":[{{"created":"0001-01-01T00:00:00Z"}}],"os":"","rootfs":{{"type":"layers","diff_ids":[{s}]}}}}
+    , .{diff_ids.items}), "application/vnd.oci.image.config.v1+json");
+    try uploadIfMissing(ctx, &registry, config, try ctx.store.blobPath(arena, oci.digestHex(config.digest).?), null);
+
+    const manifest: oci.Manifest = .{ .config = config, .layers = layers.items };
+    try registry.pushManifest(tag, try oci.toJson(arena, manifest));
+    note("signed {s}, as {s}", .{ named.digest, tag });
 }
 
 /// An image's manifest and config, as a registry has them.

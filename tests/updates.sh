@@ -47,6 +47,12 @@ check() {
 }
 fails() { ! "$@"; }
 
+# Releases' signatures, by a key that only counts where ZIGSAW_UPGRADE_FROM is set.
+(cd "$root" && zig build p256sign) || { echo "building the signer failed"; exit 1; }
+signer="$root\\zig-out\\test\\zigsaw-p256sign.exe"
+"$signer" key release "$work\\release.pub"
+export ZIGSAW_UPGRADE_KEY="$work\\release.pub"
+
 store_a="$work\\a"
 store_b="$work\\b"
 za() { ZIGSAW_HOME="$store_a" "$zigsaw" "$@"; }
@@ -171,9 +177,32 @@ if curl -sf "http://127.0.0.1:5000/v2/" >/dev/null; then
     # zigsaw itself, from a release's files in a directory.
     release="$work\\release"
     mkdir -p "$release"
+    # A release of that version, signed as scripts/sign-release.sh does.
+    signed_release() { # <version> [<word>]
+        printf '%s\n' "$1" >"$release\\VERSION"
+        printf '%s  VERSION\n' "$(sha256sum <"$release\\VERSION" | cut -d' ' -f1)" >"$release\\SHA256SUMS"
+        "$signer" sign "${2:-release}" "$release\\SHA256SUMS" >"$release\\SHA256SUMS.sig"
+    }
+    unsigned_release() {
+        signed_release 999.0.0
+        rm -f "$release\\SHA256SUMS.sig"
+        local out
+        out=$(ZIGSAW_UPGRADE_FROM="$release" zb updates check --notify 2>/dev/null) || { echo "$out"; return 1; }
+        [ -z "$out" ] || { echo "it told: $out"; return 1; }
+        ! ZIGSAW_UPGRADE_FROM="$release" zb updates 2>/dev/null | grep -q ' is out'
+    }
+    check "a newer zigsaw that isn't signed yet isn't told about" unsigned_release
+    wrongly_signed_release() {
+        signed_release 999.0.0 other
+        local out
+        out=$(ZIGSAW_UPGRADE_FROM="$release" zb updates check 2>/dev/null) && { echo "it exited 0: $out"; return 1; }
+        ! grep -q ' is out' <<<"$out" || { echo "$out"; return 1; }
+        grep -q "Couldn't find out zigsaw's latest version" <<<"$out"
+    }
+    check "  and one signed by another key is a check that failed" wrongly_signed_release
     newer_zigsaw() {
         local out
-        printf '999.0.0\n' >"$release\\VERSION"
+        signed_release 999.0.0
         out=$(ZIGSAW_UPGRADE_FROM="$release" zb updates check --notify 2>/dev/null) || { echo "$out"; return 1; }
         grep -q 'updates waiting$' <<<"$out" || { echo "$out"; return 1; }
         ZIGSAW_UPGRADE_FROM="$release" zb updates 2>/dev/null | grep -q 'zigsaw 999.0.0 is out; this is .* `zigsaw upgrade` installs it'
@@ -192,7 +221,7 @@ if curl -sf "http://127.0.0.1:5000/v2/" >/dev/null; then
     }
     check "  and not finding out is said, and isn't a failure of anything else" no_release
     elsewhere() {
-        printf '999.0.0\n' >"$release\\VERSION"
+        signed_release 999.0.0
         ZIGSAW_UPGRADE_FROM="$release" zb updates check >/dev/null 2>&1
         ! zb updates check 2>/dev/null | grep -q ' is out'
     }

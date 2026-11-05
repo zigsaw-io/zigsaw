@@ -7,8 +7,9 @@
 #                               zigsaw-relay.exe, zigsaw-host.exe, LICENSE, and Zig's licence
 #                               (its standard library is compiled into them)
 #   install.ps1                 scripts/install.ps1
-#   SHA256SUMS                  of the two
-#   notes.md                    the release's notes: the programs' own hashes
+#   VERSION                     which release this is
+#   SHA256SUMS                  of those three
+#   notes.md                   the release's notes: the programs' own hashes
 #
 #   scripts/package.sh [output directory]     (default: zig-out/release)
 #
@@ -43,7 +44,7 @@ printf '%s\n' "$version" >"$out/VERSION"
 sum() { sha256sum <"$1" | cut -d' ' -f1; }
 (
     cd "$out"
-    for f in zigsaw-x86_64-windows.zip install.ps1; do printf '%s  %s\n' "$(sum "$f")" "$f"; done >SHA256SUMS
+    for f in zigsaw-x86_64-windows.zip install.ps1 VERSION; do printf '%s  %s\n' "$(sum "$f")" "$f"; done >SHA256SUMS
     {
         printf 'Install or upgrade, in PowerShell:\n\n'
         printf '```powershell\nirm https://github.com/zigsaw-io/zigsaw/releases/download/v%s/install.ps1 | iex\n```\n\n' "$version"

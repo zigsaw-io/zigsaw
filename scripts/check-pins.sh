@@ -3,7 +3,8 @@
 # recipe names by digest ("org.gtk.Gtk4:4.24.1@sha256:...", as a runtime, an
 # SDK or an image source), and each recipe's own version, by tag. Something
 # missing means a fresh store can't build a recipe that pins it, which the
-# Reproduce workflow can't see for recipes it skips.
+# Reproduce workflow can't see for recipes it skips. On the default registry, each
+# recipe's own version must have its signature beside it too.
 #
 #   scripts/check-pins.sh [recipe.json...]   (default: those in published-recipes.txt)
 #
@@ -175,5 +176,30 @@ for recipe in "$@"; do
     done
 done
 
-echo "$# recipe(s), $pins pin(s): $missing missing, $older older runtime(s)"
-[ "$missing" -eq 0 ]
+# Each recipe's own version has its signature beside it (scripts/sign-images.sh): pull
+# warns about one that hasn't. Only here, where zigsaw knows a key, and only that one's
+# there: whether it's good is what `zigsaw signature check` and a pull are for.
+unsigned=0
+if [ "$registry" = ghcr.io/zigsaw-io ]; then
+    while read -r tid ttag tdigest; do tag_digest[$tid:$ttag]=$tdigest; done < <(
+        for recipe in "$@"; do
+            id=$(field id "$recipe")
+            digest=${tag_digest[$id:$(field version "$recipe")]:-}
+            [ -z "$digest" ] || echo "$id sha256-${digest#sha256:}.sig"
+        done | sort -u | xargs -P 8 -n 2 bash "$0" --tag
+    )
+    for recipe in "$@"; do
+        id=$(field id "$recipe")
+        version=$(field version "$recipe")
+        digest=${tag_digest[$id:$version]:-}
+        [ -n "$digest" ] || continue
+        tag "$id" "sha256-${digest#sha256:}.sig"
+        if [ -z "$now" ]; then
+            echo "unsigned: $id:$version (@$(short "$digest")) has no signature"
+            unsigned=$((unsigned + 1))
+        fi
+    done
+fi
+
+echo "$# recipe(s), $pins pin(s): $missing missing, $older older runtime(s), $unsigned unsigned"
+[ "$missing" -eq 0 ] && [ "$unsigned" -eq 0 ]

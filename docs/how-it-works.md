@@ -182,6 +182,40 @@ and about what, and what was waiting when the user last looked. What's waiting i
 compared with the store when it's read, so an app updated since the check isn't
 listed. An app that can't be checked keeps what the last check found for it.
 
+## Signatures
+
+zigsaw only checks signatures. Nothing in it can make one, or reads a private key: on
+the publisher's machine, `cosign sign-blob` does the arithmetic, reached by the scripts
+as a plain program from the store, since `zigsaw run` would put the passphrase on a
+command line and could label the key's folder low.
+
+An image's signature is what cosign's classic layout has: a tag `sha256-<digest>.sig` in
+the image's repository, for a manifest with a layer per signature. The layer is a line of
+JSON, the simple-signing payload, naming the image's digest and repository, and its
+annotation holds the signature of those bytes, ECDSA P-256 over SHA-256, in base64 DER.
+`src/signature.zig` has the rules and no I/O, `src/trust.zig` which keys count, and
+`remote.checkSignature` what to fetch. A payload is checked in order: the signature
+first, by each key for that repository, and only then what the now-trusted JSON says.
+Both its fields matter. Without the digest, a signature of anything would do for
+everything; without the repository, a signed image could be served as another app.
+
+A signature goes beside an image and not in it, so signing moves no digest, nothing
+rebuilds, and a zigsaw from before 0.74 doesn't notice. Tags are mutable, so
+`signature push` takes the digest from the payload and never from the tag.
+
+`remote.fetch` checks right after the manifest arrives, before the config or any layer,
+when it's asked to install something (`consent` other than `.not_asked`). A build's
+images come through the same function with `.not_asked`: `deps.zig` refuses anything but a
+digest pin. `update --check` and the daily check don't look, so a tag moved to something
+wrong is reported, and refused when someone goes to install it.
+
+A release is the same arithmetic over the file `SHA256SUMS`, with the signature in
+`SHA256SUMS.sig`. That file lists the zip and `VERSION`, and `upgrade.readSums` checks both
+against it: otherwise a signed old release could be offered under a newer `VERSION`, which
+would get as far as the new program saying its own version, and no further. Anything
+that isn't there is `not_signed_yet`, as a release spends some time like that; a signature
+by no key zigsaw knows is an error.
+
 ## How long grants last
 
 What a run is granted on host paths, low labels and ACL entries, stays only

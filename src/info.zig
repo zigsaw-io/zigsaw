@@ -11,8 +11,16 @@ const remote = @import("remote.zig");
 
 pub fn info(ctx: *Context, image_text: []const u8) !void {
     const arena = ctx.arena;
-    const app = try remote.fetchInfo(ctx, image_text);
+    var registry: @import("Registry.zig") = undefined;
+    const app = try remote.fetchInfoOpen(ctx, image_text, &registry);
+    defer registry.deinit();
     const cfg = app.config;
+    const signature_text: []const u8 = switch (try remote.checkSignature(ctx, &registry, app.target.ref, app.index, app.manifest_digest)) {
+        .no_key => "not checked: no key here for its registry",
+        .missing => "none: nothing says who made it",
+        .signed => |fingerprint| try std.fmt.allocPrint(arena, "signed, by key {s}", .{fingerprint}),
+        .wrong => |why| try std.fmt.allocPrint(arena, "WRONG: {s}, so pull refuses it", .{why}),
+    };
 
     var buf: [4096]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
@@ -22,6 +30,7 @@ pub fn info(ctx: *Context, image_text: []const u8) !void {
     try writeLine(w, "license", cfg.license orelse "");
     try writeLine(w, "image", app.target.text);
     try writeLine(w, "manifest", app.manifest_digest);
+    try writeLine(w, "signature", signature_text);
     if (app.index) |index| try writeLine(w, "index", try std.fmt.allocPrint(arena, "{s}, as its image for windows/amd64", .{index}));
     try writeContents(ctx, w, app.manifest, cfg);
     if (cfg.build) |b| try writeLine(w, "built", try describeBuild(arena, b));

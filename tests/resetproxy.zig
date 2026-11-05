@@ -10,6 +10,11 @@
 //! when it's killed. The first GET whose path has <path part> in it, with a longer
 //! response than <bytes>, gets <bytes> of the body, and then the reset. Everything
 //! else goes through. Requests have no bodies, which is enough for pulling.
+//!
+//!   zigsaw-resetproxy <port> <upstream port> <path part> 0 --answer-500
+//!
+//! Instead answers each GET whose path has <path part> in it with a 500, as a
+//! registry having a bad day does (tests/signing.sh).
 
 const std = @import("std");
 
@@ -36,16 +41,19 @@ extern "ws2_32" fn setsockopt(s: Socket, level: c_int, name: c_int, value: *cons
 extern "ws2_32" fn closesocket(s: Socket) callconv(.winapi) c_int;
 extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
 
+var answer_500 = false;
+
 const sock_stream = 1;
 const sol_socket = 0xffff;
 const so_linger = 0x0080;
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len != 5) {
-        std.log.err("usage: resetproxy <port> <upstream port> <path part> <bytes>", .{});
+    if (args.len != 5 and !(args.len == 6 and std.mem.eql(u8, args[5], "--answer-500"))) {
+        std.log.err("usage: resetproxy <port> <upstream port> <path part> <bytes> [--answer-500]", .{});
         std.process.exit(2);
     }
+    answer_500 = args.len == 6;
     const port = try std.fmt.parseInt(u16, args[1], 10);
     const upstream = try std.fmt.parseInt(u16, args[2], 10);
     const part: []const u8 = args[3];
@@ -76,6 +84,11 @@ fn serve(client: Socket, upstream: u16, part: []const u8, bytes: u64, reset_done
     var request_buf: [64 * 1024]u8 = undefined;
     const request = request_buf[0..try readHead(client, &request_buf)];
     const line = request[0 .. std.mem.indexOf(u8, request, "\r\n") orelse return error.BadRequest];
+
+    if (answer_500 and std.mem.startsWith(u8, line, "GET ") and std.mem.indexOf(u8, line, part) != null) {
+        try sendAll(client, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return reset_done;
+    }
 
     const server = socket(2, sock_stream, 0);
     if (server == invalid_socket) return error.NoSocket;

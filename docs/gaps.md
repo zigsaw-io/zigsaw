@@ -242,10 +242,39 @@
 - Now and then, VLC starts playing a file about 30 s after its window comes
   up, rather than at once. Seen twice in a day, on its first runs in a while;
   not found why.
-- zigsaw's releases aren't signed. `install.ps1` checks the zip against the
-  release's `SHA256SUMS`, which comes from the same release; anyone can
-  check the programs against a build of the tag (see
-  [Installing zigsaw](#installing-zigsaw)). Releases are for x64 only.
+- A first install trusts GitHub: `install.ps1` checks the zip against the
+  release's `SHA256SUMS`, and both come from where the script does, so a signature it
+  checked would prove nothing. `zigsaw upgrade` does check one, from then on. By hand,
+  [`cosign verify-blob`](../README.md#signatures) checks a release, and anyone can compare
+  the programs with a build of the tag ([Installing zigsaw](../README.md#installing-zigsaw)).
+  Releases are for x64 only.
+- **A missing image signature only warns, for now.** Someone who can change what
+  ghcr.io serves can simply leave the signature off: wrong ones are refused, and a
+  warning is all that stops this, which `--yes` doesn't stop for. It's to be refused
+  once every image has been seen signed. `zigsaw upgrade` already refuses.
+- **Signatures don't stop an old image.** A tag moved back to an older version that was
+  signed installs, older and vulnerable, as a signature says who made an image and not
+  that it's the newest. No freshness (TUF or the like) is checked. Nor does anything
+  notice a tag that stops moving, so that a fix never shows up.
+- **A key that leaks can't be revoked.** Old zigsaws trust their built-in keys for good.
+  A new release can drop one, signed by the other, for those who upgrade; there's no
+  list to check, and no one is told. If both are lost, no upgrade can be signed, and
+  zigsaw has to be installed again by hand.
+- The signing key sits on the publisher's machine, encrypted with a passphrase, with no
+  hardware token, as cosign's PIV support needs cgo, which its image doesn't have. Whoever
+  gets the machine and the passphrase can sign anything.
+- Signatures aren't in Sigstore's public log, so nobody can see what's been signed, or
+  notice something signed that shouldn't have been.
+- The catalog `zigsaw search` reads isn't signed, so it can list what it likes. What
+  gets installed is checked, by name.
+- `update --check` and the daily check don't look at signatures, so a tag moved to
+  something wrongly signed is listed as an update, and refused when it's installed.
+- zigsaw has no Authenticode signature: SmartScreen and Defender know nothing of the
+  signatures here.
+- An image pulled with no key for its registry isn't checked, and says so, on every
+  registry but `ghcr.io/zigsaw-io` until `zigsaw trust add` names one. Keys are ECDSA
+  P-256 only, and a signature in cosign's newer bundle format, which is its default, isn't
+  read: sign with `--new-bundle-format=false`, or as `zigsaw signature` does.
 - Docker's logins are used only as user names and passwords (or tokens
   used as passwords): an identity token, which Docker keeps for a registry
   after a web login, isn't, as using one takes OAuth2's refresh flow.
@@ -805,6 +834,12 @@
   one. `install.ps1 -Version` still can.
 - A zigsaw installed with `-Dir` somewhere else than its store's `bin` isn't told about
   new releases, and `zigsaw upgrade` won't replace it.
+- BusyBox's `make` failed once on a build that passes otherwise, naming a target of
+  garbage bytes: `make: don't know how to make P\x01\x02\xDBp\x02`, in the GTK SDK's
+  `enchant` module, on `make -C lib install nodist_doc_DATA=`, with no change that could
+  explain it (Reproduce on faf49a8, which changed only tests; 83bc6ab passed). It looks like
+  a memory bug in BusyBox-w32's make, not looked into further. A second run is all it took
+  to see it's not the recipe; it would fail a publish the same way.
 - A recipe's source on plain `http://` that redirects to `https://` panics `zigsaw
   build`, in Zig 0.17's std (`client.now.?` in `connectTcpOptions`, which only a first
   request over TLS sets). No published recipe has such a source. `https://` from the

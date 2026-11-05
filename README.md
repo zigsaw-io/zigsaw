@@ -43,7 +43,9 @@ zig build                # ReleaseSafe by default; -Doptimize=Debug for a quicke
 zigsaw for you alone, in Windows PowerShell 5.1 or later:
 
 - It downloads the release's `zigsaw-x86_64-windows.zip` and checks it
-  against the release's `SHA256SUMS` before changing anything.
+  against the release's `SHA256SUMS` before changing anything. Both come from where
+  the script does, so a first install trusts GitHub:
+  [checking one by hand](#signatures) is what doesn't.
 - It puts `zigsaw.exe` and the programs that come with it in `%LOCALAPPDATA%\zigsaw\bin`,
   where zigsaw puts installed apps' commands too, and adds that directory to
   your PATH, keeping the rest of PATH as it was stored (variables such as
@@ -83,8 +85,10 @@ release notes list their SHA-256. (0.18.0's were built for the CPU of
 GitHub's runner, and need AVX2, BMI2 and the SHA instructions.) A build
 of 0.19.0, 0.20.0 and 0.21.0 here gave their releases' bytes. From 0.22.0
 the programs carry version information, which Explorer's Properties show,
-and an application manifest ([`src/windows/`](src/windows/)); they aren't
-signed. [`scripts/package.sh`](scripts/package.sh) makes the release's files.
+and an application manifest ([`src/windows/`](src/windows/)); they have no
+Authenticode signature, so SmartScreen and Defender know nothing of them, though
+each release from 0.74.0 has [one of its own](#signatures).
+[`scripts/package.sh`](scripts/package.sh) makes the release's files.
 Up to v0.69.0, the manifest's line endings followed the checkout's: those
 releases were built with CRLF, so a build gives their bytes only on a checkout
 with `core.autocrlf=true`. From 0.70.0 they're pinned.
@@ -143,6 +147,15 @@ zigsaw upgrade [--yes]                 install zigsaw's latest release over this
                                        agree; --yes agrees without asking
 zigsaw update --check [<app-id>...]    list the apps a new image waits for, and what it may
                                        reach beyond theirs, installing nothing
+zigsaw trust                           list the keys images' signatures are checked against
+zigsaw trust add <registry/path> <key> check images under that path against a public key, as
+                                       `cosign generate-key-pair` makes in cosign.pub
+zigsaw trust rm <registry/path> [<fingerprint>]
+                                       stop checking them against keys added there
+zigsaw signature payload <image>       print what to sign for an image, for `cosign sign-blob`
+zigsaw signature push <image> <payload file> <signature file>
+                                       put that signature beside the image, where pull looks
+zigsaw signature check <image>         say whether an image has a good signature
 zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
 zigsaw prune [--dry-run] [--downloads] [--data]
                                        delete what no installed app needs
@@ -346,6 +359,70 @@ zigsaw push --sources net.frippery.busybox
   sources, so their recipes build even when an upstream server is gone, as
   BusyBox's was in October 2026.
 
+### Signatures
+
+Whoever could change what a registry serves could otherwise change what you install:
+a tag is only a name, and a daily check would tell you to install it. So images and
+zigsaw's own releases are signed, with a key that isn't on the registry or on GitHub,
+and zigsaw checks those with keys built into it.
+
+```
+> zigsaw pull org.nodejs.node
+ghcr.io/zigsaw-io/org.nodejs.node: signed, by key d58861ca1b29cc78
+```
+
+**What happens to an image from `ghcr.io/zigsaw-io`, on `pull` and `update`**, before
+anything of it is downloaded:
+
+- **Signed by a key that counts**: it goes on, and says whose.
+- **Signed wrongly**: refused, and nothing changes. Wrongly means by another key, or of
+  another image, or of an image under another name, or about anything but what was
+  signed. An app already installed keeps running.
+- **Not signed**: for now a warning, and it goes on. So this doesn't stop someone who
+  simply leaves the signature off, unless you notice the warning, and a script with
+  `--yes` won't: **a later release will refuse these**. Only each image's latest version
+  is signed; older ones stay unsigned on purpose, as many have known vulnerabilities.
+- **A registry that won't answer** is an error, not "not signed".
+
+`zigsaw info` has a line saying which of these an image is. What a recipe pins by digest
+isn't checked, as the digest says exactly what it wants, and a signature on the app's
+image covers its runtimes, whose layers its manifest lists.
+
+**`zigsaw upgrade` always requires a signature**, of the release's `SHA256SUMS`, which
+lists the zip and `VERSION`. A release is signed by hand after it's published, once a
+build of its tag here has given the same bytes and Reproduce has passed on it
+([`scripts/sign-release.sh`](scripts/sign-release.sh)). Until then, nobody is told about
+it. 0.73.0's `upgrade` doesn't check, so its upgrade to 0.74.0 isn't checked.
+
+**To check by hand**, with stock [cosign](https://github.com/sigstore/cosign) and the
+public keys in [`src/trust.zig`](src/trust.zig), saved as `zigsaw.pub`:
+
+```powershell
+cosign verify --key zigsaw.pub --insecure-ignore-tlog ghcr.io/zigsaw-io/org.nodejs.node:latest
+cosign verify-blob --key zigsaw.pub --insecure-ignore-tlog --signature SHA256SUMS.sig SHA256SUMS
+```
+
+`--insecure-ignore-tlog` says these signatures aren't in Sigstore's public log, which
+they aren't: a key is all there is to them. That stock `cosign verify` doesn't compare
+the image's name with what's signed is why zigsaw does.
+
+**For your own images**, sign them the same way, and tell zigsaw the key once per store:
+
+```powershell
+zigsaw trust add ghcr.io/me cosign.pub   # images under ghcr.io/me, by whole path components
+zigsaw trust                             # the keys there are, built-in ones too
+zigsaw trust rm ghcr.io/me               # and away again
+```
+
+Only ECDSA P-256 keys, which is what `cosign generate-key-pair` makes. An image under no
+key says it wasn't checked, and installs. To sign, have `cosign` sign what `zigsaw
+signature payload <image>` prints, and `zigsaw signature push` puts it beside the image
+with your registry login, in cosign's classic layout (a tag named `sha256-<digest>.sig`).
+[`scripts/sign-images.sh`](scripts/sign-images.sh) does that for the published recipes.
+No digest changes: a signature is beside its image, not in it.
+
+What this doesn't do is in [the gaps](docs/gaps.md).
+
 ### Logging in
 
 Anonymous pulls of public images work without setup. Pushing, and pulling
@@ -416,7 +493,8 @@ starts a daily check, which only tells you:
   starts `zigsaw-notify.exe`, a program with no window. `zigsaw grants` lists it.
 - **What it reaches:** once a day, the registry each of your apps came from, for that
   app's manifest and, if it's new, its config; and `github.com`, for a one-line file
-  saying zigsaw's latest version. No layers, so it's small on a metered connection too.
+  saying zigsaw's latest version and, if it's new, the signature that says so. No layers,
+  so it's small on a metered connection too.
   It sends nothing that identifies you beyond what any request does, and a login you
   saved for a private registry goes to that registry as usual.
 - **What it does:** if something's waiting, a notification says so. Clicking it opens
@@ -448,14 +526,12 @@ that isn't the default one gets a task only if `updates on` is run for it, and t
 task, should the store be deleted, is removed by `zigsaw repair` or when it next runs.
 
 `zigsaw upgrade` installs zigsaw's latest release, once you agree (or with `--yes`),
-as `install.ps1` does: it checks the zip against the release's `SHA256SUMS`, starts
-the new program to see that it runs here and is the version it should be, and only
-then replaces the old ones, moving those that are running aside. Should anything go
-wrong before that, nothing changes. It never runs by itself. The hashes come from
-the same place as the zip, so this trusts GitHub's copy of the release as much as
-`install.ps1` does; a signature would be what changes that. It only replaces a zigsaw
-in its store's `bin`; one anywhere else, as a build of your own, says how to install
-one instead, and isn't told about new releases.
+as `install.ps1` does, and more carefully: it checks the [signature](#signatures) of the
+release's `SHA256SUMS`, the zip against that, starts the new program to see that it runs
+here and is the version it should be, and only then replaces the old ones, moving those
+that are running aside. Should anything go wrong before that, nothing changes. It never
+runs by itself. It only replaces a zigsaw in its store's `bin`; one anywhere else, as a
+build of your own, says how to install one instead, and isn't told about new releases.
 
 ### Removing what's old
 
@@ -1003,6 +1079,7 @@ bash tests/zls.sh       # ZLS's language server sessions over stdio in each sand
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API, in an AppContainer through its service too (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key); `zigsaw upgrade` from a later release of the same code, a running program moved aside and every way of refusing; the daily check in a scratch default store (about 2 min)
 bash tests/zot.sh bash tests/updates.sh # what a check finds, keeps and tells, and that nothing installs anything; real scheduled tasks under this run's own name, which it removes, and the real one untouched (under 1 min; without a registry, only the task rows)
+bash tests/zot.sh bash tests/signing.sh # what pull, update and info do with an image's good, wrong and missing signature, with keys `zigsaw trust` adds (under 1 min)
 bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package); an incremental build of a copy after a change makes what --clean does
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing

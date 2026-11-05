@@ -174,6 +174,28 @@ pub fn fetchManifestRef(r: *Registry, reference: []const u8) !Manifest {
     };
 }
 
+/// As `fetchManifestRef`, or null if the repository has no such manifest. Anything
+/// else that goes wrong is an error: a registry that's down says nothing about
+/// whether it's there.
+pub fn fetchManifestIfThere(r: *Registry, reference: []const u8) !?Manifest {
+    const res = try r.send(.{
+        .method = .GET,
+        .url = try r.url("/v2/{s}/manifests/{s}", .{ r.ref.repository, reference }),
+        .accept = accept_manifests,
+    });
+    switch (res.status) {
+        .ok => {},
+        .not_found => return null,
+        else => return r.failStatus(res, "fetching the manifest"),
+    }
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(res.body, &digest, .{});
+    return .{
+        .bytes = res.body,
+        .digest = try std.fmt.allocPrint(r.ctx.arena, "sha256:{s}", .{&std.fmt.bytesToHex(digest, .lower)}),
+    };
+}
+
 pub fn hasBlob(r: *Registry, digest: []const u8) !bool {
     const res = try r.send(.{ .method = .HEAD, .url = try r.url("/v2/{s}/blobs/{s}", .{ r.ref.repository, digest }) });
     return switch (res.status) {

@@ -1,0 +1,1 @@
+{"critical":{"identity":{"docker-reference":"localhost:5000/gate/app"},"image":{"docker-manifest-digest":"sha256:58214bd6d7325459615fb1b8d6cac46e935cd890832e0b7573da78b80d9b155b"},"type":"cosign container image signature"},"optional":null}

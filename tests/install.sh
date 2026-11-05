@@ -58,7 +58,8 @@ if [ -z "${PACKAGE_DIR:-}" ]; then
     bash "$(cygpath -u "$root")/scripts/package.sh" "$(cygpath -u "$package")" >"$work\\package.log" 2>&1 ||
         { echo "packaging failed: $(tail -1 "$work\\package.log")"; exit 1; }
 fi
-(cd "$root" && zig build) || { echo "building zigsaw failed"; exit 1; }
+(cd "$root" && zig build && zig build p256sign) || { echo "building zigsaw failed"; exit 1; }
+signer="$root\\zig-out\\test\\zigsaw-p256sign.exe"
 
 install() { powershell -NoProfile -ExecutionPolicy Bypass -File "$script" -From "$package" -Dir "$bin" "$@"; }
 path_value() { reg query "HKCU\\$env_key" /v Path | tr -d '\r' | grep ' Path '; }
@@ -180,6 +181,26 @@ next=$(cygpath -aw "${NEXT_PACKAGE_DIR:-$work\\next-package}")
 if [ -z "${NEXT_PACKAGE_DIR:-}" ]; then
     bash "$(cygpath -u "$root")/tests/next-release.sh" "$next" || exit 1
 fi
+# As scripts/sign-release.sh signs a release, by a key that only counts where
+# ZIGSAW_UPGRADE_FROM is set.
+"$signer" key release "$work\\release.pub"
+export ZIGSAW_UPGRADE_KEY="$work\\release.pub"
+sign_release() { "$signer" sign "${2:-release}" "$1\\SHA256SUMS" >"$1\\SHA256SUMS.sig"; }
+copy_release() { # <dir> <file>...: a directory with those files of the signed release
+    local dir=$1 f
+    shift
+    mkdir -p "$dir"
+    for f in "$@"; do cp "$signed_next\\$f" "$dir\\"; done
+}
+sums_of() { # <dir> <file>...: its SHA256SUMS, of those files
+    local dir=$1 f
+    shift
+    for f in "$@"; do printf '%s  %s\n' "$(sha256sum <"$dir\\$f" | cut -d' ' -f1)" "$f"; done >"$dir\\SHA256SUMS"
+}
+signed_next="$work\\signed-next"
+mkdir -p "$signed_next"
+cp "$next\\zigsaw-x86_64-windows.zip" "$next\\SHA256SUMS" "$next\\VERSION" "$signed_next\\"
+sign_release "$signed_next"
 
 install >/dev/null 2>&1 || { echo "installing again failed"; exit 1; }
 "$bin\\zigsaw.exe" build "$root\\tests\\install\\app.json" >/dev/null 2>&1 || { echo "building the test app failed"; exit 1; }
@@ -201,7 +222,7 @@ up_to_date() {
 }
 check "upgrade: with nothing newer, it says so" up_to_date
 
-from="$next"
+from="$signed_next"
 no_answer() {
     local out
     out=$(up 2>&1 </dev/null) && { echo "it upgraded"; return 1; }
@@ -216,8 +237,7 @@ answer_no() {
 check "upgrade: it asks, naming both versions, and no means no" answer_no
 
 corrupt_next="$work\\corrupt-next"
-mkdir -p "$corrupt_next"
-cp "$next\\zigsaw-x86_64-windows.zip" "$next\\SHA256SUMS" "$next\\VERSION" "$corrupt_next\\"
+copy_release "$corrupt_next" zigsaw-x86_64-windows.zip SHA256SUMS SHA256SUMS.sig VERSION
 printf 'x' >>"$corrupt_next\\zigsaw-x86_64-windows.zip"
 from="$corrupt_next"
 refuses_hash() {
@@ -230,8 +250,10 @@ check "upgrade: a zip that isn't the one SHA256SUMS lists is refused, and nothin
 # A zip that's fine by its hash, of a zigsaw that isn't the release it says it is.
 lying="$work\\lying"
 mkdir -p "$lying"
-cp "$package\\zigsaw-x86_64-windows.zip" "$package\\SHA256SUMS" "$lying\\"
+cp "$package\\zigsaw-x86_64-windows.zip" "$lying\\"
 printf '999.0.0\n' >"$lying\\VERSION"
+sums_of "$lying" zigsaw-x86_64-windows.zip VERSION
+sign_release "$lying"
 from="$lying"
 refuses_lie() {
     local out
@@ -239,6 +261,48 @@ refuses_lie() {
     grep -q "the new zigsaw says \"zigsaw $this_version\", but this release is 999.0.0" <<<"$out" && grep -q "Nothing was changed" <<<"$out" && bin_unchanged
 }
 check "upgrade: a program that isn't the version the release says is refused, and nothing changes" refuses_lie
+
+# Its signature, the only thing here that doesn't come from where the files do.
+copy_release "$work\\unsigned" zigsaw-x86_64-windows.zip SHA256SUMS VERSION
+from="$work\\unsigned"
+refuses_unsigned() {
+    local out
+    out=$(up --yes 2>&1) && { echo "it upgraded"; return 1; }
+    grep -q "zigsaw $next_version is out, but isn't signed yet" <<<"$out" && grep -q "Nothing was changed" <<<"$out" && bin_unchanged
+}
+check "upgrade: a release that isn't signed yet says so, and nothing changes" refuses_unsigned
+copy_release "$work\\other-key" zigsaw-x86_64-windows.zip SHA256SUMS VERSION
+sign_release "$work\\other-key" other
+from="$work\\other-key"
+refuses_other_key() {
+    local out
+    out=$(up --yes 2>&1) && { echo "it upgraded"; return 1; }
+    grep -q "isn't by any key this zigsaw knows" <<<"$out" && grep -q "Nothing was changed" <<<"$out" && bin_unchanged
+}
+check "upgrade: a release signed by another key is refused, and nothing changes" refuses_other_key
+copy_release "$work\\other-sums" zigsaw-x86_64-windows.zip VERSION SHA256SUMS SHA256SUMS.sig
+printf '# and something else\n' >>"$work\\other-sums\\SHA256SUMS"
+from="$work\\other-sums"
+check "upgrade: a signature of other SHA256SUMS is refused, and nothing changes" refuses_other_key
+copy_release "$work\\no-version" zigsaw-x86_64-windows.zip VERSION
+sums_of "$work\\no-version" zigsaw-x86_64-windows.zip
+sign_release "$work\\no-version"
+from="$work\\no-version"
+refuses_no_version() {
+    local out
+    out=$(up --yes 2>&1) && { echo "it upgraded"; return 1; }
+    grep -q "doesn't list VERSION" <<<"$out" && bin_unchanged
+}
+check "upgrade: signed SHA256SUMS that don't list VERSION are refused" refuses_no_version
+copy_release "$work\\other-version" zigsaw-x86_64-windows.zip SHA256SUMS SHA256SUMS.sig
+printf '999.0.0\n' >"$work\\other-version\\VERSION"
+from="$work\\other-version"
+refuses_other_version() {
+    local out
+    out=$(up --yes 2>&1) && { echo "it upgraded"; return 1; }
+    grep -q "isn't what the release's signed SHA256SUMS lists" <<<"$out" && bin_unchanged
+}
+check "upgrade: a VERSION other than the signed SHA256SUMS lists is refused" refuses_other_version
 
 missing="$work\\missing"
 mkdir -p "$missing"
@@ -252,7 +316,7 @@ check "upgrade: no release there is an error, and nothing changes" refuses_missi
 
 elsewhere() {
     local out
-    out=$(ZIGSAW_UPGRADE_FROM="$next" "$root\\zig-out\\bin\\zigsaw.exe" upgrade --yes 2>&1) && { echo "it upgraded"; return 1; }
+    out=$(ZIGSAW_UPGRADE_FROM="$signed_next" "$root\\zig-out\\bin\\zigsaw.exe" upgrade --yes 2>&1) && { echo "it upgraded"; return 1; }
     grep -q "isn't in its store's bin" <<<"$out" && grep -q "install.ps1" <<<"$out" && [ -f "$root\\zig-out\\bin\\zigsaw.exe" ]
 }
 check "upgrade: a zigsaw that isn't in its store's bin, as a dev build, won't replace itself" elsewhere
@@ -261,7 +325,7 @@ check "upgrade: a zigsaw that isn't in its store's bin, as a dev build, won't re
 "$bin\\install-wait.exe" 12 &
 waiter=$!
 sleep 2
-from="$next"
+from="$signed_next"
 upgrades() {
     local out
     out=$(up --yes 2>&1) || { echo "$out"; return 1; }
@@ -325,7 +389,7 @@ env -u ZIGSAW_HOME LOCALAPPDATA="$default_home" "$default_bin\\zigsaw.exe" updat
 upgrade_default() {
     env -u ZIGSAW_HOME LOCALAPPDATA="$default_home" "$default_bin\\zigsaw.exe" updates off >/dev/null 2>&1
     rm -f "$default_home\\zigsaw\\updates\\off"
-    env -u ZIGSAW_HOME LOCALAPPDATA="$default_home" ZIGSAW_UPGRADE_FROM="$next" "$default_bin\\zigsaw.exe" upgrade --yes >/dev/null 2>&1 || return 1
+    env -u ZIGSAW_HOME LOCALAPPDATA="$default_home" ZIGSAW_UPGRADE_FROM="$signed_next" "$default_bin\\zigsaw.exe" upgrade --yes >/dev/null 2>&1 || return 1
     has_task "$ZIGSAW_TASK_NAME"
 }
 check "upgrade starts it too, for the default store, unless turned off" upgrade_default
