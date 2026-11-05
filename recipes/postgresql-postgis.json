@@ -11,8 +11,8 @@
   "extends": { "point": "org.postgresql.PostgreSQL", "version": "18" },
   "exports": {},
   "sdk": {
-    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:c4055aed101d9934ba92555bef79837dc1908dd287d413f1210245859554c452",
-    "gdalsdk": "org.gdal.GDAL.Sdk:3.13.3@sha256:1aa20e94671119a31afeb0938c2574b5cf729b2205c441a21b9e833c2b1e6675",
+    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:1026b6edae04ffd2eaed19bdd96933db131857bd3fd5843c5d3735a41160b646",
+    "gdalsdk": "org.gdal.GDAL.Sdk:3.13.3@sha256:2a88dbc7e2e011f467f4c8ced7809223bb868bf77ccd74f707c5949388ba6d14",
     "make": "org.gnu.make:4.4.1@sha256:045e39d447d7d760a15ea5ebadaf2b45a885fe5616e626b224f31171a18c1faf",
     "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
     "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85",

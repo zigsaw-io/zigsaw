@@ -10,7 +10,7 @@
   "exports": {},
   "cleanup": ["__pycache__"],
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:6a709d2c64ec13cd7e03d9cea29f661fbe647549332c58a2aaba1719e5a8cd76"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:31b88a3d1d0a4530f3a31cf558d7c6c6c58e04a42ced0d7aeb28d0cf501de104"
   },
   "modules": [
     {

@@ -236,6 +236,14 @@ dump() {
         [ "$(pg psql -XAt -d restored -c 'select perlv() || pyv() || count(*) from big' | tr -d '\r')" = "perl 5.42.3python 3.14.101" ]
 }
 check "pg_dump's dump restores into another database" dump
+# Files through zlib's gzopen, gzwrite and gzread, which -Fc doesn't use.
+dump_gzip() {
+    pg pg_dump -Fd -Z gzip -f "$data\\postgres-gz" postgres &&
+        ls "$data\\postgres-gz" | grep -q '\.dat\.gz$' &&
+        pg createdb restored_gz && pg pg_restore -d restored_gz "$data\\postgres-gz" &&
+        [ "$(pg psql -XAt -d restored_gz -c 'select perlv() || pyv() || count(*) from big' | tr -d '\r')" = "perl 5.42.3python 3.14.101" ]
+}
+check "a directory dump, gzipped file by file, restores into another database" dump_gzip
 backup() {
     pg pg_basebackup -Ft --compress=client-zstd --checkpoint=fast -D "$data\\backup" && test -s "$data\\backup\\base.tar.zst"
 }

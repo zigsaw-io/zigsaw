@@ -891,6 +891,32 @@ fn bodyFailure(hreq: *const http.Client.Request, response: *const http.Client.Re
     return connection.getReadError() orelse error.ConnectionResetByPeer;
 }
 
+/// Downloads `location` into `writer`, following redirects, and returns the status.
+/// What std.http.Client.fetch does, whose `response.bodyErr().?` panics when a
+/// connection breaks during a body with a Content-Length: here that's an error.
+pub fn getTo(client: *http.Client, location: []const u8, writer: *Io.Writer) !http.Status {
+    var hreq = try client.request(.GET, try std.Uri.parse(location), .{ .redirect_behavior = @fromBackingInt(@intCast(3)) });
+    defer hreq.deinit();
+    try hreq.sendBodiless();
+    var redirect_buffer: [8 * 1024]u8 = undefined;
+    var response = try hreq.receiveHead(&redirect_buffer);
+    const decompress_buffer: []u8 = switch (response.head.content_encoding) {
+        .identity => &.{},
+        .zstd => try client.allocator.alloc(u8, std.compress.zstd.default_window_len),
+        .deflate, .gzip => try client.allocator.alloc(u8, std.compress.flate.max_window_len),
+        .compress => return error.UnsupportedCompressionMethod,
+    };
+    defer client.allocator.free(decompress_buffer);
+    var transfer_buffer: [64]u8 = undefined;
+    var decompress: http.Decompress = undefined;
+    const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
+    _ = reader.streamRemaining(writer) catch |err| switch (err) {
+        error.ReadFailed => return bodyFailure(&hreq, &response),
+        else => |e| return e,
+    };
+    return response.head.status;
+}
+
 // ---------------------------------------------------------------------------
 // Authentication
 

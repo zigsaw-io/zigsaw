@@ -38,6 +38,7 @@ work=$(cygpath -w "$(mktemp -d)")
 # Apps that may use the user's folders, such as Documents, find none here,
 # rather than yours.
 export ZIGSAW_USER_FOLDERS="$work\\no-folders"
+mkdir -p "$ZIGSAW_USER_FOLDERS"
 # Low runs (the default) label the working directory of an app with cwd: the
 # runs go from a scratch one, not the repository, nor a folder that holds the
 # stores (their programs would then start at low integrity).

@@ -2231,6 +2231,21 @@ MinGit while building Meld.
   | a manifest | panic, exit 3 | `error: GET ...: ConnectionResetByPeer`, exit 1 |
 
   A manifest isn't resumed, as before: a broken one is an error, and running it again is cheap.
+- **Zig's own `fetch` has the same line**, which iteration 72 didn't look for: `error.ReadFailed
+  => return response.bodyErr().?`, in `std.http.Client.fetch`. A recipe's sources and `zigsaw
+  upgrade`'s files were downloaded with it, so both still panicked, up to 0.74.0. Iteration 75 hit
+  it for real, fetching a dictionary from raw.githubusercontent.com in a store with no downloads
+  yet. For a recipe, the panic also skipped the fallback to the sources next to its image, which
+  exists for a failed download. `Registry.getTo` does what `fetch` did, with `bodyFailure`.
+
+  | Reset during | 0.74.0 | 0.75.0 |
+  |---|---|---|
+  | a recipe's source | panic, exit 3 | `<file>: ConnectionResetByPeer; fetching sha256 ... from the sources next to ...` |
+  | `upgrade`'s download | panic, exit 3 | `error: downloading ...: ConnectionResetByPeer`, exit 1 |
+
+  A stack trace from a ReleaseSafe build pointed at another line of `fetch`, `sendBodiless`, which a
+  reset can't reach. A Debug build's goes through `contentLengthStream` to the `.?`. So when
+  ReleaseSafe's trace seems wrong, it may be, and a Debug build settles it.
 
 ## Telling someone something, on Windows
 
@@ -2374,6 +2389,86 @@ as here, so the path isn't it. With those two files changed to CRLF, a build her
 **is byte for byte the release's `zigsaw.exe`** (`8a190e2c…`), so that's all of it. From
 0.70.0 they're pinned, and `tests/self.sh` checks that they are. Iteration 22's check
 of 0.19.0 to 0.21.0 predates the manifest.
+
+## An empty macro in BusyBox's make
+
+Why `published (gtk)` failed at random in iteration 74, on `make -C lib install
+nodist_doc_DATA=` in enchant, naming a different garbage target each time.
+
+`update_makeflags()` in BusyBox-w32's `miscutils/make.c` writes each command line macro
+into a buffer of `strlen(name) + 2 * strlen(value) + 1` zeroed bytes. It counts on a
+zero being left at the end, and with an empty value `=` takes the last byte. So the
+string has no end, and `xappendword()` copies whatever follows in the heap into
+`MAKEFLAGS`. The `make` that was given the macro is fine; one it starts reads the junk as
+the macro's value. In enchant that's the prerequisite of `install-nodist_docDATA`, which
+comes right after the man page installs, which is where it stopped.
+
+With FRP-6075 and a small `Makefile` that prints `$MAKEFLAGS`, 100 runs each:
+
+| On the command line | Runs with junk in `MAKEFLAGS` |
+|---|---|
+| `a234567=` (7 characters) | 100 |
+| `a2345678901234567890123=` (23) | 98 |
+| `nodist_doc_DATA=` (15), `OPTFLAGS=` (8), and 8, 16 and 31 characters | 0 |
+| `nodist_doc_DATA=x`, `OPTFLAGS=x` | 0 |
+
+- **It depends on the heap**, so a row of 0 here says nothing about a larger `Makefile`:
+  `nodist_doc_DATA=` is what failed in CI, and it's clean in this one.
+- **CI's error comes back on demand.** With `install-doc: $(a234567)` in a `Makefile`
+  that calls itself, and `a234567=` on the command line, 49 of 50 runs failed with `make:
+  don't know how to make O\021K\272`. With the macro emptied in the `Makefile`, 0 of 50.
+- **The junk is what was in the heap.** One of CI's targets began `4f034a22`, which is
+  in the name of BusyBox's folder in the store (`...c4f034a22236e...`). That fits, but
+  isn't shown.
+- **A value of only blanks has the same problem**, as each is escaped, which uses up the
+  extra room. So `FOO=" "` isn't a way around it.
+- **A newer BusyBox doesn't help.** `make.c` differs from FRP-6354 by a prototype and a
+  callback's signature, and the allocation is the same on master. pdpmake, the same code
+  on its own, has it too, and from reading it, there it writes a byte past the block.
+  Its fix would be `+ 2`.
+
+So enchant's recipe now empties the macro in the `Makefile`. pgvector's is the only other
+recipe with an empty macro, `OPTFLAGS=`, and it stays: its recipe builds with GNU make,
+as pgxs needs, not BusyBox's.
+
+## zlib inside images
+
+The upstream report only sees zlib where a recipe names it as a source. Iteration 75 moved
+those to 1.4, and then looked for zlib's copyright strings (`inflate 1.x Copyright`) in what
+the images hold: store `p`'s deployments, and Node, MinGit, Python, PHP and Qt as published.
+
+Run by people using the image:
+
+| Image | File | zlib |
+|---|---|---|
+| GTK's apps, through `libz.dll` | `bin/libz.dll` | **1.4** |
+| PostgreSQL | `postgres.exe`, `pg_dump.exe` and the other tools, `pgcrypto.dll` | **1.4** |
+| PostgreSQL | its Perl's `zlib1__.dll` | 1.3.1 |
+| PostgreSQL | its Perl's `parl.exe`, `parldyn.exe`, `Zlib.xs.dll` | 1.3.2 |
+| osm2pgsql, SQLite | `osm2pgsql.exe`, `sqlite3.exe` | **1.4** |
+| GDAL, PostGIS | `libgdal-39.dll`, built with GDAL's internal copy | 1.3.1 |
+| Gaphor | Pillow's `_imaging` and `_imagingft`, from its wheel | 1.3.1 |
+| MinGit, and Meld, which has it | `zlib1.dll`, `msys-z.dll` | 1.3.2 |
+| MinGit, and Meld, which has it | `libSkiaSharp.dll` | 1.2.13.1 |
+| Qt 6, and so Flameshot and Notes | `Qt6Core.dll`, built with Qt's copy | 1.3.2 |
+| PHP | `php8.dll`, `php_zip.dll`, `libssh2.dll` | 1.3.2 |
+| Node | `node.exe` | 1.3.0.1 and 1.3.2.1 |
+
+Only at build time: Rust's `ld.exe` and `dlltool.exe` (1.2.13), CMake's programs (1.3.1), `zig.exe`
+(1.3.1), and the Perl image.
+
+- **Finding a string shows a version was linked; not finding one shows nothing.** A linker can
+  drop it. Python shows none. FreeType's `src/gzip` has a copy of zlib's inflate in its source, and
+  doesn't show either.
+- **What these versions expose wasn't checked.** The two advisories on the report are in
+  `gzwrite` (the stale pointer, `CVE-2026-76844`, and the non-blocking overflow, `CVE-2026-85091`),
+  which a program that only inflates or deflates in memory doesn't reach. Whether these do hasn't
+  been looked at. A version number here isn't a finding of a vulnerability.
+- **Not looked at:** the other published images, what's inside archives and `.jar`s, and Rust
+  crates' own deflate.
+- **`z_off_t`:** zlib 1.4 makes it 32 bits on Windows again, unless a program asks for more. In the round's sources, only osm2pgsql's libosmium calls an offset
+  function in code that's built, and its `FindOsmium.cmake` sets `_FILE_OFFSET_BITS=64`, which
+  gives it `gzoffset64`. PostgreSQL uses `gzopen`, `gzread` and `gzwrite`, and no offsets.
 
 ## Not yet tested
 

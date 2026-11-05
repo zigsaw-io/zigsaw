@@ -13,6 +13,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Context = @import("Context.zig");
+const Registry = @import("Registry.zig");
 const Store = @import("Store.zig");
 const options = @import("options");
 const process = @import("process.zig");
@@ -141,13 +142,10 @@ fn getIfThere(ctx: *Context, name: []const u8, dest: []const u8) !bool {
     defer file.close(ctx.io);
     var buf: [64 * 1024]u8 = undefined;
     var writer = file.writer(ctx.io, &buf);
-    const result = client.fetch(.{
-        .location = .{ .url = url },
-        .response_writer = &writer.interface,
-    }) catch |err| return fail("downloading {s}: {t}", .{ url, err });
+    const status = Registry.getTo(&client, url, &writer.interface) catch |err| return fail("downloading {s}: {t}", .{ url, err });
     try writer.interface.flush();
-    if (result.status == .not_found) return false;
-    if (result.status != .ok) return fail("downloading {s}: HTTP {d}", .{ url, @backingInt(result.status) });
+    if (status == .not_found) return false;
+    if (status != .ok) return fail("downloading {s}: HTTP {d}", .{ url, @backingInt(status) });
     return true;
 }
 

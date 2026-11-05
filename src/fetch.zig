@@ -10,6 +10,7 @@ const Fetcher = @This();
 const std = @import("std");
 const Io = std.Io;
 const Context = @import("Context.zig");
+const Registry = @import("Registry.zig");
 const Store = @import("Store.zig");
 const recipe = @import("recipe.zig");
 const remote = @import("remote.zig");
@@ -181,11 +182,8 @@ fn download(f: *Fetcher, url: []const u8, dest: []const u8) !?[]const u8 {
     defer file.close(io);
     var buf: [64 * 1024]u8 = undefined;
     var writer = file.writer(io, &buf);
-    const result = f.client.?.fetch(.{
-        .location = .{ .url = url },
-        .response_writer = &writer.interface,
-    }) catch |err| return try std.fmt.allocPrint(arena, "{t}", .{err});
+    const status = Registry.getTo(&f.client.?, url, &writer.interface) catch |err| return try std.fmt.allocPrint(arena, "{t}", .{err});
     try writer.interface.flush();
-    if (result.status != .ok) return try std.fmt.allocPrint(arena, "HTTP {d}", .{@intFromEnum(result.status)});
+    if (status != .ok) return try std.fmt.allocPrint(arena, "HTTP {d}", .{@intFromEnum(status)});
     return null;
 }

@@ -400,7 +400,7 @@ zig's C compiler:
 "modules": [
   {
     "name": "zlib",
-    "sources": [{ "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz", "sha256": "...", "strip": 1 }],
+    "sources": [{ "url": "https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.xz", "sha256": "...", "strip": 1 }],
     "build": [
       "for f in *.c; do zig cc -target x86_64-windows-gnu -O2 -c \"$f\" -o \"${f%.c}.o\" || exit 1; done",
       "zig ar rcs libz.a *.o",
@@ -3159,7 +3159,7 @@ other builds link with: headers,
 `gdal-config`, the import library, and static libraries of what GDAL is
 built on, which are modules of its recipe: GEOS 3.15.0, PROJ 9.9.0 (with
 `proj.db`), SQLite (with its R-tree, which GDAL's GeoPackage driver
-needs), json-c 0.19, expat 2.9.0 and libiconv. PostGIS builds against
+needs), json-c 0.19, expat 2.10.0 and libiconv. PostGIS builds against
 them (see [extensions](#postgresql-extensions)).
 
 - GDAL is one DLL, `libgdal-39.dll`, with those libraries inside, and GDAL's

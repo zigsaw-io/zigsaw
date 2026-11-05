@@ -598,6 +598,30 @@ one_changed() {
 }
 check "a build's downloads go several at a time" parallel_fetch
 check "  one that's no longer the pinned file fails the build, and what came is kept" one_changed
+# A connection reset in the other downloads, which zigsaw's own Zig call panicked on
+# up to 0.74.0: a recipe's source, and a release's file.
+cp "$bb_exe" "$work\\www\\$bb_file"
+mkdir -p "$work\\www\\rel"
+printf '9.9.9\n' >"$work\\www\\rel\\VERSION"
+sed "s|https://frippery.org/files/busybox/$bb_file|http://127.0.0.1:5004/$bb_file|" "$root\\recipes\\busybox.json" >"$work\\busybox-reset.json"
+"$proxy" 5004 18098 "$bb_file" 100000 >/dev/null 2>&1 &
+source_proxy=$!
+"$proxy" 5005 18098 /rel/VERSION 2 >/dev/null 2>&1 &
+release_proxy=$!
+sleep 1
+reset_in_upgrade() {
+    local out code
+    # upgrade only replaces a zigsaw in its store's bin.
+    mkdir -p "$work\\reset-upgrade\\bin"
+    cp "$zigsaw" "$work\\reset-upgrade\\bin\\zigsaw.exe"
+    out=$(ZIGSAW_HOME="$work\\reset-upgrade" ZIGSAW_UPGRADE_FROM=http://127.0.0.1:5005/rel "$work\\reset-upgrade\\bin\\zigsaw.exe" upgrade --yes 2>&1)
+    code=$?
+    [ "$code" = 1 ] && grep -q 'downloading http://127.0.0.1:5005/rel/VERSION: ConnectionResetByPeer' <<<"$out" || { echo "exit $code: $out" | tail -3; return 1; }
+}
+check "a connection reset during a source takes it from next to its image" from_sources "$work\\busybox-reset.json" fresh3
+check "a connection reset during upgrade's download is an error, not a crash" reset_in_upgrade
+kill "$source_proxy" "$release_proxy" 2>/dev/null
+wait "$source_proxy" "$release_proxy" 2>/dev/null
 kill $httpd 2>/dev/null
 
 # A vendor step's result is kept with the sources too, and taken from there

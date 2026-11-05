@@ -30,8 +30,8 @@
       "name": "zlib",
       "sources": [
         {
-          "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.xz",
-          "sha256": "d7a0654783a4da529d1bb793b7ad9c3318020af77667bcae35f95d0e42a792f3",
+          "url": "https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.xz",
+          "sha256": "4f11c512053d7bab8d9e9b89bde3575add3e4c50a383b42ef6cb837035fc5a7c",
           "strip": 1
         }
       ],
@@ -105,13 +105,13 @@
       "name": "libffi",
       "sources": [
         {
-          "url": "https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2.tar.gz",
-          "sha256": "f3a3082a23b37c293a4fcd1053147b371f2ff91fa7ea1b2a52e335676bac82dc",
+          "url": "https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz",
+          "sha256": "7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4",
           "strip": 1
         },
         {
-          "url": "https://wrapdb.mesonbuild.com/v2/libffi_3.5.2-1/get_patch",
-          "sha256": "1ee3035d92e4df3541d0b2b8d192d2fa183b46e4a3d68c00d8f71ede354bee74",
+          "url": "https://wrapdb.mesonbuild.com/v2/libffi_3.8.0-1/get_patch",
+          "sha256": "9674679806598d276ee49ecdf27f1b3eb62fbf4776723ef67f0e14f9200a6f6d",
           "type": "zip",
           "strip": 1
         }
@@ -159,8 +159,8 @@
       "name": "fribidi",
       "sources": [
         {
-          "url": "https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz",
-          "sha256": "1b1cde5b235d40479e91be2f0e88a309e3214c8ab470ec8a2744d82a5a9ea05c",
+          "url": "https://github.com/fribidi/fribidi/releases/download/v1.0.18/fribidi-1.0.18.tar.xz",
+          "sha256": "1de5e8073d035388b71d0b2d452b1da1f8caeea8a7702997b401fe1b6250727f",
           "strip": 1
         }
       ],
@@ -330,8 +330,8 @@
       "name": "directx-headers",
       "sources": [
         {
-          "url": "https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v1.611.0.tar.gz",
-          "sha256": "edb8b52b1379f841df5d0d5e11dde08e0c3912508179fb3711f163382e88865c",
+          "url": "https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v1.721.2.tar.gz",
+          "sha256": "b736c311057f2b426eb465d4e7867da4eb4e76d69be27f45bfa359189f97c0b0",
           "strip": 1
         }
       ],

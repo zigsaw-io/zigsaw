@@ -250,8 +250,9 @@
   Releases are for x64 only.
 - **A missing image signature only warns, for now.** Someone who can change what
   ghcr.io serves can simply leave the signature off: wrong ones are refused, and a
-  warning is all that stops this, which `--yes` doesn't stop for. It's to be refused
-  once every image has been seen signed. `zigsaw upgrade` already refuses.
+  warning is all that stops this, which `--yes` doesn't stop for. Refusing is the
+  direction, with no date set: only each image's current version is signed, so a plain
+  refusal would also stop `pull app:<older version>`. `zigsaw upgrade` already refuses.
 - **Signatures don't stop an old image.** A tag moved back to an older version that was
   signed installs, older and vulnerable, as a signature says who made an image and not
   that it's the newest. No freshness (TUF or the like) is checked. Nor does anything
@@ -834,12 +835,20 @@
   one. `install.ps1 -Version` still can.
 - A zigsaw installed with `-Dir` somewhere else than its store's `bin` isn't told about
   new releases, and `zigsaw upgrade` won't replace it.
-- BusyBox's `make` failed once on a build that passes otherwise, naming a target of
-  garbage bytes: `make: don't know how to make P\x01\x02\xDBp\x02`, in the GTK SDK's
-  `enchant` module, on `make -C lib install nodist_doc_DATA=`, with no change that could
-  explain it (Reproduce on faf49a8, which changed only tests; 83bc6ab passed). It looks like
-  a memory bug in BusyBox-w32's make, not looked into further. A second run is all it took
-  to see it's not the recipe; it would fail a publish the same way.
+- BusyBox's `make` can corrupt an empty macro given on its command line (`FOO=`): a
+  recursive `make` may get garbage as its value, and fail with something like `make:
+  don't know how to make P\x01\x02\xDBp\x02`, or quietly use it. How often depends on the
+  name's length and the heap ([findings](findings.md#an-empty-macro-in-busyboxs-make)).
+  No published recipe does this with BusyBox's `make` any more. In a recipe of your own,
+  empty the macro in the `Makefile` with `sed` instead, as a value of only blanks has the
+  same problem, or build with GNU make (`org.gnu.make`).
+- zlib 1.4 reached only the images whose recipes build it. PHP takes php.net's prebuilt 1.3.2,
+  and GDAL, Qt, Node, MinGit and Pillow carry their own copies, which the upstream report can't
+  see ([findings](findings.md#zlib-inside-images)).
+- `zigsaw grants` and what uses its check can print `error: reading the integrity label
+  of <folder>` for one of your folders whose label it can't read, and then go on as if
+  nothing happened. Only tests have been seen doing this, with a folder that didn't
+  exist.
 - A recipe's source on plain `http://` that redirects to `https://` panics `zigsaw
   build`, in Zig 0.17's std (`client.now.?` in `connectTcpOptions`, which only a first
   request over TLS sets). No published recipe has such a source. `https://` from the

@@ -47,7 +47,7 @@
   "modules": [
     {
       "name": "base",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk.Base:4.24.1@sha256:b4fe60e66ea597240f6fb8473b80b129150ada55da04b708d8eb00d5eaeda1a4" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk.Base:4.24.1@sha256:6c0f713be1848ba225024de99ab06b8ebaf88b3168069afa8affae69f0e48017" }]
     },
     {
       "name": "hicolor-icon-theme",
@@ -290,10 +290,11 @@
         "sed -i 's/ -shared -nostdlib / -shared /' libtool",
         "printf '%s\\n' EXPORTS init_enchant_provider > zigsaw/provider.def",
         "make -C libgnu -j\"$(nproc)\"",
-        "make -C lib -j\"$(nproc)\" nodist_doc_DATA=",
+        "sed -i 's/^nodist_doc_DATA = enchant.html$/nodist_doc_DATA =/' lib/Makefile && ! grep -q '^nodist_doc_DATA = .' lib/Makefile",
+        "make -C lib -j\"$(nproc)\"",
         "grep -q '^ *enchant_broker_init' lib/.libs/libenchant-2-2.dll.def && ! grep -v -e '^EXPORTS' -e '^ *enchant_' lib/.libs/libenchant-2-2.dll.def | grep -q .",
         "make -C providers -j\"$(nproc)\" LDFLAGS=\"$LDFLAGS -export-symbols B:/src/enchant/zigsaw/provider.def\"",
-        "make -C lib install nodist_doc_DATA=",
+        "make -C lib install",
         "make -C providers install",
         "make install-pkgconfigDATA",
         "cp zigsaw/enchant.ordering \"$PREFIX/share/enchant-2/enchant.ordering\""
