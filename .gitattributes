@@ -14,8 +14,10 @@ tests/osm2pgsql/*.pbf binary
 tests/batch/*.cmd text eol=crlf
 tests/install/*.cmd text eol=crlf
 
-# Hashed for releases (SHA256SUMS), so the same bytes on every checkout.
+# Hashed for releases (SHA256SUMS), so the same bytes on every checkout. LICENSE
+# is in the zip: a runner's checkout made it CRLF up to v0.72.0.
 *.ps1 text eol=lf
+LICENSE text eol=lf
 
 # Built into zigsaw's programs: without this, a runner's checkout
 # (core.autocrlf=true) gave releases up to v0.69.0 a CRLF manifest, and a build

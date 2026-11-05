@@ -24,7 +24,7 @@
 set -u
 export MSYS_NO_PATHCONV=1
 
-default_suites="store shims sandbox batch ctrlc network reach install build-base"
+default_suites="store shims sandbox batch ctrlc network reach updates install build-base"
 
 if [ "${1:-}" != --inner ]; then
     [ $# -eq 1 ] && [ -f "$1" ] || { echo "usage: tests/standard-user.sh <account file>"; exit 2; }

@@ -257,6 +257,12 @@ jobs:
         shell: bash
         run: bash tests/zot.sh bash tests/registry.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/registry.txt"
 
+      # What's waiting, against a registry; its scheduled tasks are this run's own.
+      - name: tests/updates.sh, against a local zot registry
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/zot.sh bash tests/updates.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/updates.txt"
+
       # ORAS, skopeo and cosign as published, in the seeded store, against
       # two local zot registries again.
       - name: tests/oci.sh, against two local zot registries

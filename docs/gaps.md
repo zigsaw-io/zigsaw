@@ -794,3 +794,18 @@
   ungoogled-chromium, whose recipe now does; saving worked once that was
   answered. Other apps that use the dialog without `documents` may show the
   same: VLC's permissions don't name it, and its dialogs weren't tried.
+- A daily check that's on shows nothing unless Windows shows it: Do Not Disturb hides
+  the banner (it waits for the next check), and a banner that's missed leaves nothing
+  in the notification centre, as Explorer's "shown" doesn't mean anyone saw it. It comes
+  back every three days, and `zigsaw list` has a line, so a fix isn't lost, only late.
+- The daily check needs the user signed in at some point after noon. A machine's
+  policy can refuse scheduled tasks: then `install.ps1` warns, and nothing tells you.
+- People on zigsaw 0.72 or earlier have no check until they run `install.ps1` once
+  more, and a release before 0.73.0 has no `VERSION`, so `zigsaw upgrade` can't go to
+  one. `install.ps1 -Version` still can.
+- A zigsaw installed with `-Dir` somewhere else than its store's `bin` isn't told about
+  new releases, and `zigsaw upgrade` won't replace it.
+- A recipe's source on plain `http://` that redirects to `https://` panics `zigsaw
+  build`, in Zig 0.17's std (`client.now.?` in `connectTcpOptions`, which only a first
+  request over TLS sets). No published recipe has such a source. `https://` from the
+  start is fine, redirects included.

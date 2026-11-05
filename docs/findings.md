@@ -2232,6 +2232,32 @@ MinGit while building Meld.
 
   A manifest isn't resumed, as before: a broken one is an error, and running it again is cheap.
 
+## Telling someone something, on Windows
+
+Found building the daily check for updates (iteration 73), on Windows 11 26300.
+
+- **Explorer's word that a notification was shown doesn't mean anyone saw it.** In the
+  first try, `Shell_NotifyIcon` returned success, Explorer sent `NIN_BALLOONSHOW`, then
+  `NIN_BALLOONTIMEOUT` after 6.9 s, and `SHQueryUserNotificationState` said it accepted
+  notifications. The person at the machine saw nothing, and found nothing afterwards in
+  the notification centre, though the icon was still there for ten minutes. Told when to
+  look, they saw it and clicked it (`NIN_BALLOONUSERCLICK` arrives). So nothing here can
+  know a banner reached anyone: only a click or `zigsaw updates` says so, and what's waiting
+  is told again until one does. Telling once, as the plan said, could have hidden a security
+  fix for good.
+- **`schtasks /create /xml` wants UTF-16**: UTF-8 is "unable to switch the encoding". It
+  works in the root folder for an ordinary user, with a SID as the task's `UserId`. Windows
+  leaves `RunLevel` out of the XML it shows when it's `LeastPrivilege`.
+- **`std`'s rename can't move a running program aside** on NTFS: `error.FileBusy`, where
+  `MoveFileExW` and PowerShell's `Rename-Item` can. `zigsaw upgrade` uses `MoveFileExW`.
+- **Under `$ErrorActionPreference = 'Stop'`, Windows PowerShell 5.1 takes a native
+  program's stderr as a failure once it's redirected** (`2>$null`, `2>&1`): zigsaw's notes
+  go there, so `updates off` looked like it failed. `install.ps1` runs those in a function
+  with another preference.
+- **An `http://` URL redirecting to `https://` panics Zig 0.17's `http.Client`**: it sets
+  `client.now`, which TLS needs, only in `request`, when the first URL is over TLS, and
+  `connectTcpOptions` unwraps it after a redirect. It's in [gaps.md](gaps.md).
+
 ## As a real standard user
 
 Until iteration 70, nothing had run as one: this machine's account is an

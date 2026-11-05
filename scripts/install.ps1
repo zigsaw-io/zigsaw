@@ -4,12 +4,16 @@ Installs zigsaw for the current user, upgrades it, or removes it.
 
 .DESCRIPTION
 Downloads a release of zigsaw from GitHub, checks it against the release's
-SHA256SUMS, puts zigsaw.exe, its two shim programs, its relay and zigsaw-host in
-%LOCALAPPDATA%\zigsaw\bin, where zigsaw also puts the commands of the apps it
-installs, and adds that directory to the user's PATH. No administrator is
-needed. Run it again to upgrade: programs that are running are moved aside,
-and installed apps' commands, shortcuts and file associations are written
-again by the new zigsaw (zigsaw repair).
+SHA256SUMS, puts zigsaw.exe, its two shim programs, its relay, zigsaw-host and
+zigsaw-notify in %LOCALAPPDATA%\zigsaw\bin, where zigsaw also puts the commands
+of the apps it installs, and adds that directory to the user's PATH. No
+administrator is needed. Run it again to upgrade: programs that are running are
+moved aside, and installed apps' commands, shortcuts and file associations are
+written again by the new zigsaw (zigsaw repair).
+
+For the default store, in the default directory, it also starts a daily check
+that tells you when updates are waiting, as a scheduled task of your own. It
+installs nothing, and 'zigsaw updates off' stops it for good.
 
     irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1 | iex
 
@@ -32,6 +36,10 @@ of a release on GitHub. Also $env:ZIGSAW_INSTALL_FROM.
 .PARAMETER NoPath
 Leave the user's PATH as it is. Also $env:ZIGSAW_INSTALL_NO_PATH.
 
+.PARAMETER NoUpdateCheck
+Don't have a daily check for updates, and remember that, as 'zigsaw updates off'
+does. Also $env:ZIGSAW_INSTALL_NO_UPDATE_CHECK.
+
 .PARAMETER Uninstall
 Remove zigsaw and its PATH entry. Apps have to be removed first, with
 zigsaw rm; the store's other files, such as downloads and apps' data, stay.
@@ -41,23 +49,29 @@ param(
     [string]$Dir = $env:ZIGSAW_INSTALL_DIR,
     [string]$From = $env:ZIGSAW_INSTALL_FROM,
     [switch]$NoPath,
+    [switch]$NoUpdateCheck,
     [switch]$Uninstall
 )
 
 # In a scope of its own: piped to iex, the script runs in the caller's session,
 # whose preferences are theirs.
 & {
-    param([string]$Version, [string]$Dir, [string]$From, [bool]$NoPath, [bool]$Uninstall)
+    param([string]$Version, [string]$Dir, [string]$From, [bool]$NoPath, [bool]$NoUpdateCheck, [bool]$Uninstall)
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
 
     $programs = 'zigsaw.exe', 'zigsaw-shim.exe', 'zigsaw-shimw.exe', 'zigsaw-relay.exe', 'zigsaw-host.exe'
+    # Only from 0.73.0 on; -Version can install a release before that.
+    $notify = 'zigsaw-notify.exe'
     $archive = 'zigsaw-x86_64-windows.zip'
     # The user's environment variables. Tests name another key.
     $envKey = if ($env:ZIGSAW_INSTALL_ENV_KEY) { $env:ZIGSAW_INSTALL_ENV_KEY } else { 'Environment' }
 
-    if (-not $Dir) { $Dir = Join-Path $env:LOCALAPPDATA 'zigsaw\bin' }
+    $defaultDir = Join-Path $env:LOCALAPPDATA 'zigsaw\bin'
+    if (-not $Dir) { $Dir = $defaultDir }
     $Dir = [IO.Path]::GetFullPath($Dir).TrimEnd('\')
+    $store = if ($env:ZIGSAW_HOME) { $env:ZIGSAW_HOME } else { Join-Path $env:LOCALAPPDATA 'zigsaw' }
+    $offMarker = Join-Path $store 'updates\off'
 
     function Same-Dir([string]$entry) {
         $expanded = [Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"')).TrimEnd('\')
@@ -88,6 +102,14 @@ param(
         return $true
     }
 
+    # Runs zigsaw for its effect alone. In a scope with another preference: under
+    # 'Stop', what it says on stderr would count as the command failing.
+    function Invoke-Quietly([string]$program, [string[]]$arguments) {
+        $ErrorActionPreference = 'Continue'
+        & $program @arguments 2>&1 | Out-Null
+        return $LASTEXITCODE
+    }
+
     # Deletes a program, or moves it aside if it's running: Windows lets a
     # running program be renamed, not deleted. A later install deletes it.
     function Clear-Program([string]$path) {
@@ -97,9 +119,11 @@ param(
     }
 
     function Remove-Leftovers {
-        foreach ($name in $programs) {
-            Get-ChildItem -LiteralPath $Dir -Filter "$name.old-*" -ErrorAction SilentlyContinue |
-                ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+        foreach ($name in ($programs + $notify)) {
+            foreach ($filter in "$name.old-*", "$name.new-*") {
+                Get-ChildItem -LiteralPath $Dir -Filter $filter -ErrorAction SilentlyContinue |
+                    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+            }
         }
     }
 
@@ -113,8 +137,12 @@ param(
             }
             # What stores since deleted left; later, no zigsaw is here to.
             & $zigsaw repair | Out-Null
+            # And the daily check. Leaving nothing behind includes the memory of
+            # having turned it off: an install after this one is a fresh one.
+            if (Test-Path -LiteralPath (Join-Path $Dir $notify)) { [void](Invoke-Quietly $zigsaw 'updates', 'off') }
+            Remove-Item -LiteralPath $offMarker -Force -ErrorAction SilentlyContinue
         }
-        foreach ($name in $programs) {
+        foreach ($name in ($programs + $notify)) {
             $path = Join-Path $Dir $name
             if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
         }
@@ -128,7 +156,6 @@ param(
             if ($left.Count -eq 0) { Remove-Item -LiteralPath $record -Force }
             else { Write-Warning "zigsaw's record still has what other stores changed: $($left -join '; '). A zigsaw using them takes it back." }
         }
-        $store = if ($env:ZIGSAW_HOME) { $env:ZIGSAW_HOME } else { Join-Path $env:LOCALAPPDATA 'zigsaw' }
         Write-Host "zigsaw is removed from $Dir. Its store, with downloads and apps' data, is $store; delete that too if you don't want them."
         return
     }
@@ -169,7 +196,15 @@ param(
 
         New-Item -ItemType Directory -Path $Dir -Force | Out-Null
         Remove-Leftovers
-        foreach ($name in $programs) {
+        # Going back to a release without it: the zigsaw here can still take its
+        # task away, which the one going in couldn't.
+        $hasNotify = Test-Path -LiteralPath (Join-Path $unpacked $notify)
+        if (-not $hasNotify -and (Test-Path -LiteralPath (Join-Path $Dir $notify))) {
+            [void](Invoke-Quietly (Join-Path $Dir 'zigsaw.exe') 'updates', 'off')
+            Remove-Item -LiteralPath $offMarker -Force -ErrorAction SilentlyContinue
+            Clear-Program (Join-Path $Dir $notify)
+        }
+        foreach ($name in $(if ($hasNotify) { $programs + $notify } else { $programs })) {
             Clear-Program (Join-Path $Dir $name)
             Copy-Item -LiteralPath (Join-Path $unpacked $name) -Destination (Join-Path $Dir $name)
         }
@@ -182,7 +217,6 @@ param(
     Write-Host "Installed $installed in $Dir."
 
     # Apps installed by an earlier zigsaw have its shims, which name its path.
-    $store = if ($env:ZIGSAW_HOME) { $env:ZIGSAW_HOME } else { Join-Path $env:LOCALAPPDATA 'zigsaw' }
     if (Test-Path (Join-Path $store 'refs\*.json')) {
         & $zigsaw repair
         if ($LASTEXITCODE -ne 0) { Write-Warning "Some apps' commands are still those of the zigsaw before. Close the apps and run 'zigsaw repair'." }
@@ -192,5 +226,18 @@ param(
         if (Set-UserPath $true) { Write-Host "Added $Dir to your PATH. Terminals opened from now on have it." }
         if (-not (@($env:Path -split ';') | Where-Object { $_ -ne '' -and (Same-Dir $_) })) { $env:Path = "$($env:Path.TrimEnd(';'));$Dir" }
     }
+    # The daily check: only where this is the user's own zigsaw, and never against
+    # their wishes. Not being able to have it doesn't stop an install.
+    if (-not $env:ZIGSAW_HOME -and $Dir -ieq $defaultDir.TrimEnd('\') -and (Test-Path -LiteralPath (Join-Path $Dir $notify))) {
+        if ($NoUpdateCheck) {
+            [void](Invoke-Quietly $zigsaw 'updates', 'off')
+            Write-Host "No daily check for updates. 'zigsaw updates on' starts one."
+        } elseif (Test-Path -LiteralPath $offMarker) {
+            Write-Host "The daily check for updates stays off, as you left it. 'zigsaw updates on' starts it."
+        } else {
+            if ((Invoke-Quietly $zigsaw 'updates', 'on', '--unless-off') -eq 0) { Write-Host "A daily check will tell you when updates are waiting; it installs nothing. 'zigsaw updates off' stops it." }
+            else { Write-Warning "Windows wouldn't add the daily check for updates. 'zigsaw update --check' tells you by hand." }
+        }
+    }
     Write-Host "Try: zigsaw pull org.nodejs.node"
-} $Version $Dir $From ($NoPath -or [bool]$env:ZIGSAW_INSTALL_NO_PATH) ([bool]$Uninstall)
+} $Version $Dir $From ($NoPath -or [bool]$env:ZIGSAW_INSTALL_NO_PATH) ($NoUpdateCheck -or [bool]$env:ZIGSAW_INSTALL_NO_UPDATE_CHECK) ([bool]$Uninstall)

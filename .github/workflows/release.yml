@@ -77,4 +77,4 @@ jobs:
           cd zig-out/release
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
               --title "zigsaw ${GITHUB_REF_NAME#v}" --notes-file notes.md \
-              zigsaw-x86_64-windows.zip install.ps1 SHA256SUMS
+              zigsaw-x86_64-windows.zip install.ps1 SHA256SUMS VERSION

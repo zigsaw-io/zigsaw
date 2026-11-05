@@ -44,16 +44,21 @@ zigsaw for you alone, in Windows PowerShell 5.1 or later:
 
 - It downloads the release's `zigsaw-x86_64-windows.zip` and checks it
   against the release's `SHA256SUMS` before changing anything.
-- It puts `zigsaw.exe` and its two shim programs in `%LOCALAPPDATA%\zigsaw\bin`,
+- It puts `zigsaw.exe` and the programs that come with it in `%LOCALAPPDATA%\zigsaw\bin`,
   where zigsaw puts installed apps' commands too, and adds that directory to
   your PATH, keeping the rest of PATH as it was stored (variables such as
   `%USERPROFILE%` in it stay variables).
 - Run it again to upgrade. A zigsaw that's running, because an app it
   started still runs, is moved aside, and the next install deletes it. Then
   `zigsaw repair` writes the installed apps' commands, shortcuts and file
-  associations again, as copies of the new shims.
+  associations again, as copies of the new shims. Afterwards, `zigsaw upgrade`
+  does the same from zigsaw itself.
+- It starts a [daily check for updates](#being-told-about-updates), which installs
+  nothing, and says so as it does. `zigsaw updates off`, or `-NoUpdateCheck`, stops
+  it, and it stays off through later installs. A store or a directory you chose
+  yourself doesn't get one unless you ask.
 
-With parameters (`-Version`, `-Dir`, `-NoPath`, `-Uninstall`):
+With parameters (`-Version`, `-Dir`, `-NoPath`, `-NoUpdateCheck`, `-Uninstall`):
 
 ```powershell
 & ([scriptblock]::Create((irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1))) -Version 0.19.0
@@ -129,6 +134,13 @@ zigsaw grants --take-back <path>       remove a low label that no record explain
 zigsaw update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
                                        one pulled again that may reach more asks first,
                                        unless given --yes
+zigsaw updates                         say what the last check found waiting, and whether a
+                                       daily check is on; neither installs anything
+zigsaw updates check                   look for updates of apps and zigsaw now
+zigsaw updates on|off                  start or stop the daily check; off is remembered, so that
+                                       installing or upgrading zigsaw leaves it off
+zigsaw upgrade [--yes]                 install zigsaw's latest release over this one, once you
+                                       agree; --yes agrees without asking
 zigsaw update --check [<app-id>...]    list the apps a new image waits for, and what it may
                                        reach beyond theirs, installing nothing
 zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
@@ -393,6 +405,60 @@ com.example.Tool 1.4 -> 1.5 (0a93c6d1 -> 77e2ab10)
   permits    network
 ```
 
+### Being told about updates
+
+Nothing updates by itself: a program you depend on doesn't change between two runs
+because a day went by. But a fix nobody hears about helps nobody, so `install.ps1`
+starts a daily check, which only tells you:
+
+- **What it is:** a scheduled task of your own, named `Zigsaw update check`, which
+  needs no administrator, runs with your rights and only while you're signed in, and
+  starts `zigsaw-notify.exe`, a program with no window. `zigsaw grants` lists it.
+- **What it reaches:** once a day, the registry each of your apps came from, for that
+  app's manifest and, if it's new, its config; and `github.com`, for a one-line file
+  saying zigsaw's latest version. No layers, so it's small on a metered connection too.
+  It sends nothing that identifies you beyond what any request does, and a login you
+  saved for a private registry goes to that registry as usual.
+- **What it does:** if something's waiting, a notification says so. Clicking it opens
+  a terminal listing what's waiting and the commands that install it. Nothing gets
+  installed unless you run those.
+- **How often:** a banner lasts seconds, and one you miss is gone, so what's waiting
+  is told again every three days until you've looked at it, by clicking or with
+  `zigsaw updates`. Something new is told at once. While Windows holds notifications
+  back (full screen, Do Not Disturb) it waits for the next check. `zigsaw list` has a
+  line about it too.
+
+```
+> zigsaw updates
+Last checked 3 hours ago.
+
+Waiting to be installed, with `zigsaw update`:
+  org.nodejs.node 24.21.0 -> 24.22.2 (5e1c07a2 -> 91bd44f0)
+
+zigsaw 0.74.0 is out; this is 0.73.0. `zigsaw upgrade` installs it.
+
+A daily check is on; it installs nothing. `zigsaw updates off` stops it.
+```
+
+`zigsaw updates` only reads what the last check kept; `zigsaw updates check` looks
+now. An app pulled by digest is pinned, and one built from a recipe only rebuilding
+can tell about: neither is ever listed. `zigsaw updates off` removes the task and
+remembers, in `updates\off` in the store; `zigsaw updates on` starts it again. A store
+that isn't the default one gets a task only if `updates on` is run for it, and that
+task, should the store be deleted, is removed by `zigsaw repair` or when it next runs.
+
+`zigsaw upgrade` installs zigsaw's latest release, once you agree (or with `--yes`),
+as `install.ps1` does: it checks the zip against the release's `SHA256SUMS`, starts
+the new program to see that it runs here and is the version it should be, and only
+then replaces the old ones, moving those that are running aside. Should anything go
+wrong before that, nothing changes. It never runs by itself. The hashes come from
+the same place as the zip, so this trusts GitHub's copy of the release as much as
+`install.ps1` does; a signature would be what changes that. It only replaces a zigsaw
+in its store's `bin`; one anywhere else, as a build of your own, says how to install
+one instead, and isn't told about new releases.
+
+### Removing what's old
+
 Installing a new version deletes the files of the one it replaces, unless
 that version is still running. `zigsaw prune` deletes everything else no
 installed app needs: the blobs of old versions, files kept because they were
@@ -635,6 +701,8 @@ a label until something takes it away, so deleting a store doesn't. A copy of ea
 store's list is kept outside it, in `HKCU\Software\Zigsaw\Grants`, for that:
 `zigsaw repair`, from any store, takes back what a deleted one left, unless a
 store that's still there needs it. `install.ps1` runs `repair` on an upgrade.
+It lists the [daily check for updates](#being-told-about-updates) as well, the one
+thing zigsaw puts in Task Scheduler, which `zigsaw updates off` removes.
 
 It also looks at your six folders and your profile, and lists under **Not
 explained** a low label that no record has, as a program other than zigsaw could
@@ -933,7 +1001,8 @@ bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: 
 bash tests/chromium.sh # ungoogled-chromium and VSCodium in each sandbox, with Windows' word on how their processes are confined: pages, WebGL, H.264, a second launch, downloads, a task in VSCodium's terminal with your apps' commands and zigsaw-host, an extension saving a file; links through the shims and through Windows; shims, shortcuts and what they leave outside, the keys of HKCU's Classes, RegisteredApplications, Clients and Run included
 bash tests/zls.sh       # ZLS's language server sessions over stdio in each sandbox: the standard library's documentation, a module a project's build.zig declares, a syntax error; its shim (needs ZLS_HOME or BUILD_HOME, or builds it)
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API, in an AppContainer through its service too (needs PHP_HOME or BUILD_HOME; local only)
-bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key)
+bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key); `zigsaw upgrade` from a later release of the same code, a running program moved aside and every way of refusing; the daily check in a scratch default store (about 2 min)
+bash tests/zot.sh bash tests/updates.sh # what a check finds, keeps and tells, and that nothing installs anything; real scheduled tasks under this run's own name, which it removes, and the real one untouched (under 1 min; without a registry, only the task rows)
 bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package); an incremental build of a copy after a change makes what --clean does
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole
 bash tests/batch.sh     # batch files as commands: arguments arrive exactly, and run nothing

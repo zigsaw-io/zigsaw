@@ -238,7 +238,8 @@ pub const Output = struct {
 };
 
 /// Runs a process with `input` on its stdin, for what it writes on its
-/// stdout, as a credential helper answers; its stderr is ours. For short
+/// stdout, as a credential helper answers; its stderr is `spec.stdio`'s last,
+/// or ours. For short
 /// exchanges: one that writes more than 64 KiB, or takes longer than `ms`,
 /// is ended, and the result is null.
 pub fn output(arena: Allocator, spec: SpawnSpec, input: []const u8, ms: win32.DWORD) !?Output {
@@ -256,7 +257,7 @@ pub fn output(arena: Allocator, spec: SpawnSpec, input: []const u8, ms: win32.DW
     defer _ = win32.CloseHandle(out_read);
     var with_pipes = spec;
     // `start` makes the child's ends inheritable; ours stay ours.
-    with_pipes.stdio = .{ in_read, out_write, win32.GetStdHandle(win32.STD_ERROR_HANDLE) };
+    with_pipes.stdio = .{ in_read, out_write, if (spec.stdio) |s| s[2] else win32.GetStdHandle(win32.STD_ERROR_HANDLE) };
     const started = start(arena, with_pipes);
     // `start` ignores Ctrl+C, for an app that shares the console; zigsaw
     // itself should still stop for it once this is done.

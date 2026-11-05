@@ -58,6 +58,21 @@ pub fn build(b: *std.Build) void {
     addWindowsResources(b, host, "zigsaw host command");
     b.installArtifact(host);
 
+    // What the daily check for updates starts: a GUI program, so that no console
+    // flashes up; small too. Windows shows its description on the notification.
+    const notify = b.addExecutable(.{
+        .name = "zigsaw-notify",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/notify.zig"),
+            .target = target,
+            .optimize = .small,
+            .strip = true,
+        }),
+    });
+    notify.subsystem = .windows;
+    addWindowsResources(b, notify, "zigsaw");
+    b.installArtifact(notify);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     run_cmd.addPassthruArgs();

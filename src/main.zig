@@ -21,7 +21,10 @@ const remote = @import("remote.zig");
 const runtime = @import("run.zig");
 const shortcuts = @import("shortcuts.zig");
 const associations = @import("associations.zig");
+const schedule = @import("schedule.zig");
 const update = @import("update.zig");
+const updates = @import("updates.zig");
+const upgrade = @import("upgrade.zig");
 const win32 = @import("win32.zig");
 const options = @import("options");
 const fail = Context.fail;
@@ -72,6 +75,13 @@ const usage =
     \\                                  unless given --yes
     \\  update --check [<app-id>...]    list the apps a new image waits for, and what it may
     \\                                  reach beyond theirs, installing nothing
+    \\  updates                         say what the last check found waiting, and whether a
+    \\                                  daily check is on; neither installs anything
+    \\  updates check                   look for updates of apps and zigsaw now
+    \\  updates on|off                  start or stop the daily check; off is remembered, so
+    \\                                  that installing or upgrading zigsaw leaves it off
+    \\  upgrade [--yes]                 install zigsaw's latest release over this one, once you
+    \\                                  agree; --yes agrees without asking
     \\  rm [--delete-data] <app-id>     uninstall an app and its commands
     \\  prune [--dry-run] [--downloads] [--data]
     \\                                  delete what no installed app needs; also cached
@@ -305,6 +315,15 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         if (only_check) return update.check(ctx, ids.items);
         return update.update(ctx, ids.items, consent);
     }
+    if (std.mem.eql(u8, command, "updates")) return updatesCommand(ctx, rest);
+    if (std.mem.eql(u8, command, "upgrade")) {
+        var consent: remote.Consent = .ask;
+        for (rest) |arg| {
+            if (isFlag(arg, "yes")) consent = .given else return usageError();
+        }
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        return upgrade.upgrade(ctx, consent);
+    }
     if (std.mem.eql(u8, command, "rm")) {
         var delete_data = false;
         var id: ?[]const u8 = null;
@@ -343,6 +362,7 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         try hkcu.settleLeftovers(ctx, null);
         const unsettled = try grants.settleAll(ctx) + try grants.settleOrphans(ctx);
         const code = try exports.repair(ctx);
+        try schedule.repair(ctx);
         return if (unsettled > 0) 1 else code;
     }
     if (std.mem.eql(u8, command, "grants")) {
@@ -362,6 +382,42 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         if (id != null and take_back != null) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
         if (take_back) |p| try grants.takeBackLabel(ctx, p) else try grants.show(ctx, id);
+        return 0;
+    }
+    return usageError();
+}
+
+fn updatesCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
+    if (args.len == 0) {
+        try updates.show(ctx);
+        return 0;
+    }
+    const what = args[0];
+    const rest = args[1..];
+    if (std.mem.eql(u8, what, "check")) {
+        var opts: updates.CheckOptions = .{};
+        for (rest) |arg| {
+            if (isFlag(arg, "notify")) {
+                opts.notify = true;
+            } else if (isFlag(arg, "quiet")) {
+                opts.quiet = true;
+            } else return usageError();
+        }
+        if (opts.notify and opts.quiet) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        return updates.check(ctx, opts);
+    }
+    if (std.mem.eql(u8, what, "on")) {
+        // An install or upgrade asks this way: what the user turned off stays off.
+        const respect = rest.len == 1 and isFlag(rest[0], "unless-off");
+        if (rest.len != @intFromBool(respect)) return usageError();
+        if (respect and try schedule.turnedOff(ctx)) return 0;
+        try schedule.turnOn(ctx);
+        return 0;
+    }
+    if (std.mem.eql(u8, what, "off")) {
+        if (rest.len != 0) return usageError();
+        try schedule.turnOff(ctx);
         return 0;
     }
     return usageError();
@@ -635,6 +691,7 @@ fn list(ctx: *Context) !void {
     }
     try w.flush();
     try grants.noteLeftovers(ctx);
+    try updates.noteWaiting(ctx);
 }
 
 fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
@@ -715,12 +772,15 @@ test {
     _ = @import("layer.zig");
     _ = @import("ledger.zig");
     _ = @import("run.zig");
+    _ = @import("schedule.zig");
     _ = @import("services.zig");
     _ = @import("shortcuts.zig");
     _ = @import("Sidecar.zig");
     _ = @import("Store.zig");
     _ = @import("testing.zig");
     _ = @import("Tree.zig");
+    _ = @import("updates.zig");
+    _ = @import("upgrade.zig");
     _ = @import("written.zig");
     _ = @import("zipfile.zig");
 }

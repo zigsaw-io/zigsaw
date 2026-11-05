@@ -51,7 +51,7 @@ pub fn check(ctx: *Context, ids: []const []const u8) !u32 {
     return 1;
 }
 
-fn refsOf(ctx: *Context, ids: []const []const u8) ![]const Store.Ref {
+pub fn refsOf(ctx: *Context, ids: []const []const u8) ![]const Store.Ref {
     const arena = ctx.arena;
     var refs: std.ArrayList(Store.Ref) = .empty;
     if (ids.len == 0) {
@@ -64,35 +64,66 @@ fn refsOf(ctx: *Context, ids: []const []const u8) ![]const Store.Ref {
 }
 
 fn checkApp(ctx: *Context, ref: Store.Ref, w: *std.Io.Writer) !void {
+    const app = try newImage(ctx, ref) orelse return;
+    try app.write(w);
+}
+
+/// A new image an installed app could update to.
+pub const Waiting = struct {
+    id: []const u8,
+    from: []const u8,
+    to: []const u8,
+    from_digest: []const u8,
+    to_digest: []const u8,
+    /// What it may reach beyond the installed version, as lines ready to show.
+    added: []const u8 = "",
+
+    pub fn write(app: Waiting, w: *std.Io.Writer) !void {
+        try w.print("{s} {s} -> {s} ({s} -> {s})\n", .{
+            app.id,                           app.from,                       app.to,
+            oci.shortDigest(app.from_digest), oci.shortDigest(app.to_digest),
+        });
+        try w.writeAll(app.added);
+    }
+};
+
+/// What a new image waits for the app, reading no layers; null, after a note
+/// saying why, if there's none, or nothing could tell.
+pub fn newImage(ctx: *Context, ref: Store.Ref) !?Waiting {
     const arena = ctx.arena;
     const source = ref.source orelse {
         note("{s}: doesn't record where it came from; build or pull it again to update it", .{ref.id});
-        return;
+        return null;
     };
     if (std.fs.path.isAbsoluteWindows(source)) {
         if (!try Store.exists(ctx.io, source)) return fail("{s}: its recipe {s} is gone", .{ ref.id, source });
         note("{s} {s}: built from {s}, so only rebuilding it tells", .{ ref.id, ref.version, source });
-        return;
+        return null;
     }
     const reference = Registry.Reference.parse(source) catch
         return fail("{s}: its source \"{s}\" isn't a recipe path or an image reference", .{ ref.id, source });
     if (reference.digest != null) {
         note("{s} {s}: pinned to {s}", .{ ref.id, ref.version, source });
-        return;
+        return null;
     }
     const new = try remote.fetchInfoUnless(ctx, source, ref.manifest) orelse {
         note("{s} {s}: up to date", .{ ref.id, ref.version });
-        return;
+        return null;
     };
     if (!std.mem.eql(u8, new.config.id, ref.id))
         return fail("{s}: {s} now provides {s}; build or pull that explicitly", .{ ref.id, source, new.config.id });
-    try w.print("{s} {s} -> {s} ({s} -> {s})\n", .{
-        ref.id,                        ref.version,                          new.config.version,
-        oci.shortDigest(ref.manifest), oci.shortDigest(new.manifest_digest),
-    });
     const installed = try ctx.store.readImage(arena, ref.id, ref.manifest);
     const added = try oci.addedAccess(arena, try .of(arena, installed.config), try .of(arena, new.config));
-    if (!added.isEmpty()) try remote.writeAddedAccess(arena, w, added);
+    var lines: std.Io.Writer.Allocating = .init(arena);
+    if (!added.isEmpty()) try remote.writeAddedAccess(arena, &lines.writer, added);
+    return .{
+        .id = ref.id,
+        .from = ref.version,
+        .to = new.config.version,
+        .from_digest = ref.manifest,
+        .to_digest = new.manifest_digest,
+        .added = lines.written(),
+    };
 }
 
 fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent) !void {

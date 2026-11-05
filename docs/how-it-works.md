@@ -166,6 +166,22 @@ AppContainers may do:
 See [findings](findings.md). `tests/matrix.sh` checks what the Windows
 it runs on allows, and prints it.
 
+## Being told about updates
+
+The daily check is a scheduled task, made with `schtasks.exe` from XML in UTF-16 (it
+refuses UTF-8), starting `zigsaw-notify.exe` with the store and the task's name. That
+program has the GUI subsystem, as a console program would flash a window. It runs
+`zigsaw updates check` with no window, and shows the two lines that prints, if any,
+with `Shell_NotifyIcon`, which needs no registration of the program with Windows.
+What decides whether to tell, and what to say, is in zigsaw (`src/updates.zig`):
+the notifier has no network code or task code, beyond removing a task whose store
+is gone.
+
+A check writes `updates\state.json` in the store: what's waiting, when it last told
+and about what, and what was waiting when the user last looked. What's waiting is
+compared with the store when it's read, so an app updated since the check isn't
+listed. An app that can't be checked keeps what the last check found for it.
+
 ## How long grants last
 
 What a run is granted on host paths, low labels and ACL entries, stays only

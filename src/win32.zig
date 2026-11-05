@@ -44,6 +44,8 @@ pub const CTRL_BREAK_EVENT: DWORD = 1;
 
 /// The child gets no console, rather than ours or a new one.
 pub const DETACHED_PROCESS: DWORD = 0x00000008;
+pub const CREATE_NEW_CONSOLE: DWORD = 0x00000010;
+pub const CREATE_NO_WINDOW: DWORD = 0x08000000;
 pub const CREATE_UNICODE_ENVIRONMENT: DWORD = 0x00000400;
 pub const EXTENDED_STARTUPINFO_PRESENT: DWORD = 0x00080000;
 pub const STARTF_USESTDHANDLES: DWORD = 0x00000100;
@@ -445,6 +447,9 @@ pub extern "advapi32" fn GetSidIdentifierAuthority(sid: PSID) callconv(.winapi) 
 pub extern "advapi32" fn GetSidSubAuthorityCount(sid: PSID) callconv(.winapi) *u8;
 pub extern "advapi32" fn GetSidSubAuthority(sid: PSID, index: DWORD) callconv(.winapi) *DWORD;
 pub extern "advapi32" fn ConvertStringSidToSidW(string_sid: LPCWSTR, sid: *?PSID) callconv(.winapi) BOOL;
+pub extern "advapi32" fn ConvertSidToStringSidW(sid: PSID, string_sid: *?[*:0]u16) callconv(.winapi) BOOL;
+pub extern "kernel32" fn MoveFileExW(existing: LPCWSTR, new: LPCWSTR, flags: DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetSystemDirectoryW(buffer: [*]u16, size: c_uint) callconv(.winapi) c_uint;
 pub extern "advapi32" fn GetAce(acl: *ACL, index: DWORD, ace: *?*anyopaque) callconv(.winapi) BOOL;
 pub extern "advapi32" fn GetNamedSecurityInfoW(
     object_name: LPCWSTR,
@@ -875,6 +880,16 @@ pub fn selfExePath(gpa: std.mem.Allocator) ![]u8 {
     const len = GetModuleFileNameW(null, &buf, buf.len);
     if (len == 0 or len >= buf.len) return lastErrorFail("GetModuleFileNameW");
     return std.unicode.wtf16LeToWtf8Alloc(gpa, buf[0..len]);
+}
+
+/// A program of Windows' own by its full path, so that nothing on PATH or in
+/// the working directory can stand in for it.
+pub fn systemProgram(gpa: std.mem.Allocator, name: []const u8) ![]u8 {
+    var buf: [1024]u16 = undefined;
+    const len = GetSystemDirectoryW(&buf, buf.len);
+    if (len == 0 or len >= buf.len) return lastErrorFail("GetSystemDirectoryW");
+    const dir = try std.unicode.wtf16LeToWtf8Alloc(gpa, buf[0..len]);
+    return std.fmt.allocPrint(gpa, "{s}\\{s}", .{ dir, name });
 }
 
 /// Logs the calling thread's last Win32 error and returns `error.Failed`

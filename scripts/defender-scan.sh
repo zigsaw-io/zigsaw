@@ -31,7 +31,7 @@ trap 'rm -rf "$(cygpath -u "$dir")" 2>/dev/null' EXIT
 powershell -NoProfile -Command "Expand-Archive -LiteralPath '$zip' -DestinationPath '$dir'" || { echo "couldn't unpack $zip"; exit 2; }
 
 flagged=0
-for program in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe zigsaw-host.exe; do
+for program in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe zigsaw-host.exe zigsaw-notify.exe; do
     out=$("$scanner" -Scan -ScanType 3 -File "$dir\\$program" -DisableRemediation 2>&1 | tr -d '\r')
     if grep -q 'found no threats' <<<"$out"; then
         echo "ok    $program"

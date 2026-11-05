@@ -35,6 +35,7 @@ const acl = @import("acl.zig");
 const appcontainer = @import("appcontainer.zig");
 const folders = @import("folders.zig");
 const ledger = @import("ledger.zig");
+const schedule = @import("schedule.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
 const Context = @import("Context.zig");
@@ -280,6 +281,16 @@ pub fn show(ctx: *Context, only: ?[]const u8) !void {
         any = true;
         try w.writeAll("Not explained: labelled low, in no store's record (`zigsaw grants --take-back <path>` removes one)\n");
         for (s.unexplained) |p| try w.print("  {s}\n", .{p});
+    }
+    if (only == null) {
+        const tasks = try schedule.listTasks(ctx);
+        if (tasks.len > 0) {
+            any = true;
+            try w.writeAll("Daily checks for updates, which install nothing (`zigsaw updates off` removes a store's)\n");
+        }
+        for (tasks) |t| try w.print("  scheduled task \"{s}\", for {s}{s}\n", .{
+            t.name, t.store orelse "a store whose path can't be read here", if (t.gone) ", since deleted (`zigsaw repair` removes it)" else "",
+        });
     }
     if (!any) try w.writeAll(if (only != null) "Nothing recorded for that app.\n" else "zigsaw has changed nothing outside its stores.\n");
     try w.flush();
