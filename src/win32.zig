@@ -711,6 +711,10 @@ pub const FILE_FLAG_BACKUP_SEMANTICS: DWORD = 0x02000000;
 pub const FILE_FLAG_OPEN_REPARSE_POINT: DWORD = 0x00200000;
 pub const FSCTL_SET_REPARSE_POINT: DWORD = 0x000900A4;
 pub const FSCTL_GET_REPARSE_POINT: DWORD = 0x000900A8;
+/// Makes a file sparse, or not (FILE_SET_SPARSE_BUFFER): what's never
+/// written takes no room, and writing far past the end costs no zeros.
+pub const FSCTL_SET_SPARSE: DWORD = 0x000900C4;
+pub const FILE_SET_SPARSE_BUFFER = extern struct { SetSparse: u8 };
 /// A directory junction's reparse tag.
 pub const IO_REPARSE_TAG_MOUNT_POINT: DWORD = 0xA0000003;
 pub const MAXIMUM_REPARSE_DATA_BUFFER_SIZE = 16 * 1024;
@@ -850,6 +854,15 @@ pub extern "kernel32" fn GetProcessId(process: HANDLE) callconv(.winapi) DWORD;
 pub const SRWLOCK = extern struct { ptr: ?*anyopaque = null };
 pub extern "kernel32" fn AcquireSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) void;
 pub extern "kernel32" fn ReleaseSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) void;
+pub extern "kernel32" fn AcquireSRWLockShared(lock: *SRWLOCK) callconv(.winapi) void;
+pub extern "kernel32" fn ReleaseSRWLockShared(lock: *SRWLOCK) callconv(.winapi) void;
+/// What threads holding an SRWLOCK wait on: zero is ready.
+pub const CONDITION_VARIABLE = extern struct { ptr: ?*anyopaque = null };
+/// Releases the lock, waits until woken or `ms` pass, and takes it again;
+/// false (ERROR_TIMEOUT) when the time ran out.
+pub extern "kernel32" fn SleepConditionVariableSRW(cond: *CONDITION_VARIABLE, lock: *SRWLOCK, ms: DWORD, flags: u32) callconv(.winapi) BOOL;
+pub extern "kernel32" fn WakeAllConditionVariable(cond: *CONDITION_VARIABLE) callconv(.winapi) void;
+pub extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
 
 // ---------------------------------------------------------------------------
 // Certificates (roots.zig)

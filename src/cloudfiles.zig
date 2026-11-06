@@ -186,6 +186,7 @@ const Api = struct {
     CfCreatePlaceholders: *const fn ([*:0]const u16, [*]PlaceholderCreateInfo, u32, u32, ?*u32) callconv(.winapi) HRESULT,
     CfReportProviderProgress: *const fn (i64, i64, i64, i64) callconv(.winapi) HRESULT,
     CfGetSyncRootInfoByPath: *const fn ([*:0]const u16, u32, *anyopaque, u32, ?*u32) callconv(.winapi) HRESULT,
+    CfHydratePlaceholder: *const fn (win32.HANDLE, i64, i64, u32, ?*anyopaque) callconv(.winapi) HRESULT,
 };
 
 var api_storage: Api = undefined;
@@ -303,6 +304,21 @@ pub fn isSyncRoot(gpa: Allocator, path: []const u8) bool {
     var info: [64]u8 align(8) = undefined;
     var len: u32 = 0;
     return a.CfGetSyncRootInfoByPath(path_w, CF_SYNC_ROOT_INFO_BASIC, &info, info.len, &len) >= 0;
+}
+
+/// Has Windows fetch a placeholder's whole file now, as a read of it would,
+/// through the provider's own callbacks. A handle that only reads attributes
+/// is what CfHydratePlaceholder takes, and all the provider's own process may
+/// open its placeholders with. Returns its HRESULT: negative if it failed.
+pub fn hydrate(gpa: Allocator, path: []const u8) !HRESULT {
+    const a = api() orelse return error.Unsupported;
+    const path_w = try win32.wide(gpa, path);
+    defer gpa.free(path_w);
+    const FILE_READ_ATTRIBUTES: win32.DWORD = 0x80;
+    const h = win32.CreateFileW(path_w, FILE_READ_ATTRIBUTES, win32.FILE_SHARE_READ | win32.FILE_SHARE_WRITE | win32.FILE_SHARE_DELETE, null, win32.OPEN_EXISTING, 0, null);
+    if (h == win32.INVALID_HANDLE_VALUE) return @bitCast(0x80070000 | @as(u32, win32.GetLastError()));
+    defer _ = win32.CloseHandle(h);
+    return a.CfHydratePlaceholder(h, 0, -1, 0, null);
 }
 
 pub const Connection = struct {

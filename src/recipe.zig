@@ -164,6 +164,12 @@ pub const Recipe = struct {
     /// The format of the app's own layer (see format.zig): "gzip", or
     /// "estargz", whose files can be read where they are.
     layer: Layer = .gzip,
+    /// Files of the app's eStargz layer to put first, in this order, before
+    /// its prefetch landmark: what a first run reads, which a lazy pull
+    /// fetches before anything asks (see docs/layer-formats.md). '/'-separated
+    /// paths from the top of the app; scripts/record-prefetch.sh makes the
+    /// list. One the app hasn't is left out, with a warning.
+    prefetch: []const []const u8 = &.{},
     /// What to leave out of the app's layer: "/path" from the top of the
     /// prefix, or a file name pattern ("*.pdb") that matches anywhere.
     cleanup: []const []const u8 = &.{},
@@ -240,7 +246,25 @@ pub fn parse(arena: std.mem.Allocator, file_name: []const u8, bytes: []const u8)
         return fail("{s}: host toolchain \"{s}\" isn't one zigsaw knows; only \"msvc\" is", .{ file_name, toolchain });
     if (r.host.len > 0 and !r.hasBuildCommands())
         return fail("{s}: \"host\" toolchains are for build commands, and no module has any", .{file_name});
+    try validatePrefetch(arena, file_name, r);
     return r;
+}
+
+fn validatePrefetch(arena: std.mem.Allocator, file_name: []const u8, r: Recipe) !void {
+    if (r.prefetch.len == 0) return;
+    if (r.layer != .estargz)
+        return fail("{s}: \"prefetch\" puts files first in an eStargz layer, so it needs \"layer\": \"estargz\"", .{file_name});
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    for (r.prefetch) |p| {
+        var parts = std.mem.splitScalar(u8, p, '/');
+        const relative = p.len > 0 and p[0] != '/' and std.mem.indexOfAny(u8, p, "\\:") == null and while (parts.next()) |part| {
+            if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) break false;
+        } else true;
+        if (!relative)
+            return fail("{s}: prefetch \"{s}\" must be a '/'-separated path inside the app", .{ file_name, p });
+        const gop = try seen.getOrPut(arena, try std.ascii.allocLowerString(arena, p));
+        if (gop.found_existing) return fail("{s}: prefetch lists \"{s}\" twice", .{ file_name, p });
+    }
 }
 
 fn validateDependencies(file_name: []const u8, r: Recipe) error{Failed}!void {
@@ -412,6 +436,40 @@ test "the layer's format: gzip unless a recipe asks for eStargz" {
             \\{{ "id": "x", "version": "1", "command": "a.exe", "layer": "{s}",
             \\  "modules": [{{ "name": "m", "sources": [{{ "url": "https://example.com/a.exe", "dest": "a.exe" }}] }}] }}
         , .{name});
+        try std.testing.expectError(error.Failed, parse(arena, "t.json", json));
+    }
+}
+
+test "prefetch: paths inside the app, each once, of an eStargz layer" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const ok = try parse(arena, "t.json",
+        \\{ "id": "x", "version": "1", "command": "a.exe", "layer": "estargz", "prefetch": ["a.exe", "lib/b.dll"],
+        \\  "modules": [{ "name": "m", "sources": [{ "url": "https://example.com/a.exe", "dest": "a.exe" }] }] }
+    );
+    try std.testing.expectEqual(2, ok.prefetch.len);
+    for ([_][]const u8{
+        // gzip, the default
+        \\"prefetch": ["a.exe"]
+        ,
+        \\"layer": "estargz", "prefetch": ["../a.exe"]
+        ,
+        \\"layer": "estargz", "prefetch": ["/a.exe"]
+        ,
+        \\"layer": "estargz", "prefetch": ["lib\\b.dll"]
+        ,
+        \\"layer": "estargz", "prefetch": ["lib//b.dll"]
+        ,
+        \\"layer": "estargz", "prefetch": ["C:/a.exe"]
+        ,
+        \\"layer": "estargz", "prefetch": ["a.exe", "A.EXE"]
+        ,
+    }) |fields| {
+        const json = try std.fmt.allocPrint(arena,
+            \\{{ "id": "x", "version": "1", "command": "a.exe", {s},
+            \\  "modules": [{{ "name": "m", "sources": [{{ "url": "https://example.com/a.exe", "dest": "a.exe" }}] }}] }}
+        , .{fields});
         try std.testing.expectError(error.Failed, parse(arena, "t.json", json));
     }
 }

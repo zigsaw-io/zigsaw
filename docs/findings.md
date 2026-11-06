@@ -2539,6 +2539,47 @@ An eStargz layer's files as placeholders, fetched as they're first opened: see
 - **No notification**: Windows showed none while VSCodium's lazy run fetched 369 MB (watched
   by eye). The sync root is registered without Explorer's integration.
 
+## Lazy pulling that pays (iteration 78)
+
+- **Where 77's time went**: a chunk of 4 MiB was 2 to 5 requests of 1 MiB one after
+  another; what runs fetched was fetched again by the download, which also stopped for
+  every fetch; installing read each program's header with a request of its own (TeX Live
+  has 150 commands); and Qt's SDK pinned llvm-mingw's gzip build, which downloaded whole
+  first.
+- **Paired from ghcr.io, `--lazy`, 0.77 then 0.78, time to first use**, with 0.78's full
+  pulls the same hour (some 5 to 10 MB/s):
+
+  | | full | 0.77 lazy | 0.78 lazy | fetched on demand |
+  |---|---|---|---|---|
+  | llvm-mingw, `clang hello.c` | 23.7 s | 23.3 s | 15.7 s | 139 MB |
+  | Qt's runtime, Designer's window | 12.5 s | 15.7 s | 12.8 s | 71 MB |
+  | Qt's SDK, `moc --version` | 46.8 s | 50.8 s | 35.8 s | 1.2 MB |
+  | VSCodium's window | 38.0 s | 61.1 s | 27.7 s | 369 MB |
+  | TeX Live, a first `pdflatex` | 96.6 s | 86.3 s | 62.5 s | 17.7 MB |
+
+  These are the published images, before Qt's re-pin and lists. VSCodium gains most: its
+  239 MB program now comes in parallel requests. TeX Live's first `pdflatex` still asks for
+  its 135 files one after another, some 23 s.
+- **A pull's own downloads must come first**: with the helper downloading on three
+  connections from the start, TeX Live's pull of its 64 MB of gzip runtimes took 79 to
+  93 s instead of 46. The download now waits for the pull, and for a run's fetches.
+- **Prioritized files, as Go lays them out**: stargazer 0.4's order is Go's
+  `WithPrioritizedFiles`' entry for entry, and each reads the other's blob. zigsaw 0.77
+  pulls and runs a Qt runtime with them, full and lazily.
+- **What first runs read**: Designer's window, 36 files of Qt's runtime (71 MB); a CMake
+  configure and build of a Qt program, 456 files of its SDK (27.5 MB); TeX Live's first
+  `pdflatex`, 135 (17.7 MB). Through a local zot, a lazy pull of the new Qt runtime
+  hydrated 37 files ahead, and Designer then fetched nothing.
+- **Hydrating from the provider's own process works** on a handle that only reads
+  attributes (`CfHydratePlaceholder`), as the experiment found; a placeholder it opens to
+  read, or a program it starts, still gets 395.
+- **Keeping the files at the swap doesn't pay**: hydrating the rest and reverting
+  llvm-mingw's 5,381 placeholders took 2.6 s and left the same bytes and attributes (only
+  times differ, as they do for any unpack), but every later `clang` took 0.33 s against
+  0.24 in a fresh copy, which pays 0.52 s once: Windows builds libLLVM's image section
+  anew each time from a reverted file (66 ms against 0.45). Reading a fresh copy's files
+  before its first run doesn't make that run warm (0.49 s).
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

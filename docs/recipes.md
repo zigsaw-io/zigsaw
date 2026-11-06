@@ -56,6 +56,16 @@ fails to unpack it (`EndOfStream`), and 0.64 unpacks it with eStargz's two
 files of its own, `stargz.index.json` and `.no.prefetch.landmark`, among
 the app's. Qt's images and llvm-mingw's have eStargz layers.
 
+`prefetch` lists files of an eStargz layer that come first in it, in that
+order, each after its parent directories: what a first run reads, which a
+[lazy pull](../README.md#pulling-lazily) fetches at once and has on disk
+before the run asks. Paths are from the top of the app, with `/`; one the
+app doesn't have is left out, with a warning, so a version bump still
+builds. `scripts/record-prefetch.sh <ref> [--command=<name>] [-- <args>]`
+(or `--window=<title>`) makes the list from a run of the published image,
+to paste in. Qt's runtime lists what Designer's window reads, and its SDK
+what a CMake build of a Qt program does.
+
 An eStargz layer is also what an update can download in part (zigsaw
 0.66 and later): the new layer's blob is built from the members of
 eStargz layers the store has, an older version of it usually, and the rest
@@ -813,9 +823,11 @@ and `LDFLAGS=-s`, and its `bin` is on the build's PATH, with the
 GDAL's and PostgreSQL's images, and what's built on them, build with it, and
 so do [Qt's SDK](#qt) and [GTK's](#gtk) (and gettext), whose runtime it is,
 so Qt and GTK apps build with it too. Its layer is
-[eStargz](#recipes) since iteration 66 (110 MB; 108 as gzip); those
-recipes pin its earlier gzip build, `@sha256:1fd5d6d8…` and
-`@sha256:115b5e48…`, which have the same files.
+[eStargz](#recipes) since iteration 66 (110 MB; 108 as gzip). GDAL's,
+PostgreSQL's and GTK's recipes pin its earlier gzip builds,
+`@sha256:1fd5d6d8…` and `@sha256:115b5e48…`, which have the same files;
+Qt's SDK pins the eStargz one, `@sha256:69f40e5c…`, since iteration 78, so
+that a lazy pull of the SDK fetches its compiler as it's used.
 
 - **Objects and links are reproducible without a flag**: Clang writes the
   time it compiled an object into its header, which static libraries keep,
@@ -1472,9 +1484,10 @@ Clang (llvm-mingw, since iteration 62; zig 0.16 before):
   zig, until iteration 62, they took 25 and 26 (qtdeclarative 14 and 2.5;
   48, 32 and 7.5 before its unity build, in iteration 42). Since
   iteration 65, the three Qt images' own layers are
-  [eStargz](#recipes) (`"layer": "estargz"`); their CMake, llvm-mingw and
-  BusyBox layers stay gzip, and Flameshot and Notes, gzip too, run on an
-  eStargz runtime.
+  [eStargz](#recipes) (`"layer": "estargz"`); their CMake and BusyBox
+  layers stay gzip, and Flameshot and Notes, gzip too, run on an eStargz
+  runtime. Since iteration 78 the SDKs' llvm-mingw is its eStargz build, and
+  the SDK's and runtime's layers have [prefetch](#recipes) lists.
 - **[`io.qt.Qt6`](recipes/qt6.json)** is the runtime: the SDK's files as an
   [image source](#images-as-sources), without the headers, libraries, CMake
   files and build tools (QML's too), in seconds: 160 MB (58.4 MB as

@@ -231,7 +231,15 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         try checkCommand(ctx, &tree, placeholders, try std.fmt.allocPrint(arena, "scheme \"{s}\" has the icon", .{name}), icon);
 
     const start = ctx.now();
-    const layer_file = try tree.writeLayerFile(ctx, r.layer.format());
+    // A file a new version doesn't have any more is left out, so that a
+    // version bump builds before its list is recorded again.
+    var prefetch: std.ArrayList([]const u8) = .empty;
+    for (r.prefetch) |p| {
+        if (try tree.filePath(arena, p)) |actual| {
+            try prefetch.append(arena, actual);
+        } else Context.note("warning: prefetch \"{s}\" isn't a file of the app's; it's left out", .{p});
+    }
+    const layer_file = try tree.writeLayerFile(ctx, r.layer.format(), .{ .prefetch = prefetch.items });
     ctx.timed(start, "write layer ({d} entries)", .{tree.nodes.count()});
     // Without build commands, a project's files went from its directory
     // straight into the layer.
@@ -624,7 +632,7 @@ const BuildRoot = struct {
             if (!try Store.exists(io, made))
                 return fail("module {s}: the vendor commands left nothing in {s}", .{ m.name, v.dir });
             const tree = try Tree.fromDir(io, arena, made);
-            const file = try tree.writeLayerFile(ctx, .tar);
+            const file = try tree.writeLayerFile(ctx, .tar, .{});
             const got = try arena.dupe(u8, &file.hash.hex);
             // Kept under its actual hash, as downloads are, so pinning it
             // doesn't run the commands again.

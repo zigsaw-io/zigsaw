@@ -109,9 +109,26 @@ pub const Blob = struct {
     }
 };
 
+/// The index's prioritized files and their directories: those before the
+/// prefetch landmark. None in a layer without one (the no-prefetch landmark).
+pub fn prioritized(index: *const Index) []const Index.File {
+    for (index.files, 0..) |f, i| {
+        if (std.mem.eql(u8, f.name, estargz.prefetch_landmark)) return index.files[0..i];
+        if (std.mem.eql(u8, f.name, estargz.no_prefetch_landmark)) return &.{};
+    }
+    return &.{};
+}
+
+pub const WriteOptions = struct {
+    /// Of an eStargz layer: the files to put first, as the tar names them
+    /// (see estargz.Options.prioritized). None, the layer is what it was
+    /// before there were any.
+    prefetch: []const []const u8 = &.{},
+};
+
 /// Writes a layer in format `f` to a temporary file, hashing it on the way.
 /// `source.writeTar(io, arena, out)` writes the layer's plain tar.
-pub fn write(ctx: *Context, f: Format, source: anytype) !Blob {
+pub fn write(ctx: *Context, f: Format, source: anytype, options: WriteOptions) !Blob {
     const io = ctx.io;
     const arena = ctx.arena;
     const path = try ctx.store.tmpPath(arena, "layer");
@@ -148,9 +165,15 @@ pub fn write(ctx: *Context, f: Format, source: anytype) !Blob {
             }
             var tar_file = try Io.Dir.cwd().openFile(io, tar_path, .{});
             defer tar_file.close(io);
-            var buf: [64 * 1024]u8 = undefined;
-            var r = tar_file.reader(io, &buf);
-            annotations = try toEstargz(ctx.gpa, arena, &r.interface, &hashed.writer);
+            if (options.prefetch.len == 0) {
+                var buf: [64 * 1024]u8 = undefined;
+                var r = tar_file.reader(io, &buf);
+                annotations = try toEstargz(ctx.gpa, arena, .{ .stream = &r.interface }, &hashed.writer, &.{});
+            } else {
+                // Read where each file is, and then in order.
+                var src_file: Source.File = .{ .io = io, .file = tar_file };
+                annotations = try toEstargz(ctx.gpa, arena, .{ .source = src_file.source(try tar_file.length(io)) }, &hashed.writer, options.prefetch);
+            }
         },
     }
     try hashed.writer.flush();
@@ -170,11 +193,18 @@ pub fn write(ctx: *Context, f: Format, source: anytype) !Blob {
 /// Writes the plain tar `in` to `out` as eStargz, with stargazer's
 /// defaults (members every 4 MiB, deflate level 6, as gzip layers have),
 /// and returns the annotations the layer's descriptor gets.
-fn toEstargz(gpa: Allocator, arena: Allocator, in: *Io.Reader, out: *Io.Writer) !std.json.ArrayHashMap([]const u8) {
-    const result = estargz.convert(gpa, in, out, .{}) catch |err| switch (err) {
+fn toEstargz(gpa: Allocator, arena: Allocator, in: union(enum) { stream: *Io.Reader, source: Source }, out: *Io.Writer, prefetch: []const []const u8) !std.json.ArrayHashMap([]const u8) {
+    var not_found: []const u8 = "";
+    const converted = switch (in) {
+        .stream => |s| estargz.convert(gpa, s, out, .{}),
+        .source => |s| estargz.convertSource(gpa, s, out, .{ .prioritized = prefetch }, &not_found),
+    };
+    const result = converted catch |err| switch (err) {
         error.EstargzReservedName => return fail("an eStargz layer can't have {s}, {s} or {s} at its top: eStargz keeps those names for itself", .{
             estargz.toc_name, estargz.no_prefetch_landmark, estargz.prefetch_landmark,
         }),
+        // The builder lists only the tree's files.
+        error.EstargzPrioritizedNotFound => return fail("prefetch \"{s}\" isn't a file of the layer's", .{not_found}),
         else => |e| return e,
     };
     var annotations: std.json.ArrayHashMap([]const u8) = .{};
@@ -284,7 +314,7 @@ fn testBlob(arena: Allocator, f: Format, tree: TestTree) !struct { []const u8, o
         },
         .estargz => {
             var in: Io.Reader = .fixed(tar.written());
-            annotations = try toEstargz(std.testing.allocator, arena, &in, &out.writer);
+            annotations = try toEstargz(std.testing.allocator, arena, .{ .stream = &in }, &out.writer, &.{});
             try out.writer.flush();
         },
     }

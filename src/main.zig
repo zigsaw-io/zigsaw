@@ -872,6 +872,7 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
 test {
     _ = @import("aliases.zig");
     _ = @import("associations.zig");
+    _ = @import("BlobReader.zig");
     _ = @import("builder.zig");
     _ = @import("catalog.zig");
     _ = @import("cloudfiles.zig");

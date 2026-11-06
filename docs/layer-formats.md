@@ -145,6 +145,31 @@ descriptor.
   reserved: a tree with one of them fails to build.
 - `zigsaw build` of a recipe with `"layer": "estargz"` makes the same bytes
   as `stargazer convert` of the tar of its gzip layer.
+- With prioritized files (below), it reads the tar where each of those is,
+  then in order (`convertSource`, stargazer 0.4), and makes the same bytes as
+  `stargazer convert --prioritized`. Without any, the bytes are the same as
+  before there were any: a test pins them.
+
+### Prioritized files
+
+What a first run reads can come first in the blob, as eStargz allows:
+
+- A recipe's `"prefetch"` lists files of its eStargz layer, as paths from
+  the top of the app. They come first, in that order, each after its parent
+  directories, then `.prefetch.landmark`, then everything else in its
+  sorted order: Go's `WithPrioritizedFiles` layout, which the conformance
+  check compares entry by entry.
+- `scripts/record-prefetch.sh` makes the list: it pulls an image lazily
+  into a store of its own, runs a command or opens a window once, and lists
+  what each layer's helper fetched, in the order first asked for.
+- A path the app doesn't have (a new version dropped it) is left out, with a
+  warning, so that a version bump builds before its list is recorded again.
+- A lazy pull's helper asks for the prioritized span at once, as soon as it
+  starts, in parallel requests, and has Windows hydrate each file as its
+  bytes are in, so that the first run finds them on disk.
+- Only Qt's runtime and SDK have lists (iteration 78): 36 files of Qt's
+  runtime for Designer's window, 456 of its SDK for a CMake build of a Qt
+  program. Other eStargz images would need publishing again.
 
 ### Recipes
 
@@ -247,6 +272,10 @@ A gzip layer is named as one that can't be read without pulling.
     deleted.
   - No image says which zigsaw it needs: decided in iteration 65, as
     0.60's failure is clean and 0.64's is harmless.
+- Prioritized files change nothing for a reader: the TOC still follows the
+  blob, entries need no order, and every reader since 0.65 skips both
+  landmarks and makes parent directories itself. A blob's prioritized files
+  only lose some of the delta an update would reuse, as they moved.
 - A later format with a media type of its own, such as zstd:chunked
   (`tar+zstd`), is refused by name, as zstd is now.
 
@@ -275,7 +304,8 @@ A gzip layer is named as one that can't be read without pulling.
 - **zstd:chunked**: Zig's std has no zstd compressor. Its TOC fits the
   model; it can come when a compressor does.
 - **SOCI**: keeps layers unchanged, but needs resumable gzip checkpoints.
-- **Prioritized files and an external TOC**: for lazy pulling only.
+- **An external TOC**: only lazy pulling would use it. Prioritized files
+  came in iteration 78.
 
 ## Slices
 
@@ -285,6 +315,7 @@ A gzip layer is named as one that can't be read without pulling.
 | 65 | the format interface in zigsaw, tar and gzip behind it unchanged; `"layer": "estargz"`, descriptor annotations, pulls without an inflated tar; Qt's chain on eStargz, five images published again |
 | 66 | Range downloads (and resuming a broken download); stargazer 0.2's update plans; updates that build the blob from the store's; `zigsaw ls` and `zigsaw cat`; llvm-mingw on eStargz |
 | 77 | stargazer 0.3's chunk reads; `pull --lazy`, Cloud Files placeholders served by a helper until the blob is in; TeX Live on eStargz |
+| 78 | stargazer 0.4's prioritized files; recipes' `prefetch`, and `scripts/record-prefetch.sh`; a helper that fetches in parallel and once; Qt's chain re-pinned to llvm-mingw on eStargz, with lists |
 
 ## Decisions
 

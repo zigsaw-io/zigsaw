@@ -14,7 +14,6 @@
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const Sha256 = std.crypto.hash.sha2.Sha256;
 
 const BlobReader = @import("BlobReader.zig");
 const Context = @import("Context.zig");
@@ -38,12 +37,9 @@ const Helper = struct {
     index: *format.Index,
     reader: *BlobReader,
     blob_path: []const u8,
-    part_path: []const u8,
     conn: ?cloudfiles.Connection = null,
 
-    inflight: std.atomic.Value(u32) = .init(0),
     failures: std.atomic.Value(u32) = .init(0),
-    downloaded: std.atomic.Value(u64) = .init(0),
     complete: std.atomic.Value(bool) = .init(false),
     stopping: std.atomic.Value(bool) = .init(false),
     /// The download's last failure, for state.json; empty when it's going.
@@ -54,8 +50,9 @@ const Helper = struct {
     unpacked: ?[]const u8 = null,
     /// Held on the unpacked tree's folder in tmp, so that prune leaves it.
     unpacked_lock: ?Store.Lock = null,
-    /// When the download last got anywhere, or the helper started.
+    /// When the blob's file last got anywhere, or the helper started.
     progress_at: std.atomic.Value(i64) = .init(0),
+    progress_bytes: u64 = 0,
     /// Tests' hooks: ZIGSAW_TEST_LAZY_GATE, a file the download waits on while
     /// it's there; ZIGSAW_TEST_LAZY_FAIL, a name whose fetches fail.
     test_gate: ?[]const u8 = null,
@@ -73,6 +70,20 @@ const Helper = struct {
         defer win32.ReleaseSRWLockExclusive(&h.error_lock);
         if (h.error_len == 0) return null;
         return arena.dupe(u8, h.error_buf[0..h.error_len]) catch null;
+    }
+
+    /// What state.json is to say, in `phase`.
+    fn state(h: *Helper, arena: Allocator, phase: []const u8) lazy.State {
+        return .{
+            .phase = phase,
+            .downloaded = if (h.complete.load(.acquire)) h.desc.size else h.reader.haveBytes(),
+            .size = h.desc.size,
+            .pid = win32.GetCurrentProcessId(),
+            .failures = h.failures.load(.monotonic),
+            .@"error" = h.errorText(arena),
+            .requests = h.reader.requests.load(.monotonic),
+            .on_demand = h.reader.on_demand.load(.monotonic),
+        };
     }
 };
 
@@ -102,7 +113,6 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
     if (tail.len > desc.size) return fail("the blob's tail is longer than the blob", .{});
     const reader = try BlobReader.init(gpa, ctx, .{ .host = meta.host, .repository = meta.repository }, desc.digest, desc.size, tail, .{});
     const blob_path = try store.blobPath(arena, hex);
-    const part_path = try lazy.filePath(store, arena, hex, "blob.part");
 
     var h: Helper = .{
         .ctx = ctx,
@@ -113,13 +123,19 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
         .index = undefined,
         .reader = reader,
         .blob_path = blob_path,
-        .part_path = part_path,
     };
     h.progress_at.store(nowSeconds(), .monotonic);
     if (try Store.exists(io, blob_path)) {
-        reader.setHave(blob_path, desc.size);
-        h.downloaded.store(desc.size, .monotonic);
+        reader.setDone(blob_path);
         h.complete.store(true, .release);
+    } else {
+        // What an earlier helper fetched, and 0.77's download (blob.part).
+        const earlier = reader.attach(
+            try lazy.filePath(store, arena, hex, "blob.sparse"),
+            try lazy.filePath(store, arena, hex, "have"),
+            try lazy.filePath(store, arena, hex, "blob.part"),
+        ) catch |err| return fail("the blob's file in lazy\\: {t}", .{err});
+        if (earlier > 0) note("going on with {d} of {d} bytes, which an earlier helper got", .{ earlier, desc.size });
     }
     // The TOC, checked against the descriptor once more: the tail is a file
     // in the store, which anything of the user's could have changed.
@@ -142,12 +158,7 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
     note("serving {d} files{s}", .{ h.index.files.len, if (made > 0) ", placeholders made" else "" });
     // Before ready: whoever started this reads who serves, as `rm` does to
     // end it if it won't stop.
-    try lazy.writeState(store, arena, hex, .{
-        .phase = if (h.complete.load(.acquire)) "downloaded" else "serving",
-        .downloaded = h.downloaded.load(.monotonic),
-        .size = desc.size,
-        .pid = win32.GetCurrentProcessId(),
-    });
+    try lazy.writeState(store, arena, hex, h.state(arena, if (h.complete.load(.acquire)) "downloaded" else "serving"));
 
     const stop = win32.CreateEventW(null, win32.TRUE, win32.FALSE, try lazy.eventName(arena, store, hex, "stop")) orelse
         return win32.lastErrorFail("CreateEventW");
@@ -159,6 +170,12 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
     if (!h.complete.load(.acquire)) {
         const t = try std.Thread.spawn(.{}, download, .{&h});
         t.detach();
+        // scripts/record-prefetch.sh's hook: what a run reads, fetched by it,
+        // the prioritized files too.
+        if (format.prioritized(h.index).len > 0 and ctx.env.get("ZIGSAW_TEST_LAZY_NO_HYDRATE") == null) {
+            const p = try std.Thread.spawn(.{}, hydrateAhead, .{&h});
+            p.detach();
+        }
     }
 
     // Once a second: say what's going on, and swap when it's time.
@@ -174,14 +191,12 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
             return 0;
         }
         const complete = h.complete.load(.acquire);
-        lazy.writeState(store, t, hex, .{
-            .phase = if (h.unpacked != null) "unpacking" else if (complete) "downloaded" else "serving",
-            .downloaded = h.downloaded.load(.monotonic),
-            .size = desc.size,
-            .pid = win32.GetCurrentProcessId(),
-            .failures = h.failures.load(.monotonic),
-            .@"error" = h.errorText(t),
-        }) catch {};
+        const have = h.reader.haveBytes();
+        if (have != h.progress_bytes) {
+            h.progress_bytes = have;
+            h.progress_at.store(nowSeconds(), .monotonic);
+        }
+        lazy.writeState(store, t, hex, h.state(t, if (h.unpacked != null) "unpacking" else if (complete) "downloaded" else "serving")) catch {};
         if (complete) {
             if (try swap(&h, t)) {
                 note("swapped in the unpacked layer; done", .{});
@@ -192,13 +207,9 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
         // Nothing got anywhere for ten minutes, and nothing uses the
         // deployment: the next run starts a helper again.
         if (nowSeconds() - h.progress_at.load(.monotonic) > 600 and !try store.deploymentInUse(t, desc.digest)) {
-            lazy.writeState(store, t, hex, .{
-                .phase = "paused",
-                .downloaded = h.downloaded.load(.monotonic),
-                .size = desc.size,
-                .failures = h.failures.load(.monotonic),
-                .@"error" = h.errorText(t),
-            }) catch {};
+            var paused = h.state(t, "paused");
+            paused.pid = 0;
+            lazy.writeState(store, t, hex, paused) catch {};
             note("paused: no progress for ten minutes, and no run", .{});
             if (h.conn) |c| c.disconnect();
             return 0;
@@ -320,8 +331,6 @@ fn makePlaceholders(h: *Helper) !usize {
 fn onFetch(info: *const cloudfiles.CallbackInfo, raw: *const anyopaque) callconv(.winapi) void {
     const h: *Helper = @ptrCast(@alignCast(info.context.?));
     const params: *const cloudfiles.FetchDataParams = @ptrCast(@alignCast(raw));
-    _ = h.inflight.fetchAdd(1, .acq_rel);
-    defer _ = h.inflight.fetchSub(1, .acq_rel);
     const first: u64 = @intCast(params.required_offset);
     const len: u64 = @intCast(params.required_length);
     var image_buf: [512]u8 = undefined;
@@ -342,7 +351,47 @@ fn onFetch(info: *const cloudfiles.CallbackInfo, raw: *const anyopaque) callconv
         _ = cloudfiles.transfer(info, status, null, first, len);
         return;
     };
-    note("fetched {s}: {d} bytes, for {s}", .{ file.name, served, image });
+    // Not "fetched": what a run read is what record-prefetch.sh lists.
+    if (info.process_info != null and info.process_info.?.pid == win32.GetCurrentProcessId())
+        note("hydrated {s}: {d} bytes, ahead of use", .{ file.name, served })
+    else
+        note("fetched {s}: {d} bytes, for {s}", .{ file.name, served, image });
+}
+
+/// Asks for the layer's prioritized files at once, which its blob has first,
+/// as soon as the helper starts, and has Windows hydrate each as its bytes
+/// come in: the first run, which reads them, finds them on disk.
+fn hydrateAhead(h: *Helper) void {
+    const files = format.prioritized(h.index);
+    var end: u64 = 0;
+    for (files) |f| if (f.chunks.len > 0) {
+        end = @max(end, f.chunks[f.chunks.len - 1].end);
+    };
+    if (end == 0) return;
+    h.reader.prefetch(0, end);
+    var arena_state: std.heap.ArenaAllocator = .init(h.gpa);
+    defer arena_state.deinit();
+    var hydrated: usize = 0;
+    var count: usize = 0;
+    for (files) |f| {
+        if (h.stopping.load(.acquire)) return;
+        if (f.entry.type != .reg or f.chunks.len == 0) continue;
+        count += 1;
+        _ = arena_state.reset(.retain_capacity);
+        const arena = arena_state.allocator();
+        h.reader.ensure(f.chunks[0].offset, f.chunks[f.chunks.len - 1].end) catch continue;
+        const relative = arena.dupe(u8, f.name) catch continue;
+        std.mem.replaceScalar(u8, relative, '/', '\\');
+        const path = std.fs.path.join(arena, &.{ h.root, relative }) catch continue;
+        // A run got to it first.
+        const attributes = win32.GetFileAttributesW(win32.wide(arena, path) catch continue);
+        if (attributes == win32.INVALID_FILE_ATTRIBUTES or attributes & cloudfiles.FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS == 0) continue;
+        const hr = cloudfiles.hydrate(arena, path) catch continue;
+        if (hr < 0) {
+            note("couldn't hydrate {s} ahead of use: 0x{x:0>8}", .{ f.name, @as(u32, @bitCast(hr)) });
+        } else hydrated += 1;
+    }
+    note("hydrated {d} of the {d} prioritized files ahead of use", .{ hydrated, count });
 }
 
 fn describe(err: anyerror) []const u8 {
@@ -363,9 +412,22 @@ fn serve(h: *Helper, info: *const cloudfiles.CallbackInfo, file: *const format.I
     var out: Io.Writer.Allocating = .init(h.gpa);
     defer out.deinit();
     var served: u64 = 0;
-    for (file.chunksIn(first, last)) |c| {
+    const chunks = file.chunksIn(first, last);
+    // All of them asked for at once, so that they come in parallel while
+    // each is handed over in turn.
+    if (chunks.len > 1) h.reader.prefetch(chunks[0].offset, chunks[chunks.len - 1].end);
+    for (chunks) |c| {
         out.clearRetainingCapacity();
-        try h.index.readChunk(h.gpa, &scratch, c, &out.writer);
+        h.index.readChunk(h.gpa, &scratch, c, &out.writer) catch |err| switch (err) {
+            // What the file has there may be a write cut short: once more
+            // from the registry.
+            error.EstargzDigestMismatch => {
+                h.reader.invalidate(c.offset, c.end);
+                out.clearRetainingCapacity();
+                try h.index.readChunk(h.gpa, &scratch, c, &out.writer);
+            },
+            else => |e| return e,
+        };
         // A chunk starts at a multiple of 4 MiB, and ends at one or at the
         // file's end, as a transfer must.
         const hr = cloudfiles.transfer(info, .ok, out.written(), c.file_offset, c.size);
@@ -389,15 +451,71 @@ fn onCancel(info: *const cloudfiles.CallbackInfo, raw: *const anyopaque) callcon
 
 fn download(h: *Helper) void {
     var attempts: u32 = 0;
-    while (attempts < 3 and !h.stopping.load(.acquire)) : (attempts += 1) {
-        downloadOnce(h) catch |err| {
-            h.setError("{t}", .{err});
-            note("download failed: {t}", .{err});
-            return;
+    var backoff: u32 = 2000;
+    while (!h.stopping.load(.acquire)) {
+        h.reader.downloadAll(.{ .context = h, .holdFn = held }) catch |err| switch (err) {
+            error.Stopped => return,
+            else => {
+                h.setError("{s}", .{describe(err)});
+                note("download paused at {d} of {d} bytes: {s}; trying again in {d} s", .{ h.reader.haveBytes(), h.desc.size, describe(err), backoff / 1000 });
+                sleepUnlessStopping(h, backoff);
+                backoff = @min(backoff * 2, 300_000);
+                continue;
+            },
         };
-        if (h.complete.load(.acquire) or h.stopping.load(.acquire)) return;
+        backoff = 2000;
+        h.setError("", .{});
+        finishDownload(h) catch |err| switch (err) {
+            error.DigestMismatch => {
+                attempts += 1;
+                if (attempts >= 3) {
+                    h.setError("the blob didn't match its digest, three times", .{});
+                    return;
+                }
+                note("the downloaded blob doesn't match its digest: starting again", .{});
+                h.reader.reset() catch |e| {
+                    h.setError("{t}", .{e});
+                    return;
+                };
+                continue;
+            },
+            else => {
+                h.setError("{t}", .{err});
+                note("download failed: {t}", .{err});
+                return;
+            },
+        };
+        return;
     }
-    h.setError("the blob didn't match its digest, three times", .{});
+}
+
+/// The download waits while a pull of the layer goes on, and tests hold it
+/// back while ZIGSAW_TEST_LAZY_GATE's file is there.
+fn held(context: *anyopaque) bool {
+    const h: *Helper = @ptrCast(@alignCast(context));
+    if (h.stopping.load(.acquire)) return false;
+    var buf: [8192]u8 = undefined;
+    var fba: std.heap.FixedBufferAllocator = .init(&buf);
+    if (lazy.pulling(h.ctx.store, fba.allocator(), h.hex)) return true;
+    const gate = h.test_gate orelse return false;
+    return Store.exists(h.ctx.io, gate) catch false;
+}
+
+/// Checks the complete file against the digest, and moves it into the store.
+fn finishDownload(h: *Helper) !void {
+    const hex = try h.reader.hashFile();
+    if (!std.mem.eql(u8, &hex, h.hex)) return error.DigestMismatch;
+    // Into the store, as any blob, while no prune runs.
+    var arena_state: std.heap.ArenaAllocator = .init(h.gpa);
+    defer arena_state.deinit();
+    const store_lock = try h.ctx.store.lock(arena_state.allocator(), .shared);
+    defer store_lock.release(h.ctx.io);
+    try h.reader.finish(h.blob_path);
+    h.complete.store(true, .release);
+    const r = h.reader;
+    note("downloaded and checked the whole blob: {d} bytes by the download, {d} for reads, {d} an earlier helper got, in {d} requests", .{
+        r.downloaded.load(.monotonic), r.on_demand.load(.monotonic), r.earlier, r.requests.load(.monotonic),
+    });
 }
 
 /// How long to wait before trying again, which doubles up to five minutes.
@@ -408,80 +526,6 @@ fn sleepUnlessStopping(h: *Helper, ms: u32) void {
         win32.Sleep(step);
         left -= step;
     }
-}
-
-fn downloadOnce(h: *Helper) !void {
-    const io = h.ctx.io;
-    const size = h.desc.size;
-    var file = try Io.Dir.cwd().createFile(io, h.part_path, .{ .truncate = false, .read = true });
-    var closed = false;
-    defer if (!closed) file.close(io);
-    var have = try file.length(io);
-    if (have > size) {
-        try file.setLength(io, 0);
-        have = 0;
-    }
-    const buf = try h.gpa.alloc(u8, 8 << 20);
-    defer h.gpa.free(buf);
-    // What an earlier helper got, hashed again: the file could be anything.
-    var hasher = Sha256.init(.{});
-    var pos: u64 = 0;
-    while (pos < have) {
-        const n = try file.readPositional(io, &.{buf[0..@intCast(@min(buf.len, have - pos))]}, pos);
-        if (n == 0) break;
-        hasher.update(buf[0..n]);
-        pos += n;
-    }
-    have = pos;
-    h.reader.setHave(h.part_path, have);
-    h.downloaded.store(have, .release);
-    if (have > 0) note("downloading from {d} bytes, which an earlier helper got", .{have});
-
-    var backoff: u32 = 2000;
-    while (have < size) {
-        if (h.stopping.load(.acquire)) return;
-        // Runs come first: fetches are what someone waits for.
-        while (h.inflight.load(.acquire) > 0 and !h.stopping.load(.acquire)) win32.Sleep(20);
-        // Tests hold the download back while this file is there.
-        if (h.test_gate) |gate| while (!h.stopping.load(.acquire) and (Store.exists(io, gate) catch false)) win32.Sleep(100);
-        const want: usize = @intCast(@min(size - have, buf.len));
-        h.reader.fetch(have, buf[0..want]) catch |err| {
-            h.setError("{s}", .{describe(err)});
-            note("download paused at {d} of {d} bytes: {s}; trying again in {d} s", .{ have, size, describe(err), backoff / 1000 });
-            sleepUnlessStopping(h, backoff);
-            backoff = @min(backoff * 2, 300_000);
-            continue;
-        };
-        try file.writePositionalAll(io, buf[0..want], have);
-        hasher.update(buf[0..want]);
-        have += want;
-        h.reader.setDownloaded(have);
-        h.downloaded.store(have, .release);
-        h.progress_at.store(nowSeconds(), .monotonic);
-        if (backoff != 2000) h.setError("", .{});
-        backoff = 2000;
-    }
-    file.close(io);
-    closed = true;
-
-    const hex = std.fmt.bytesToHex(hasher.finalResult(), .lower);
-    if (!std.mem.eql(u8, &hex, h.hex)) {
-        note("the downloaded blob doesn't match its digest: starting again", .{});
-        h.reader.setHave("", 0);
-        h.downloaded.store(0, .release);
-        try Io.Dir.cwd().deleteFile(io, h.part_path);
-        return;
-    }
-    // Into the store, as any blob, while no prune runs.
-    var arena_state: std.heap.ArenaAllocator = .init(h.gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const store_lock = try h.ctx.store.lock(arena, .shared);
-    defer store_lock.release(io);
-    _ = try h.ctx.store.putBlobFile(arena, h.part_path, .{ .hex = hex, .size = size }, h.desc.mediaType);
-    h.reader.setHave(h.blob_path, size);
-    h.complete.store(true, .release);
-    note("downloaded and checked the whole blob", .{});
 }
 
 // ---------------------------------------------------------------------------

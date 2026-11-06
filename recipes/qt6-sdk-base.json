@@ -16,7 +16,7 @@
   "cleanup": ["*.bat"],
   "runtimes": {
     "cmake": "org.cmake.cmake:4.4.4@sha256:fa7efc2e143063055620628a8867dbd904bb0464a36f6a44943f7dba50a8bcd0",
-    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:1fd5d6d8ada26770ad03d85e375e007e4b3bfcfa6d07201e93f5ad01a72c025e",
+    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:69f40e5c8bfbf0d42be44d3ddaa0df8d07775af88b9cf593595b00b0f779d718",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [

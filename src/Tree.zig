@@ -96,9 +96,15 @@ pub fn addTree(t: *Tree, arena: Allocator, other: *const Tree, base: []const u8)
 }
 
 pub fn isFile(t: *const Tree, arena: Allocator, path: []const u8) !bool {
+    return try t.filePath(arena, path) != null;
+}
+
+/// The file's path as the layer has it (its case as first added); null if
+/// the tree has no such file.
+pub fn filePath(t: *const Tree, arena: Allocator, path: []const u8) !?[]const u8 {
     const key = try std.ascii.allocLowerString(arena, try normalizePath(arena, path));
-    const node = t.nodes.get(key) orelse return false;
-    return node.content != .dir;
+    const node = t.nodes.get(key) orelse return null;
+    return if (node.content == .dir) null else node.path;
 }
 
 /// Removes what a recipe's `cleanup` patterns match, and everything below a
@@ -500,8 +506,8 @@ fn sameContents(io: Io, zip: *zipfile.Content, dest: Io.Dir, node: Node, src_buf
 /// format.zig). Images' layers are gzip-compressed unless their recipe asks
 /// for another format; what vendor steps make is kept as a plain tar, as
 /// its hash is pinned.
-pub fn writeLayerFile(t: *const Tree, ctx: *Context, f: format.Format) !format.Blob {
-    return format.write(ctx, f, t);
+pub fn writeLayerFile(t: *const Tree, ctx: *Context, f: format.Format, options: format.WriteOptions) !format.Blob {
+    return format.write(ctx, f, t, options);
 }
 
 /// The sha256 of the tree as an uncompressed layer, which depends only on

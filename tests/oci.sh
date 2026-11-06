@@ -191,6 +191,12 @@ key_named_wrongly() { # <what COSIGN_KEY is> <what the error should say>
 check "  a key's path with its backslashes eaten says so" key_named_wrongly 'E:keyscosign.key' "Git Bash ate them"
 check "  a key that's named otherwise says what's there" key_named_wrongly "$work\\cwd\\wrong.key" "cosign.key"
 check "  a folder says to name the file" key_named_wrongly "$work\\cwd" "That's a folder"
+wrong_passphrase() {
+    local out
+    out=$(env COSIGN_KEY="$work\\cwd\\cosign.key" COSIGN_PASSWORD=not-it COSIGN="$cosign_program" bash "$root\\scripts\\sign-images.sh" "$(cygpath -w "$work\\cwd\\signed-recipe.json")" 2>&1) && { echo "it went on"; return 1; }
+    grep -qF "COSIGN_PASSWORD doesn't open" <<<"$out" || { echo "$out"; return 1; }
+}
+check "  a passphrase that doesn't open the key says so, before signing anything" wrong_passphrase
 ZIGSAW_HOME="$work\\checks" "$zigsaw" rm --delete-data net.frippery.busybox >/dev/null 2>&1
 
 # A release, with programs that only have to be the same bytes.

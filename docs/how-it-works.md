@@ -233,7 +233,10 @@ connects as the root's provider, and signals that it's ready; only then does `pu
 go on. The path an app sees never changes, so nothing else in zigsaw knows a lazy
 deployment from another. Installing reads only the headers of the app's programs, to
 pick their shims' kind, and reads those from the index rather than open a placeholder,
-which would fetch the whole file.
+which would fetch the whole file: all their first chunks asked for at once, into
+memory, so that neighbours share a request (TeX Live has 150 commands). `pull` holds
+`lazy\<hex>.pull.lock` shared until it ends, and the helper's download waits for it,
+so that the pull's other layers have the network first.
 
 A separate process, as Windows lets one process provide for a root, and won't let that
 process open the root's placeholders itself (error 395): `zigsaw run` couldn't be it.
@@ -241,15 +244,29 @@ process open the root's placeholders itself (error 395): `zigsaw run` couldn't b
 The helper hands over the eStargz chunks that hold it, each whole (they start at
 multiples of 4 MiB, as a transfer must), each checked against its digest in the TOC
 before Windows sees it ([`Reader.readChunk`](../stargazer/src/estargz.zig), stargazer
-0.3.0). Chunks come from the tail, from the download so far, or from the registry in
-blocks of 1 MiB, which are kept: a registry's storage takes about as long for 4 KiB as
-for a megabyte ([src/BlobReader.zig](../src/BlobReader.zig)). Requests go through a few
-registry clients, each replaced every 64 requests, so that a helper that runs for hours
-neither grows nor keeps an expired token.
+0.3.0). **Every byte fetched goes into one file**, `lazy\<hex>\blob.sparse`, a sparse
+file of the blob's size with its tail written in, and `lazy\<hex>\have` says which of
+its 1 MiB blocks are there ([src/BlobReader.zig](../src/BlobReader.zig)). A fetch asks
+at once for the blocks of all its chunks that nobody has asked for; each run of them
+goes out as one Range request, of 4 MiB at most, on four threads with a registry
+client each: what Windows waits for first, the download's after. A fetch that wants
+blocks another is fetching waits for those. A chunk read from the file that fails its
+digest (a write cut short by a crash) has its blocks fetched again. Clients are
+replaced every 64 requests, so that a helper that runs for hours neither grows nor
+keeps an expired token.
 
-**The download** runs meanwhile, 8 MiB at a time, giving way while Windows waits on a
-fetch, into `lazy\<hex>\blob.part`, which a later helper hashes again and goes on
-from. Only a blob checked against its digest goes into `blobs\`, as for any pull.
+**The download** fills in the blocks the file hasn't, in order, 8 MiB a request, on at
+most three of the threads, so that one is always free for Windows. It starts nothing
+while a fetch for a run is queued or going, or for a second after one, as a run's next
+read is often right behind; it skips what runs fetched; and a later helper goes on
+from the map. Once every block is there, the file is hashed, stops being sparse, and
+goes into `blobs\` if it's the blob, as for any pull, or is fetched again if not.
+
+**Prioritized files**: if the layer has them (a recipe's [`prefetch`](recipes.md#recipes),
+before `.prefetch.landmark`), the helper asks for their span as soon as it's connected,
+at a run's priority, and has Windows hydrate each file (`CfHydratePlaceholder`, on a
+handle that only reads attributes, which the provider's own process may open) as its
+blocks are in. A first run then finds those on disk.
 **The swap**: the helper unpacks the blob into `tmp\` as `Store.deploy` would, with
 that folder's lock held so that `prune` leaves it, and waits until it can lock
 `deploy\<hex>.lock` exclusively, which every run holds shared while it runs (and

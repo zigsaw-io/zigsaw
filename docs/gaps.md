@@ -896,10 +896,23 @@
   nothing to go back to: its layer's blob was never complete, so `rollback` says how to
   pull that version again.
 - `--lazy` helps only an image whose big layers are eStargz: its gzip layers, a runtime's
-  among them, download whole before anything starts, as Qt's SDK's llvm-mingw and CMake
-  do (pinned before llvm-mingw moved to eStargz). And only an app whose first use reads a
-  small part: a file is fetched whole, so VSCodium, whose program is 239 MB of its layer,
-  starts later than after a full pull. Nothing fetches in parallel what a first run will
-  read (eStargz's prioritized files, a recorded list): each file waits for the last.
-- The first run after the swap is cold: the unpacked files are new to Windows, and that run
-  pays what a run on a fresh deployment does (TeX Live's `pdflatex` 14 s once, then 0.3 s).
+  among them, download whole before anything starts, as the CMake of Qt's SDK does
+  (21 MB, below the 32 MiB at which a layer is pulled lazily), and Perl's and
+  Ghostscript's of TeX Live. And only an app whose first use reads a small part: a file
+  is fetched whole, so VSCodium, whose program is 239 MB of its layer, waits for it.
+- Only Qt's runtime and SDK have `prefetch` lists. Elsewhere a first run's files come as
+  it asks, one after another, each a round trip (TeX Live's first `pdflatex`, 135 files,
+  some 23 s of its first use); a list needs the image published again. A list says what
+  one run read when it was recorded: another command, or a new version, reads other
+  files, which then come as asked. Qt's SDK's is 456 paths long, in its recipe.
+- The first run after the swap is cold: the unpacked files are new to Windows, and that
+  run pays what a run on a fresh deployment does (TeX Live's `pdflatex` 14 to 22 s once,
+  then 0.3 s; llvm-mingw's `clang` 0.5 s once, then 0.24). Iteration 78 tried keeping the
+  files instead, by hydrating what's left and making placeholders plain files
+  (`CfRevertPlaceholder`): the result has the same bytes and attributes, but every later
+  `clang` takes 0.33 s, as Windows builds libLLVM's image section anew each time (66 ms
+  against 0.5), so the swap stays a rename. Reading the new files before the first run
+  doesn't warm them either (0.49 s): the cost is in starting the program.
+- A zigsaw before 0.78 doesn't know a 0.78 helper's `blob.sparse`: one that serves a layer
+  a 0.78 helper started fetches from the registry what that one had, and downloads it all
+  again.

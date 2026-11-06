@@ -101,10 +101,17 @@ fn listTo(ctx: *Context, registry: *Registry, app: remote.Info, all: []const Lay
             };
             try w.print("{s} {s}: {d} files\n", .{ l.id, l.version, files });
         }
-        for (opened.index.files) |f| {
-            if (f.entry.type != .reg or !format.isLayerFile(f.name)) continue;
-            try w.print("{s}{d: >12}  {s}\n", .{ if (headings) "  " else "", f.size, f.name });
-        }
+        // By name: a layer's prioritized files come first in its TOC.
+        var listed: std.ArrayList(*const format.Index.File) = .empty;
+        for (opened.index.files) |*f| if (f.entry.type == .reg and format.isLayerFile(f.name)) {
+            try listed.append(ctx.arena, f);
+        };
+        std.mem.sort(*const format.Index.File, listed.items, {}, struct {
+            fn less(_: void, a: *const format.Index.File, b: *const format.Index.File) bool {
+                return std.mem.lessThan(u8, a.name, b.name);
+            }
+        }.less);
+        for (listed.items) |f| try w.print("{s}{d: >12}  {s}\n", .{ if (headings) "  " else "", f.size, f.name });
     }
     try w.flush();
 }

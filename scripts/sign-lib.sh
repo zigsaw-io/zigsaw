@@ -47,12 +47,32 @@ check_key() {
     exit 2
 }
 
-# The passphrase of the key, for this script and what it starts, once.
+# The passphrase of the key, for this script and what it starts, once. It's tried on
+# the key before anything is signed: cosign's own word for a wrong one is "decrypt:
+# encrypted: decryption failed". A wrong one typed is asked for again; a wrong one
+# from COSIGN_PASSWORD stops it, as a passphrase left there by something else would.
 ask_passphrase() {
-    [ -z "${COSIGN_PASSWORD:-}" ] || return 0
-    IFS= read -rs -p "Passphrase of the key: " COSIGN_PASSWORD
-    echo
-    export COSIGN_PASSWORD
+    local from_env=no tries=0
+    if [ -n "${COSIGN_PASSWORD+set}" ]; then from_env=yes; fi
+    while :; do
+        if [ $from_env = no ]; then
+            IFS= read -rs -p "Passphrase of the key: " COSIGN_PASSWORD
+            echo
+            export COSIGN_PASSWORD
+        fi
+        if "$cosign" public-key --key "$COSIGN_KEY" >/dev/null 2>&1; then return 0; fi
+        if [ $from_env = yes ]; then
+            echo "error: COSIGN_PASSWORD doesn't open $COSIGN_KEY." >&2
+            echo "  It was set before this started: by a test kit, say. \`unset COSIGN_PASSWORD\` and run it again to be asked." >&2
+            exit 2
+        fi
+        tries=$((tries + 1))
+        if [ $tries -ge 3 ]; then
+            echo "error: that passphrase doesn't open $COSIGN_KEY: is it the key you meant?" >&2
+            exit 2
+        fi
+        echo "That passphrase doesn't open $COSIGN_KEY. Again:" >&2
+    done
 }
 
 # sign_blob <file> <signature file>: as cosign does, with the key in COSIGN_KEY, and

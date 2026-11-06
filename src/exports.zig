@@ -140,6 +140,13 @@ fn syncLocked(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, when
     var added: std.ArrayList([]const u8) = .empty;
     var shim_exes: std.EnumArray(ShimKind, ?[]const u8) = .initFill(null);
     const export_count = config.exports.map.count();
+    // A lazy pull's programs' headers, asked for at once: shimKind reads them.
+    {
+        var targets: std.ArrayList([]const u8) = .empty;
+        for (config.exports.map.values()) |e| try targets.append(arena, try placeholders.commandPath(arena, e.command));
+        for (found) |f| try targets.append(arena, f.path);
+        lazy.prefetchHeaders(std.heap.smp_allocator, targets.items);
+    }
     for (0..export_count + found.len) |i| {
         const is_export = i < export_count;
         const name = if (is_export) config.exports.map.keys()[i] else found[i - export_count].name;

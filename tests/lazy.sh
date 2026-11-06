@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # End-to-end checks for lazy pulling (src/lazy.zig): `pull --lazy` installs an
 # app with its eStargz layer as Cloud Files placeholders, which a helper serves
-# from the registry as they're read, under every sandbox; the helper comes back
-# when it's gone, says what it couldn't fetch, and swaps the unpacked layer in
-# once the download is done and no run uses it; `rm` takes it all away; and a
-# volume that can't have placeholders, or a test hook acting as one, gets a
-# whole download. Store a builds a small app (BusyBox, a 16 MiB file and two
-# small ones) and pushes it; the others pull it.
+# from the registry as they're read, under every sandbox, a file's chunks in a
+# few requests; the helper hydrates the recipe's prefetch files before any run;
+# it comes back when it's gone, going on from what the last one fetched, says
+# what it couldn't fetch, and swaps the unpacked layer in once the download,
+# which fetches nothing runs did, is done and no run uses it; `rm` takes it all
+# away; and a volume that can't have placeholders, or a test hook acting as
+# one, gets a whole download. Store a builds a small app (BusyBox, a 16 MiB
+# file and three small ones, one of them prefetched) and pushes it; the others
+# pull it.
 #
 #   tests/zot.sh bash tests/lazy.sh [path\to\zigsaw.exe]
 #
@@ -96,7 +99,8 @@ mkdir -p "$(cygpath -u "$fixture")"
 head -c 16777216 /dev/urandom >"$(cygpath -u "$fixture")/big.bin"
 printf 'hello lazy\n' >"$(cygpath -u "$fixture")/small.txt"
 printf 'never read but once\n' >"$(cygpath -u "$fixture")/never.txt"
-printf '{ "id": "%s", "version": "1", "command": "busybox.exe", "exports": {}, "layer": "estargz",\n  "permissions": { "sandbox": "soft" },\n  "modules": [{ "name": "files", "sources": [\n    { "url": "https://frippery.org/files/busybox/busybox-w64-FRP-6075-g169694ebd.exe", "sha256": "07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075", "dest": "busybox.exe" },\n    { "path": "big.bin" }, { "path": "small.txt" }, { "path": "never.txt" } ] }] }\n' $APP >"$(cygpath -u "$fixture")/app.json"
+printf 'what a first run reads\n' >"$(cygpath -u "$fixture")/first.txt"
+printf '{ "id": "%s", "version": "1", "command": "busybox.exe", "exports": {}, "layer": "estargz", "prefetch": ["first.txt"],\n  "permissions": { "sandbox": "soft" },\n  "modules": [{ "name": "files", "sources": [\n    { "url": "https://frippery.org/files/busybox/busybox-w64-FRP-6075-g169694ebd.exe", "sha256": "07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075", "dest": "busybox.exe" },\n    { "path": "big.bin" }, { "path": "small.txt" }, { "path": "never.txt" }, { "path": "first.txt" } ] }] }\n' $APP >"$(cygpath -u "$fixture")/app.json"
 za build "$fixture\\app.json" >"$work\\build.txt" 2>&1 || { echo "building the fixture failed:"; tail -3 "$work\\build.txt"; exit 1; }
 za push $APP "$repo:1" >/dev/null 2>&1 || { echo "pushing the fixture failed"; exit 1; }
 manifest=$(grep -o 'sha256:[0-9a-f]*' "$(store a)\\refs\\$APP.json" | head -1 | cut -d: -f2)
@@ -106,6 +110,13 @@ lazy_of() { echo "$(store "$1")\\lazy\\$hex"; }
 helper_pid() { tr -d '\r\n ' 2>/dev/null <"$(lazy_of "$1")\\state.json" | grep -o '"pid":[0-9]*' | cut -d: -f2; }
 helper_running() { local p; p=$(helper_pid "$1") && [ -n "$p" ] && [ "$p" != 0 ] && tasklist /fi "PID eq $p" /nh 2>/dev/null | grep -q " $p "; }
 helper_gone() { ! helper_running "$1"; }
+# The recipe's prefetch: first.txt first, then the landmark, then the rest.
+prioritized_first() {
+    local names
+    names=$(gzip -dc <"$(store a)\\blobs\\sha256\\$hex" 2>/dev/null | tar -t 2>/dev/null | head -2 | tr '\n' ' ')
+    [ "$names" = "first.txt .prefetch.landmark " ] || { echo "the blob starts: $names"; return 1; }
+}
+check "a recipe's prefetch puts its files first in the layer, then the prefetch landmark" prioritized_first
 
 # --- Pulled lazily -----------------------------------------------------------
 touch "$(cygpath -u "$gate")"
@@ -120,6 +131,16 @@ pulled_lazily() {
 }
 check "pull --lazy installs the app with its layer as placeholders, and no blob" pulled_lazily
 check "list says it's downloading" bash -c "ZIGSAW_HOME='$(store b)' '$zigsaw' list 2>&1 | grep '^$APP ' | grep -q '(downloading'"
+# While the download waits on the gate, before any run.
+hydrated_ahead() {
+    local i
+    for i in $(seq 1 40); do grep -q 'hydrated first.txt' "$(lazy_of b)\\log" 2>/dev/null && break; sleep 0.25; done
+    grep -q 'hydrated first.txt' "$(lazy_of b)\\log" || { echo "the log says nothing of first.txt"; return 1; }
+    local a; a=$(attributes "$(deploy_of b)\\first.txt")
+    [ -n "$a" ] && (( (a & 0x400000) == 0 )) || { echo "first.txt's attributes: $a"; return 1; }
+    recall_on_access "$(deploy_of b)\\never.txt" || { echo "never.txt isn't a placeholder"; return 1; }
+}
+check "the helper hydrates the prioritized files ahead of use, and only those" hydrated_ahead
 for sb in soft low appcontainer; do
     check "under $sb, BusyBox starts from a placeholder and reads one" \
         bash -c "[ \"\$(ZIGSAW_HOME='$(store b)' ZIGSAW_TEST_LAZY_GATE='$gate' '$zigsaw' run --sandbox=$sb $APP cat '$(deploy_of b)\\small.txt' 2>&1 | tr -d '\r')\" = 'hello lazy' ]"
@@ -133,12 +154,25 @@ check "a program the app starts can't leave the app's job" breakaway
 
 pid1=$(helper_pid b)
 taskkill /F /PID "$pid1" >/dev/null 2>&1
+# Stdout only: in a job that refuses breakaway (CI's), the restart says so on stderr.
 restarted() {
     local n
-    n=$(zb run $APP wc -c "$(deploy_of b)\\big.bin" 2>&1 | tr -d '\r' | awk '{ print $1 }')
-    [ "$n" = 16777216 ] && helper_running b && [ "$(helper_pid b)" != "$pid1" ]
+    n=$(zb run $APP wc -c "$(deploy_of b)\\big.bin" 2>/dev/null | tr -d '\r' | awk '{ print $1 }')
+    [ "$n" = 16777216 ] || { echo "wc said '$n'"; return 1; }
+    helper_running b && [ "$(helper_pid b)" != "$pid1" ] || { echo "no new helper (pid $(helper_pid b), was $pid1)"; return 1; }
 }
 check "a killed helper is started again by the next run, which reads 16 MiB through it" restarted
+# Its four chunks, asked for at once: a request each, not one per MiB.
+few_requests() {
+    local i r=
+    for i in $(seq 1 12); do
+        r=$(tr -d '\r\n ' <"$(lazy_of b)\\state.json" 2>/dev/null | grep -o '"requests":[0-9]*' | cut -d: -f2)
+        [ -n "$r" ] && [ "$r" -gt 0 ] && break
+        sleep 0.25
+    done
+    [ -n "$r" ] && [ "$r" -ge 1 ] && [ "$r" -le 8 ] || { echo "$r requests"; return 1; }
+}
+check "and those 16 MiB came in a few requests" few_requests
 
 taskkill /F /PID "$(helper_pid b)" >/dev/null 2>&1
 told_why() {
@@ -167,6 +201,8 @@ waits_for_run() {
         grep -q '"phase": *"unpacking"' "$(lazy_of b)\\state.json" 2>/dev/null && break
         sleep 0.25
     done
+    # The swap deletes it.
+    cp "$(lazy_of b)\\log" "$work\\b.log" 2>/dev/null
     # Downloaded and unpacked, and the deployment still the placeholders.
     [ -d "$(lazy_of b)" ] && recall_on_access "$(deploy_of b)\\never.txt"
 }
@@ -180,6 +216,18 @@ swapped() {
     [ "$(sha256sum <"$(store b)\\blobs\\sha256\\$hex" | cut -d' ' -f1)" = "$hex" ] || { echo "the blob isn't the layer"; return 1; }
 }
 check "after it, the deployment is plain files, and the blob is the layer's" swapped
+# The helpers that were killed left what they fetched, big.bin among it,
+# and the one that finished fetched none of that again.
+skipped_had() {
+    local line by earlier size
+    line=$(grep 'downloaded and checked the whole blob' "$work\\b.log" | tail -1)
+    by=$(sed -n 's/.*blob: \([0-9]*\) bytes by the download.*/\1/p' <<<"$line")
+    earlier=$(sed -n 's/.*for reads, \([0-9]*\) an earlier helper got.*/\1/p' <<<"$line")
+    size=$(stat -c %s "$(store b)\\blobs\\sha256\\$hex")
+    [ -n "$by" ] && [ -n "$earlier" ] || { echo "the log says: ${line:-nothing of it}"; return 1; }
+    [ "$earlier" -ge 16777216 ] && [ "$by" -lt $((size - 16777216)) ] || { echo "$line (blob $size)"; return 1; }
+}
+check "the download went on from what killed helpers fetched, and fetched none of it again" skipped_had
 check "the helper is gone" helper_gone b
 check "and the app reads the file nothing fetched" bash -c "[ \"\$(ZIGSAW_HOME='$(store b)' '$zigsaw' run $APP cat '$(deploy_of b)\\never.txt' 2>&1 | tr -d '\r')\" = 'never read but once' ]"
 check "list says nothing of it any more" bash -c "! ZIGSAW_HOME='$(store b)' '$zigsaw' list 2>&1 | grep '^$APP ' | grep -q '(downloading\|(paused'"
@@ -200,7 +248,13 @@ check "rm while it's lazy stops the helper, and leaves no placeholders or downlo
 injob_out=$(ZIGSAW_HOME="$(store d)" ZIGSAW_TEST_LAZY_GATE="$gate" "$jobprobe" injob "$zigsaw" pull --yes --lazy "$repo:1" 2>&1)
 check "pull --lazy in a job that keeps what it starts says the download lasts as long as it" grep -q "in a job that keeps what it starts" <<<"$injob_out"
 check "the job's end ended the helper" helper_gone d
-check "the next run, outside it, starts the helper again" bash -c "[ \"\$(ZIGSAW_HOME='$(store d)' ZIGSAW_TEST_LAZY_GATE='$gate' '$zigsaw' run $APP cat '$(deploy_of d)\\small.txt' 2>&1 | tr -d '\r')\" = 'hello lazy' ]"
+# Stdout only, as above: outside that job may still be inside another.
+restarted_outside() {
+    local out
+    out=$(zd run $APP cat "$(deploy_of d)\\small.txt" 2>/dev/null | tr -d '\r')
+    [ "$out" = 'hello lazy' ] || { echo "cat said '$out'"; return 1; }
+}
+check "the next run, outside it, starts the helper again" restarted_outside
 # As a pull that stopped would leave it: placeholders, a helper, and no ref.
 rm -f "$(store d)\\refs\\$APP.json"
 pruned() {

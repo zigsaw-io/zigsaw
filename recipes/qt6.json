@@ -6,6 +6,44 @@
   "homepage": "https://www.qt.io/",
   "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
   "layer": "estargz",
+  "prefetch": [
+    "bin/designer.exe",
+    "bin/Qt6PrintSupport.dll",
+    "bin/Qt6Network.dll",
+    "bin/Qt6Xml.dll",
+    "bin/Qt6Designer.dll",
+    "bin/Qt6DesignerComponents.dll",
+    "bin/Qt6Widgets.dll",
+    "bin/Qt6Gui.dll",
+    "bin/Qt6Core.dll",
+    "bin/Qt6OpenGLWidgets.dll",
+    "bin/Qt6OpenGL.dll",
+    "bin/qt.conf",
+    "plugins/platforms/qdirect2d.dll",
+    "plugins/platforms/qminimal.dll",
+    "plugins/platforms/qoffscreen.dll",
+    "plugins/platforms/qwindows.dll",
+    "plugins/styles/qmodernwindowsstyle.dll",
+    "translations/designer_en.qm",
+    "translations/qtbase_en.qm",
+    "plugins/designer/qquickwidget.dll",
+    "bin/Qt6QuickWidgets.dll",
+    "bin/Qt6Quick.dll",
+    "bin/Qt6Qml.dll",
+    "bin/Qt6QmlMeta.dll",
+    "bin/Qt6QmlModels.dll",
+    "bin/Qt6QmlWorkerScript.dll",
+    "plugins/iconengines/qsvgicon.dll",
+    "plugins/imageformats/qgif.dll",
+    "plugins/imageformats/qicns.dll",
+    "plugins/imageformats/qico.dll",
+    "plugins/imageformats/qjpeg.dll",
+    "plugins/imageformats/qsvg.dll",
+    "plugins/imageformats/qtga.dll",
+    "plugins/imageformats/qtiff.dll",
+    "plugins/imageformats/qwbmp.dll",
+    "plugins/imageformats/qwebp.dll"
+  ],
   "command": "bin/designer.exe",
   "path": ["bin"],
   "permissions": { "filesystem": ["cwd", "documents"] },
@@ -22,7 +60,7 @@
     "Qt Linguist": { "command": "linguist", "description": "Translate Qt apps" }
   },
   "sdk": {
-    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:25ddeefda7090fe3a87a9822dd8a871d65ba0856b79f14580659980f865b4b80"
+    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:965dba80c2f86cd874d5603658b48ed0d0c8f01d1204aba2cb1c077fb7ba0128"
   },
   "cleanup": [
     "/include",
@@ -96,7 +134,7 @@
   "modules": [
     {
       "name": "qt",
-      "sources": [{ "image": "io.qt.Qt6.Sdk:6.12.0@sha256:25ddeefda7090fe3a87a9822dd8a871d65ba0856b79f14580659980f865b4b80" }]
+      "sources": [{ "image": "io.qt.Qt6.Sdk:6.12.0@sha256:965dba80c2f86cd874d5603658b48ed0d0c8f01d1204aba2cb1c077fb7ba0128" }]
     },
     {
       "name": "qt-conf",

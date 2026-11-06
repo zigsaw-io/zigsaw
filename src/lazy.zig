@@ -13,12 +13,16 @@
 //! What a lazy layer has, while it's lazy, in the store:
 //!   lazy\<hex>\layer.json   the layer's descriptor and repository
 //!   lazy\<hex>\tail         the blob's last bytes, with its TOC, as pull fetched them
-//!   lazy\<hex>\blob.part    the download so far
+//!   lazy\<hex>\blob.sparse  the blob as far as it's fetched, by runs and by the
+//!                           download: a sparse file of its size (BlobReader.zig)
+//!   lazy\<hex>\have         which 1 MiB blocks of it are there
 //!   lazy\<hex>\state.json   what the helper is doing, for `list`
 //!   lazy\<hex>\log          the helper's messages: each fetch, and what failed
 //!   lazy\<hex>.helper.lock  held by the helper while it runs; beside the folder,
 //!                           as the helper deletes that before it ends
 //!   lazy\<hex>.start.lock   held while a helper is being started
+//!   lazy\<hex>.pull.lock    held, shared, by a pull until it ends: the download
+//!                           waits, so that the pull's own downloads go first
 //!   lazy\zigsaw-<hash>.exe  the copy of zigsaw that helpers run, so that
 //!                           zigsaw.exe can be replaced while they do
 
@@ -53,6 +57,10 @@ pub const State = struct {
     pid: u32 = 0,
     failures: u32 = 0,
     @"error": ?[]const u8 = null,
+    /// Range requests this helper sent, and bytes it fetched for reads
+    /// rather than for the download (0.78 on).
+    requests: u64 = 0,
+    on_demand: u64 = 0,
 };
 
 pub fn dirPath(store: Store, arena: Allocator, hex: []const u8) ![]u8 {
@@ -63,7 +71,7 @@ pub fn filePath(store: Store, arena: Allocator, hex: []const u8, name: []const u
     return store.path(arena, &.{ "lazy", hex, name });
 }
 
-/// lazy\<hex>.<which>.lock: "helper" or "start".
+/// lazy\<hex>.<which>.lock: "helper", "start" or "pull".
 pub fn lockPath(store: Store, arena: Allocator, hex: []const u8, which: []const u8) ![]u8 {
     return store.path(arena, &.{ "lazy", try std.fmt.allocPrint(arena, "{s}.{s}.lock", .{ hex, which }) });
 }
@@ -168,6 +176,9 @@ pub fn prepare(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !Prepar
         .layer = desc,
     }) });
     try writeState(store, arena, hex, .{ .phase = "starting", .size = desc.size });
+    // Until this process ends, however it ends: its other layers' downloads,
+    // and the first run, which follows, have the network first.
+    try pull_holds.append(arena, try Store.openLock(io, try lockPath(store, arena, hex, "pull"), .shared, .wait));
     switch (try startHelper(ctx, hex)) {
         .serving => {},
         .unsupported => |why| {
@@ -178,48 +189,77 @@ pub fn prepare(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !Prepar
     }
     // For what installing reads of the layer's files, as long as this
     // process lasts: their headers, from the index (see `headerOf`).
-    const reader = try BlobReader.init(ctx.gpa, ctx, registry.ref, desc.digest, desc.size, blob.tail.?, .{ .clients = 2, .slots = 8 });
+    const reader = try BlobReader.init(ctx.gpa, ctx, registry.ref, desc.digest, desc.size, blob.tail.?, .{});
+    try reader.attachMemory();
     try sessions.append(arena, .{
         .root = try store.deployPath(arena, desc.digest),
         .index = try format.openIndex(ctx.gpa, desc, reader.source()),
+        .reader = reader,
     });
     return .lazy;
+}
+
+/// The pull locks this process holds, which its end releases.
+var pull_holds: std.ArrayList(Store.Lock) = .empty;
+
+/// Whether a pull of the layer is still going.
+pub fn pulling(store: Store, arena: Allocator, hex: []const u8) bool {
+    return Store.isLocked(store.io, lockPath(store, arena, hex, "pull") catch return false) catch false;
 }
 
 /// A layer this process made lazy, whose index it keeps.
 const Session = struct {
     root: []const u8,
     index: *format.Index,
+    reader: *BlobReader,
 };
 var sessions: std.ArrayList(Session) = .empty;
 
-/// The first bytes of `path`, a file of a layer this process made lazy that
-/// nothing has read yet, from the layer's index, into `buf`: what telling a
-/// GUI program from a console one needs, without the whole file fetched, as
-/// opening it would. Null for any other file, which is to be read as usual.
-pub fn headerOf(gpa: Allocator, path: []const u8, buf: []u8) ?[]const u8 {
+/// The session and the index's file that `path` is, if it's a file of a
+/// layer this process made lazy that nothing has read yet.
+fn sessionFile(gpa: Allocator, path: []const u8) ?struct { *const Session, *const format.Index.File } {
     if (sessions.items.len == 0) return null;
     const path_w = win32.wide(gpa, path) catch return null;
     defer gpa.free(path_w);
     const attributes = win32.GetFileAttributesW(path_w);
     if (attributes == win32.INVALID_FILE_ATTRIBUTES or attributes & cloudfiles.FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS == 0) return null;
-    for (sessions.items) |s| {
+    for (sessions.items) |*s| {
         if (path.len <= s.root.len + 1 or !std.ascii.eqlIgnoreCase(path[0..s.root.len], s.root) or path[s.root.len] != '\\') continue;
         const name = gpa.dupe(u8, path[s.root.len + 1 ..]) catch return null;
         defer gpa.free(name);
         std.mem.replaceScalar(u8, name, '\\', '/');
         const f = s.index.lookup(name) orelse return null;
         if (f.chunks.len == 0) return null;
-        var scratch: format.Index.Scratch = .{};
-        defer scratch.deinit(gpa);
-        var out: Io.Writer.Allocating = .init(gpa);
-        defer out.deinit();
-        s.index.readChunk(gpa, &scratch, f.chunks[0], &out.writer) catch return null;
-        const n = @min(buf.len, out.written().len);
-        @memcpy(buf[0..n], out.written()[0..n]);
-        return buf[0..n];
+        return .{ s, f };
     }
     return null;
+}
+
+/// Asks for the first chunks of these files at once, for `headerOf` to
+/// read next: in parallel, and a block for neighbours, rather than a request
+/// for each in turn (TeX Live has 150 commands).
+pub fn prefetchHeaders(gpa: Allocator, paths: []const []const u8) void {
+    if (sessions.items.len == 0) return;
+    for (paths) |path| {
+        const s, const f = sessionFile(gpa, path) orelse continue;
+        s.reader.prefetch(f.chunks[0].offset, f.chunks[0].end);
+    }
+}
+
+/// The first bytes of `path`, a file of a layer this process made lazy that
+/// nothing has read yet, from the layer's index, into `buf`: what telling a
+/// GUI program from a console one needs, without the whole file fetched, as
+/// opening it would. Null for any other file, which is to be read as usual.
+pub fn headerOf(gpa: Allocator, path: []const u8, buf: []u8) ?[]const u8 {
+    const s, const f = sessionFile(gpa, path) orelse return null;
+    var scratch: format.Index.Scratch = .{};
+    defer scratch.deinit(gpa);
+    var out: Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    s.index.readChunk(gpa, &scratch, f.chunks[0], &out.writer) catch return null;
+    const n = @min(buf.len, out.written().len);
+    @memcpy(buf[0..n], out.written()[0..n]);
+    return buf[0..n];
 }
 
 /// Makes sure each of these layers that's still lazy has a helper, before a
