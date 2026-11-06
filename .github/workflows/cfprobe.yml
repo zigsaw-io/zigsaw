@@ -1,0 +1,58 @@
+# Iteration 77's probe, before lazy pulling is built on it: does Windows Server
+# 2025, as GitHub runs it, let an app run from Cloud Files placeholders, under
+# zigsaw's three sandboxes, on the runner's C: and D:, and as a standard user?
+# tests/cfprobe-ci.sh says how. It runs on a push to a probe/ branch only, and
+# changes nothing anywhere; the results are in the run's summary.
+name: Cloud Files probe
+
+on:
+  push:
+    branches: ['probe/**']
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.0
+
+      - name: Build zigsaw, the probe and the account helper
+        run: zig build && zig build cfprobe asuser
+
+      - name: A throwaway standard user
+        shell: bash
+        run: |
+          # As reproduce.yml's standard-user job: 14 characters, or net user asks.
+          password="$(od -An -tx1 -N5 /dev/urandom | tr -d ' \n')Aa1-"
+          echo "::add-mask::$password"
+          MSYS_NO_PATHCONV=1 net user zsprobe "$password" /add
+          printf 'zsprobe\n%s\n' "$password" >"$RUNNER_TEMP/account.txt"
+
+      - name: tests/cfprobe-ci.sh, on C: and D:
+        shell: bash
+        env:
+          CFPROBE_ACCOUNT: ${{ runner.temp }}\account.txt
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          bash tests/cfprobe-ci.sh 'C:\cfp' "$RUNNER_TEMP\\cfp" 2>&1 | tee "$RUNNER_TEMP/logs/cfprobe.txt"
+
+      - name: Upload the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: logs-cfprobe
+          path: |
+            ${{ runner.temp }}\logs
+            C:\cfp\logs
+            ${{ runner.temp }}\cfp\logs
+          if-no-files-found: ignore

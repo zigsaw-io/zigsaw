@@ -211,6 +211,19 @@ pub fn build(b: *std.Build) void {
     const procprobe_step = b.step("procprobe", "Build the process confinement probe used by tests/chromium.sh");
     procprobe_step.dependOn(&b.addInstallArtifact(procprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // The Cloud Files experiment's provider; see
+    // docs/experiment-cloud-files.md on the experiment/cfapi branch, and
+    // tests/cfprobe-ci.sh. Also installed under zig-out\test.
+    const cfprobe_mod = b.createModule(.{
+        .root_source_file = b.path("tests/cfprobe.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    cfprobe_mod.addImport("stargazer", b.dependency("stargazer", .{ .target = target, .optimize = optimize }).module("stargazer"));
+    const cfprobe = b.addExecutable(.{ .name = "zigsaw-cfprobe", .root_module = cfprobe_mod });
+    const cfprobe_step = b.step("cfprobe", "Build the Cloud Files experiment's provider");
+    cfprobe_step.dependOn(&b.addInstallArtifact(cfprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     // Runs a command as another account; see tests/standard-user.sh. Also
     // installed under zig-out\test.
     const asuser = b.addExecutable(.{ .name = "zigsaw-asuser", .root_module = b.createModule(.{
