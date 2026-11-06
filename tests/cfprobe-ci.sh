@@ -59,8 +59,7 @@ row note "cldflt service" "$(sc query cldflt 2>&1 | tr -d '\r' | awk '/STATE/ { 
 filters=$(fltmc filters 2>&1 | tr -d '\r')
 if grep -qi cldflt <<<"$filters"; then row note "fltmc" "CldFlt is loaded: $(grep -i cldflt <<<"$filters" | tr -s ' ')"
 else row note "fltmc" "$(head -c 200 <<<"$filters" | tr '\n' ' ')"; fi
-whoami_groups=$(whoami /groups 2>/dev/null | tr -d '\r')
-grep -q 'S-1-16-12288' <<<"$whoami_groups" && row note "token" "elevated (high integrity)" || row note "token" "not elevated"
+net session >/dev/null 2>&1 && row note "token" "elevated (net session works)" || row note "token" "not elevated"
 row note "job" "$("$cfprobe" job 2>&1 | tr -d '\r' | tr '\n' ' ')"
 
 APP=test.cfprobe.app
@@ -162,11 +161,26 @@ for base in "$@"; do
             mkdir -p "$(u "$stage")"
             cp "$(u "$cfprobe")" "$(u "$stage")/cfprobe.exe"; cp "$(u "$blob")" "$(u "$stage")/blob"
             icacls "$stage" /grant "$user:(OI)(CI)M" >/dev/null
-            "$(u "$asuser")" "$(w "$CFPROBE_ACCOUNT")" "$stage\\out.txt" \
-                "\"$stage\\cfprobe.exe\" mount \"$stage\\root\" \"$stage\\blob\" -- \"$stage\\root\\busybox.exe\" sha256sum \"$stage\\root\\big.txt\""
-            out=$(tr -d '\r' <"$(u "$stage")/out.txt" 2>/dev/null)
-            if grep -q "^$hash " <<<"$out"; then row ok "as the standard user $user: BusyBox from a placeholder read the text file"
-            else row FAIL "as the standard user $user" "$(tail -3 <<<"$out" | tr '\n' ' ')"; fi
+            # Twice: the root in a folder the account may only modify, which an
+            # administrator made, and then in the account's own LOCALAPPDATA, where
+            # its default store would be. BusyBox starts through cmd, as the
+            # provider's own process may not open its placeholders (error 395);
+            # zigsaw run is that other process in the rows above. No spaces in
+            # these paths, so cmd /c needs no quotes inside.
+            "$(u "$asuser")" "$(w "$CFPROBE_ACCOUNT")" "$stage\\out-stage.txt" \
+                "\"$stage\\cfprobe.exe\" mount \"$stage\\root\" \"$stage\\blob\" -- cmd /d /c $stage\\root\\busybox.exe sha256sum $stage\\root\\big.txt"
+            "$(u "$asuser")" "$(w "$CFPROBE_ACCOUNT")" "$stage\\out-profile.txt" \
+                "cmd /d /c \"\"$stage\\cfprobe.exe\" mount \"%LOCALAPPDATA%\\cfp-root\" \"$stage\\blob\" -- cmd /d /c %LOCALAPPDATA%\\cfp-root\\busybox.exe sha256sum %LOCALAPPDATA%\\cfp-root\\big.txt\""
+            for where in stage profile; do
+                out=$(tr -d '\r' <"$(u "$stage")/out-$where.txt" 2>/dev/null)
+                cp "$(u "$stage")/out-$where.txt" "$(u "$logs")/standard-user-$where.txt" 2>/dev/null
+                label="as the standard user $user, the root in $([ $where = stage ] && echo "a folder an administrator made" || echo "the account's LOCALAPPDATA")"
+                if grep -q "^$hash " <<<"$out"; then row ok "$label: BusyBox from a placeholder read the text file" "$(grep '^cfprobe: [0-9]* fetches' <<<"$out" | sed 's/^cfprobe: //')"
+                else
+                    why=$(grep -m2 -E 'failed|error' <<<"$out" | tr '\n' ' ')
+                    row FAIL "$label" "${why:-$(head -2 <<<"$out" | tr '\n' ' ')}"
+                fi
+            done
             "$cfprobe" unregister "$stage\\root" >/dev/null 2>&1
         fi
         first=0

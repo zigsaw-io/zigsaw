@@ -46,13 +46,19 @@ jobs:
           mkdir -p "$RUNNER_TEMP/logs"
           bash tests/cfprobe-ci.sh 'C:\cfp' "$RUNNER_TEMP\\cfp" 2>&1 | tee "$RUNNER_TEMP/logs/cfprobe.txt"
 
+      # Into one folder: upload-artifact wants a common root, and C: and D: have none.
+      - name: Gather the logs
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs/c" "$RUNNER_TEMP/logs/d"
+          cp -r /c/cfp/logs/. "$RUNNER_TEMP/logs/c/" 2>/dev/null || true
+          cp -r "$RUNNER_TEMP/cfp/logs/." "$RUNNER_TEMP/logs/d/" 2>/dev/null || true
+
       - name: Upload the logs
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-cfprobe
-          path: |
-            ${{ runner.temp }}\logs
-            C:\cfp\logs
-            ${{ runner.temp }}\cfp\logs
+          path: ${{ runner.temp }}\logs
           if-no-files-found: ignore
