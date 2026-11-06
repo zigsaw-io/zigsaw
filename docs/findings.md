@@ -2580,6 +2580,44 @@ An eStargz layer's files as placeholders, fetched as they're first opened: see
   anew each time from a reverted file (66 ms against 0.45). Reading a fresh copy's files
   before its first run doesn't make that run warm (0.49 s).
 
+## Lazy pulling, round 3 (iteration 79)
+
+- **Prefetch lists pay, from ghcr.io** (published Qt images with lists, zigsaw 0.78,
+  2026-11-07, a slower hour than 78's): Designer's window 8.8 s lazily against
+  28.3 s for a full pull, nothing fetched on demand (37 files hydrated ahead); Qt's SDK
+  `moc --version` 20.9 s against 47.4 s (457 hydrated ahead). The first `moc` after the
+  swap took 4.4 s: cold, as gaps.md says.
+- **Windows' 60 seconds** (probe, `zigsaw-cfprobe mount --stall-ms 90000 --progress`):
+  with no report a fetch was cancelled at 60 s and asked for again; with
+  `CfReportProviderProgress` every 10 s it wasn't, whether `completed` grew or stayed
+  0, and whether the total was the file's size or the range's. So a fetch queued
+  behind others can be kept alive with nothing new to say.
+- **A slow link isn't the same as a long wait**: at 40 KB/s, a local zot cut the
+  request some 70 s in ("N bytes short"); Windows hadn't cancelled anything. Requests
+  held 90 s before they went (`ZIGSAW_TEST_LAZY_WAIT`) kept their fetches past 60 s,
+  and the run got its bytes.
+- **eStargz costs a layer of many small files more**: Perl's is 53.6 MB against 48 MB
+  as gzip (+12%), MinGit's 40.0 MB. Qt's grew 2 to 5% (iteration 64).
+- **What first runs read, recorded through a local zot**: a first `pdflatex`, 135 files
+  of TeX Live (17.7 MB, as in 78) and 97 of Perl (9.3 MB); VSCodium's first window, 193
+  files (368.8 MB, its 239 MB program among them) and nothing of MinGit.
+- **A first run beside the unpack is four times as slow.** Through a local zot, TeX Live's
+  first `pdflatex` after `pull --lazy` took 52 s, with every file it read hydrated ahead
+  and nothing fetched on demand, against 10 s after a full pull. With the download held
+  back (no unpack beside it), the same run took 11.9 s. So placeholders cost little
+  once hydrated; what cost was the helper unpacking 240 MB, which Defender looks at file
+  by file, while the run went: from a fast registry the download is done in seconds,
+  and nothing a run fetches pauses it when the list fetched everything. 0.79's helper
+  unpacks only when no run uses the deployment, at background priority:
+  12.3 s, and 25.9 s from the pull's start against 68.0 for a full pull (0.78: 66.2).
+- **An update copied 97% of TeX Live's layer from the version before** (local zot, the
+  published `99b0c1d4` to the new `7d55caed`): the pull planned 244.4 of 251.2 MB as
+  copies in 0.28 s, the helper copied 241.0 MB in 0.2 s, and 9.1 MB came from the registry
+  (3.9 by the download, 5.3 for reads). Perl's layer, gzip before, had nothing to copy
+  from. From the update's start to the first `pdflatex`: 36.9 s, 23.9 of them the update
+  (a fresh `pull --lazy` of the same image takes 13.6; where the other 10 s go wasn't
+  looked into).
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

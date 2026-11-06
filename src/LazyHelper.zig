@@ -53,10 +53,17 @@ const Helper = struct {
     /// When the blob's file last got anywhere, or the helper started.
     progress_at: std.atomic.Value(i64) = .init(0),
     progress_bytes: u64 = 0,
+    /// Whether the log says the unpack waits for a run.
+    said_waiting: bool = false,
     /// Tests' hooks: ZIGSAW_TEST_LAZY_GATE, a file the download waits on while
     /// it's there; ZIGSAW_TEST_LAZY_FAIL, a name whose fetches fail.
     test_gate: ?[]const u8 = null,
     test_fail: ?[]const u8 = null,
+    /// What the store's other blobs have of this one (plan.json), the runs of
+    /// blocks claimed to copy from them, and those blobs, open.
+    plan: ?lazy.Plan = null,
+    copy_runs: []const BlobReader.Piece = &.{},
+    copy_files: []?Io.File = &.{},
 
     fn setError(h: *Helper, comptime fmt: []const u8, args: anytype) void {
         win32.AcquireSRWLockExclusive(&h.error_lock);
@@ -111,7 +118,15 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
     const tail = Io.Dir.cwd().readFileAlloc(io, try lazy.filePath(store, arena, hex, "tail"), gpa, .limited(64 << 20)) catch |err|
         return fail("reading the blob's tail: {t}", .{err});
     if (tail.len > desc.size) return fail("the blob's tail is longer than the blob", .{});
-    const reader = try BlobReader.init(gpa, ctx, .{ .host = meta.host, .repository = meta.repository }, desc.digest, desc.size, tail, .{});
+    const plan = lazy.readPlan(store, arena, hex);
+    const reader = try BlobReader.init(gpa, ctx, .{ .host = meta.host, .repository = meta.repository }, desc.digest, desc.size, tail, .{
+        .block_size = if (plan != null) BlobReader.copy_block_size else 1 << 20,
+    });
+    // Tests' hooks: a slow link, or requests that wait, so that a fetch takes
+    // long. A registry cuts a request that's read slowly for long, so a wait
+    // is what keeps one past Windows' 60 s.
+    if (ctx.env.get("ZIGSAW_TEST_LAZY_SLOW")) |v| reader.throttle = std.fmt.parseInt(u64, v, 10) catch 0;
+    if (ctx.env.get("ZIGSAW_TEST_LAZY_WAIT")) |v| reader.wait_ms = std.fmt.parseInt(u32, v, 10) catch 0;
     const blob_path = try store.blobPath(arena, hex);
 
     var h: Helper = .{
@@ -136,6 +151,7 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
             try lazy.filePath(store, arena, hex, "blob.part"),
         ) catch |err| return fail("the blob's file in lazy\\: {t}", .{err});
         if (earlier > 0) note("going on with {d} of {d} bytes, which an earlier helper got", .{ earlier, desc.size });
+        if (plan) |p| try claimCopies(&h, p);
     }
     // The TOC, checked against the descriptor once more: the tail is a file
     // in the store, which anything of the user's could have changed.
@@ -168,6 +184,10 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
     }
 
     if (!h.complete.load(.acquire)) {
+        if (h.copy_runs.len > 0) {
+            const c = try std.Thread.spawn(.{}, copyFromStore, .{&h});
+            c.detach();
+        }
         const t = try std.Thread.spawn(.{}, download, .{&h});
         t.detach();
         // scripts/record-prefetch.sh's hook: what a run reads, fetched by it,
@@ -404,6 +424,9 @@ fn describe(err: anyerror) []const u8 {
     };
 }
 
+/// How often a fetch that waits tells Windows how far it's got.
+const progress_ms = 2000;
+
 /// Hands Windows each chunk that holds any of the file's bytes from `first`
 /// up to `last`, whole, once its digest checks.
 fn serve(h: *Helper, info: *const cloudfiles.CallbackInfo, file: *const format.Index.File, first: u64, last: u64) !u64 {
@@ -416,7 +439,23 @@ fn serve(h: *Helper, info: *const cloudfiles.CallbackInfo, file: *const format.I
     // All of them asked for at once, so that they come in parallel while
     // each is handed over in turn.
     if (chunks.len > 1) h.reader.prefetch(chunks[0].offset, chunks[chunks.len - 1].end);
+    var reported = false;
+    const asked_at = win32.GetTickCount64();
     for (chunks) |c| {
+        // Windows gives up on a fetch that says nothing for 60 s: over a slow
+        // link, a chunk can take longer, so it's told how far it's got.
+        while (!try h.reader.ensureFor(c.offset, c.end, progress_ms)) {
+            const got = h.reader.received(c.offset, c.end);
+            const done = c.file_offset + c.size * got / @max(c.end - c.offset, 1);
+            const hr = cloudfiles.reportProgress(info, file.size, done);
+            if (!reported) {
+                reported = true;
+                note("progress: {s}: {d} of {d} bytes of a chunk after {d} s{s}", .{
+                    file.name, got, c.end - c.offset, (win32.GetTickCount64() - asked_at) / 1000,
+                    if (hr < 0) ", which Windows refused" else "",
+                });
+            }
+        }
         out.clearRetainingCapacity();
         h.index.readChunk(h.gpa, &scratch, c, &out.writer) catch |err| switch (err) {
             // What the file has there may be a write cut short: once more
@@ -447,6 +486,121 @@ fn onCancel(info: *const cloudfiles.CallbackInfo, raw: *const anyopaque) callcon
 }
 
 // ---------------------------------------------------------------------------
+// Copies from the store
+
+/// Opens the blobs plan.json copies from, leaving out any the store no longer
+/// has as it was, and claims the blocks of the blob their copies make up, for
+/// `copyFromStore`: runs wait for those, and the download passes them over.
+/// What lies between two runs of copies is fetched, in whole blocks.
+fn claimCopies(h: *Helper, plan: lazy.Plan) !void {
+    const io = h.ctx.io;
+    const arena = h.ctx.arena;
+    const files = try arena.alloc(?Io.File, plan.sources.len);
+    @memset(files, null);
+    for (plan.sources, files) |s, *f| {
+        const hex = oci.digestHex(s.digest) orelse continue;
+        const path = try h.ctx.store.blobPath(arena, hex);
+        const file = Io.Dir.cwd().openFile(io, path, .{}) catch {
+            note("the store no longer has layer {s}: what the plan copies from it is fetched", .{oci.shortDigest(s.digest)});
+            continue;
+        };
+        if ((file.length(io) catch 0) != s.size) {
+            file.close(io);
+            note("layer {s} in the store isn't its size: what the plan copies from it is fetched", .{oci.shortDigest(s.digest)});
+            continue;
+        }
+        f.* = file;
+    }
+    // Copies follow one another in the blob: runs of them, whichever blob
+    // each comes from, make a span, and its whole blocks are claimed.
+    var runs: std.ArrayList(BlobReader.Piece) = .empty;
+    var span_start: u64 = 0;
+    var span_end: u64 = 0;
+    for (plan.copies) |c| {
+        if (files[c.source] == null) continue;
+        if (c.at != span_end) {
+            try h.reader.claim(span_start, span_end, &runs);
+            span_start = c.at;
+        }
+        span_end = c.at + c.len;
+    }
+    try h.reader.claim(span_start, span_end, &runs);
+    // An earlier helper copied it all.
+    if (runs.items.len == 0) {
+        for (files) |f| if (f) |file| file.close(io);
+        return;
+    }
+    h.plan = plan;
+    h.copy_files = files;
+    h.copy_runs = runs.items;
+}
+
+/// Copies what was claimed from the store's blobs, in the blob's order, so
+/// that the prioritized files, first in it, are there first; a run's blocks
+/// are had as each MiB of them is written. What fails to copy is fetched.
+fn copyFromStore(h: *Helper) void {
+    const io = h.ctx.io;
+    const plan = h.plan.?;
+    const start = win32.GetTickCount64();
+    var arena_state: std.heap.ArenaAllocator = .init(h.gpa);
+    defer arena_state.deinit();
+    // Prune waits while this copies.
+    const store_lock = h.ctx.store.lock(arena_state.allocator(), .shared) catch |err| {
+        note("couldn't copy from the store's layers ({t}): fetching it all", .{err});
+        for (h.copy_runs) |r| h.reader.settle(r.start, r.end, false);
+        return;
+    };
+    defer store_lock.release(io);
+    defer for (h.copy_files) |f| if (f) |file| file.close(io);
+    const buf = h.gpa.alloc(u8, 1 << 20) catch {
+        for (h.copy_runs) |r| h.reader.settle(r.start, r.end, false);
+        return;
+    };
+    defer h.gpa.free(buf);
+
+    const step: u64 = 1 << 20;
+    var k: usize = 0;
+    for (h.copy_runs) |run| {
+        var pos = run.start;
+        while (pos < run.end) {
+            if (h.stopping.load(.acquire)) return;
+            const piece_end = @min(run.end, pos + step);
+            copyRange(h, plan, &k, pos, piece_end, buf) catch |err| {
+                note("copying from the store's layers failed at {d} ({t}): the rest is fetched", .{ pos, err });
+                h.reader.settle(pos, run.end, false);
+                break;
+            };
+            h.reader.settle(pos, piece_end, true);
+            pos = piece_end;
+        }
+    }
+    note("copied {d} bytes from the store's layers in {d} ms", .{ h.reader.copied.load(.monotonic), win32.GetTickCount64() - start });
+}
+
+/// Writes the blob's bytes from `pos` to `end` from the copies that hold
+/// them, `k` being the first that may.
+fn copyRange(h: *Helper, plan: lazy.Plan, k: *usize, start: u64, end: u64, buf: []u8) !void {
+    const io = h.ctx.io;
+    var pos = start;
+    while (pos < end) {
+        while (k.* < plan.copies.len and plan.copies[k.*].at + plan.copies[k.*].len <= pos) k.* += 1;
+        if (k.* >= plan.copies.len) return error.NotInPlan;
+        const c = plan.copies[k.*];
+        if (c.at > pos) return error.NotInPlan;
+        const file = h.copy_files[c.source] orelse return error.NotInPlan;
+        const n: usize = @intCast(@min(@min(end, c.at + c.len) - pos, buf.len));
+        var done: usize = 0;
+        while (done < n) {
+            const got = try file.readPositional(io, &.{buf[done..n]}, c.offset + (pos - c.at) + done);
+            if (got == 0) return error.EndOfStream;
+            done += got;
+        }
+        try h.reader.writeAt(pos, buf[0..n]);
+        pos += n;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The download
 
 fn download(h: *Helper) void {
@@ -473,6 +627,10 @@ fn download(h: *Helper) void {
                     return;
                 }
                 note("the downloaded blob doesn't match its digest: starting again", .{});
+                // Without the copies: they may be what was wrong.
+                if (lazy.filePath(h.ctx.store, h.ctx.arena, h.hex, "plan.json")) |p| {
+                    Io.Dir.cwd().deleteFile(h.ctx.io, p) catch {};
+                } else |_| {}
                 h.reader.reset() catch |e| {
                     h.setError("{t}", .{e});
                     return;
@@ -513,8 +671,8 @@ fn finishDownload(h: *Helper) !void {
     try h.reader.finish(h.blob_path);
     h.complete.store(true, .release);
     const r = h.reader;
-    note("downloaded and checked the whole blob: {d} bytes by the download, {d} for reads, {d} an earlier helper got, in {d} requests", .{
-        r.downloaded.load(.monotonic), r.on_demand.load(.monotonic), r.earlier, r.requests.load(.monotonic),
+    note("downloaded and checked the whole blob: {d} bytes by the download, {d} for reads, {d} an earlier helper got, in {d} requests; {d} bytes from the store's layers", .{
+        r.downloaded.load(.monotonic), r.on_demand.load(.monotonic), r.earlier, r.requests.load(.monotonic), r.copied.load(.monotonic),
     });
 }
 
@@ -538,11 +696,24 @@ fn swap(h: *Helper, arena: Allocator) !bool {
     const io = ctx.io;
     const store = ctx.store;
     if (h.unpacked == null) {
+        // Not beside a run: unpacking, with Defender looking at each new
+        // file, made TeX Live's first pdflatex take 50 s rather than 12.
+        if (try store.deploymentInUse(arena, h.desc.digest)) {
+            if (!h.said_waiting) note("downloaded; unpacking once no run uses the deployment", .{});
+            h.said_waiting = true;
+            return false;
+        }
         // In tmp\, with its lock held, so that prune leaves it.
         const work = try store.makeTmpDir(h.gpa, "lazy");
         h.unpacked_lock = try Store.openLock(io, try Store.lockPathFor(h.gpa, work), .exclusive, .wait);
         const tree = try std.fs.path.join(h.gpa, &.{ work, "app" });
         lazy.writeState(store, arena, h.hex, .{ .phase = "unpacking", .downloaded = h.desc.size, .size = h.desc.size, .pid = win32.GetCurrentProcessId() }) catch {};
+        // And behind whatever a run that starts meanwhile does: CPU, disk
+        // and memory at background priority, as Windows' own indexer does.
+        const background = win32.SetPriorityClass(win32.GetCurrentProcess(), win32.PROCESS_MODE_BACKGROUND_BEGIN) != 0;
+        defer if (background) {
+            _ = win32.SetPriorityClass(win32.GetCurrentProcess(), win32.PROCESS_MODE_BACKGROUND_END);
+        };
         format.deploy(io, h.gpa, h.gpa, false, h.desc, h.blob_path, work, tree) catch |err| {
             note("unpacking the layer failed: {t}; trying again later", .{err});
             Store.deleteTree(io, arena, work) catch {};

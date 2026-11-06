@@ -17,6 +17,11 @@
 //! the blocks in memory instead, and asks for all the headers at once. With
 //! neither, a read is one Range request for its span.
 //!
+//! What the store's other blobs have of it, as an update's previous version
+//! does, is copied from them rather than fetched (`claim`, `writeAt`,
+//! `settle`): a helper with a plan, which has blocks of 64 KiB, so that what
+//! lies between two copies fetches little.
+//!
 //! Nothing here checks what it reads: the index checks each chunk against
 //! the TOC (and `invalidate`s what fails, to fetch it again), and the
 //! download checks the blob against its digest.
@@ -82,8 +87,20 @@ requests: std.atomic.Value(u64) = .init(0),
 on_demand: std.atomic.Value(u64) = .init(0),
 downloaded: std.atomic.Value(u64) = .init(0),
 earlier: u64 = 0,
-/// Tests' fetch, in place of the registry's.
-test_fetch: ?*const fn (b: *BlobReader, offset: u64, buffer: []u8) anyerror!void = null,
+/// Bytes copied from other blobs in the store, rather than fetched.
+copied: std.atomic.Value(u64) = .init(0),
+/// What each thread is fetching, and how much of it has come so far: what
+/// `received` counts, for a helper to tell Windows a slow fetch goes on.
+inflight: []Inflight = &.{},
+/// Tests' hook (ZIGSAW_TEST_LAZY_SLOW): at most this many bytes a second
+/// for each request. 0: as fast as they come.
+throttle: u64 = 0,
+/// Tests' hook (ZIGSAW_TEST_LAZY_WAIT): each request waits this long before
+/// it goes, as one behind others would.
+wait_ms: u32 = 0,
+/// Tests' fetch, in place of the registry's: `len` bytes from `offset`,
+/// written to `w`.
+test_fetch: ?*const fn (b: *BlobReader, offset: u64, len: usize, w: *Io.Writer) anyerror!void = null,
 
 /// The most a run's request asks for at once: a chunk of 4 MiB fits, and
 /// the download's pieces queue behind it.
@@ -94,9 +111,18 @@ pub const background_piece: u64 = 8 << 20;
 /// How long after a run's last fetch the download waits to go on.
 const quiet_ms = 1000;
 
-const State = enum(u8) { missing, queued_background, queued_demand, fetching, have };
+/// `copying`: claimed by whoever copies it from another blob, until it
+/// `settle`s it.
+const State = enum(u8) { missing, queued_background, queued_demand, fetching, copying, have };
 
-const Piece = struct { start: u64, end: u64 };
+const Inflight = struct {
+    busy: bool = false,
+    start: u64 = 0,
+    end: u64 = 0,
+    got: std.atomic.Value(u64) = .init(0),
+};
+
+pub const Piece = struct { start: u64, end: u64 };
 
 /// A registry client, which one request at a time uses. Replaced, with its
 /// arena, every so many requests: Registry allocates each request's strings
@@ -115,7 +141,13 @@ const Client = struct {
 pub const Options = struct {
     /// How many requests at once.
     clients: usize = 4,
+    /// The blocks the map counts. A map already there keeps its own.
+    block_size: u64 = 1 << 20,
 };
+
+/// The block size of a helper whose blob is copied in part from others: what
+/// lies between two copies is fetched in whole blocks.
+pub const copy_block_size: u64 = 64 << 10;
 
 pub fn init(gpa: Allocator, base: *Context, ref: Registry.Reference, digest: []const u8, size: u64, tail: []const u8, options: Options) !*BlobReader {
     const b = try gpa.create(BlobReader);
@@ -130,6 +162,7 @@ pub fn init(gpa: Allocator, base: *Context, ref: Registry.Reference, digest: []c
         .size = size,
         .tail = tail,
         .tail_start = size - tail.len,
+        .block_size = options.block_size,
         .clients = clients,
         .free_clients = clients.len,
     };
@@ -145,6 +178,7 @@ pub fn deinit(b: *BlobReader) void {
         c.arena.deinit();
     };
     b.gpa.free(b.clients);
+    b.gpa.free(b.inflight);
     b.demand.deinit(b.gpa);
     b.background.deinit(b.gpa);
     b.closeFiles();
@@ -190,6 +224,7 @@ const map_magic = "ZSHAVE01";
 /// Returns how many bytes there were already.
 pub fn attach(b: *BlobReader, data_path: []const u8, map_path: []const u8, legacy_path: ?[]const u8) !u64 {
     const io = b.base.io;
+    if (mapBlockSize(io, map_path, b.size)) |size| b.block_size = size;
     const n = b.blockCount();
     b.blocks = try b.gpa.alloc(State, n);
     @memset(b.blocks, .missing);
@@ -232,6 +267,13 @@ pub fn attach(b: *BlobReader, data_path: []const u8, map_path: []const u8, legac
     b.map = map;
     b.writeMap();
 
+    try b.startWorkers();
+    return b.have_bytes;
+}
+
+fn startWorkers(b: *BlobReader) !void {
+    b.inflight = try b.gpa.alloc(Inflight, b.clients.len);
+    for (b.inflight) |*f| f.* = .{};
     b.workers = try b.gpa.alloc(std.Thread, b.clients.len);
     var started: usize = 0;
     errdefer {
@@ -240,11 +282,24 @@ pub fn attach(b: *BlobReader, data_path: []const u8, map_path: []const u8, legac
         b.gpa.free(b.workers);
         b.workers = &.{};
     }
-    for (b.workers) |*t| {
-        t.* = try std.Thread.spawn(.{}, work, .{b});
+    for (b.workers, 0..) |*t, i| {
+        t.* = try std.Thread.spawn(.{}, work, .{ b, &b.inflight[i] });
         started += 1;
     }
-    return b.have_bytes;
+}
+
+/// The block size of the map at `path`, if it's a map of a blob this size
+/// with a size of block this reads: 0.78's 1 MiB, or `copy_block_size`.
+fn mapBlockSize(io: Io, path: []const u8, size: u64) ?u64 {
+    var map = Io.Dir.cwd().openFile(io, path, .{}) catch return null;
+    defer map.close(io);
+    var header: [24]u8 = undefined;
+    const got = map.readPositional(io, &.{&header}, 0) catch return null;
+    if (got != header.len or !std.mem.eql(u8, header[0..8], map_magic)) return null;
+    if (std.mem.readInt(u64, header[16..24], .little) != size) return null;
+    const block = std.mem.readInt(u64, header[8..16], .little);
+    if (block != 1 << 20 and block != copy_block_size) return null;
+    return block;
 }
 
 /// Backs reads with blocks kept in memory, for a process that reads a few
@@ -256,18 +311,7 @@ pub fn attachMemory(b: *BlobReader) !void {
     @memset(b.blocks, .missing);
     b.mem = try b.gpa.alloc(?[]u8, n);
     @memset(b.mem, null);
-    b.workers = try b.gpa.alloc(std.Thread, b.clients.len);
-    var started: usize = 0;
-    errdefer {
-        b.stop();
-        for (b.workers[0..started]) |t| t.join();
-        b.gpa.free(b.workers);
-        b.workers = &.{};
-    }
-    for (b.workers) |*t| {
-        t.* = try std.Thread.spawn(.{}, work, .{b});
-        started += 1;
-    }
+    try b.startWorkers();
 }
 
 /// The map's blocks, if it's this blob's: a map of another size, or none,
@@ -373,12 +417,12 @@ fn readAt(context: *const anyopaque, offset: u64, buffer: []u8) anyerror!usize {
     const want = buffer[0..@intCast(@min(buffer.len, b.tail_start - offset))];
     if (try b.readDone(offset, want)) return want.len;
     if (b.blocks.len == 0) {
-        try b.fetchRange(offset, want);
+        try b.fetchRange(offset, want, null);
         _ = b.on_demand.fetchAdd(want.len, .monotonic);
         return want.len;
     }
     try b.request(offset, offset + want.len, .demand);
-    try b.waitFor(offset, offset + want.len);
+    _ = try b.waitFor(offset, offset + want.len, null);
     if (b.mem.len > 0) {
         // Had blocks don't change, so no lock is needed to read them.
         var at = offset;
@@ -443,7 +487,44 @@ pub fn ensure(b: *BlobReader, start: u64, end: u64) !void {
     const last = @min(end, b.tail_start);
     if (start >= last) return;
     try b.request(start, last, .demand);
-    try b.waitFor(start, last);
+    _ = try b.waitFor(start, last, null);
+}
+
+/// As `ensure`, but waits at most `ms`: false if the blocks aren't all in
+/// by then, when they're still on their way.
+pub fn ensureFor(b: *BlobReader, start: u64, end: u64, ms: u32) !bool {
+    if (b.blocks.len == 0) return true;
+    const last = @min(end, b.tail_start);
+    if (start >= last) return true;
+    try b.request(start, last, .demand);
+    return b.waitFor(start, last, win32.GetTickCount64() + ms);
+}
+
+/// How many of the bytes from `start` to `end` are in: those of had blocks,
+/// and what's come so far of the requests now going.
+pub fn received(b: *BlobReader, start: u64, end: u64) u64 {
+    if (b.blocks.len == 0) return 0;
+    const last = @min(end, b.tail_start);
+    if (start >= last) return end - start;
+    win32.AcquireSRWLockExclusive(&b.lock);
+    defer win32.ReleaseSRWLockExclusive(&b.lock);
+    if (b.done_path.len > 0) return end - start;
+    var n: u64 = 0;
+    const first: usize = @intCast(start / b.block_size);
+    const stop_at: usize = @intCast(std.math.divCeil(u64, last, b.block_size) catch unreachable);
+    for (b.blocks[first..stop_at], first..) |s, i| if (s == .have) {
+        n += overlap(@as(u64, i) * b.block_size, b.blockEnd(i), start, last);
+    };
+    for (b.inflight) |*f| if (f.busy) {
+        n += overlap(f.start, f.start + f.got.load(.monotonic), start, last);
+    };
+    return @min(n, last - start);
+}
+
+fn overlap(a: u64, a_end: u64, c: u64, c_end: u64) u64 {
+    const lo = @max(a, c);
+    const hi = @min(a_end, c_end);
+    return if (hi > lo) hi - lo else 0;
 }
 
 fn request(b: *BlobReader, start: u64, end: u64, priority: Priority) !void {
@@ -506,14 +587,15 @@ fn promote(b: *BlobReader, i: usize) void {
 }
 
 /// Waits until the blocks from `start` to `end` are in the file; fails if a
-/// fetch of one of them did.
-fn waitFor(b: *BlobReader, start: u64, end: u64) !void {
+/// fetch of one of them did. With a `deadline` (GetTickCount64), false if
+/// they aren't by then.
+fn waitFor(b: *BlobReader, start: u64, end: u64, deadline: ?u64) !bool {
     const first: usize = @intCast(start / b.block_size);
     const last: usize = @intCast(std.math.divCeil(u64, @min(end, b.tail_start), b.block_size) catch unreachable);
     win32.AcquireSRWLockExclusive(&b.lock);
     defer win32.ReleaseSRWLockExclusive(&b.lock);
     while (true) {
-        if (b.done_path.len > 0) return;
+        if (b.done_path.len > 0) return true;
         if (b.stopping) return error.Stopped;
         var ready = true;
         for (b.blocks[first..last]) |s| switch (s) {
@@ -521,8 +603,80 @@ fn waitFor(b: *BlobReader, start: u64, end: u64) !void {
             .missing => return b.last_error orelse error.Failed,
             else => ready = false,
         };
-        if (ready) return;
-        _ = win32.SleepConditionVariableSRW(&b.cond, &b.lock, 1000, 0);
+        if (ready) return true;
+        var ms: u32 = 1000;
+        if (deadline) |d| {
+            const now = win32.GetTickCount64();
+            if (now >= d) return false;
+            ms = @intCast(@min(d - now, 1000));
+        }
+        _ = win32.SleepConditionVariableSRW(&b.cond, &b.lock, ms, 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Copies from other blobs
+
+/// Claims the blocks wholly within `start` to `end` that nobody has or has
+/// asked for, for the caller to copy (`writeAt`) and `settle`: reads wait
+/// for them meanwhile, and the download passes them over. Appends the runs
+/// of blocks it claimed, as byte ranges, to `out`.
+pub fn claim(b: *BlobReader, start: u64, end: u64, out: *std.ArrayList(Piece)) !void {
+    if (b.blocks.len == 0) return;
+    const last_byte = @min(end, b.tail_start);
+    const first: usize = @intCast(std.math.divCeil(u64, start, b.block_size) catch unreachable);
+    // The last block, short, ends at the tail: wholly within if `end` does.
+    const last: usize = if (last_byte == b.tail_start) b.blocks.len else @intCast(last_byte / b.block_size);
+    if (first >= last) return;
+    win32.AcquireSRWLockExclusive(&b.lock);
+    defer win32.ReleaseSRWLockExclusive(&b.lock);
+    var i = first;
+    while (i < last) {
+        if (b.blocks[i] != .missing) {
+            i += 1;
+            continue;
+        }
+        var j = i;
+        while (j < last and b.blocks[j] == .missing) : (j += 1) b.blocks[j] = .copying;
+        try out.append(b.gpa, .{ .start = @as(u64, i) * b.block_size, .end = b.blockEnd(j - 1) });
+        i = j;
+    }
+}
+
+/// Writes bytes copied from another blob into the file, at `offset`.
+pub fn writeAt(b: *BlobReader, offset: u64, bytes: []const u8) !void {
+    win32.AcquireSRWLockShared(&b.file_lock);
+    defer win32.ReleaseSRWLockShared(&b.file_lock);
+    const file = b.file orelse return error.Stopped;
+    try file.writePositionalAll(b.base.io, bytes, offset);
+    _ = b.copied.fetchAdd(bytes.len, .monotonic);
+}
+
+/// Ends a claim on the blocks from `start` to `end`, a run `claim` gave or a
+/// part of one, from a block's start: had, once `writeAt` has written them,
+/// or, if the copy failed, asked for as a read would, so that whoever waits
+/// gets them.
+pub fn settle(b: *BlobReader, start: u64, end: u64, ok: bool) void {
+    if (b.blocks.len == 0) return;
+    win32.AcquireSRWLockExclusive(&b.lock);
+    defer win32.ReleaseSRWLockExclusive(&b.lock);
+    defer win32.WakeAllConditionVariable(&b.cond);
+    const first: usize = @intCast(start / b.block_size);
+    const last: usize = @intCast(std.math.divCeil(u64, @min(end, b.tail_start), b.block_size) catch unreachable);
+    if (first >= last) return;
+    for (first..last) |i| if (b.blocks[i] == .copying) {
+        if (ok) {
+            b.blocks[i] = .have;
+            b.have_blocks += 1;
+            b.have_bytes += b.blockLen(i);
+        } else {
+            b.blocks[i] = .missing;
+        }
+    };
+    if (ok) {
+        b.writeMap();
+    } else {
+        b.requestLocked(@as(u64, first) * b.block_size, b.blockEnd(last - 1), .demand) catch {};
     }
 }
 
@@ -545,7 +699,7 @@ pub fn invalidate(b: *BlobReader, start: u64, end: u64) void {
 // ---------------------------------------------------------------------------
 // The threads that fetch
 
-fn work(b: *BlobReader) void {
+fn work(b: *BlobReader, slot: *Inflight) void {
     const buf = b.gpa.alloc(u8, @intCast(@max(demand_piece, background_piece))) catch return;
     defer b.gpa.free(buf);
     win32.AcquireSRWLockExclusive(&b.lock);
@@ -570,10 +724,12 @@ fn work(b: *BlobReader) void {
             continue;
         }
         b.mark(piece, .fetching);
+        slot.* = .{ .busy = true, .start = piece.start, .end = piece.end };
         win32.ReleaseSRWLockExclusive(&b.lock);
         const len: usize = @intCast(piece.end - piece.start);
-        const result = b.fetchInto(piece.start, buf[0..len]);
+        const result = b.fetchInto(piece.start, buf[0..len], &slot.got);
         win32.AcquireSRWLockExclusive(&b.lock);
+        slot.busy = false;
         if (background) {
             b.background_busy -= 1;
             b.background_out -= 1;
@@ -611,8 +767,8 @@ fn mark(b: *BlobReader, piece: Piece, state: State) void {
 }
 
 /// Fetches a piece and writes it into the file.
-fn fetchInto(b: *BlobReader, offset: u64, buffer: []u8) !void {
-    try b.fetchRange(offset, buffer);
+fn fetchInto(b: *BlobReader, offset: u64, buffer: []u8, got: *std.atomic.Value(u64)) !void {
+    try b.fetchRange(offset, buffer, got);
     if (b.mem.len > 0) {
         // A piece is whole blocks, from one's start.
         var at: usize = 0;
@@ -634,21 +790,41 @@ fn fetchInto(b: *BlobReader, offset: u64, buffer: []u8) !void {
     try file.writePositionalAll(b.base.io, buffer, offset);
 }
 
-/// Fetches `buffer.len` bytes of the blob from `offset` from the registry.
-fn fetchRange(b: *BlobReader, offset: u64, buffer: []u8) !void {
+/// Fetches `buffer.len` bytes of the blob from `offset` from the registry,
+/// counting in `got` what's come so far.
+fn fetchRange(b: *BlobReader, offset: u64, buffer: []u8, got: ?*std.atomic.Value(u64)) !void {
     _ = b.requests.fetchAdd(1, .monotonic);
-    if (b.test_fetch) |f| return f(b, offset, buffer);
-    const c = try b.acquire();
-    defer b.release(c);
+    if (b.wait_ms > 0) win32.Sleep(b.wait_ms);
     var w: Io.Writer = .fixed(buffer);
-    const found = c.registry.getBlob(b.digest, .{ .start = offset, .end = offset + buffer.len }, &w) catch |err| {
-        // A client that failed may be in any state: the next one starts afresh.
-        c.uses = Client.max_uses;
-        return err;
-    };
-    if (!found) return error.BlobNotFound;
+    // Unbuffered, so that it counts each write as it comes.
+    var counted = w.hashed(Counter{ .got = got, .throttle = b.throttle }, &.{});
+    if (b.test_fetch) |f| {
+        try f(b, offset, buffer.len, &counted.writer);
+    } else {
+        const c = try b.acquire();
+        defer b.release(c);
+        const found = c.registry.getBlob(b.digest, .{ .start = offset, .end = offset + buffer.len }, &counted.writer) catch |err| {
+            // A client that failed may be in any state: the next one starts afresh.
+            c.uses = Client.max_uses;
+            return err;
+        };
+        if (!found) return error.BlobNotFound;
+    }
+    try counted.writer.flush();
     if (w.end != buffer.len) return error.EndOfStream;
 }
+
+/// What `fetchRange`'s writer tells of each write: counts it, and, for the
+/// tests' throttle, takes as long as it would at that rate.
+const Counter = struct {
+    got: ?*std.atomic.Value(u64),
+    throttle: u64,
+
+    pub fn update(c: *Counter, bytes: []const u8) void {
+        if (c.got) |g| _ = g.fetchAdd(bytes.len, .monotonic);
+        if (c.throttle > 0) win32.Sleep(@intCast(bytes.len * 1000 / c.throttle));
+    }
+};
 
 fn acquire(b: *BlobReader) !*Client {
     win32.AcquireSRWLockExclusive(&b.lock);
@@ -816,13 +992,25 @@ const Fake = struct {
     var fetched: std.atomic.Value(u64) = .init(0);
     var fail_at: ?u64 = null;
 
-    fn fetch(b: *BlobReader, offset: u64, buffer: []u8) anyerror!void {
+    fn fetch(b: *BlobReader, offset: u64, len: usize, w: *Io.Writer) anyerror!void {
         _ = b;
         _ = calls.fetchAdd(1, .monotonic);
-        _ = fetched.fetchAdd(buffer.len, .monotonic);
-        if (fail_at) |at| if (at >= offset and at < offset + buffer.len) return error.TestFailure;
+        _ = fetched.fetchAdd(len, .monotonic);
+        if (fail_at) |at| if (at >= offset and at < offset + len) return error.TestFailure;
         win32.Sleep(5);
-        for (buffer, 0..) |*x, i| x.* = @truncate(offset + i);
+        try writePattern(w, offset, len);
+    }
+
+    /// Each byte its offset's low one.
+    fn writePattern(w: *Io.Writer, offset: u64, len: usize) !void {
+        var buf: [4096]u8 = undefined;
+        var done: usize = 0;
+        while (done < len) {
+            const n = @min(buf.len, len - done);
+            for (buf[0..n], 0..) |*x, i| x.* = @truncate(offset + done + i);
+            try w.writeAll(buf[0..n]);
+            done += n;
+        }
     }
 
     fn reset() void {
@@ -833,8 +1021,19 @@ const Fake = struct {
 };
 
 fn testReader(ctx: *Context, tail: []const u8, size: u64, dir: []const u8) !*BlobReader {
-    const b = try BlobReader.init(testing.allocator, ctx, .{ .host = "test", .repository = "test" }, "sha256:00", size, tail, .{});
-    b.test_fetch = Fake.fetch;
+    return testReaderOf(ctx, tail, size, dir, .{}, Fake.fetch);
+}
+
+fn testReaderOf(
+    ctx: *Context,
+    tail: []const u8,
+    size: u64,
+    dir: []const u8,
+    options: Options,
+    fetch: *const fn (b: *BlobReader, offset: u64, len: usize, w: *Io.Writer) anyerror!void,
+) !*BlobReader {
+    const b = try BlobReader.init(testing.allocator, ctx, .{ .host = "test", .repository = "test" }, "sha256:00", size, tail, options);
+    b.test_fetch = fetch;
     const data = try std.fs.path.join(testing.allocator, &.{ dir, "blob.sparse" });
     defer testing.allocator.free(data);
     const map = try std.fs.path.join(testing.allocator, &.{ dir, "have" });
@@ -987,4 +1186,128 @@ test "a map of another blob says nothing is had" {
     const b = try testReader(&ctx, "tail", 9 << 20, dir);
     defer b.deinit();
     try testing.expectEqual(@as(u64, 0), b.earlier);
+}
+
+/// The pattern's bytes from `offset`, as a copy from another blob would
+/// have them.
+fn testCopy(b: *BlobReader, start: u64, end: u64) !void {
+    const bytes = try testing.allocator.alloc(u8, @intCast(end - start));
+    defer testing.allocator.free(bytes);
+    for (bytes, 0..) |*x, i| x.* = @truncate(start + i);
+    try b.writeAt(start, bytes);
+}
+
+test "claimed blocks wait for their copy, and the download fetches only the rest" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var ctx = testContext(arena.allocator());
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    Fake.reset();
+    const dir = try tmpPath(arena.allocator(), &tmp);
+    const size: u64 = 8 << 20;
+    {
+        const b = try testReaderOf(&ctx, "tail", size, dir, .{ .block_size = copy_block_size }, Fake.fetch);
+        defer b.deinit();
+        var runs: std.ArrayList(Piece) = .empty;
+        defer runs.deinit(testing.allocator);
+        // Its whole blocks only: from the next 64 KiB on.
+        try b.claim((1 << 20) + 100, 5 << 20, &runs);
+        try testing.expectEqual(@as(usize, 1), runs.items.len);
+        try testing.expectEqual(@as(u64, (1 << 20) + (64 << 10)), runs.items[0].start);
+        try testing.expectEqual(@as(u64, 5 << 20), runs.items[0].end);
+
+        const Reader = struct {
+            fn run(r: *BlobReader, ok: *bool) void {
+                var buf: [10]u8 = undefined;
+                r.source().readAll(2 << 20, &buf) catch return;
+                for (buf, 0..) |x, i| if (x != @as(u8, @truncate((2 << 20) + i))) return;
+                ok.* = true;
+            }
+        };
+        var ok = false;
+        const t = try std.Thread.spawn(.{}, Reader.run, .{ b, &ok });
+        win32.Sleep(100);
+        // It waits for the copy, and nothing is fetched for it.
+        try testing.expect(!ok);
+        try testCopy(b, runs.items[0].start, runs.items[0].end);
+        b.settle(runs.items[0].start, runs.items[0].end, true);
+        t.join();
+        try testing.expect(ok);
+        try testing.expectEqual(@as(u32, 0), Fake.calls.load(.monotonic));
+
+        try b.downloadAll(null);
+        try testing.expectEqual(size - 4 - (runs.items[0].end - runs.items[0].start), Fake.fetched.load(.monotonic));
+        var buf: [100]u8 = undefined;
+        try b.source().readAll(3 << 20, &buf);
+        for (buf, 0..) |x, i| try testing.expectEqual(@as(u8, @truncate((3 << 20) + i)), x);
+    }
+    // A helper started again keeps the map's blocks, whatever it asks for.
+    const b = try testReader(&ctx, "tail", size, dir);
+    defer b.deinit();
+    try testing.expectEqual(copy_block_size, b.block_size);
+    try testing.expectEqual(size - 4, b.earlier);
+}
+
+test "a copy that fails is fetched, for whoever waits for it" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var ctx = testContext(arena.allocator());
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    Fake.reset();
+    const b = try testReaderOf(&ctx, "tail", 4 << 20, try tmpPath(arena.allocator(), &tmp), .{ .block_size = copy_block_size }, Fake.fetch);
+    defer b.deinit();
+    var runs: std.ArrayList(Piece) = .empty;
+    defer runs.deinit(testing.allocator);
+    try b.claim(0, 2 << 20, &runs);
+    const Reader = struct {
+        fn run(r: *BlobReader, ok: *bool) void {
+            var buf: [10]u8 = undefined;
+            r.source().readAll(1 << 20, &buf) catch return;
+            if (buf[0] != 0) return;
+            ok.* = true;
+        }
+    };
+    var ok = false;
+    const t = try std.Thread.spawn(.{}, Reader.run, .{ b, &ok });
+    win32.Sleep(100);
+    b.settle(0, 2 << 20, false);
+    t.join();
+    try testing.expect(ok);
+    try testing.expect(Fake.calls.load(.monotonic) >= 1);
+}
+
+/// A fetch that writes half its bytes, then waits until `go`.
+const Halting = struct {
+    var halfway: std.atomic.Value(bool) = .init(false);
+    var go: std.atomic.Value(bool) = .init(false);
+
+    fn fetch(b: *BlobReader, offset: u64, len: usize, w: *Io.Writer) anyerror!void {
+        _ = b;
+        try Fake.writePattern(w, offset, len / 2);
+        halfway.store(true, .release);
+        while (!go.load(.acquire)) win32.Sleep(5);
+        try Fake.writePattern(w, offset + len / 2, len - len / 2);
+    }
+};
+
+test "received counts what's come of a fetch while it comes" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var ctx = testContext(arena.allocator());
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    Halting.halfway.store(false, .monotonic);
+    Halting.go.store(false, .monotonic);
+    const b = try testReaderOf(&ctx, "tail", 4 << 20, try tmpPath(arena.allocator(), &tmp), .{}, Halting.fetch);
+    defer b.deinit();
+    try testing.expectEqual(@as(u64, 0), b.received(0, 1 << 20));
+    // Not in within 50 ms: it's waiting for the rest.
+    try testing.expect(!try b.ensureFor(0, 1 << 20, 50));
+    while (!Halting.halfway.load(.acquire)) win32.Sleep(5);
+    try testing.expectEqual(@as(u64, 512 << 10), b.received(0, 1 << 20));
+    Halting.go.store(true, .release);
+    try testing.expect(try b.ensureFor(0, 1 << 20, 10_000));
+    try testing.expectEqual(@as(u64, 1 << 20), b.received(0, 1 << 20));
 }

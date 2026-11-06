@@ -357,30 +357,36 @@ zigsaw list                                # org.tug.texlive ...  (downloading 3
 
 It's for layers in eStargz (`"layer": "estargz"` in a recipe) of 32 MiB or
 more: of the published images, VSCodium's, TeX Live's, Qt's runtime and SDKs,
-and llvm-mingw. An app's other layers download first, as without `--lazy`.
-`zigsaw update --lazy` does the same for a new version, without the delta
-update a plain `update` may take.
+and llvm-mingw, and Perl's and MinGit's, which TeX Live and VSCodium run on.
+An app's other layers download first, as without `--lazy`.
+`zigsaw update --lazy` does the same for a new version, and, as a plain
+`update` does, takes what the version before has from the store rather
+than the registry: a run waits for a copy on disk, not a download, and only
+what changed is fetched.
 
-Here, on a link of some 5 to 10 MB/s, from the start of the pull to the
-first use:
+Here, from ghcr.io on a link of some 5 to 10 MB/s, from the start of the
+pull to the first use (each row's two in the same hour):
 
 | | full pull | `--lazy` |
 |---|---|---|
 | llvm-mingw, `clang hello.c` | 23.7 s | 15.7 s |
-| Qt's runtime, Designer's window | 12.5 s | 12.8 s |
-| Qt's SDK, `moc --version` | 46.8 s | 35.8 s |
+| Qt's runtime, Designer's window | 28.3 s | 8.8 s |
+| Qt's SDK, `moc --version` | 47.4 s | 20.9 s |
 | VSCodium's window | 38.0 s | 27.7 s |
 | TeX Live, a first `pdflatex` | 96.6 s | 62.5 s |
 
-It saves most where a first use reads a small part of a big layer, and
-little where it reads most of it (Designer reads 71 MB of Qt's runtime).
-Iteration 78's [write-up](docs/iteration-78.md#results) has the numbers.
+Qt's rows are its images with their lists, measured in iteration 79; the
+others are 78's, before 79's lists and its Perl and MinGit on eStargz. With
+those, through a registry on this machine, TeX Live's first `pdflatex` came
+25.9 s after the start of the pull, against 68.0 s for a full pull.
+The write-ups of iterations [78](docs/iteration-78.md#results) and
+[79](docs/iteration-79.md#results) have the numbers.
 
 An image can say what its first run reads (a recipe's
 [`prefetch`](docs/recipes.md#recipes)): those files come first in its
 layer, and the helper asks for them all at once and puts them on disk before
 the run gets to them, rather than as it asks, one after another. Qt's runtime
-and SDK have such lists.
+and SDK, TeX Live, Perl and VSCodium have such lists.
 
 The layer's deployment starts as Windows' Cloud Files placeholders, as
 OneDrive's files are: listed, with their sizes, and empty. A helper process,
@@ -412,6 +418,8 @@ Until then:
   `--lazy` downloads the layer whole, and says so.
 - **`push` waits for the download**: it refuses an app still downloading.
 
+- **The layer unpacks once no run is using it**, so that the unpack doesn't
+  slow the run down; an app left open stays on placeholders until it's closed.
 - **The first run after the download is cold again**: the unpacked files are
   new to Windows, so that run pays what any first run on a fresh deployment
   does (TeX Live's `pdflatex`: 15 s once, then 0.3 s).
@@ -1209,7 +1217,7 @@ bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key); `zigsaw upgrade` from a later release of the same code, a running program moved aside and every way of refusing; the daily check in a scratch default store (about 2 min)
 bash tests/zot.sh bash tests/updates.sh # what a check finds, keeps and tells, and that nothing installs anything; real scheduled tasks under this run's own name, which it removes, and the real one untouched (under 1 min; without a registry, only the task rows)
 bash tests/zot.sh bash tests/rollback.sh # the version an update replaces is kept, rollback goes back to it without the network and updates pass over the version left, a newer one gets through, hold and unhold (under 1 min)
-bash tests/zot.sh bash tests/lazy.sh # pull --lazy: placeholders served under each sandbox, a file's chunks in a few requests, a recipe's prefetch files first in the layer and hydrated ahead, a helper that comes back, goes on from what the last one fetched and says what it couldn't fetch, a download that fetches nothing twice, the swap once the download's done and no run uses it, rm, a job that keeps what it starts, and a whole download where placeholders can't be (under 1 min; needs NTFS: LAZY_WORK, and LAZY_DEV_DRIVE for a real Dev Drive row)
+bash tests/zot.sh bash tests/lazy.sh # pull --lazy: placeholders served under each sandbox, a file's chunks in a few requests, a recipe's prefetch files first in the layer and hydrated ahead, a helper that comes back, goes on from what the last one fetched and says what it couldn't fetch, a download that fetches nothing twice, the swap once the download's done and no run uses it, rm, a job that keeps what it starts, a whole download where placeholders can't be, update --lazy copying what the version before has (a source gone, a copy wrong), and a slow fetch telling Windows how far it's got (under 1 min; needs NTFS: LAZY_WORK, and LAZY_DEV_DRIVE for a real Dev Drive row; LAZY_WAIT=90000 for a fetch past Windows' 60 s)
 bash tests/zot.sh bash tests/signing.sh # what pull, update and info do with an image's good, wrong and missing signature, with keys `zigsaw trust` adds (under 1 min)
 bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package); an incremental build of a copy after a change makes what --clean does
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole

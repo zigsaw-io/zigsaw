@@ -429,10 +429,10 @@ pub fn transfer(info: *const CallbackInfo, status: Status, data: ?[]const u8, of
 }
 
 /// Tells Windows a slow fetch is still going, which restarts its 60 seconds
-/// before it cancels the fetch.
-pub fn reportProgress(info: *const CallbackInfo, total: u64, completed: u64) void {
-    const a = api() orelse return;
-    _ = a.CfReportProviderProgress(info.connection_key, info.transfer_key, @intCast(total), @intCast(completed));
+/// before it cancels the fetch: `completed` of the file's `total` bytes.
+pub fn reportProgress(info: *const CallbackInfo, total: u64, completed: u64) HRESULT {
+    const a = api() orelse return @bitCast(@as(u32, 0x80004005)); // E_FAIL
+    return a.CfReportProviderProgress(info.connection_key, info.transfer_key, @intCast(total), @intCast(completed));
 }
 
 /// The image path of the process a fetch is for, as UTF-8 in `buf`, or "?".

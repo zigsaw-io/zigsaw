@@ -877,14 +877,19 @@
 - A helper started where everything a program starts ends with it (a job that refuses
   breakaway, as some terminals' and GitHub's runners' do) ends then too. zigsaw says
   so, and the app's next run starts one again.
-- `update --lazy` downloads the new layer whole in the background, rather than build it
-  from the old one by ranges as a plain `update` may.
+- `pull --lazy` and `update --lazy` copy what the store's other eStargz layers have of the
+  new one (the version an update replaces, mostly) only from blobs the store has whole: a
+  version that was itself pulled lazily copies nothing until its download finished. And
+  the pull's own reads of its programs' headers still come from the registry.
+- A 0.79 helper with a copy plan counts the blob in blocks of 64 KiB. A zigsaw before 0.79
+  can't read that map: a helper of its, on the same store, downloads the layer again.
 - A placeholder is fetched whole when a program opens it, and its first read costs more
   than in a plain deployment (some 7 ms here, Defender's look at it, an unpack pays when
   writing). Explorer drawing a shortcut's icon fetches its program.
-- Windows gives up on a fetch after 60 seconds. A chunk (up to 4 MiB) that takes longer
-  over a slow link fails, and the program's read is tried again; zigsaw doesn't tell
-  Windows of progress within a chunk.
+- A fetch that takes long now tells Windows how far it's got every 2 seconds, so Windows'
+  60 seconds don't run out. The registry may still cut a request read very slowly (a
+  local zot did, after some 70 s at 40 KB/s): that fetch fails, and the program's read is
+  tried again.
 - Placeholders need NTFS: on a Dev Drive (ReFS), a network share or FAT, `--lazy`
   downloads whole. Whether a registration outlives a reboot hasn't been tried; a helper
   registers the folder again if Windows forgot it.
@@ -895,16 +900,24 @@
 - An update that replaces a version pulled lazily before its download finished leaves
   nothing to go back to: its layer's blob was never complete, so `rollback` says how to
   pull that version again.
-- `--lazy` helps only an image whose big layers are eStargz: its gzip layers, a runtime's
-  among them, download whole before anything starts, as the CMake of Qt's SDK does
-  (21 MB, below the 32 MiB at which a layer is pulled lazily), and Perl's and
-  Ghostscript's of TeX Live. And only an app whose first use reads a small part: a file
-  is fetched whole, so VSCodium, whose program is 239 MB of its layer, waits for it.
-- Only Qt's runtime and SDK have `prefetch` lists. Elsewhere a first run's files come as
-  it asks, one after another, each a round trip (TeX Live's first `pdflatex`, 135 files,
-  some 23 s of its first use); a list needs the image published again. A list says what
-  one run read when it was recorded: another command, or a new version, reads other
-  files, which then come as asked. Qt's SDK's is 456 paths long, in its recipe.
+- `--lazy` helps only an image whose big layers are eStargz: its gzip layers, and those
+  below the 32 MiB at which a layer is pulled lazily, download whole before anything
+  starts, as the CMake of Qt's SDK does (21 MB) and Ghostscript's of TeX Live (12 MB).
+  And only an app whose first use reads a small part: a file is fetched whole, so
+  VSCodium, whose program is 239 MB of its layer, waits for it.
+- An eStargz layer is bigger than a gzip one: each file is a gzip member of its own.
+  Perl's, of many small files, is 53.6 MB against 48, so a full pull of it is that much
+  longer; Qt's grew 2 to 5%.
+- Only Qt's runtime and SDK, TeX Live, Perl and VSCodium have `prefetch` lists (MinGit's
+  layer isn't read by what VSCodium's window does). Elsewhere a first run's files come
+  as it asks, one after another, each a round trip; a list needs the image published
+  again. A list says what one run read when it was recorded: another command, or a new
+  version, reads other files, which then come as asked. Perl's is what TeX Live's first
+  `pdflatex` reads of it, not what PostgreSQL's PL/Perl does. Qt's SDK's is 456 paths
+  long, VSCodium's 193, in their recipes.
+- The unpack waits while a run uses the deployment, so a long run (an editor left open)
+  keeps the app on placeholders until it ends, and the layer then unpacks and swaps.
+  A run that starts during the unpack gets the machine first, but not to itself.
 - The first run after the swap is cold: the unpacked files are new to Windows, and that
   run pays what a run on a fresh deployment does (TeX Live's `pdflatex` 14 to 22 s once,
   then 0.3 s; llvm-mingw's `clang` 0.5 s once, then 0.24). Iteration 78 tried keeping the

@@ -314,7 +314,7 @@ MinGit's `env`, and nothing is copied into Meld's image:
 ```json
 "runtimes": {
   "pygobject": "org.gnome.PyGObject:3.58.1@sha256:...",
-  "git": "org.git_scm.MinGit:2.56.0.windows.1@sha256:636d59bc02546599..."
+  "git": "org.git_scm.MinGit:2.56.0.windows.4@sha256:7560cb36755ae988..."
 }
 ```
 
@@ -2873,6 +2873,14 @@ runtimes: Perl's ([`org.perl.perl`](recipes/perl.json), Strawberry Perl),
 for its Perl scripts such as latexmk, and Ghostscript's
 ([`com.artifex.Ghostscript`](recipes/ghostscript.json), built from source),
 for epstopdf and ps2pdf. Its layer is 236 MB.
+
+Since iteration 77 TeX Live's layer is [eStargz](#recipes), and since 79
+Perl's is too, so that `pull --lazy` of TeX Live waits for neither
+(Ghostscript's, 12 MB, is below the 32 MiB at which a layer is pulled
+lazily). Both have [prefetch](#recipes) lists, of what a first `pdflatex`
+reads of each: 135 files of TeX Live (17.7 MB) and 97 of Perl (9.3 MB).
+MinGit's layer is eStargz since 79 too, for VSCodium's lazy pulls, and
+VSCodium's list is what its first window reads: 193 files, 369 MB.
 
 **Its packages are pinned against a repository that moves.** tlnet, TeX
 Live's repository, has one archive per package, and replaces it in place

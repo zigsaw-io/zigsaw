@@ -494,7 +494,52 @@ fn downloadBlob(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !void 
 
 /// Fetching less than this share of a blob's bytes (in tenths) isn't worth
 /// building it from pieces.
-const min_reuse_tenths = 1;
+pub const min_reuse_tenths = 1;
+
+/// The store's indexed layers but one, each opened through its index from
+/// the store's own blob: what a plan (`format.plan.make`) builds a new
+/// layer's blob from, a plan's `source` being the index into these.
+pub const Olds = struct {
+    descs: []const oci.Descriptor,
+    indexes: []*format.Index,
+    blobs: []*RemoteBlob,
+
+    pub fn deinit(o: Olds) void {
+        for (o.indexes) |r| r.deinit();
+        for (o.blobs) |b| b.close();
+    }
+};
+
+/// The store's indexed layers but `except`, opened: null if it has none
+/// whose index opens. RemoteBlob reads a blob the store has from its file,
+/// so this sends the registry nothing.
+pub fn openOlds(ctx: *Context, registry: *Registry, except: []const u8) !?Olds {
+    const arena = ctx.arena;
+    const pool = try indexedLayers(ctx, except);
+    if (pool.len == 0) return null;
+    var descs: std.ArrayList(oci.Descriptor) = .empty;
+    var indexes: std.ArrayList(*format.Index) = .empty;
+    var blobs: std.ArrayList(*RemoteBlob) = .empty;
+    errdefer (Olds{ .descs = descs.items, .indexes = indexes.items, .blobs = blobs.items }).deinit();
+    for (pool) |d| {
+        const b = try RemoteBlob.open(ctx, registry, d);
+        const r = format.openIndex(ctx.gpa, d, b.source()) catch |err| switch (err) {
+            error.OutOfMemory => |e| {
+                b.close();
+                return e;
+            },
+            else => {
+                b.close();
+                continue;
+            },
+        };
+        try descs.append(arena, d);
+        try indexes.append(arena, r);
+        try blobs.append(arena, b);
+    }
+    if (indexes.items.len == 0) return null;
+    return .{ .descs = descs.items, .indexes = indexes.items, .blobs = blobs.items };
+}
 
 /// Builds an indexed layer's blob (see `format.Format.indexed`) from the
 /// members that the store's blobs of other indexed layers have, as an
@@ -509,29 +554,8 @@ fn downloadByPlan(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !boo
     const io = ctx.io;
     const short = oci.shortDigest(desc.digest);
     if (!(format.Format.ofDescriptor(desc) orelse return false).indexed()) return false;
-    const pool = try indexedLayers(ctx, desc.digest);
-    if (pool.len == 0) return false;
-
-    // The old blobs, each opened through its index.
-    var olds: std.ArrayList(*format.Index) = .empty;
-    var old_blobs: std.ArrayList(*RemoteBlob) = .empty;
-    defer {
-        for (olds.items) |r| r.deinit();
-        for (old_blobs.items) |b| b.close();
-    }
-    for (pool) |d| {
-        const b = try RemoteBlob.open(ctx, registry, d);
-        const r = format.openIndex(gpa, d, b.source()) catch |err| switch (err) {
-            error.OutOfMemory => |e| return e,
-            else => {
-                b.close();
-                continue;
-            },
-        };
-        try olds.append(arena, r);
-        try old_blobs.append(arena, b);
-    }
-    if (olds.items.len == 0) return false;
+    const olds = try openOlds(ctx, registry, desc.digest) orelse return false;
+    defer olds.deinit();
 
     const new = try RemoteBlob.open(ctx, registry, desc);
     defer new.close();
@@ -540,7 +564,7 @@ fn downloadByPlan(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !boo
         else => |e| return e,
     };
     defer index.deinit();
-    var p = try format.plan.make(gpa, index, olds.items);
+    var p = try format.plan.make(gpa, index, olds.indexes);
     defer p.deinit();
     try p.coalesce(.{ .have_from = new.tail_start });
     const copied = p.copied();
@@ -565,7 +589,7 @@ fn downloadByPlan(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !boo
         for (p.pieces) |piece| {
             switch (piece) {
                 .copy => |c| {
-                    const src = old_blobs.items[c.source].source();
+                    const src = olds.blobs[c.source].source();
                     var done: u64 = 0;
                     while (done < c.len) {
                         const n: usize = @intCast(@min(c.len - done, copy_buf.len));

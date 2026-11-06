@@ -84,7 +84,9 @@ the rest of the input unread. So:
 - **The same tree and recipe make the same bytes**, in every format.
 - **A blob in the store is complete and checked against its digest.**
   Nothing in this design trusts a blob unchecked. A lazy pull's download
-  so far lives in `lazy\`, not `blobs\`, and moves in once it's checked.
+  so far lives in `lazy\`, not `blobs\`, and moves in once it's checked;
+  what it copied from the store's other blobs (iteration 79) is checked
+  with the rest.
 - **Formats are opt-in, per recipe.** The default stays gzip, and no
   existing image changes digest.
 - **zigsaw decides by capability, not by format name.** Adding a format

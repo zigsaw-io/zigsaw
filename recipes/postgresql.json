@@ -46,7 +46,7 @@
     "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:1026b6edae04ffd2eaed19bdd96933db131857bd3fd5843c5d3735a41160b646"
   },
   "runtimes": {
-    "perl": "org.perl.perl:5.42.3.1@sha256:4bf63dc4d73c1094335f85767629736c3d01276dc3e46be04bfba985b70e25df",
+    "perl": "org.perl.perl:5.42.3.1@sha256:3bd9e281698960a2cf62cfb8168edfd84f376305af45eb743270672aaca1ca22",
     "python": "org.python.python:3.14.10@sha256:ccd0d0e3ef77fd28cfa787f19405ffe747d47f1483312df00819dce1a356c5b4"
   },
   "cleanup": ["/include", "/lib/cmake", "/lib/pkgconfig", "*.a", "/share/doc", "/share/man", "/bin/xml2-config", "/bin/xmllint.exe", "/bin/xmlcatalog.exe", "/bin/test_cloexec.exe", "/lib/postgresql/pgxs"],

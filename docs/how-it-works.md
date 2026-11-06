@@ -32,7 +32,8 @@ versions\<id>.skip.json      the version a rollback left, which updates pass ove
 versions\<id>.held     there while `zigsaw hold` keeps updates away from the app
 deploy\<hex>\          an unpacked layer, by layer digest, shared by all runs and apps;
                        placeholders while a lazy pull fetches it
-lazy\<hex>\            a layer pulled lazily: its TOC, its download, its helper's state and log
+lazy\<hex>\            a layer pulled lazily: its TOC, its download, what to copy from the
+                       store's other layers, its helper's state and log
 data\<id>\             per-app writable state, kept across runs
 grants\<id>.txt        host paths granted to the app's AppContainer, or labelled low for its runs
 grants\<id>.cwd        those of them that were a run's working directory
@@ -246,7 +247,8 @@ multiples of 4 MiB, as a transfer must), each checked against its digest in the 
 before Windows sees it ([`Reader.readChunk`](../stargazer/src/estargz.zig), stargazer
 0.3.0). **Every byte fetched goes into one file**, `lazy\<hex>\blob.sparse`, a sparse
 file of the blob's size with its tail written in, and `lazy\<hex>\have` says which of
-its 1 MiB blocks are there ([src/BlobReader.zig](../src/BlobReader.zig)). A fetch asks
+its blocks (1 MiB, or 64 KiB with a copy plan) are there
+([src/BlobReader.zig](../src/BlobReader.zig)). A fetch asks
 at once for the blocks of all its chunks that nobody has asked for; each run of them
 goes out as one Range request, of 4 MiB at most, on four threads with a registry
 client each: what Windows waits for first, the download's after. A fetch that wants
@@ -254,6 +256,28 @@ blocks another is fetching waits for those. A chunk read from the file that fail
 digest (a write cut short by a crash) has its blocks fetched again. Clients are
 replaced every 64 requests, so that a helper that runs for hours neither grows nor
 keeps an expired token.
+
+**A fetch that waits tells Windows** how far it's got, every 2 seconds
+(`CfReportProviderProgress`: the file's size, and what's come of the chunk so far, as
+each request counts what it has received). Windows cancels a fetch that says nothing
+for 60 seconds, which a 4 MiB chunk over a slow link, or a request queued behind four
+others, may take. Iteration 79's probe found that any report restarts the 60 seconds,
+a repeated one too.
+
+**What the store has already isn't fetched** (0.79 on). Before it starts the helper,
+`pull` plans the new blob from the store's other indexed layers, as a delta update does
+(`remote.openOlds`, stargazer's `plan.make`): each member of the new blob that one of
+theirs has, by chunk digest, is a copy. With at least a tenth copied, it writes
+`lazy\<hex>\plan.json`: the copies, by where they go in the blob, and the blobs they
+come from, by digest and size. Its helper then counts the blob in 64 KiB blocks rather
+than 1 MiB, opens those blobs (leaving out one the store no longer has, or not at its
+size), claims every block that runs of copies wholly cover (`BlobReader.claim`), and
+copies them, in the blob's order, while holding the store's lock shared so that no
+`prune` deletes a source. A run that wants a claimed block waits for the copy, not the
+registry, and the download passes claimed blocks over. What lies between runs of
+copies is fetched, in whole blocks, at most 128 KiB more for each. A copy that fails
+has its blocks fetched; one that's wrong fails its chunk's digest when read, and the
+whole blob's when the download ends, which then fetches it all again without the plan.
 
 **The download** fills in the blocks the file hasn't, in order, 8 MiB a request, on at
 most three of the threads, so that one is always free for Windows. It starts nothing
@@ -267,8 +291,11 @@ before `.prefetch.landmark`), the helper asks for their span as soon as it's con
 at a run's priority, and has Windows hydrate each file (`CfHydratePlaceholder`, on a
 handle that only reads attributes, which the provider's own process may open) as its
 blocks are in. A first run then finds those on disk.
-**The swap**: the helper unpacks the blob into `tmp\` as `Store.deploy` would, with
-that folder's lock held so that `prune` leaves it, and waits until it can lock
+**The swap**: once no run uses the deployment (0.79 on: unpacking beside a run, with
+Defender looking at each new file, made TeX Live's first `pdflatex` take 52 s instead
+of 12), the helper unpacks the blob into `tmp\` as `Store.deploy` would, at background
+priority (`PROCESS_MODE_BACKGROUND_BEGIN`: CPU, disk and memory) for a run that starts
+meanwhile, with that folder's lock held so that `prune` leaves it, and waits until it can lock
 `deploy\<hex>.lock` exclusively, which every run holds shared while it runs (and
 `install` while it deploys). Then, with the store lock held shared so that no `prune`
 comes between: it disconnects, renames the placeholders into `tmp\`, renames the

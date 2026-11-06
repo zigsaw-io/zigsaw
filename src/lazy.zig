@@ -15,7 +15,10 @@
 //!   lazy\<hex>\tail         the blob's last bytes, with its TOC, as pull fetched them
 //!   lazy\<hex>\blob.sparse  the blob as far as it's fetched, by runs and by the
 //!                           download: a sparse file of its size (BlobReader.zig)
-//!   lazy\<hex>\have         which 1 MiB blocks of it are there
+//!   lazy\<hex>\have         which of its blocks are there (1 MiB, or 64 KiB with a plan)
+//!   lazy\<hex>\plan.json    what the store's other layers have of the blob, for the
+//!                           helper to copy rather than fetch (0.79 on): an update's
+//!                           previous version, mostly
 //!   lazy\<hex>\state.json   what the helper is doing, for `list`
 //!   lazy\<hex>\log          the helper's messages: each fetch, and what failed
 //!   lazy\<hex>.helper.lock  held by the helper while it runs; beside the folder,
@@ -38,6 +41,7 @@ const Store = @import("Store.zig");
 const format = @import("format.zig");
 const oci = @import("oci.zig");
 const process = @import("process.zig");
+const remote = @import("remote.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -62,6 +66,30 @@ pub const State = struct {
     requests: u64 = 0,
     on_demand: u64 = 0,
 };
+
+/// What `plan.json` holds: the bytes of the layer's blob that blobs the store
+/// has hold too, as an update's previous version of the layer does, for the
+/// helper to copy rather than fetch. Each copy is `len` bytes of `sources`'
+/// blob from `offset`, which are the blob's from `at`.
+pub const Plan = struct {
+    sources: []const Source,
+    copies: []const Copy,
+
+    pub const Source = struct { digest: []const u8, size: u64 };
+    pub const Copy = struct { at: u64, source: u32, offset: u64, len: u64 };
+
+    /// How many bytes it copies.
+    pub fn copied(p: Plan) u64 {
+        var n: u64 = 0;
+        for (p.copies) |c| n += c.len;
+        return n;
+    }
+};
+
+pub fn readPlan(store: Store, arena: Allocator, hex: []const u8) ?Plan {
+    const bytes = Io.Dir.cwd().readFileAlloc(store.io, filePath(store, arena, hex, "plan.json") catch return null, arena, .limited(256 << 20)) catch return null;
+    return std.json.parseFromSliceLeaky(Plan, arena, bytes, .{ .ignore_unknown_fields = true }) catch null;
+}
 
 pub fn dirPath(store: Store, arena: Allocator, hex: []const u8) ![]u8 {
     return store.path(arena, &.{ "lazy", hex });
@@ -175,6 +203,7 @@ pub fn prepare(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !Prepar
         .repository = registry.ref.repository,
         .layer = desc,
     }) });
+    try writePlan(ctx, registry, desc, index, blob.tail_start);
     try writeState(store, arena, hex, .{ .phase = "starting", .size = desc.size });
     // Until this process ends, however it ends: its other layers' downloads,
     // and the first run, which follows, have the network first.
@@ -197,6 +226,50 @@ pub fn prepare(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !Prepar
         .reader = reader,
     });
     return .lazy;
+}
+
+/// Writes `plan.json` for the layer's helper, if the store's other indexed
+/// layers have enough of its blob, as the previous version an update
+/// replaces does: what's below `tail_start` (the tail is the pull's already),
+/// as `remote.downloadByPlan` would copy it, its source blobs by digest.
+fn writePlan(ctx: *Context, registry: *Registry, desc: oci.Descriptor, index: *format.Index, tail_start: u64) !void {
+    const arena = ctx.arena;
+    const short = oci.shortDigest(desc.digest);
+    const start = ctx.now();
+    defer ctx.timed(start, "planning {s} from the store's layers", .{short});
+    const olds = try remote.openOlds(ctx, registry, desc.digest) orelse return;
+    defer olds.deinit();
+    var p = try format.plan.make(ctx.gpa, index, olds.indexes);
+    defer p.deinit();
+    var copies: std.ArrayList(Plan.Copy) = .empty;
+    var used: std.AutoArrayHashMapUnmanaged(usize, u32) = .empty;
+    var sources: std.ArrayList(Plan.Source) = .empty;
+    var at: u64 = 0;
+    for (p.pieces) |piece| {
+        defer at += piece.len();
+        const c = switch (piece) {
+            .copy => |c| c,
+            .fetch => continue,
+        };
+        if (at >= tail_start) continue;
+        const gop = try used.getOrPut(arena, c.source);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = @intCast(sources.items.len);
+            try sources.append(arena, .{ .digest = olds.descs[c.source].digest, .size = olds.descs[c.source].size });
+        }
+        try copies.append(arena, .{ .at = at, .source = gop.value_ptr.*, .offset = c.offset, .len = @min(c.len, tail_start - at) });
+    }
+    const plan: Plan = .{ .sources = sources.items, .copies = copies.items };
+    const copied = plan.copied();
+    if (copied * 10 < desc.size * remote.min_reuse_tenths) {
+        if (ctx.verbose) Context.note("  layer {s}: the store's layers have {d} of its {d} bytes; it's fetched", .{ short, copied, desc.size });
+        return;
+    }
+    try Io.Dir.cwd().writeFile(ctx.io, .{
+        .sub_path = try filePath(ctx.store, arena, oci.digestHex(desc.digest).?, "plan.json"),
+        .data = try std.json.Stringify.valueAlloc(arena, plan, .{}),
+    });
+    note("  layer {s}: {d} of its {d} bytes are copied from layers in the store", .{ short, copied, desc.size });
 }
 
 /// The pull locks this process holds, which its end releases.

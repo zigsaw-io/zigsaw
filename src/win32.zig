@@ -450,6 +450,11 @@ pub const TOKEN_USER = extern struct {
 };
 
 pub extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
+/// Only for the current process: its CPU, I/O and memory priority low, then
+/// back.
+pub const PROCESS_MODE_BACKGROUND_BEGIN: DWORD = 0x00100000;
+pub const PROCESS_MODE_BACKGROUND_END: DWORD = 0x00200000;
+pub extern "kernel32" fn SetPriorityClass(process: HANDLE, class: DWORD) callconv(.winapi) BOOL;
 pub extern "advapi32" fn OpenProcessToken(process: HANDLE, access: DWORD, token: *?HANDLE) callconv(.winapi) BOOL;
 pub extern "advapi32" fn GetTokenInformation(
     token: HANDLE,
