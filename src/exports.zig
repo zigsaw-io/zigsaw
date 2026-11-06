@@ -18,6 +18,7 @@ const Context = @import("Context.zig");
 const Sidecar = @import("Sidecar.zig");
 const oci = @import("oci.zig");
 const pe = @import("pe.zig");
+const lazy = @import("lazy.zig");
 const shortcuts = @import("shortcuts.zig");
 const associations = @import("associations.zig");
 const repeat = @import("testing.zig").repeat;
@@ -299,6 +300,11 @@ pub const ShimKind = enum { console, gui };
 /// programs, the console one for anything else, batch files and files that
 /// can't be read included.
 pub fn shimKind(io: Io, path: []const u8) ShimKind {
+    // A program of a layer being pulled lazily that nothing has fetched yet:
+    // opening it would fetch all of it, VSCodium's 200 MB for a shim.
+    var header: [4096]u8 = undefined;
+    if (lazy.headerOf(std.heap.smp_allocator, path, &header)) |bytes|
+        return if (pe.subsystemOfBytes(bytes) == .gui) .gui else .console;
     const subsystem = pe.subsystem(io, path) catch return .console;
     return if (subsystem == .gui) .gui else .console;
 }

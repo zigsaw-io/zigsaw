@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const Context = @import("Context.zig");
+const Store = @import("Store.zig");
 const exports = @import("exports.zig");
 const grants = @import("grants.zig");
 const oci = @import("oci.zig");
@@ -30,7 +31,13 @@ pub fn install(ctx: *Context, image: Image) !void {
     const cfg = image.config;
     const previous = try ctx.store.readRef(arena, cfg.id);
     const start = ctx.now();
-    for (image.manifest.layers) |l| _ = try ctx.store.deploy(arena, l);
+    for (image.manifest.layers) |l| {
+        // As a run does: a lazy layer's helper swaps its unpacked files in
+        // only while nothing holds this.
+        const in_use = try Store.openLock(ctx.io, try Store.lockPathFor(arena, try ctx.store.deployPath(arena, l.digest)), .shared, .wait);
+        defer in_use.release(ctx.io);
+        _ = try ctx.store.deploy(arena, l);
+    }
     ctx.timed(start, "deploy", .{});
     const replaced = if (previous) |p| !std.mem.eql(u8, p.manifest, image.manifest_digest) else false;
     // Before the ref moves, so that an install that stops between the two

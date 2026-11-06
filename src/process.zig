@@ -139,6 +139,8 @@ pub const SpawnSpec = struct {
     token: ?win32.HANDLE = null,
     /// More CreateProcess flags, such as DETACHED_PROCESS.
     creation_flags: win32.DWORD = 0,
+    /// Let the child start processes outside its job (see `newJobAllowing`).
+    breakaway_ok: bool = false,
     /// The child's stdin, stdout and stderr; null hands it ours.
     stdio: ?[3]?win32.HANDLE = null,
     /// Handles the child inherits besides those, such as the relay's
@@ -286,7 +288,7 @@ pub fn output(arena: Allocator, spec: SpawnSpec, input: []const u8, ms: win32.DW
 
 /// Starts a process as `spawn` does, without waiting for it.
 pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
-    const job = try newJob();
+    const job = try newJobAllowing(spec.breakaway_ok);
     errdefer _ = win32.CloseHandle(job);
     return .{ .job = job, .process = try startIn(arena, job, spec) };
 }
@@ -295,13 +297,54 @@ pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
 /// `startIn`, when another process has to be in the job before the one a
 /// `Child` waits for.
 pub fn newJob() !win32.HANDLE {
+    return newJobAllowing(false);
+}
+
+/// The same, letting its processes start one outside it if they ask
+/// (CREATE_BREAKAWAY_FROM_JOB): a shim's job, whose zigsaw may start a lazy
+/// pull's helper that must outlive it (see lazy.zig). An app's job never
+/// does, so nothing an app starts gets out of it.
+pub fn newJobAllowing(breakaway: bool) !win32.HANDLE {
     const job = win32.CreateJobObjectW(null, null) orelse return win32.lastErrorFail("CreateJobObjectW");
     errdefer _ = win32.CloseHandle(job);
     var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
-    limits.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    limits.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+        (if (breakaway) win32.JOB_OBJECT_LIMIT_BREAKAWAY_OK else 0);
     if (win32.SetInformationJobObject(job, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits))) == 0)
         return win32.lastErrorFail("SetInformationJobObject");
     return job;
+}
+
+/// A process started by `startDetached`.
+pub const Detached = struct {
+    process: win32.HANDLE,
+    pid: u32,
+    /// Whether it's out of every job we're in. When one of them refuses, it's
+    /// in those, and ends as they do.
+    broke_away: bool,
+};
+
+/// Starts a program that outlives us: no console, none of our handles
+/// (a GUI shim reads our output until every holder of its pipe has ended),
+/// and out of our jobs if they let it. A low or AppContainer token, or a job
+/// that doesn't allow it, keeps it in.
+pub fn startDetached(arena: Allocator, exe: []const u8, command_line: []const u8, cwd: []const u8) !Detached {
+    const exe_w = try win32.wide(arena, exe);
+    const cwd_w = try win32.wide(arena, cwd);
+    for ([_]bool{ true, false }) |breakaway| {
+        const line = try win32.wide(arena, command_line);
+        var startup: win32.STARTUPINFOW = .{ .cb = @sizeOf(win32.STARTUPINFOW) };
+        var info: win32.PROCESS_INFORMATION = undefined;
+        const flags = win32.DETACHED_PROCESS | win32.CREATE_UNICODE_ENVIRONMENT |
+            (if (breakaway) win32.CREATE_BREAKAWAY_FROM_JOB else 0);
+        if (win32.CreateProcessW(exe_w, line, null, null, win32.FALSE, flags, null, cwd_w, &startup, &info) == 0) {
+            if (breakaway and win32.GetLastError() == win32.ERROR_ACCESS_DENIED) continue;
+            return win32.lastErrorFail("CreateProcessW");
+        }
+        _ = win32.CloseHandle(info.hThread);
+        return .{ .process = info.hProcess, .pid = info.dwProcessId, .broke_away = breakaway };
+    }
+    unreachable;
 }
 
 /// Starts a process in `job`, another process's, which ends it with that

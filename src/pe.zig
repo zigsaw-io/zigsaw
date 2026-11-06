@@ -19,6 +19,16 @@ pub fn subsystem(io: Io, path: []const u8) !?Subsystem {
     return fromNtHeaders(&nt);
 }
 
+/// The same, of an executable's first bytes, as a lazy pull reads them from
+/// a layer's index rather than open a file that isn't fetched yet; null also
+/// when they end before the headers.
+pub fn subsystemOfBytes(bytes: []const u8) ?Subsystem {
+    if (bytes.len < 64) return null;
+    const offset = ntHeaderOffset(bytes[0..64]) orelse return null;
+    if (offset > bytes.len or bytes.len - offset < nt_len) return null;
+    return fromNtHeaders(bytes[offset..][0..nt_len]);
+}
+
 /// The PE signature, the file header, and the optional header up to and
 /// including Subsystem, which is at the same offset in PE32 and PE32+.
 const nt_len = 4 + 20 + 70;
@@ -68,6 +78,10 @@ test subsystem {
         try tmp.dir.writeFile(io, .{ .sub_path = c.name, .data = c.data });
         const p = try std.fs.path.join(arena_state.allocator(), &.{ root, c.name });
         try std.testing.expectEqual(c.want, try subsystem(io, p));
+        // From the bytes alone, the same.
+        try std.testing.expectEqual(c.want, subsystemOfBytes(c.data));
     }
     try std.testing.expectError(error.FileNotFound, subsystem(io, try std.fs.path.join(arena_state.allocator(), &.{ root, "missing.exe" })));
+    // Bytes that end before the headers do.
+    try std.testing.expectEqual(null, subsystemOfBytes(testImage(2)[0..100]));
 }

@@ -112,7 +112,9 @@ fn shim(arena: Allocator, report_failures: bool) !u32 {
         try process.appendQuoted(arena, &command_line, try urlOrReport(arena, args, schemes));
     } else if (!sidecar.files) try appendArguments(arena, &command_line, args);
 
-    const spec: process.SpawnSpec = .{ .exe = sidecar.zigsaw, .command_line = command_line.items };
+    // zigsaw may start a lazy pull's helper, which must outlive this job (see
+    // lazy.zig); the app's own job, inside it, never lets anything out.
+    const spec: process.SpawnSpec = .{ .exe = sidecar.zigsaw, .command_line = command_line.items, .breakaway_ok = true };
     if (!gui) return process.spawn(arena, spec);
     if (!report_failures) {
         var detached = spec;

@@ -867,3 +867,39 @@
 - A zigsaw before 0.76 doesn't know of `versions\`: its `update` moves a held app, and
   takes the version a rollback left, and its `prune` deletes the blobs kept for
   `rollback`, which then says how to have the version back.
+- Until a lazy pull's download is done, a file nothing has read needs the registry. An
+  app started offline that reads one fails as a program does whose files can't be
+  read, often with a "bad image" error (`BAD_EXE_FORMAT`); a console run then names
+  the file, but a GUI app may show its own error, or stop, first.
+- A layer pulled lazily is served by its helper, which a run of the app, a build using
+  the image, or a pull starts if it's gone. An extension pulled with `--lazy` gets one
+  only from those of its own: a run of the app it extends doesn't start it.
+- A helper started where everything a program starts ends with it (a job that refuses
+  breakaway, as some terminals' and GitHub's runners' do) ends then too. zigsaw says
+  so, and the app's next run starts one again.
+- `update --lazy` downloads the new layer whole in the background, rather than build it
+  from the old one by ranges as a plain `update` may.
+- A placeholder is fetched whole when a program opens it, and its first read costs more
+  than in a plain deployment (some 7 ms here, Defender's look at it, an unpack pays when
+  writing). Explorer drawing a shortcut's icon fetches its program.
+- Windows gives up on a fetch after 60 seconds. A chunk (up to 4 MiB) that takes longer
+  over a slow link fails, and the program's read is tried again; zigsaw doesn't tell
+  Windows of progress within a chunk.
+- Placeholders need NTFS: on a Dev Drive (ReFS), a network share or FAT, `--lazy`
+  downloads whole. Whether a registration outlives a reboot hasn't been tried; a helper
+  registers the folder again if Windows forgot it.
+- A zigsaw before 0.77 knows nothing of `lazy\`: on the same store it takes placeholders
+  for a complete deployment, which works only while a helper serves, and its `prune`
+  deletes them without stopping the helper. Let downloads finish, or `rm` such apps,
+  before going back to an older zigsaw.
+- An update that replaces a version pulled lazily before its download finished leaves
+  nothing to go back to: its layer's blob was never complete, so `rollback` says how to
+  pull that version again.
+- `--lazy` helps only an image whose big layers are eStargz: its gzip layers, a runtime's
+  among them, download whole before anything starts, as Qt's SDK's llvm-mingw and CMake
+  do (pinned before llvm-mingw moved to eStargz). And only an app whose first use reads a
+  small part: a file is fetched whole, so VSCodium, whose program is 239 MB of its layer,
+  starts later than after a full pull. Nothing fetches in parallel what a first run will
+  read (eStargz's prioritized files, a recorded list): each file waits for the last.
+- The first run after the swap is cold: the unpacked files are new to Windows, and that run
+  pays what a run on a fresh deployment does (TeX Live's `pdflatex` 14 s once, then 0.3 s).

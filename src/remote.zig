@@ -18,6 +18,7 @@ const Store = @import("Store.zig");
 const format = @import("format.zig");
 const info = @import("info.zig");
 const install = @import("install.zig");
+const lazy = @import("lazy.zig");
 const oci = @import("oci.zig");
 const prompt = @import("prompt.zig");
 const repeat = @import("testing.zig").repeat;
@@ -77,6 +78,9 @@ pub const FetchOptions = struct {
     installed: ?Installed = null,
     /// Whether to ask before downloading the layers.
     consent: Consent = .not_asked,
+    /// `--lazy`: indexed layers the store lacks become placeholders, fetched
+    /// as they're used, while they download (see lazy.zig).
+    lazy: bool = false,
 
     pub const Installed = struct { version: []const u8, access: oci.Access };
 };
@@ -134,7 +138,25 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
     };
     try agree(ctx, manifest, config, told);
 
-    try downloadBlobs(ctx, &registry, manifest.layers);
+    // With --lazy, the layers that can be fetched as they're used first, so
+    // that a layer that can't goes on to download with the rest.
+    var eager: std.ArrayList(oci.Descriptor) = .empty;
+    var lazy_layers: std.ArrayList(oci.Descriptor) = .empty;
+    errdefer for (lazy_layers.items) |l| {
+        _ = ctx.store.deleteDeployment(arena, l.digest) catch {};
+    };
+    for (manifest.layers) |l| {
+        const have = try Store.exists(ctx.io, try ctx.store.blobPath(arena, oci.digestHex(l.digest).?));
+        if (opts.lazy and !have and lazy.eligible(ctx, l)) {
+            if (try lazy.prepare(ctx, &registry, l) == .lazy) {
+                note("  lazy     layer {s} ({d} bytes): its files are fetched as they're used; the rest downloads meanwhile", .{ oci.shortDigest(l.digest), l.size });
+                try lazy_layers.append(arena, l);
+                continue;
+            }
+        }
+        try eager.append(arena, l);
+    }
+    try downloadBlobs(ctx, &registry, eager.items);
     const manifest_desc = try ctx.store.putBlob(arena, fetched.bytes, oci.media_type.manifest);
     return .{
         .manifest_digest = manifest_desc.digest,
@@ -618,6 +640,11 @@ pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8, opts: PushOp
 
     const manifest_bytes = try ctx.store.readBlob(arena, installed.manifest);
     const image = try ctx.store.readImage(arena, id, installed.manifest);
+    for (image.manifest.layers) |l| {
+        const hex = oci.digestHex(l.digest).?;
+        if (try lazy.isLazy(ctx.store, arena, hex) and !try Store.exists(ctx.io, try ctx.store.blobPath(arena, hex)))
+            return fail("{s} is still being downloaded (`zigsaw list` says how far): push it once it's in", .{id});
+    }
     const mounts = try mountSources(arena, ref, installed.source, image.manifest, image.config);
 
     var registry: Registry = undefined;

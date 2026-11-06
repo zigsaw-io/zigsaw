@@ -215,7 +215,17 @@ fn deployEstargz(io: Io, gpa: Allocator, desc: oci.Descriptor, blob: []const u8,
     const src: stargazer_source.File = .{ .io = io, .file = file };
     const r = try openIndex(gpa, desc, src.source(try file.length(io)));
     defer r.deinit();
-    // The names a tar layer may have, checked by zigsaw's rules, as there.
+    try checkDeployable(desc, r);
+    r.extract(io, gpa, dest, .{ .jobs = layer.max_extract_workers }) catch |err|
+        return fail("unpacking layer {s}: {t}", .{ short, err });
+}
+
+/// Fails unless the index lists only what a deployment may have: the names a
+/// tar layer may have, by zigsaw's rules, and only files and directories.
+/// Lazy pulling (lazy.zig) makes a deployment from the index alone, so it
+/// asks the same.
+pub fn checkDeployable(desc: oci.Descriptor, r: *const Index) !void {
+    const short = oci.shortDigest(desc.digest);
     for (r.files) |f| {
         if (!isLayerFile(f.name)) continue;
         if (!oci.isSafeRelPath(std.mem.trimEnd(u8, f.entry.name, "/")))
@@ -223,8 +233,6 @@ fn deployEstargz(io: Io, gpa: Allocator, desc: oci.Descriptor, blob: []const u8,
         if (f.entry.type != .dir and f.entry.type != .reg)
             return fail("layer {s} has {s}, which isn't a file or directory", .{ short, f.entry.name });
     }
-    r.extract(io, gpa, dest, .{ .jobs = layer.max_extract_workers }) catch |err|
-        return fail("unpacking layer {s}: {t}", .{ short, err });
 }
 
 // ---------------------------------------------------------------------------

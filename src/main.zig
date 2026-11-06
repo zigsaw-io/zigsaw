@@ -14,6 +14,8 @@ const hkcu = @import("hkcu.zig");
 const info = @import("info.zig");
 const peek = @import("peek.zig");
 const install = @import("install.zig");
+const lazy = @import("lazy.zig");
+const LazyHelper = @import("LazyHelper.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
 const prune = @import("prune.zig");
@@ -49,9 +51,11 @@ const usage =
     \\                                  it, as far as its layers' format allows (eStargz)
     \\  cat <image> <path>              write a file of an app in a registry to stdout, the
     \\                                  same way
-    \\  pull [--yes] <image>            install an app and its commands from a registry, once
+    \\  pull [--yes] [--lazy] <image>   install an app and its commands from a registry, once
     \\                                  you agree to what it may reach; --yes agrees without
-    \\                                  asking
+    \\                                  asking; --lazy installs it before its large eStargz
+    \\                                  layers are downloaded, their files fetched as they're
+    \\                                  first used while the rest downloads
     \\  push [--sources] <app-id> [<image>]
     \\                                  publish an installed app to a registry; --sources also
     \\                                  keeps the files it was built from next to it
@@ -73,9 +77,10 @@ const usage =
     \\                                  this store and others, what stores since deleted left,
     \\                                  and low labels on your folders no record explains
     \\  grants --take-back <path>       remove a low label that no record explains
-    \\  update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
+    \\  update [--yes] [--lazy] [<app-id>...]
+    \\                                  rebuild or re-pull apps from where they came from;
     \\                                  one pulled again that may reach more asks first,
-    \\                                  unless given --yes
+    \\                                  unless given --yes; --lazy as for pull
     \\  update --check [<app-id>...]    list the apps a new image waits for, and what it may
     \\                                  reach beyond theirs, installing nothing
     \\  rollback [--yes] <app-id>       go back to the version the installed one replaced, with
@@ -224,6 +229,15 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         return 0;
     }
 
+    // A lazy layer's helper (see lazy.zig), which zigsaw starts, and nobody
+    // else: the store it's for by its full path, whatever ZIGSAW_HOME says.
+    if (std.mem.eql(u8, command, "lazy-helper")) {
+        if (rest.len != 2) return usageError();
+        try ctx.env.put("ZIGSAW_HOME", rest[0]);
+        ctx.store = try .open(ctx.io, ctx.arena, ctx.env);
+        return LazyHelper.main(ctx, rest[1]);
+    }
+
     ctx.store = try .open(ctx.io, ctx.arena, ctx.env);
     ctx.store.verbose = ctx.verbose;
     // Commands hold the store lock shared, and prune exclusively; see Store.zig.
@@ -249,15 +263,18 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     if (std.mem.eql(u8, command, "pull")) {
         var consent: remote.Consent = .ask;
         var image: ?[]const u8 = null;
+        var lazily = false;
         for (rest) |arg| {
             if (isFlag(arg, "yes")) {
                 consent = .given;
+            } else if (isFlag(arg, "lazy")) {
+                lazily = true;
             } else if (image == null and !std.mem.startsWith(u8, arg, "-")) {
                 image = arg;
             } else return usageError();
         }
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try install.install(ctx, (try remote.fetch(ctx, image orelse return usageError(), .{ .consent = consent })).?);
+        try install.install(ctx, (try remote.fetch(ctx, image orelse return usageError(), .{ .consent = consent, .lazy = lazily })).?);
         return 0;
     }
     if (std.mem.eql(u8, command, "push")) {
@@ -317,20 +334,23 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     if (std.mem.eql(u8, command, "update")) {
         var consent: remote.Consent = .ask;
         var only_check = false;
+        var lazily = false;
         var ids: std.ArrayList([]const u8) = .empty;
         for (rest) |arg| {
             if (isFlag(arg, "yes")) {
                 consent = .given;
             } else if (isFlag(arg, "check")) {
                 only_check = true;
+            } else if (isFlag(arg, "lazy")) {
+                lazily = true;
             } else if (!std.mem.startsWith(u8, arg, "-")) {
                 try ids.append(ctx.arena, arg);
             } else return usageError();
         }
-        if (only_check and consent == .given) return usageError();
+        if (only_check and (consent == .given or lazily)) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
         if (only_check) return update.check(ctx, ids.items);
-        return update.update(ctx, ids.items, consent);
+        return update.update(ctx, ids.items, consent, lazily);
     }
     if (std.mem.eql(u8, command, "rollback")) {
         var consent: remote.Consent = .ask;
@@ -791,6 +811,7 @@ fn list(ctx: *Context) !void {
         if (image.config.registry) |keys| for (keys) |k| try w.print("  (keeps HKCU\\{s})", .{k});
         const saved = try override.load(ctx.store, arena, ref.id);
         if (!saved.isEmpty()) try w.print("  (override {f})", .{saved});
+        if (try lazy.describe(ctx.store, arena, image.manifest)) |state| try w.print("  {s}", .{state});
         if (try ctx.store.isHeld(arena, ref.id)) try w.writeAll("  (held)");
         if (try ctx.store.readPrevious(arena, ref.id)) |p| if (!std.mem.eql(u8, p.manifest, ref.manifest)) try w.print("  (previous {s})", .{p.version});
         if (try ctx.store.readSkip(arena, ref.id)) |s| try w.print("  (skips {s})", .{s.version});
@@ -853,6 +874,7 @@ test {
     _ = @import("associations.zig");
     _ = @import("builder.zig");
     _ = @import("catalog.zig");
+    _ = @import("cloudfiles.zig");
     _ = @import("credentials.zig");
     _ = @import("deps.zig");
     _ = @import("drive.zig");

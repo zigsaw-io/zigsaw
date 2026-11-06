@@ -6,6 +6,7 @@
   "homepage": "https://tug.org/texlive/",
   "license": "LicenseRef-TeX-Live",
   "command": "bin/windows/latexmk.exe",
+  "layer": "estargz",
   "path": ["bin/windows"],
   "env": {
     "TEXMFVAR": "${data}\\texmf-var",

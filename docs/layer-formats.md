@@ -83,13 +83,15 @@ the rest of the input unread. So:
 
 - **The same tree and recipe make the same bytes**, in every format.
 - **A blob in the store is complete and checked against its digest.**
-  Nothing in this design stores part of a blob, or trusts one unchecked.
+  Nothing in this design trusts a blob unchecked. A lazy pull's download
+  so far lives in `lazy\`, not `blobs\`, and moves in once it's checked.
 - **Formats are opt-in, per recipe.** The default stays gzip, and no
   existing image changes digest.
 - **zigsaw decides by capability, not by format name.** Adding a format
   adds an implementation, not cases in the pull and update code.
-- **No filesystem driver, no admin**: an app runs from a complete
-  deployment. Lazy running is out of scope.
+- **No driver to install, no admin.** An app runs from a complete
+  deployment, or, while `pull --lazy` downloads the layer, from Cloud Files
+  placeholders, whose filter comes with Windows (iteration 77).
 
 ## Design
 
@@ -266,8 +268,10 @@ A gzip layer is named as one that can't be read without pulling.
 
 ### Not in this design
 
-- **Lazy running**: needs a filesystem driver. ProjFS needs admin to turn
-  on; the Cloud Files API is untested with AppContainer and low IL.
+- **Keeping apps lazily**, beyond the download: iteration 77's `pull --lazy`
+  is a bridge to a complete deployment (see
+  [the experiment](experiment-cloud-files.md) for why). ProjFS needs admin to
+  turn on, and gives a reader zeros when its provider dies mid-fetch.
 - **zstd:chunked**: Zig's std has no zstd compressor. Its TOC fits the
   model; it can come when a compressor does.
 - **SOCI**: keeps layers unchanged, but needs resumable gzip checkpoints.
@@ -280,12 +284,14 @@ A gzip layer is named as one that can't be read without pulling.
 | 64 | stargazer 0.1: TOC model, eStargz reader and writer, CLI, C ABI v0, fuzzing, Go conformance, CI on three OSes. zigsaw: `layer.gunzip` reads every member, the submodule cloned by https in CI. Sizes and times on Qt's layers |
 | 65 | the format interface in zigsaw, tar and gzip behind it unchanged; `"layer": "estargz"`, descriptor annotations, pulls without an inflated tar; Qt's chain on eStargz, five images published again |
 | 66 | Range downloads (and resuming a broken download); stargazer 0.2's update plans; updates that build the blob from the store's; `zigsaw ls` and `zigsaw cat`; llvm-mingw on eStargz |
+| 77 | stargazer 0.3's chunk reads; `pull --lazy`, Cloud Files placeholders served by a helper until the blob is in; TeX Live on eStargz |
 
 ## Decisions
 
 Taken 2026-10-31:
 
-- Lazy running is out of scope for now.
+- Lazy running is out of scope for now. (Reversed 2026-11-06: lazy pulling,
+  as a bridge, opt-in with `--lazy`; see [iteration 77](iteration-77.md).)
 - stargazer has a Zig API and a C ABI.
 - eStargz is opt-in per recipe, not a change of every image. It's also the
   proof that zigsaw can carry more than one layer format.

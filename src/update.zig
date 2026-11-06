@@ -18,11 +18,11 @@ const note = Context.note;
 /// Updates the given apps, or every installed app, and returns the exit code:
 /// 1 if any couldn't be updated. One failure doesn't stop the others. An app
 /// whose new version may reach more is updated only if you agree, unless
-/// `consent` is `.given` (--yes).
-pub fn update(ctx: *Context, ids: []const []const u8, consent: remote.Consent) !u32 {
+/// `consent` is `.given` (--yes). `lazily`: `--lazy`, as for `pull`.
+pub fn update(ctx: *Context, ids: []const []const u8, consent: remote.Consent, lazily: bool) !u32 {
     var failed: usize = 0;
     for (try refsOf(ctx, ids)) |ref| {
-        updateApp(ctx, ref, consent) catch |err| switch (err) {
+        updateApp(ctx, ref, consent, lazily) catch |err| switch (err) {
             error.Failed => failed += 1, // Already reported.
             else => |e| return e,
         };
@@ -151,7 +151,7 @@ pub fn newImage(ctx: *Context, ref: Store.Ref) !?Waiting {
     };
 }
 
-fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent) !void {
+fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent, lazily: bool) !void {
     if (try held(ctx, ref)) return;
     const source = ref.source orelse {
         note("{s}: doesn't record where it came from; build or pull it again to update it", .{ref.id});
@@ -181,6 +181,7 @@ fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent) !void {
             .unless = ref.manifest,
             .installed = .{ .version = ref.version, .access = try .of(ctx.arena, installed.config) },
             .consent = consent,
+            .lazy = lazily,
         });
     };
 

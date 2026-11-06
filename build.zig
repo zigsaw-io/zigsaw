@@ -211,6 +211,16 @@ pub fn build(b: *std.Build) void {
     const procprobe_step = b.step("procprobe", "Build the process confinement probe used by tests/chromium.sh");
     procprobe_step.dependOn(&b.addInstallArtifact(procprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
+    // Breaking away from job objects, and a job that lets nothing out; see
+    // tests/lazy.sh. Also installed under zig-out\test.
+    const jobprobe = b.addExecutable(.{ .name = "zigsaw-jobprobe", .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/jobprobe.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const jobprobe_step = b.step("jobprobe", "Build the job object probe used by tests/lazy.sh");
+    jobprobe_step.dependOn(&b.addInstallArtifact(jobprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+
     // Runs a command as another account; see tests/standard-user.sh. Also
     // installed under zig-out\test.
     const asuser = b.addExecutable(.{ .name = "zigsaw-asuser", .root_module = b.createModule(.{

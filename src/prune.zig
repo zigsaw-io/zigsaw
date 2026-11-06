@@ -11,6 +11,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const lazy = @import("lazy.zig");
 const oci = @import("oci.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
@@ -124,7 +125,9 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     const deploy_dir = try store.path(arena, &.{"deploy"});
     const deploy_entries = try listDir(io, arena, deploy_dir);
     for (deploy_entries) |entry| {
-        if (entry.kind != .directory or !oci.isSha256Hex(entry.name) or deployments_used.contains(entry.name)) continue;
+        // Not only directories: a lazy pull's placeholders are a sync root,
+        // which lists as a reparse point (see lazy.zig).
+        if (entry.kind == .file or !oci.isSha256Hex(entry.name) or deployments_used.contains(entry.name)) continue;
         const digest = try std.fmt.allocPrint(arena, "sha256:{s}", .{entry.name});
         const size = try treeSize(io, arena, try std.fs.path.join(arena, &.{ deploy_dir, entry.name }));
         const in_use = if (opts.dry_run)
@@ -138,6 +141,9 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         }
     }
     if (!opts.dry_run) try deleteStaleLocks(io, arena, deploy_dir);
+    // What lazy pulls left (see lazy.zig): a layer's folder in lazy\ once its
+    // deployment is gone, as above, and copies of zigsaw no helper runs.
+    if (!opts.dry_run) _ = try lazy.prune(store, arena, null);
 
     // Leftovers in tmp\: everything but the directories of running
     // --ephemeral apps. Builds and pulls stage files here too, but can't be

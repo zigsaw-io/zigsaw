@@ -8,7 +8,11 @@
 //!   <root>\versions\<id>.skip.json  the version a rollback left, which updates pass over
 //!   <root>\versions\<id>.held     there while updates leave the app alone (`hold`)
 //!   <root>\deploy\<hex>\          an unpacked layer, by layer digest: an app's own
-//!                                 files, or a runtime's, shared by the apps using it
+//!                                 files, or a runtime's, shared by the apps using it;
+//!                                 placeholders while a lazy pull fetches it
+//!   <root>\lazy\<hex>\            what a layer has while it's pulled lazily: its TOC,
+//!                                 the download so far, its helper's state and log
+//!                                 (see lazy.zig)
 //!   <root>\data\<id>\             per-app writable state, kept across runs
 //!   <root>\grants\<id>.txt        host paths whose ACLs zigsaw changed for the app:
 //!                                 grants to its AppContainer, low integrity labels
@@ -42,6 +46,7 @@ const win32 = @import("win32.zig");
 const oci = @import("oci.zig");
 const format = @import("format.zig");
 const ledger = @import("ledger.zig");
+const lazy = @import("lazy.zig");
 const Context = @import("Context.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -55,7 +60,7 @@ verbose: bool = false,
 /// from another.
 ledger_key: ?[]const u8 = null,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "deploy", "data", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "deploy", "lazy", "data", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|
@@ -484,6 +489,21 @@ pub fn readCompleteImage(s: Store, arena: Allocator, manifest_digest: []const u8
     return try s.readImage(arena, manifest_digest, manifest_digest);
 }
 
+/// The same, but with a layer still pulled lazily counted as there: what a
+/// build can use, as its helper serves the files (see lazy.zig).
+pub fn readUsableImage(s: Store, arena: Allocator, manifest_digest: []const u8) !?Loaded {
+    const hex = oci.digestHex(manifest_digest) orelse return null;
+    if (!try exists(s.io, try s.blobPath(arena, hex))) return null;
+    const manifest = try s.readManifest(arena, manifest_digest);
+    const config_hex = oci.digestHex(manifest.config.digest) orelse return null;
+    if (!try exists(s.io, try s.blobPath(arena, config_hex))) return null;
+    for (manifest.layers) |d| {
+        const h = oci.digestHex(d.digest) orelse return null;
+        if (!try exists(s.io, try s.blobPath(arena, h)) and !try lazy.isLazy(s, arena, h)) return null;
+    }
+    return try s.readImage(arena, manifest_digest, manifest_digest);
+}
+
 pub fn readManifest(s: Store, arena: Allocator, manifest_digest: []const u8) !oci.Manifest {
     return std.json.parseFromSliceLeaky(oci.Manifest, arena, try s.readBlob(arena, manifest_digest), .{
         .ignore_unknown_fields = true,
@@ -553,6 +573,10 @@ pub fn deleteDeployment(s: Store, arena: Allocator, layer_digest: []const u8) !D
     // once no deployment goes with it.
     const exclusive = try tryLock(s.io, try lockPathFor(arena, dest), .exclusive) orelse return .in_use;
     defer exclusive.release(s.io);
+    // Placeholders of a lazy pull: their helper goes first. Moving and
+    // deleting them then works as for any folder; Windows deletes what was
+    // never fetched with them.
+    lazy.stop(s, arena, oci.digestHex(layer_digest).?);
     try acl.unprotect(arena, dest);
     s.discard(arena, dest) catch |err| switch (err) {
         // Windows refuses to move a directory while a file in it is open.

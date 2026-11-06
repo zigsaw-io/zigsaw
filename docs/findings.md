@@ -2470,6 +2470,75 @@ Only at build time: Rust's `ld.exe` and `dlltool.exe` (1.2.13), CMake's programs
   function in code that's built, and its `FindOsmium.cmake` sets `_FILE_OFFSET_BITS=64`, which
   gives it `gzoffset64`. PostgreSQL uses `gzopen`, `gzread` and `gzwrite`, and no offsets.
 
+## Lazy running with the Cloud Files API (experiment, 2026-11-04)
+
+An eStargz layer's files as placeholders, fetched as they're first opened: see
+[experiment-cloud-files.md](experiment-cloud-files.md). In short:
+
+- **It needs no admin, and works under low integrity and AppContainer**: reading,
+  mapping, loading and starting dehydrated files, with zigsaw's deny entry and grants
+  on them. `zigsaw run`, `rm` and `prune` work on such a folder unchanged. A Dev Drive
+  refuses it (error 478).
+- **Placeholders are ten times cheaper than an unpack** (0.55 s against 5.8 s for
+  llvm-mingw), and first use comes 1.7 to 8 times sooner, by how little of an image is
+  used. One request per file loses to a full pull; blocks of 1 MiB don't.
+- **A plain open fetches the whole file**, so what's lazy is the file, not the page.
+- **A file's first open costs ~7.5 ms more**, it looks like Defender's, which an unpack
+  pays for while writing.
+- **Creating an image section for a hydrated 77 MB DLL takes 60 ms each time**, against
+  0.5 ms for a plain copy, even once it's reverted and unregistered. We didn't find the
+  cause. Renaming a copy over it cures it.
+- **One provider per root, and it must stay.** Without one, a dehydrated program or DLL
+  fails with `BAD_EXE_FORMAT`. A provider's own process can't start a dehydrated program.
+
+## Lazy pulling, built (iteration 77)
+
+- **GitHub's Windows Server 2025 has it**: cldflt running, and BusyBox started from a
+  placeholder read its file under soft, low and AppContainer, on the runner's C: and D:
+  (both NTFS); with no provider, a read gets 362 and a start 193, as here. There,
+  Windows asks for a 15 MB file in several pieces (5 fetches for 2 files, against 2
+  here). Probe run 42151690186, on the `probe/cfapi` branch.
+- **A provider's process can't open its own placeholders, error 395**, and that
+  includes starting a program from them: the probe's first "standard user" row failed
+  on that, not on the account. What starts a program reads its image file, so a fetch
+  of `busybox.exe` comes from `zigsaw.exe`, and the helper's log says so.
+- **Jobs.** GitHub's step runs in a job with no limits (flags 0x0), which refuses
+  `CREATE_BREAKAWAY_FROM_JOB` (error 5): helpers there stay in the step's job. This
+  machine's shell (Claude Code's, in VS Code) is in jobs with breakaway and silent
+  breakaway allowed (0x1800) and no kill-on-close; a child that breaks away is still
+  in one such job, which looks like the compatibility assistant's, and harmless.
+- **Placeholders outlive their provider**: a new process connects to those an earlier
+  one made, and serves them. A registered root renames with no provider connected,
+  unregisters by its new name, and deletes, before or after unregistering; once
+  disconnected, the provider's own process can delete them too. That's the swap.
+- **End to end on llvm-mingw from ghcr.io** (110 MB): `pull --lazy` returned with the
+  placeholders, `clang --version` ran with its two big DLLs fetched (127 MB of files),
+  the download finished, and the swap left plain files and a blob of the right digest.
+  A helper in a job that keeps what it starts died with it at 8 MiB; the next run's
+  helper hashed those 8 MiB again, went on, and swapped 20 s later.
+
+- **What it saves, on real images** (this machine, some 10 MB/s from ghcr.io; time from
+  the pull's start to first use, full pull against `--lazy`):
+
+  | | full | lazy | fetched on demand |
+  |---|---|---|---|
+  | llvm-mingw, `clang hello.c` | 21.9 s | 19.4 s | 139 MB |
+  | Qt's runtime, Designer's window | 11.6 s | 16.7 s | 71 MB |
+  | VSCodium's window | 37.4 s | 46.6 s | 369 MB, 239 of them `VSCodium.exe` |
+  | Qt's SDK, `moc --version` | 51.1 s | 52.0 s | (128 MB of gzip runtimes first) |
+  | TeX Live, a first `pdflatex`, from a local zot | 69.1 s | 64.8 s | 17.7 MB |
+
+  Much less than the experiment's 1.7 to 8 times, which timed one layer alone. Real images
+  bring gzip runtimes that download first (Qt's SDK pins llvm-mingw's gzip build); a file is
+  fetched whole, so an Electron app's program is most of what it fetches; and files a first
+  run reads come one after another. From a local registry nothing is saved on the download,
+  and TeX Live's 135 files came slower than a plain deployment's, its download writing
+  beside them.
+- **The first run after the swap is cold**: TeX Live's `pdflatex` took 13.8 s, then 0.3 s.
+  Its files are new to Windows, as a fresh unpack's are.
+- **No notification**: Windows showed none while VSCodium's lazy run fetched 369 MB (watched
+  by eye). The sync root is registered without Explorer's integration.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

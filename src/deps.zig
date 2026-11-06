@@ -11,6 +11,7 @@
 const std = @import("std");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const lazy = @import("lazy.zig");
 const oci = @import("oci.zig");
 const remote = @import("remote.zig");
 const fail = Context.fail;
@@ -54,7 +55,12 @@ pub fn resolve(ctx: *Context, recipe: []const u8, kind: Kind, alias: []const u8,
         return fail("{s}: {t} {s}: \"{s}\" isn't an app id or an image reference", .{ recipe, kind, alias, reference });
     const digest = target.ref.digest orelse return failUnpinned(ctx, recipe, kind, alias, reference, target);
 
-    const image = try ctx.store.readCompleteImage(arena, digest) orelse pulled: {
+    // An image pulled lazily is usable as it is, served by its helper,
+    // rather than downloaded again beside it (see lazy.zig).
+    const image = if (try ctx.store.readUsableImage(arena, digest)) |usable| usable: {
+        try lazy.ensureServed(ctx, usable.manifest.layers);
+        break :usable usable;
+    } else pulled: {
         const fetched = (try remote.fetch(ctx, reference, .{})).?;
         // A pin names an image, not an index of images for several platforms.
         if (!std.mem.eql(u8, fetched.manifest_digest, digest))

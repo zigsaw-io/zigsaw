@@ -112,9 +112,11 @@ zigsaw ls <image>                      list the files of an app in a registry wi
                                        it, as far as its layers' format allows (eStargz)
 zigsaw cat <image> <path>              write a file of an app in a registry to stdout, the
                                        same way
-zigsaw pull [--yes] <image>            install an app and its commands from a registry, once
+zigsaw pull [--yes] [--lazy] <image>   install an app and its commands from a registry, once
                                        you agree to what it may reach; --yes agrees without
-                                       asking
+                                       asking; --lazy installs it before its large eStargz
+                                       layers are downloaded, their files fetched as they're
+                                       first used while the rest downloads
 zigsaw push [--sources] <app-id> [<image>]
                                        publish an installed app to a registry; --sources
                                        also pushes the files it was built from
@@ -135,9 +137,10 @@ zigsaw grants [<app-id>]               list what zigsaw changed outside its stor
                                        this store and others, what stores since deleted left,
                                        and low labels on your folders no record explains
 zigsaw grants --take-back <path>       remove a low label that no record explains
-zigsaw update [--yes] [<app-id>...]    rebuild or re-pull apps from where they came from;
+zigsaw update [--yes] [--lazy] [<app-id>...]
+                                       rebuild or re-pull apps from where they came from;
                                        one pulled again that may reach more asks first,
-                                       unless given --yes
+                                       unless given --yes; --lazy as for pull
 zigsaw updates                         say what the last check found waiting, and whether a
                                        daily check is on; neither installs anything
 zigsaw updates check                   look for updates of apps and zigsaw now
@@ -340,6 +343,67 @@ the blob in one request after all, and so do the push's later blobs.
 in one request), and `-v` says how each chunk went.
 
 Registries on `localhost` are reached over plain HTTP; all others over HTTPS.
+
+### Pulling lazily
+
+`zigsaw pull --lazy` installs an app before its large layers are downloaded,
+so that it starts sooner. Each of their files is fetched the first time
+something reads it, while the rest downloads in the background:
+
+```powershell
+zigsaw pull --lazy org.tug.texlive         # 236 MB of TeX Live; a document reads some 18
+zigsaw list                                # org.tug.texlive ...  (downloading 37%)
+```
+
+It's for layers in eStargz (`"layer": "estargz"` in a recipe) of 32 MiB or
+more: of the published images, VSCodium's, TeX Live's, Qt's runtime and SDKs,
+and llvm-mingw. An app's other layers download first, as without `--lazy`.
+`zigsaw update --lazy` does the same for a new version, without the delta
+update a plain `update` may take.
+
+It saves time when an app's first use reads a small part of a big layer, and
+not otherwise. Here, on a link of some 10 MB/s, `clang` of llvm-mingw
+compiled its first program 2.5 s sooner than after a full pull; VSCodium's
+window came 9 s later, as its program alone is 239 MB, which has to be all
+there before it starts; and Qt's SDK gained nothing, as the runtimes it
+brings are gzip layers that download first. Measurements are in
+[iteration 77's write-up](docs/iteration-77.md#results).
+
+The layer's deployment starts as Windows' Cloud Files placeholders, as
+OneDrive's files are: listed, with their sizes, and empty. A helper process,
+which is zigsaw itself, gives Windows a file's bytes when a program first
+opens it. It reads them from the registry, in blocks of 1 MiB, and checks
+each chunk against the layer's TOC, which it checks against the image's
+manifest, whose signature `pull` checked. So nothing unchecked reaches an
+app, in any sandbox. Once the whole layer is downloaded and checked against
+its digest, and no run of the app is going, the helper unpacks it as a plain
+pull would, puts that where the placeholders were, and ends. From then on
+the app is as if pulled without `--lazy`, and starts as fast.
+
+Until then:
+
+- **A file nothing has read needs the registry.** An app that's started
+  offline and reads one fails, as a program fails whose files can't be read,
+  often with a "bad image" error. zigsaw then says which file it couldn't
+  fetch, and why.
+- **The helper lasts as long as it has work.** Any run of the app starts it
+  again if it's gone, after a reboot say, and `zigsaw rm` stops it. Its log is
+  in the store's `lazy` folder. Started where everything a program starts ends
+  with it, as in some terminals, the helper ends then too, and says so first;
+  the app's next run starts it again.
+- **A file is fetched whole** when a program opens it, and its first read
+  costs a little more than in a plain deployment (some 7 ms here: Defender
+  looking at it).
+- **Placeholders need NTFS.** On a Dev Drive (ReFS), a network share or FAT,
+  `--lazy` downloads the layer whole, and says so.
+- **`push` waits for the download**: it refuses an app still downloading.
+
+- **The first run after the download is cold again**: the unpacked files are
+  new to Windows, so that run pays what any first run on a fresh deployment
+  does (TeX Live's `pdflatex`: 14 s once, then 0.3 s).
+
+How it works, and why it's a bridge and not a way of keeping apps, is in
+[how-it-works.md](docs/how-it-works.md#lazy-pulls).
 
 ### Sources next to images
 
@@ -1131,6 +1195,7 @@ bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key); `zigsaw upgrade` from a later release of the same code, a running program moved aside and every way of refusing; the daily check in a scratch default store (about 2 min)
 bash tests/zot.sh bash tests/updates.sh # what a check finds, keeps and tells, and that nothing installs anything; real scheduled tasks under this run's own name, which it removes, and the real one untouched (under 1 min; without a registry, only the task rows)
 bash tests/zot.sh bash tests/rollback.sh # the version an update replaces is kept, rollback goes back to it without the network and updates pass over the version left, a newer one gets through, hold and unhold (under 1 min)
+bash tests/zot.sh bash tests/lazy.sh # pull --lazy: placeholders served under each sandbox, a helper that comes back and says what it couldn't fetch, the swap once the download's done and no run uses it, rm, a job that keeps what it starts, and a whole download where placeholders can't be (under 1 min; needs NTFS: LAZY_WORK, and LAZY_DEV_DRIVE for a real Dev Drive row)
 bash tests/zot.sh bash tests/signing.sh # what pull, update and info do with an image's good, wrong and missing signature, with keys `zigsaw trust` adds (under 1 min)
 bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package); an incremental build of a copy after a change makes what --clean does
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole

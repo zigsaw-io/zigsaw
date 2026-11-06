@@ -37,6 +37,7 @@ const folders = @import("folders.zig");
 const forward = @import("forward.zig");
 const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
+const lazy = @import("lazy.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
 const roots = @import("roots.zig");
@@ -69,6 +70,12 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // and any ephemeral data directory stay locked as in use until the end.
     // (On errors, zigsaw exits and that releases every lock.)
     const store_lock = try ctx.store.lock(arena, .shared);
+    // Layers still pulled lazily need their helper before their deployments
+    // are locked: one that's done swaps them while nothing holds them.
+    const lazy_layers = try lazyLayersOf(ctx, opts.id);
+    try lazy.ensureServed(ctx, lazy_layers);
+    const failures_before = try arena.alloc(u32, lazy_layers.len);
+    for (lazy_layers, failures_before) |l, *f| f.* = @intCast((try lazy.failedFetches(ctx.store, arena, oci.digestHex(l.digest).?, 0)).len);
     const image = try ctx.store.loadImage(arena, opts.id);
     const cfg = image.config;
 
@@ -302,11 +309,31 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         }),
     };
     const code = try child.wait();
+    // An app whose files couldn't be fetched says only something like
+    // BAD_EXE_FORMAT: say what the helper knows. Through a GUI shim, this
+    // reaches the box a failed run shows.
+    if (code != 0) for (lazy_layers, failures_before) |l, before| {
+        const hex = oci.digestHex(l.digest).?;
+        for (try lazy.failedFetches(ctx.store, arena, hex, before)) |line| note("zigsaw: {s} of a layer still being fetched couldn't be: {s}", .{ cfg.id, line });
+    };
     if (watcher) |w| written.finish(ctx, cfg.id, w);
     // Commands the run installed, as `npm install -g` does, get shims. An
     // --ephemeral run's are gone with its data directory.
     if (run_dir == null and exports.hasCommandDirs(cfg)) exports.syncAfterRun(ctx, cfg.id);
     return code;
+}
+
+/// The installed app's layers, its runtimes' included, that are still pulled
+/// lazily; none if it isn't installed, which `loadImage` then says.
+fn lazyLayersOf(ctx: *Context, id: []const u8) ![]const oci.Descriptor {
+    const arena = ctx.arena;
+    const ref = try ctx.store.readRef(arena, id) orelse return &.{};
+    const manifest = try ctx.store.readManifest(arena, ref.manifest);
+    var found: std.ArrayList(oci.Descriptor) = .empty;
+    for (manifest.layers) |l| {
+        if (try lazy.isLazy(ctx.store, arena, oci.digestHex(l.digest) orelse continue)) try found.append(arena, l);
+    }
+    return found.items;
 }
 
 /// Says so when the app's image says it can't work under `sandbox`. A warning

@@ -129,6 +129,12 @@ pub const MB_OK: c_uint = 0x0;
 pub const MB_ICONERROR: c_uint = 0x10;
 pub extern "user32" fn MessageBoxW(window: ?HANDLE, text: LPCWSTR, caption: LPCWSTR, kind: c_uint) callconv(.winapi) c_int;
 pub extern "kernel32" fn GetModuleFileNameW(module: ?*anyopaque, file_name: [*]u16, size: DWORD) callconv(.winapi) DWORD;
+/// Only from System32, so that no DLL of the same name next to zigsaw.exe or
+/// in the working directory is loaded instead.
+pub const LOAD_LIBRARY_SEARCH_SYSTEM32: DWORD = 0x800;
+pub extern "kernel32" fn LoadLibraryExW(name: LPCWSTR, file: ?HANDLE, flags: DWORD) callconv(.winapi) ?HANDLE;
+pub extern "kernel32" fn GetProcAddress(module: HANDLE, name: [*:0]const u8) callconv(.winapi) ?*const anyopaque;
+pub extern "kernel32" fn GetSystemTimeAsFileTime(time: *i64) callconv(.winapi) void;
 pub extern "kernel32" fn SetEnvironmentVariableW(name: LPCWSTR, value: ?LPCWSTR) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GetStartupInfoW(info: *STARTUPINFOW) callconv(.winapi) void;
 pub extern "kernel32" fn SetConsoleCtrlHandler(
@@ -210,6 +216,23 @@ pub extern "kernel32" fn TerminateProcess(h: HANDLE, exit_code: u32) callconv(.w
 
 pub const JobObjectExtendedLimitInformation: c_int = 9;
 pub const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x00002000;
+/// A process in the job may start one outside it, with CREATE_BREAKAWAY_FROM_JOB.
+pub const JOB_OBJECT_LIMIT_BREAKAWAY_OK: DWORD = 0x00000800;
+pub const CREATE_BREAKAWAY_FROM_JOB: DWORD = 0x01000000;
+
+// ---------------------------------------------------------------------------
+// Events and other processes
+
+pub const SYNCHRONIZE: DWORD = 0x00100000;
+pub const EVENT_MODIFY_STATE: DWORD = 0x0002;
+pub const PROCESS_TERMINATE: DWORD = 0x0001;
+pub extern "kernel32" fn CreateEventW(attributes: ?*anyopaque, manual_reset: BOOL, initial_state: BOOL, name: ?LPCWSTR) callconv(.winapi) ?HANDLE;
+pub extern "kernel32" fn OpenEventW(access: DWORD, inherit: BOOL, name: LPCWSTR) callconv(.winapi) ?HANDLE;
+pub extern "kernel32" fn SetEvent(event: HANDLE) callconv(.winapi) BOOL;
+pub extern "kernel32" fn WaitForMultipleObjects(count: DWORD, handles: [*]const HANDLE, wait_all: BOOL, milliseconds: DWORD) callconv(.winapi) DWORD;
+pub extern "kernel32" fn OpenProcess(access: DWORD, inherit: BOOL, pid: DWORD) callconv(.winapi) ?HANDLE;
+pub extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) DWORD;
+pub extern "kernel32" fn SetStdHandle(which: DWORD, handle: HANDLE) callconv(.winapi) BOOL;
 
 pub const JOBOBJECT_BASIC_LIMIT_INFORMATION = extern struct {
     PerProcessUserTimeLimit: i64 = 0,

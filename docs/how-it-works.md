@@ -30,7 +30,9 @@ refs\<id>.json         installed app -> manifest digest
 versions\<id>.previous.json  the version the installed one replaced, whose blobs prune keeps
 versions\<id>.skip.json      the version a rollback left, which updates pass over
 versions\<id>.held     there while `zigsaw hold` keeps updates away from the app
-deploy\<hex>\          an unpacked layer, by layer digest, shared by all runs and apps
+deploy\<hex>\          an unpacked layer, by layer digest, shared by all runs and apps;
+                       placeholders while a lazy pull fetches it
+lazy\<hex>\            a layer pulled lazily: its TOC, its download, its helper's state and log
 data\<id>\             per-app writable state, kept across runs
 grants\<id>.txt        host paths granted to the app's AppContainer, or labelled low for its runs
 grants\<id>.cwd        those of them that were a run's working directory
@@ -206,6 +208,81 @@ doesn't know, and on the same store, every ref. Each concern has its own file, s
 With a skip, it asks the registry for the tag's digest first (`remote.manifestDigest`,
 which resolves an index to its windows/amd64 image, as refs record), so that nothing of
 the version passed over is downloaded or asked about.
+
+## Lazy pulls
+
+`pull --lazy` and `update --lazy` ([src/lazy.zig](../src/lazy.zig)) make an indexed
+layer the store lacks, of 32 MiB or more, a deployment of Cloud Files placeholders,
+after the signature check and the agreement and before the other layers download.
+[The experiment](experiment-cloud-files.md) measured what this does and doesn't save.
+It's a **bridge**: the placeholders last only until the layer is downloaded, and are
+then replaced by the plain deployment a full pull makes. Keeping them would keep a
+provider, its failure modes, and a cost the experiment couldn't explain: Windows
+builds a hydrated DLL's image section anew for each process, 60 ms for llvm-mingw's
+77 MB one, against 0.5 ms for a plain copy.
+
+`pull` fetches the blob's tail, which has eStargz's TOC, checks the TOC against the
+descriptor's annotation (the manifest is pinned by digest and its signature checked),
+and refuses a layer whose names or entries a deployment couldn't have, as unpacking
+would. It writes the tail and the descriptor to `lazy\<hex>\`, and starts the layer's
+helper, `zigsaw lazy-helper <store> <hex>` ([src/LazyHelper.zig](../src/LazyHelper.zig)),
+from a copy in `lazy\` named by its contents, so that zigsaw.exe can be replaced
+meanwhile. The helper registers `deploy\<hex>\` as a sync root, makes a placeholder of
+every directory and file (Windows then asks about no directory: all are there),
+connects as the root's provider, and signals that it's ready; only then does `pull`
+go on. The path an app sees never changes, so nothing else in zigsaw knows a lazy
+deployment from another. Installing reads only the headers of the app's programs, to
+pick their shims' kind, and reads those from the index rather than open a placeholder,
+which would fetch the whole file.
+
+A separate process, as Windows lets one process provide for a root, and won't let that
+process open the root's placeholders itself (error 395): `zigsaw run` couldn't be it.
+**Windows asks the helper** for a range of a file, on its own threads, several at once.
+The helper hands over the eStargz chunks that hold it, each whole (they start at
+multiples of 4 MiB, as a transfer must), each checked against its digest in the TOC
+before Windows sees it ([`Reader.readChunk`](../stargazer/src/estargz.zig), stargazer
+0.3.0). Chunks come from the tail, from the download so far, or from the registry in
+blocks of 1 MiB, which are kept: a registry's storage takes about as long for 4 KiB as
+for a megabyte ([src/BlobReader.zig](../src/BlobReader.zig)). Requests go through a few
+registry clients, each replaced every 64 requests, so that a helper that runs for hours
+neither grows nor keeps an expired token.
+
+**The download** runs meanwhile, 8 MiB at a time, giving way while Windows waits on a
+fetch, into `lazy\<hex>\blob.part`, which a later helper hashes again and goes on
+from. Only a blob checked against its digest goes into `blobs\`, as for any pull.
+**The swap**: the helper unpacks the blob into `tmp\` as `Store.deploy` would, with
+that folder's lock held so that `prune` leaves it, and waits until it can lock
+`deploy\<hex>.lock` exclusively, which every run holds shared while it runs (and
+`install` while it deploys). Then, with the store lock held shared so that no `prune`
+comes between: it disconnects, renames the placeholders into `tmp\`, renames the
+unpacked tree into their place, protects it, deletes `lazy\<hex>\`, and deletes the
+placeholders, which Windows lets the helper's process do once it's disconnected. A
+helper that ends between the two renames leaves no deployment and a complete blob,
+which the next `deploy` unpacks as usual. A run that waits on the lock meanwhile finds
+the plain deployment.
+
+**Helpers come back**: each holds `lazy\<hex>.helper.lock` while it runs, beside the
+folder it deletes. A run, a build using an image pulled lazily, and `pull` make sure
+each lazy layer they use has one before they lock its deployment, under
+`lazy\<hex>.start.lock` so that one starts. A new helper connects to the placeholders
+its predecessor made, or registers the folder again if Windows forgot it. A helper that
+gets nowhere for ten minutes while no run uses the deployment ends, and `list` says
+it's paused. `rm`, `prune` and anything else that deletes a deployment stop its helper
+first (a named event, then `TerminateProcess` after 15 s), then delete the placeholders
+as any folder; Windows deletes what was never fetched with them.
+
+**Jobs**: a zigsaw that a shim starts is in the shim's job, which the shim ends when
+zigsaw ends. The shim's job allows breakaway, and the helper starts with
+`CREATE_BREAKAWAY_FROM_JOB`, no console and none of zigsaw's handles (a GUI shim
+reads zigsaw's output until every holder of its pipe has ended). The app's own job,
+inside the shim's, allows nothing out, so what an app starts never leaves it. Where
+some other job refuses breakaway, as GitHub's runners' does, the helper starts in it,
+lasts as long as it does, and zigsaw says so.
+
+**When a fetch fails**, the helper tells Windows, which fails the read, and writes
+`fetch failed: <file>: <why>` to `lazy\<hex>\log`. An app only says what Windows told
+it (`BAD_EXE_FORMAT` for a program or DLL), so a run that ends with an error prints
+the failures the log gained while it ran.
 
 ## Signatures
 
