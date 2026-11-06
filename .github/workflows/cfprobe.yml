@@ -38,7 +38,7 @@ jobs:
           MSYS_NO_PATHCONV=1 net user zsprobe "$password" /add
           printf 'zsprobe\n%s\n' "$password" >"$RUNNER_TEMP/account.txt"
 
-      - name: tests/cfprobe-ci.sh, on C: and D:
+      - name: 'tests/cfprobe-ci.sh, on C: and D:'
         shell: bash
         env:
           CFPROBE_ACCOUNT: ${{ runner.temp }}\account.txt
