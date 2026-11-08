@@ -2,7 +2,7 @@
 
 Image-based container solution for running sandboxed program on Windows.
 
-Think Flatpak for Windows programs: apps are built from pinned sources into
+A mix of Flatpak and Docker, but for Windows programs: apps are built from pinned sources into
 OCI-style images, installed per user, and run in a clean environment with their
 own data directory. No admin rights, no Hyper-V; it works on Windows Home.
 
@@ -164,7 +164,15 @@ zigsaw signature payload <image>       print what to sign for an image, for `cos
 zigsaw signature push <image> <payload file> <signature file>
                                        put that signature beside the image, where pull looks
 zigsaw signature check <image>         say whether an image has a good signature
-zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands
+zigsaw volume create [--path=<dir>] <name>
+                                       make a volume in the store, or keep one in a folder of
+                                       yours; a run's --volume makes one it doesn't find
+zigsaw volume ls                       list the volumes, where each is, and what mounts it
+zigsaw volume inspect <name>           show a volume's size, mounts, use and grants
+zigsaw volume rm <name>...             delete volumes in the store, or forget ones kept
+                                       elsewhere, leaving their files; not one an override mounts
+zigsaw volume prune [--dry-run]        delete the volumes in the store that no override mounts
+zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands; its volumes stay
 zigsaw prune [--dry-run] [--downloads] [--data] [--previous]
                                        delete what no installed app needs; --previous also
                                        the versions kept for rollback
@@ -701,7 +709,9 @@ to finish.
 | `--port=<name>=<port>` | Serve one of the app's [services](#services) on another port, or reach a port it [uses](#reaching-this-machine) on another |
 | `--env=NAME=VALUE` | Set an environment variable |
 | `--noextension=<id>` | Leave out an installed [extension](docs/recipes.md#extension-points), which otherwise joins the runs of what it extends; `--extension=<id>` has one an override leaves out join again |
-| `--ephemeral` | Use a fresh data directory, deleted after the run |
+| `--volume=<source>:<path>[:ro]` | Mount a [volume](#volumes), by its name, or a folder of yours, by its absolute path, at a path in the app's data directory |
+| `--novolume=<path>` | Take away the mount an override has at that path |
+| `--ephemeral` | Use a fresh data directory, deleted after the run; its volumes stay |
 | `-v`, `--verbose` | Print the resolved command, environment and grants |
 
 ### Sandboxes
@@ -930,6 +940,54 @@ and Downloads (Rnote Pictures too, for exports), and VLC your Desktop,
 Downloads, Music, Pictures and Videos. Images that use folder names need
 zigsaw 0.18.0 or later; and a permission this zigsaw doesn't know, from a
 later one, is left out of a run with a warning, rather than refused.
+
+### Volumes
+
+An app's data directory goes with it: `zigsaw rm --delete-data`, `prune --data`
+and the end of an `--ephemeral` run delete all of it. A volume, as Docker has
+them, is a folder that outlives that, and that other apps may share. `--volume`
+mounts one at a path in the app's data directory:
+
+```powershell
+zigsaw override --volume=pgdata:data org.postgresql.PostgreSQL   # its cluster, PGDATA, in a volume
+zigsaw override --volume=D:\settings\codium:home\AppData\Roaming\VSCodium com.vscodium.codium
+                                                                  # its settings in a folder of yours
+zigsaw volume create --path=D:\volumes\pg pg                      # a named volume kept on D:
+zigsaw volume ls
+```
+
+- The source is a volume's name, or a folder of yours by its absolute path (a bind
+  mount). A volume's name has 2 to 64 letters, digits, `_` and `-`; one the store
+  doesn't have yet is made in it, in `volumes\<name>`, by the first run that mounts it.
+  `zigsaw volume create --path=<dir> <name>` names a folder elsewhere instead, which
+  may have files already.
+- The path is relative to the app's data directory: `data` is the folder PostgreSQL's
+  `PGDATA` names, `home\AppData\Roaming\<app>` where an app keeps its settings. It
+  can't be where zigsaw keeps something of its own (`registry`, `home` and its
+  `AppData`, the temporary folder, your folders' links), and two mounts can't
+  overlap. `:ro` makes the mount read-only, under `low` and `appcontainer`.
+- Windows has no mount namespaces, so a mount is a link (a directory junction) at that
+  path, to the volume's folder. Deleting the data directory, as the commands above do,
+  stops at the link, and leaves the volume as it is.
+- The folder is granted as a `--filesystem` path is, and as long: labelled low under
+  `low`, given to the app's AppContainer under `appcontainer`. A mount only on the
+  command line, and its link, go when the app's last run ends; a saved one
+  (`zigsaw override --volume`) stays until `--novolume=<path>` takes it away. As with
+  folders, a volume one app may write is writable by every low-integrity program
+  while it's labelled.
+- The first run of a saved mount moves the app's own files at the path into the
+  volume, if the volume is empty, as Docker fills an empty volume: how PostgreSQL's
+  cluster moves into one. It only renames, so the volume has to be on the drive of
+  the app's data. A mount on the command line, a read-only one, or one of a volume
+  that has files refuses instead, and leaves the app's files as they are.
+- `zigsaw volume inspect <name>` shows a volume's size, what mounts it, and what it was
+  granted. `zigsaw volume rm` deletes a volume in the store, and forgets one kept
+  elsewhere, leaving its files; it refuses one an override mounts, or a run uses.
+  `zigsaw volume prune` deletes the volumes in the store no override mounts; `zigsaw
+  prune` counts them.
+- An `--ephemeral` run mounts its volumes too: a fresh app, and the volume's files.
+- A zigsaw before 0.80 can't read overrides that have volumes: `override --reset`
+  makes it work again.
 
 ### Batch files
 

@@ -20,7 +20,9 @@
 # PROJ's proj.db, buffers with GEOS, reads GeoJSON and GML and uses a GiST
 # index (and makes a topology, at low), and its rasters, on GDAL's DLL,
 # give a band's values and statistics, reproject, and go through GeoTIFF
-# and PNG; --noextension leaves pg_cron out.
+# and PNG; --noextension leaves pg_cron out. A saved --volume at the
+# cluster's place moves it into a volume, which a server with a fresh data
+# directory (--ephemeral) then serves.
 #
 #   POSTGRES_HOME=path\to\store bash tests/postgresql.sh [path\to\zigsaw.exe]
 #
@@ -100,8 +102,13 @@ is() {
 # with zigsaw's run options in RUN_OPTIONS. check runs it in a subshell, so
 # the server's run leaves its exit code in a file, for stop.
 start() {
+    rm -rf "$data\\data" "$data\\pgpass.conf"
+    serve "$@"
+}
+# serve [postgres options]: as start, but the cluster there is served.
+serve() {
     local log="$work\\server-${SANDBOX:-low}${RUN_OPTIONS:+-options}.out" i
-    rm -rf "$data\\data" "$data\\pgpass.conf" "$work\\server.exit"
+    rm -f "$work\\server.exit"
     (
         timeout 600 "$zigsaw" run ${SANDBOX:+--sandbox=$SANDBOX} ${RUN_OPTIONS:-} $on_port $APP "$@" >"$log" 2>&1
         echo $? >"$work\\server.exit"
@@ -238,6 +245,8 @@ dump() {
 check "pg_dump's dump restores into another database" dump
 # Files through zlib's gzopen, gzwrite and gzread, which -Fc doesn't use.
 dump_gzip() {
+    # pg_dump refuses a directory that has files: an earlier run's.
+    rm -rf "$data\\postgres-gz"
     pg pg_dump -Fd -Z gzip -f "$data\\postgres-gz" postgres &&
         ls "$data\\postgres-gz" | grep -q '\.dat\.gz$' &&
         pg createdb restored_gz && pg pg_restore -d restored_gz "$data\\postgres-gz" &&
@@ -268,6 +277,35 @@ check "  and preloads nothing, while pgvector still joins" is "|1" \
     "create extension vector" "select current_setting('shared_preload_libraries') || '|' || count(*) from pg_extension where extname = 'vector'"
 check "  and pg_ctl stops it" stop
 unset RUN_OPTIONS
+
+# A volume (src/volumes.zig): a saved mount at `data` moves the cluster into
+# the empty volume, where a server with a fresh data directory finds it. The
+# app's overrides are as they were afterwards.
+vol=pgtest-$port
+vol_dir="$ZIGSAW_HOME\\volumes\\$vol"
+overrides="$ZIGSAW_HOME\\overrides\\$APP.json"
+[ -f "$overrides" ] && cp "$overrides" "$work\\overrides.json"
+check "a cluster with a table, for a volume" start
+check "  has it" is 1 "create table kept (v text)" "insert into kept values ('kept')" "select count(*) from kept"
+check "  and stops" stop
+moved() {
+    "$zigsaw" override --volume=$vol:data $APP >/dev/null 2>&1 && serve && [ -f "$vol_dir\\PG_VERSION" ] &&
+        [ -L "$(cygpath -u "$data\\data")" ] && grep -qF "files at data into volume $vol" "$work\\server-low.out"
+}
+check "a saved --volume at data moves the cluster into the volume, and the server serves it there" moved
+check "  with the table" is kept "select v from kept"
+check "  and pg_ctl stops it" stop
+RUN_OPTIONS=--ephemeral
+check "a server with a fresh data directory (--ephemeral) serves the cluster in the volume" serve
+check "  with the table" is kept "select v from kept"
+check "  and pg_ctl stops it" stop
+unset RUN_OPTIONS
+unmounted() {
+    "$zigsaw" override --novolume=data $APP >/dev/null 2>&1 && [ ! -e "$(cygpath -u "$data\\data")" ] && [ -f "$vol_dir\\PG_VERSION" ]
+}
+check "--novolume takes the mount away, and leaves the cluster in the volume" unmounted
+if [ -f "$work\\overrides.json" ]; then cp "$work\\overrides.json" "$overrides"; else rm -f "$overrides"; fi
+check "volume rm deletes the volume" sh -c "\"\$0\" volume rm $vol >/dev/null 2>&1 && [ ! -e '$vol_dir' ]" "$zigsaw"
 
 for SANDBOX in soft appcontainer; do
     check "$SANDBOX: postgresql makes a cluster and serves it" start -c 'plperl.on_init=$main::booted = 47;'
@@ -300,7 +338,7 @@ unset SANDBOX
 check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
 cd "$root" || exit 1
-rm -rf "$data\\data" "$data\\pgpass.conf" "$data\\backup" "$data\\postgres.dump" "$data\\server.crt" "$data\\server.key"
+rm -rf "$data\\data" "$data\\pgpass.conf" "$data\\backup" "$data\\postgres.dump" "$data\\postgres-gz" "$data\\server.crt" "$data\\server.key"
 [ -z "${LOG_DIR:-}" ] || cp "$(cygpath -u "$work")"/server-*.out "$(cygpath -u "$LOG_DIR")" 2>/dev/null
 rm -rf "$work"
 echo

@@ -9,6 +9,7 @@
 //!   "cwd" filesystem permission;
 //! - the user's folders it may use, such as Documents, linked into that
 //!   profile (see folders.zig);
+//! - its volumes, linked into its data directory (see volumes.zig);
 //! - a job object, so the whole process tree ends when the run ends.
 //!
 //! The `low` sandbox, the default unless the app's image asks for another,
@@ -42,6 +43,7 @@ const override = @import("override.zig");
 const process = @import("process.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
+const volumes = @import("volumes.zig");
 const written = @import("written.zig");
 const repeat = @import("testing.zig").repeat;
 const fail = Context.fail;
@@ -114,12 +116,24 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const found = try extensions.find(ctx.store, arena, cfg, settings.noextension);
     for (found.skipped) |s| if (s.warn or ctx.verbose) note("note: {s} doesn't join this run: {s}", .{ s.id, s.reason });
     if (sandbox == .soft and run_dir == null) try unlabelData(ctx, cfg.id);
+    const data_dir = if (run_dir) |d| d.path else try ctx.store.path(arena, &.{ "data", cfg.id });
+    // Its volumes, in its data directory, before it joins the app's runs:
+    // whether another goes on decides what may change there. Each is granted
+    // as a host path is (see volumes.zig).
+    const mounted = try volumes.prepare(ctx, .{
+        .id = cfg.id,
+        .data_dir = data_dir,
+        .values = settings.volumes,
+        .saved = saved.volumes,
+        .ephemeral = run_dir != null,
+    });
+    defer mounted.release(io);
+    for (mounted.mounts) |m| try host_grants.append(arena, .{ .path = m.host, .read_only = m.mount.read_only });
     // One of the app's runs from here on: the last to end takes back what
     // its command line asked for, and what no longer stands.
     const runs = try grants.begin(ctx, cfg.id);
     defer grants.end(ctx, runs);
     store_lock.release(io);
-    const data_dir = if (run_dir) |d| d.path else try ctx.store.path(arena, &.{ "data", cfg.id });
     const profile: environment.Profile = try .init(arena, data_dir);
     // Where file dialogs keep Quick access: only if it exists do they make
     // it, with the user's folders pinned (docs/findings.md).
@@ -224,6 +238,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             note("uses     {s}: localhost:{d}", .{ t.use.name, t.port })
         else
             note("uses     {s}: localhost:{d}, which zigsaw forwards from {d} in its container", .{ t.use.name, t.port, t.connect });
+        for (mounted.mounts) |m| note("volume   {f} at {s}{s} ({s})", .{ m.mount, m.mount.target, if (m.mount.read_only) ", read-only" else "", m.host });
         note("exe      {s}", .{exe});
         if (command.batch) note("script   {s}", .{command.exe});
         note("cmdline  {s}", .{command_line});

@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const oci = @import("oci.zig");
+const volumes = @import("volumes.zig");
 const fail = Context.fail;
 
 pub const Sandbox = oci.Sandbox;
@@ -45,6 +46,11 @@ pub const Settings = struct {
     /// "NAME=PORT": where other programs reach the app's service NAME,
     /// instead of the port its config says (see services.zig).
     ports: []const []const u8 = &.{},
+    /// "<volume or folder>:<target>[:ro]": what appears where in the app's
+    /// data directory (see volumes.zig), as volumes.Mount.spec writes it.
+    volumes: []const []const u8 = &.{},
+    /// Targets whose mount a layer below has, and this one takes away.
+    novolume: []const []const u8 = &.{},
     /// Whether this store's apps get the user's real folders, for a store
     /// that isn't the default one, whose apps otherwise don't (see
     /// folders.zig). Saved store-wide only.
@@ -53,7 +59,8 @@ pub const Settings = struct {
     pub fn isEmpty(s: Settings) bool {
         return s.sandbox == null and s.network == null and s.commands == null and s.host == null and s.ephemeral == null and
             s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.env.len == 0 and
-            s.noextension.len == 0 and s.extension.len == 0 and s.ports.len == 0 and s.real_folders == null;
+            s.noextension.len == 0 and s.extension.len == 0 and s.ports.len == 0 and
+            s.volumes.len == 0 and s.novolume.len == 0 and s.real_folders == null;
     }
 
     /// `upper` over `lower`. For the lists, an entry of `upper` replaces
@@ -66,11 +73,13 @@ pub const Settings = struct {
             .commands = upper.commands orelse lower.commands,
             .host = upper.host orelse lower.host,
             .ephemeral = upper.ephemeral orelse lower.ephemeral,
-            .filesystem = try mergeList(arena, try without(arena, lower.filesystem, upper.nofilesystem, grantPath), upper.filesystem, grantPath),
-            .nofilesystem = try mergeList(arena, try without(arena, lower.nofilesystem, upper.filesystem, grantPath), upper.nofilesystem, grantPath),
+            .filesystem = try mergeList(arena, try without(arena, lower.filesystem, upper.nofilesystem, grantPath, grantPath), upper.filesystem, grantPath),
+            .nofilesystem = try mergeList(arena, try without(arena, lower.nofilesystem, upper.filesystem, grantPath, grantPath), upper.nofilesystem, grantPath),
             .env = try mergeList(arena, lower.env, upper.env, envName),
-            .noextension = try mergeList(arena, try without(arena, lower.noextension, upper.extension, itself), upper.noextension, itself),
+            .noextension = try mergeList(arena, try without(arena, lower.noextension, upper.extension, itself, itself), upper.noextension, itself),
             .ports = try mergeList(arena, lower.ports, upper.ports, envName),
+            .volumes = try mergeList(arena, try without(arena, lower.volumes, upper.novolume, volumes.targetOf, itself), upper.volumes, volumes.targetOf),
+            .novolume = try mergeList(arena, try without(arena, lower.novolume, upper.volumes, itself, volumes.targetOf), upper.novolume, itself),
             .real_folders = upper.real_folders orelse lower.real_folders,
         };
     }
@@ -81,16 +90,16 @@ pub const Settings = struct {
         return (try merge(arena, .{ .filesystem = app_permissions }, s)).filesystem;
     }
 
-    /// As saved: without the options left unset, and without the extension
-    /// and port lists when empty, so that a zigsaw from before them still
-    /// reads it.
+    /// As saved: without the options left unset, and without the extension,
+    /// port and volume lists when empty, so that a zigsaw from before them
+    /// still reads it.
     pub fn jsonStringify(s: Settings, jw: anytype) !void {
         try jw.beginObject();
         const info = @typeInfo(Settings).@"struct";
         inline for (info.field_names, info.field_types) |name, T| {
             const v = @field(s, name);
             const later_list = comptime std.mem.eql(u8, name, "noextension") or std.mem.eql(u8, name, "extension") or
-                std.mem.eql(u8, name, "ports");
+                std.mem.eql(u8, name, "ports") or std.mem.eql(u8, name, "volumes") or std.mem.eql(u8, name, "novolume");
             const skip = switch (@typeInfo(T)) {
                 .optional => v == null,
                 else => if (later_list) v.len == 0 else false,
@@ -150,6 +159,14 @@ pub const Settings = struct {
             try w.print("{s}--port={s}", .{ sep, p });
             sep = " ";
         }
+        for (s.volumes) |v| {
+            try w.print("{s}--volume={s}", .{ sep, v });
+            sep = " ";
+        }
+        for (s.novolume) |t| {
+            try w.print("{s}--novolume={s}", .{ sep, t });
+            sep = " ";
+        }
         if (s.real_folders) |on| {
             try w.print("{s}--{s}real-folders", .{ sep, if (on) "" else "no" });
             sep = " ";
@@ -188,13 +205,14 @@ fn mergeList(arena: Allocator, lower: []const []const u8, upper: []const []const
     return out.items;
 }
 
-/// The entries of `list` whose key none of `others` has.
-fn without(arena: Allocator, list: []const []const u8, others: []const []const u8, key: fn ([]const u8) []const u8) ![]const []const u8 {
+/// The entries of `list` whose key none of `others` has: `key` of an entry,
+/// `other_key` of one of `others`.
+fn without(arena: Allocator, list: []const []const u8, others: []const []const u8, key: fn ([]const u8) []const u8, other_key: fn ([]const u8) []const u8) ![]const []const u8 {
     if (others.len == 0) return list;
     var out: std.ArrayList([]const u8) = .empty;
     for (list) |entry| {
         const named = for (others) |o| {
-            if (std.os.windows.eqlIgnoreCaseWtf8(key(entry), key(o))) break true;
+            if (std.os.windows.eqlIgnoreCaseWtf8(key(entry), other_key(o))) break true;
         } else false;
         if (!named) try out.append(arena, entry);
     }
@@ -354,6 +372,33 @@ test "Settings.merge: --port replaces a lower layer's for the same service" {
 
     // A zigsaw from before ports reads settings without them.
     try std.testing.expect(std.mem.indexOf(u8, try oci.toJson(arena, Settings{ .network = true }), "ports") == null);
+}
+
+test "Settings.merge: --volume replaces a lower layer's at the same place, and --novolume takes it away" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const global: Settings = .{ .volumes = &.{ "cache:cache", "pg:data", "D:\\x:x" } };
+    const app: Settings = .{ .volumes = &.{"pg2:data:ro"}, .novolume = &.{"Cache"} };
+    const s = try Settings.merge(arena, global, app);
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "D:\\x:x", "pg2:data:ro" }), s.volumes);
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{"Cache"}), s.novolume);
+    try std.testing.expect(!s.isEmpty());
+
+    // The command line mounts something at cache again.
+    const cli = try Settings.merge(arena, s, .{ .volumes = &.{"c2:cache"} });
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "D:\\x:x", "pg2:data:ro", "c2:cache" }), cli.volumes);
+    try std.testing.expectEqual(0, cli.novolume.len);
+
+    var buf: [256]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    try s.format(&w);
+    try std.testing.expectEqualStrings("--volume=D:\\x:x --volume=pg2:data:ro --novolume=Cache", w.buffered());
+
+    // A zigsaw from before volumes reads settings without them.
+    const json = try oci.toJson(arena, Settings{ .network = true });
+    try std.testing.expect(std.mem.indexOf(u8, json, "volume") == null);
+    try std.testing.expectEqualDeep(s, try std.json.parseFromSliceLeaky(Settings, arena, try oci.toJson(arena, s), .{}));
 }
 
 test sandboxOf {

@@ -60,7 +60,7 @@ verbose: bool = false,
 /// from another.
 ledger_key: ?[]const u8 = null,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "deploy", "lazy", "data", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "deploy", "lazy", "data", "volumes", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|
@@ -158,6 +158,9 @@ fn discard(s: Store, arena: Allocator, p: []const u8) !void {
 // - grants.lock is held exclusively while a host path's ACL, or a grants
 //   file, changes: as a run grants paths, as grants are taken back, and by
 //   `rm`.
+// - volumes\<name>.lock is held shared by each run that mounts the volume,
+//   for as long as it runs, and exclusively by `volume rm` and `volume
+//   prune` as they delete it (see volumes.zig).
 //
 // Locks end when zigsaw exits, however it exits.
 
@@ -834,6 +837,25 @@ pub fn writePrograms(s: Store, arena: Allocator, id: []const u8, paths: []const 
     try s.replaceFile(arena, try s.programsPath(arena, id), out.items);
 }
 
+// grants\<id>.mounts lists the places in the app's data directory where
+// zigsaw made a junction to a volume (see volumes.zig), one per line,
+// relative to the data directory. It changes under grants.lock.
+
+fn mountsPath(s: Store, arena: Allocator, id: []const u8) ![]u8 {
+    return s.path(arena, &.{ "grants", try std.fmt.allocPrint(arena, "{s}.mounts", .{id}) });
+}
+
+pub fn readMounts(s: Store, arena: Allocator, id: []const u8) ![]const []const u8 {
+    return s.readLines(arena, try s.mountsPath(arena, id));
+}
+
+/// Replaces the list; an empty one deletes the file.
+pub fn writeMounts(s: Store, arena: Allocator, id: []const u8, targets: []const []const u8) !void {
+    var out: std.ArrayList(u8) = .empty;
+    for (targets) |t| try out.print(arena, "{s}\n", .{t});
+    try s.replaceFile(arena, try s.mountsPath(arena, id), out.items);
+}
+
 pub fn recordCwdGrant(s: Store, arena: Allocator, id: []const u8, p: []const u8) !void {
     const existing = try s.readCwdGrants(arena, id);
     for (existing) |e| if (std.os.windows.eqlIgnoreCaseWtf8(e, p)) return;
@@ -908,6 +930,7 @@ pub fn deleteGrants(s: Store, arena: Allocator, id: []const u8) !void {
     try s.writeGrants(arena, id, &.{});
     try s.writeCwdGrants(arena, id, &.{});
     try s.writePrograms(arena, id, &.{});
+    try s.writeMounts(arena, id, &.{});
 }
 
 /// The ids of the apps with grants recorded, installed or not.
@@ -918,7 +941,7 @@ pub fn listGrantIds(s: Store, arena: Allocator) ![]const []const u8 {
     var it = dir.iterate();
     while (try it.next(s.io)) |entry| {
         if (entry.kind != .file) continue;
-        for ([_][]const u8{ ".txt", ".cwd", ".programs" }) |ext| if (std.mem.endsWith(u8, entry.name, ext)) {
+        for ([_][]const u8{ ".txt", ".cwd", ".programs", ".mounts" }) |ext| if (std.mem.endsWith(u8, entry.name, ext)) {
             const id = entry.name[0 .. entry.name.len - ext.len];
             const seen = for (ids.items) |x| {
                 if (std.mem.eql(u8, x, id)) break true;

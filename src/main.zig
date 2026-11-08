@@ -30,6 +30,7 @@ const trust = @import("trust.zig");
 const update = @import("update.zig");
 const updates = @import("updates.zig");
 const upgrade = @import("upgrade.zig");
+const volumes = @import("volumes.zig");
 const win32 = @import("win32.zig");
 const options = @import("options");
 const fail = Context.fail;
@@ -104,7 +105,16 @@ const usage =
     \\  signature push <image> <payload file> <signature file>
     \\                                  put that signature beside the image, where pull looks
     \\  signature check <image>         say whether an image has a good signature
-    \\  rm [--delete-data] <app-id>     uninstall an app and its commands
+    \\  volume create [--path=<dir>] <name>
+    \\                                  make a volume in the store, or keep one in a folder of
+    \\                                  yours; a run's --volume makes one it doesn't find
+    \\  volume ls                       list the volumes, where each is, and what mounts it
+    \\  volume inspect <name>           show a volume's size, mounts, use and grants
+    \\  volume rm <name>...             delete volumes in the store, or forget ones kept
+    \\                                  elsewhere, leaving their files; not one an override
+    \\                                  mounts
+    \\  volume prune [--dry-run]        delete the volumes in the store that no override mounts
+    \\  rm [--delete-data] <app-id>     uninstall an app and its commands; its volumes stay
     \\  prune [--dry-run] [--downloads] [--data] [--previous]
     \\                                  delete what no installed app needs; also cached
     \\                                  downloads and tool caches, the data of uninstalled
@@ -155,7 +165,12 @@ const usage =
     \\  --noextension=<id>              leave out an installed extension, which otherwise
     \\                                  joins the runs of what it extends
     \\  --extension=<id>                have an extension an override leaves out join again
-    \\  --ephemeral                     use a fresh data directory, deleted afterwards
+    \\  --volume=<source>:<path>[:ro]   make <path> in the app's data directory the volume of
+    \\                                  that name, or a folder of yours by its absolute path;
+    \\                                  it outlives the data, and other apps may mount it too
+    \\  --novolume=<path>               take away the mount an override has there
+    \\  --ephemeral                     use a fresh data directory, deleted afterwards; its
+    \\                                  volumes stay
     \\
     \\What the low and appcontainer sandboxes grant on host paths stays while the app's
     \\permissions and overrides give it; what a command line adds goes when the app's
@@ -376,6 +391,7 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     if (std.mem.eql(u8, command, "updates")) return updatesCommand(ctx, rest);
     if (std.mem.eql(u8, command, "trust")) return trustCommand(ctx, rest);
     if (std.mem.eql(u8, command, "signature")) return signatureCommand(ctx, rest);
+    if (std.mem.eql(u8, command, "volume")) return volumeCommand(ctx, rest);
     if (std.mem.eql(u8, command, "upgrade")) {
         var consent: remote.Consent = .ask;
         for (rest) |arg| {
@@ -485,6 +501,56 @@ fn updatesCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
     return usageError();
 }
 
+/// `zigsaw volume`: the named volumes runs mount (see volumes.zig).
+fn volumeCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
+    if (args.len == 0) return usageError();
+    const what = args[0];
+    const rest = args[1..];
+    _ = try ctx.store.lock(ctx.arena, .shared);
+    if (std.mem.eql(u8, what, "create")) {
+        var name: ?[]const u8 = null;
+        var at: ?[]const u8 = null;
+        var i: usize = 0;
+        while (i < rest.len) : (i += 1) {
+            if (!std.mem.startsWith(u8, rest[i], "--")) {
+                if (name != null) return usageError();
+                name = rest[i];
+                continue;
+            }
+            const opt = try Option.read(rest, &i, &.{});
+            if (!std.mem.eql(u8, opt.name, "path") or opt.value.?.len == 0) return usageError();
+            at = opt.value;
+        }
+        try volumes.create(ctx, name orelse return usageError(), at);
+        return 0;
+    }
+    if (std.mem.eql(u8, what, "prune")) {
+        var dry_run = false;
+        for (rest) |arg| {
+            if (isFlag(arg, "dry-run")) dry_run = true else return usageError();
+        }
+        try volumes.prune(ctx, dry_run);
+        return 0;
+    }
+    for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
+    if (std.mem.eql(u8, what, "ls")) {
+        if (rest.len != 0) return usageError();
+        try volumes.show(ctx);
+        return 0;
+    }
+    if (std.mem.eql(u8, what, "inspect")) {
+        if (rest.len != 1) return usageError();
+        try volumes.inspect(ctx, rest[0]);
+        return 0;
+    }
+    if (std.mem.eql(u8, what, "rm")) {
+        if (rest.len == 0) return usageError();
+        try volumes.remove(ctx, @ptrCast(rest));
+        return 0;
+    }
+    return usageError();
+}
+
 /// `zigsaw trust`: which keys count for which images.
 fn trustCommand(ctx: *Context, rest: []const []const u8) !u32 {
     _ = try ctx.store.lock(ctx.arena, .shared);
@@ -585,6 +651,8 @@ const SettingsParser = struct {
     noextension: std.ArrayList([]const u8) = .empty,
     extension: std.ArrayList([]const u8) = .empty,
     ports: std.ArrayList([]const u8) = .empty,
+    volumes: std.ArrayList([]const u8) = .empty,
+    novolume: std.ArrayList([]const u8) = .empty,
 
     const flags = [_][]const u8{"ephemeral"};
 
@@ -629,6 +697,18 @@ const SettingsParser = struct {
         } else if (std.mem.eql(u8, name, "port")) {
             if (override.parsePort(value) == null) return fail("--port expects <service>=<port>, a port from 1 to 65535; got \"{s}\"", .{value});
             try p.ports.append(arena, value);
+        } else if (std.mem.eql(u8, name, "volume")) {
+            // Kept as volumes.Mount.spec writes it, which tells mounts apart
+            // by where they go when settings merge.
+            switch (try volumes.parse(arena, value)) {
+                .ok => |m| try p.volumes.append(arena, try m.spec(arena)),
+                .invalid => |why| return fail("--volume={s}: {s}", .{ value, why }),
+            }
+        } else if (std.mem.eql(u8, name, "novolume")) {
+            switch (try volumes.parseTarget(arena, value)) {
+                .ok => |t| try p.novolume.append(arena, t),
+                .invalid => |why| return fail("--novolume={s}: {s}", .{ value, why }),
+            }
         } else return false;
         return true;
     }
@@ -641,6 +721,8 @@ const SettingsParser = struct {
         s.noextension = p.noextension.items;
         s.extension = p.extension.items;
         s.ports = p.ports.items;
+        s.volumes = p.volumes.items;
+        s.novolume = p.novolume.items;
         return s;
     }
 };
@@ -861,12 +943,17 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     }
     if (try store.deleteUnusedDeployments(arena, ref.manifest))
         note("kept {s}'s files, which are still in use; `zigsaw prune` removes them later", .{id});
+    // Deleting the data stops at the junctions of its volumes (see
+    // volumes.zig), which stay.
+    var kept_volumes: []const []const u8 = &.{};
     if (delete_data) {
+        kept_volumes = try volumes.namedIn(arena, (try override.load(store, arena, id)).volumes);
         try Store.deleteTree(io, arena, try store.path(arena, &.{ "data", id }));
         try override.delete(store, arena, id);
     }
 
     note("removed {s} {s}{s}", .{ id, ref.version, if (delete_data) " and its data" else "" });
+    for (kept_volumes) |name| note("kept volume {s}, which it mounted; `zigsaw volume rm {s}` deletes it", .{ name, name });
 }
 
 test {
@@ -888,6 +975,7 @@ test {
     _ = @import("grants.zig");
     _ = @import("hkcu.zig");
     _ = @import("info.zig");
+    _ = @import("junction.zig");
     _ = @import("msvc.zig");
     _ = @import("net.zig");
     _ = @import("oci.zig");
@@ -918,6 +1006,7 @@ test {
     _ = @import("update.zig");
     _ = @import("updates.zig");
     _ = @import("upgrade.zig");
+    _ = @import("volumes.zig");
     _ = @import("written.zig");
     _ = @import("zipfile.zig");
 }

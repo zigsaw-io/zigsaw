@@ -40,6 +40,7 @@ const oci = @import("oci.zig");
 const override = @import("override.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const volumes = @import("volumes.zig");
 const written = @import("written.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -61,8 +62,10 @@ pub const Own = struct {
     }
 
     /// Why no run may write `path`, if none may. A run's own data directory,
-    /// in the store, is the caller's to leave out.
+    /// in the store, is the caller's to leave out; a volume's folder in it,
+    /// and what's in that, are the apps' (see volumes.zig).
     pub fn refusal(own: Own, path: []const u8) ?[]const u8 {
+        if (own.inVolume(path)) return null;
         if (isWithin(own.store, path)) return "zigsaw's store is in it";
         if (isWithin(path, own.store)) return "it's in zigsaw's store";
         const d = own.self_dir orelse return null;
@@ -75,6 +78,19 @@ pub const Own = struct {
     /// will do.
     pub fn contains(own: Own, path: []const u8) bool {
         return isWithin(path, own.store) or (if (own.self_dir) |d| isWithin(path, d) else false);
+    }
+
+    /// Whether `path` is a volume's folder in the store, <store>\volumes\<name>,
+    /// or in one; not volumes\ itself, nor the files beside the folders,
+    /// whose names have a dot that a volume's can't.
+    fn inVolume(own: Own, path: []const u8) bool {
+        const store = std.mem.trimEnd(u8, own.store, "\\/");
+        if (!isWithin(path, store)) return false;
+        const rest = std.mem.trimStart(u8, path[store.len..], "\\/");
+        var parts = std.mem.tokenizeAny(u8, rest, "\\/");
+        const first = parts.next() orelse return false;
+        if (!std.ascii.eqlIgnoreCase(first, "volumes")) return false;
+        return volumes.isValidName(parts.next() orelse return false);
     }
 };
 
@@ -111,7 +127,7 @@ pub fn end(ctx: *Context, s: Session) void {
 pub fn settleUnlessRunning(ctx: *Context, id: []const u8) !bool {
     const arena = ctx.arena;
     if ((try ctx.store.readGrants(arena, id)).len == 0 and (try ctx.store.readCwdGrants(arena, id)).len == 0 and
-        (try ctx.store.readPrograms(arena, id)).len == 0) return true;
+        (try ctx.store.readPrograms(arena, id)).len == 0 and (try ctx.store.readMounts(arena, id)).len == 0) return true;
     const l = try Store.tryLock(ctx.io, try ctx.store.runsLockPath(arena, id), .exclusive) orelse return false;
     defer l.release(ctx.io);
     try settle(ctx, id);
@@ -144,6 +160,8 @@ pub fn settle(ctx: *Context, id: []const u8) !void {
     const changes = try store.lockGrantChanges(arena);
     defer changes.release(ctx.io);
     try written.settle(ctx, id);
+    // The junctions of mounts that no longer stand, under any sandbox.
+    try volumes.settle(ctx, id);
     const recorded = try store.readGrants(arena, id);
     const cwds = try store.readCwdGrants(arena, id);
     if (recorded.len == 0 and cwds.len == 0) return;
@@ -186,7 +204,31 @@ pub fn undoAll(ctx: *Context, id: []const u8) !void {
             _ = try undo(ctx, id, g, sids, true);
         }
     }
+    try volumes.unmountAll(ctx, id);
     try ctx.store.deleteGrants(arena, id);
+}
+
+/// Takes back what any app's runs were given on `path`, for `zigsaw volume
+/// rm` as the volume there goes: its folder may stay, one kept outside the
+/// store.
+pub fn undoPath(ctx: *Context, path: []const u8) !void {
+    const arena = ctx.arena;
+    const changes = try ctx.store.lockGrantChanges(arena);
+    defer changes.release(ctx.io);
+    for (try ctx.store.listGrantIds(arena)) |id| {
+        const recorded = try ctx.store.readGrants(arena, id);
+        var kept: std.ArrayList(Store.Grant) = .empty;
+        for (recorded) |g| {
+            if (g.kind == .loopback or !samePath(g.path, path)) {
+                try kept.append(arena, g);
+                continue;
+            }
+            // Every app's goes, a label too: none may mount the volume now. A
+            // deleted folder took its ACL with it.
+            if (try Store.exists(ctx.io, g.path) and !try takeBack(ctx, g, try .of(arena, id), true)) try kept.append(arena, g);
+        }
+        if (kept.items.len != recorded.len) try ctx.store.writeGrants(arena, id, kept.items);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +553,9 @@ const Standing = struct {
                 .unknown => {},
             }
         }
+        // The folders its saved mounts reach (see volumes.zig).
+        for (try volumes.standing(ctx, saved.volumes)) |m|
+            try paths.append(arena, .{ .path = m.host, .access = if (m.mount.read_only) .read_execute else .full });
         s.paths = paths.items;
         return s;
     }
@@ -632,6 +677,33 @@ test "Standing.keeps: under the saved sandbox, for what the app may reach withou
     try std.testing.expectEqual(.full, with_own.keeps(low("D:\\proj"), true).?);
     const ac_own: Standing = .{ .sandbox = .appcontainer, .paths = &paths, .cwd = .full, .own = own };
     try std.testing.expectEqual(.read_execute, ac_own.keeps(ac("D:\\zs"), true).?);
+
+    // A volume's folder in the store stands as any other path.
+    const volume = [_]Standing.Path{.{ .path = "D:\\zs\\store\\volumes\\pg", .access = .full }};
+    const with_volume: Standing = .{ .sandbox = .low, .paths = &volume, .own = own };
+    try std.testing.expectEqual(.full, with_volume.keeps(low("d:/zs/store/volumes/pg"), false).?);
+    try std.testing.expectEqual(null, with_volume.keeps(low("D:\\zs\\store\\volumes\\other"), false));
+}
+
+test "Own.refusal: a volume's folder in the store, and what's in it, are the apps'" {
+    const own: Own = .{ .store = "C:\\Users\\Ann\\AppData\\Local\\zigsaw", .self_dir = "C:\\Users\\Ann\\AppData\\Local\\zigsaw\\bin" };
+    for ([_][]const u8{
+        "C:\\Users\\Ann\\AppData\\Local\\zigsaw\\volumes\\pgdata",
+        "c:/users/ann/appdata/local/zigsaw/Volumes/pgdata/base/1",
+        "C:\\Users\\Ann\\AppData\\Local\\zigsaw\\volumes\\pgdata\\",
+    }) |p| try std.testing.expectEqual(null, own.refusal(p));
+    for ([_][]const u8{
+        "C:\\Users\\Ann\\AppData\\Local\\zigsaw",
+        "C:\\Users\\Ann\\AppData\\Local\\zigsaw\\volumes",
+        "C:\\Users\\Ann\\AppData\\Local\\zigsaw\\volumes\\",
+        // The files beside the folders.
+        "C:\\Users\\Ann\\AppData\\Local\\zigsaw\\volumes\\pgdata.json",
+        "C:\\Users\\Ann\\AppData\\Local\\zigsaw\\volumes\\pgdata.lock",
+        "C:\\Users\\Ann\\AppData\\Local\\zigsaw\\data\\app",
+        "C:\\Users\\Ann\\AppData\\Local\\zigsaw\\bin\\volumes\\pg",
+    }) |p| try std.testing.expect(own.refusal(p) != null);
+    // Still in the store, which no folder will do for `--path`.
+    try std.testing.expect(own.contains("C:\\Users\\Ann\\AppData\\Local\\zigsaw\\volumes\\pgdata"));
 }
 
 test "Own.refusal" {

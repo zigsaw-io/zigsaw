@@ -141,6 +141,12 @@ pub fn currentUserSid(arena: Allocator) !win32.PSID {
 /// their profile; see `writeLabel` for files that don't give it.
 pub fn labelLow(arena: Allocator, path: []const u8) !bool {
     if (try ownLabel(arena, path)) |rid| if (rid <= win32.SECURITY_MANDATORY_LOW_RID) return false;
+    try writeLabel(arena, path, try lowLabel(arena));
+    return true;
+}
+
+/// A SACL with an inheritable low integrity label.
+fn lowLabel(arena: Allocator) !*win32.ACL {
     const low = try lowIntegritySid(arena);
     const size = @sizeOf(win32.ACL) + @sizeOf(win32.ACCESS_ALLOWED_ACE) + win32.GetLengthSid(low);
     const buf = try arena.alignedAlloc(u8, .of(u64), size);
@@ -149,8 +155,7 @@ pub fn labelLow(arena: Allocator, path: []const u8) !bool {
     const inherit = win32.OBJECT_INHERIT_ACE | win32.CONTAINER_INHERIT_ACE;
     if (win32.AddMandatoryAce(sacl, win32.ACL_REVISION, inherit, win32.SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, low) == 0)
         return win32.lastErrorFail("AddMandatoryAce");
-    try writeLabel(arena, path, sacl);
-    return true;
+    return sacl;
 }
 
 /// Removes the label of `path`'s own, and the copies inherited below it, so
@@ -162,6 +167,24 @@ pub fn unlabel(arena: Allocator, path: []const u8) !void {
     var empty: win32.ACL = undefined;
     if (win32.InitializeAcl(&empty, @sizeOf(win32.ACL), win32.ACL_REVISION) == 0) return win32.lastErrorFail("InitializeAcl");
     try writeLabel(arena, path, &empty);
+}
+
+/// Has everything below `path` take again what `path` passes on, its ACL's
+/// inheritable entries and its label, as after a change to them: for files
+/// moved in from elsewhere, which keep what they inherited there. Writing a
+/// folder's ACL makes Windows rewrite the inherited entries of all below it,
+/// so this is as slow as a grant on a large tree.
+pub fn reinherit(arena: Allocator, path: []const u8) !void {
+    var dacl = try Dacl.read(arena, path);
+    defer dacl.deinit();
+    try dacl.write(dacl.acl);
+    // Below medium, Windows would write the process's own level.
+    if (try belowMedium()) return;
+    // Its own label, written again; or none, which takes inherited copies off.
+    const own = try ownLabel(arena, path);
+    if (own == null) return unlabel(arena, path);
+    // Only a low one is zigsaw's to write.
+    if (own.? <= win32.SECURITY_MANDATORY_LOW_RID) try writeLabel(arena, path, try lowLabel(arena));
 }
 
 /// Gives the file `path` a label of its own, which its folder's doesn't

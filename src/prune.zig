@@ -15,6 +15,7 @@ const lazy = @import("lazy.zig");
 const oci = @import("oci.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
+const volumes = @import("volumes.zig");
 const note = Context.note;
 
 pub const Options = struct {
@@ -294,6 +295,10 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         note("kept {d} previous version(s) ({Bi:.1}) for `zigsaw rollback`; --previous deletes them", .{ previous_only.count, previous_only.bytes });
     if (!kept_previous and previous.items.len > 0)
         note("{s} {d} previous version(s): `zigsaw rollback` has nothing to go back to", .{ if (opts.dry_run) "would forget" else "forgot", previous.items.len });
+    // Volumes outlive apps, and their data (see volumes.zig).
+    const unused = try volumes.unused(ctx);
+    if (unused.count > 0)
+        note("kept {d} volume(s) ({Bi:.1}) that no override mounts; `zigsaw volume prune` deletes them", .{ unused.count, unused.bytes });
 }
 
 const Entry = struct { name: []const u8, kind: Io.File.Kind };

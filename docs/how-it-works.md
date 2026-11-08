@@ -35,8 +35,12 @@ deploy\<hex>\          an unpacked layer, by layer digest, shared by all runs an
 lazy\<hex>\            a layer pulled lazily: its TOC, its download, what to copy from the
                        store's other layers, its helper's state and log
 data\<id>\             per-app writable state, kept across runs
+volumes\<name>\        a volume's files, which outlive the data of the apps that mount it
+volumes\<name>.json    a volume kept in a folder elsewhere: where
+volumes\<name>.lock    held shared by each run that mounts the volume
 grants\<id>.txt        host paths granted to the app's AppContainer, or labelled low for its runs
 grants\<id>.cwd        those of them that were a run's working directory
+grants\<id>.mounts     where in the app's data directory zigsaw linked a volume
 overrides\<id>.json    run options saved with `zigsaw override`
 bin\<name>.exe         command shims, with a <name>.shim file saying what each runs
 aliases\<id>\          shims for the aliases an app's runs have: its own and its runtimes'
@@ -96,6 +100,18 @@ is that home folder unless the app has the `cwd` filesystem permission. A job
 object ends the whole process tree when the run ends. Deployed files deny
 writes and deletes to the user, so no run, and nothing else running as you,
 can change an installed app or runtime.
+
+**Volumes** are junctions too, at the paths in `data\<id>\` that `--volume` names,
+to a folder in `volumes\`, one elsewhere that `volume create --path` recorded, or
+one of yours. A run makes them before it joins the app's runs, while it can tell
+whether another goes on: only then may it replace a link, or move the app's own
+files into an empty volume (by renaming them, and then having the volume's ACL
+inherited again, as moved files keep what they inherited where they were). The
+folder is then one of the run's host paths, granted, recorded and taken back as
+`--filesystem`'s are: a folder in the store is one no run may otherwise write
+(below), but a volume's is the apps'. `grants\<id>.mounts` lists the links made, so
+that the app's last run to end, or a change to its overrides, removes those no
+saved mount names any more.
 
 The app shares the terminal, so Ctrl+C and Ctrl+Break reach it just as when
 it runs alone, also through a shim. zigsaw waits for it and passes on its
@@ -370,7 +386,8 @@ again:
 
 - under the sandbox such a run gets ([above](#how-it-works)): its
   overrides', or its image's, or `low` (`soft` grants nothing);
-- for the paths and folders its permissions and overrides name;
+- for the paths and folders its permissions and overrides name, and the folders of
+  the volumes its overrides mount;
 - for each working directory such runs had, while it keeps `cwd`, so that a
   big project isn't granted again on every run.
 
