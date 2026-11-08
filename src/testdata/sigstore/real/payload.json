@@ -1,0 +1,1 @@
+{"critical":{"identity":{"docker-reference":"ghcr.io/zigsaw-io/net.frippery.busybox"},"image":{"docker-manifest-digest":"sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"},"type":"cosign container image signature"},"optional":null}

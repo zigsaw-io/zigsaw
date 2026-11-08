@@ -346,12 +346,56 @@ the failures the log gained while it ran.
 
 ## Signatures
 
-zigsaw only checks signatures. Nothing in it can make one, or reads a private key: on
-the publisher's machine, `cosign sign-blob` does the arithmetic, reached by the scripts
-as a plain program from the store, since `zigsaw run` would put the passphrase on a
-command line and could label the key's folder low.
+zigsaw only checks signatures. Nothing in it can make one, or reads a private key:
+`cosign sign-blob` does that, keyless in CI (scripts/sign-images.sh, and
+scripts/sign-release.sh --keyless), or with a key on a publisher's machine.
 
-An image's signature is what cosign's classic layout has: a tag `sha256-<digest>.sig` in
+### Keyless
+
+A keyless signature is a Sigstore bundle, as `cosign sign-blob --bundle` writes it: the
+signature of a file, the certificate Fulcio gave the key that made it, valid for ten
+minutes and naming who asked (for GitHub Actions, the workflow's URI at its ref, and in
+an extension of Fulcio's, the issuer of the identity token), and the signature's entry
+in Rekor's log with the log's promise of when it was entered (the SET).
+`src/sigstore.zig` checks one with no I/O, against the trusted root built in
+(`src/sigstore-root.json`, as Sigstore's TUF repository hands it out):
+
+1. the entry is a hashedrekord 0.0.1, in a log whose key the root has, at a time that
+   key was good for, and its SET verifies over `{"body","integratedTime","logID","logIndex"}`;
+2. what the log entered (the body) names this file's SHA-256, this signature, and this
+   certificate;
+3. the certificate chains to a Fulcio authority of the root, checked at the log's time,
+   which also says it hadn't expired when the file was signed; it's for code signing;
+4. its key signed the file, and its SAN and issuer are exactly the identity wanted.
+
+std's X.509 parser checks the chain, and skips the extensions zigsaw needs, which
+`readExtensions` walks itself, bounds-checked, since a certificate is anyone's. Only
+Rekor v1's entries carry a time the log vouches for: a Rekor v2 entry needs an RFC 3161
+timestamp beside it, which zigsaw doesn't check, so it's refused, saying so. The
+inclusion proof a bundle carries isn't checked; the SET is the log's word that the entry
+is in it.
+
+An image's keyless signature goes beside it under `sha256-<digest>.sigstore`: a manifest
+whose layers are the payload, once, and a bundle per signature. What's signed is the
+same simple-signing payload as below, and the checker makes it again from the repository
+and digest rather than read it, so a bundle is good only for exactly that image in
+exactly that repository. Not cosign's classic tag, because a zigsaw from 0.74 to 0.80
+refuses what it can't check there, and not cosign's referrers, which zigsaw doesn't read;
+here, a zigsaw before 0.81 finds nothing, and warns. `signature push-bundle` checks a
+bundle as a pull would before it pushes, as a bundle that isn't good would have every
+pull refuse the image.
+
+Whose signature counts is `trust.Signer`: a key or an identity, per prefix. A release's
+identity is built from the version being installed, so it names
+`release.yml@refs/tags/v<that version>`: a release's signature can't stand for another's.
+`readSums` takes `SHA256SUMS.sigstore.json` by that identity, or `SHA256SUMS.sig` by the
+backup key, the way out should Sigstore's root change past what an old zigsaw knows. A
+store's own keyless entries are a list of their own in `trust.json`, which zigsaws
+before them skip.
+
+### Keys
+
+An image's signature by a key is what cosign's classic layout has: a tag `sha256-<digest>.sig` in
 the image's repository, for a manifest with a layer per signature. The layer is a line of
 JSON, the simple-signing payload, naming the image's digest and repository, and its
 annotation holds the signature of those bytes, ECDSA P-256 over SHA-256, in base64 DER.
@@ -372,7 +416,7 @@ digest pin. `update --check` and the daily check don't look, so a tag moved to s
 wrong is reported, and refused when someone goes to install it.
 
 A release is the same arithmetic over the file `SHA256SUMS`, with the signature in
-`SHA256SUMS.sig`. That file lists the zip and `VERSION`, and `upgrade.readSums` checks both
+`SHA256SUMS.sig` (or keyless, above). That file lists the zip and `VERSION`, and `upgrade.readSums` checks both
 against it: otherwise a signed old release could be offered under a newer `VERSION`, which
 would get as far as the new program saying its own version, and no further. Anything
 that isn't there is `not_signed_yet`, as a release spends some time like that; a signature

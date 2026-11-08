@@ -23,7 +23,9 @@
 # Needs Git Bash and network access. Pulls into a temporary store. Builds the
 # recipes in BUILD_HOME if set, e.g. a store that already has their downloads,
 # otherwise in a temporary store. Keeps the build and pull logs in LOG_DIR if
-# set. With GROUP set, checks only the recipes of that group in
+# set, and compared.txt there, a line "<id> <version> <digest>" for each image
+# shown to be what its recipe builds (what scripts/sign-images.sh signs). With
+# GROUP set, checks only the recipes of that group in
 # scripts/published-groups.txt, as each of CI's jobs does with one; either
 # way, every published recipe must be in exactly one group there. Skips the
 # recipes SKIP_RECIPES lists (file names, separated by spaces).
@@ -301,6 +303,9 @@ for name in $published_recipes; do
         printf 'host  %s %s is built with a host toolchain, so it isn'"'"'t compared\n' "$id" "$version"
     elif [ "$published" = "$built" ]; then
         pass "$id $version: has the digest of a fresh build"
+        # What scripts/sign-images.sh may sign: this, it's now shown, is what the
+        # recipe builds.
+        printf '%s %s %s\n' "$id" "$version" "$published" >>"$logs\\compared.txt"
     else
         manifest "$build_store" "$built" >"$logs\\$id.built-manifest.json"
         manifest "$pull_store" "$published" >"$logs\\$id.published-manifest.json"

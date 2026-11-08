@@ -96,14 +96,22 @@ const usage =
     \\                                  that installing or upgrading zigsaw leaves it off
     \\  upgrade [--yes]                 install zigsaw's latest release over this one, once you
     \\                                  agree; --yes agrees without asking
-    \\  trust                           list the keys that images' signatures are checked against
+    \\  trust                           list whose signatures images and releases are checked for
     \\  trust add <registry/path> <key> check images under that path against a public key, as
     \\                                  `cosign generate-key-pair` makes in cosign.pub
-    \\  trust rm <registry/path> [<fingerprint>]
-    \\                                  stop checking them against keys added there
+    \\  trust add <registry/path> --keyless <identity> [--issuer <url>]
+    \\                                  check them for a keyless signature, by a certificate
+    \\                                  Sigstore's Fulcio gave <identity> (a workflow's URI, as
+    \\                                  cosign's --certificate-identity takes it); the issuer is
+    \\                                  GitHub Actions' unless given
+    \\  trust rm <registry/path> [<fingerprint or identity>]
+    \\                                  stop checking them for signatures added there
     \\  signature payload <image>       print what to sign for an image, for `cosign sign-blob`
     \\  signature push <image> <payload file> <signature file>
-    \\                                  put that signature beside the image, where pull looks
+    \\                                  put a key's signature beside the image, where pull looks
+    \\  signature push-bundle <image> <payload file> <bundle file>
+    \\                                  put a keyless one, as `cosign sign-blob --bundle` writes
+    \\                                  it, beside the image, once it's checked
     \\  signature check <image>         say whether an image has a good signature
     \\  volume create [--path=<dir>] <name>
     \\                                  make a volume in the store, or keep one in a folder of
@@ -551,11 +559,20 @@ fn volumeCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
     return usageError();
 }
 
-/// `zigsaw trust`: which keys count for which images.
+/// `zigsaw trust`: whose signatures count for which images.
 fn trustCommand(ctx: *Context, rest: []const []const u8) !u32 {
     _ = try ctx.store.lock(ctx.arena, .shared);
     if (rest.len == 0) {
         try trust.list(ctx);
+        return 0;
+    }
+    if (std.mem.eql(u8, rest[0], "add") and rest.len >= 4 and isFlag(rest[2], "keyless")) {
+        const issuer = switch (rest.len) {
+            4 => @import("sigstore.zig").github_issuer,
+            6 => if (isFlag(rest[4], "issuer")) rest[5] else return usageError(),
+            else => return usageError(),
+        };
+        try trust.addKeyless(ctx, rest[1], rest[3], issuer);
         return 0;
     }
     if (std.mem.eql(u8, rest[0], "add") and rest.len == 3) {
@@ -570,7 +587,7 @@ fn trustCommand(ctx: *Context, rest: []const []const u8) !u32 {
 }
 
 /// `zigsaw signature`: what scripts/sign-images.sh needs, on either side of cosign's
-/// `sign-blob`, which is what holds the key.
+/// `sign-blob`, which is what signs.
 fn signatureCommand(ctx: *Context, rest: []const []const u8) !u32 {
     if (rest.len < 2) return usageError();
     _ = try ctx.store.lock(ctx.arena, .shared);
@@ -594,6 +611,15 @@ fn signatureCommand(ctx: *Context, rest: []const []const u8) !u32 {
         try remote.pushSignature(ctx, image, payload, text);
         return 0;
     }
+    if (std.mem.eql(u8, what, "push-bundle") and rest.len == 4) {
+        const cwd = std.Io.Dir.cwd();
+        const payload = cwd.readFileAlloc(ctx.io, rest[2], ctx.arena, .limited(signature.max_payload_size)) catch |err|
+            return fail("reading {s}: {t}", .{ rest[2], err });
+        const bundle = cwd.readFileAlloc(ctx.io, rest[3], ctx.arena, .limited(@import("sigstore.zig").max_bundle_size)) catch |err|
+            return fail("reading {s}: {t}", .{ rest[3], err });
+        try remote.pushBundle(ctx, image, payload, bundle);
+        return 0;
+    }
     if (std.mem.eql(u8, what, "check") and rest.len == 2) {
         const target = try remote.resolve(ctx, image);
         var registry: @import("Registry.zig") = undefined;
@@ -604,8 +630,8 @@ fn signatureCommand(ctx: *Context, rest: []const []const u8) !u32 {
             .no_key => fail("{s}: no key here for its registry", .{image}),
             .missing => fail("{s}: not signed", .{image}),
             .wrong => |why| fail("{s}: {s}", .{ image, why }),
-            .signed => |fingerprint| signed: {
-                note("{s}: signed, by key {s}", .{ image, fingerprint });
+            .signed => |by| signed: {
+                note("{s}: signed, by {s}", .{ image, by });
                 break :signed 0;
             },
         };
@@ -997,6 +1023,7 @@ test {
     _ = @import("schedule.zig");
     _ = @import("services.zig");
     _ = @import("signature.zig");
+    _ = @import("sigstore.zig");
     _ = @import("trust.zig");
     _ = @import("shortcuts.zig");
     _ = @import("Sidecar.zig");

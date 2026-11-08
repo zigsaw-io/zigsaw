@@ -3,10 +3,12 @@
 # one, a wrong one, and none, against a local registry, with keys `zigsaw trust` adds.
 # Signatures are made by tests/p256sign.zig, in the form cosign's are, which
 # tests/oci.sh checks with the real thing. `upgrade`'s are in tests/install.sh.
+# Keyless ones, images' and releases', are made by tests/fake-sigstore.sh, and checked
+# by a zigsaw built here to take them.
 #
 #   tests/zot.sh bash tests/signing.sh [path\to\zigsaw.exe]
 #
-# Takes less than a minute.
+# Takes about a minute and a half, a third of it building.
 
 set -u
 export MSYS_NO_PATHCONV=1
@@ -352,6 +354,177 @@ indexed() {
     grep -q "signed, by key $one_fp" <<<"$out" || { echo "$out"; return 1; }
 }
 check "a signature of a multi-platform index covers its image" indexed
+
+# --- Keyless ---------------------------------------------------------------------------
+# Signatures as the Reproduce and Release workflows make them, by a Sigstore of this
+# test's own (tests/fake-sigstore.sh), which only a zigsaw built with its root takes:
+# that one's built here, in Debug, as it's quicker to build (some 20 s).
+
+fake="$work\\fake-sigstore"
+bash "$(cygpath -u "$root")/tests/fake-sigstore.sh" "$fake" init || { echo "making a fake Sigstore failed"; exit 1; }
+(cd "$root" && zig build -Doptimize=Debug "-Dsigstore-test-root=$fake\\root.json" --prefix "$work\\keyless-zigsaw") ||
+    { echo "building a zigsaw that takes the fake Sigstore failed"; exit 1; }
+zk_exe="$work\\keyless-zigsaw\\bin\\zigsaw.exe"
+zk() { ZIGSAW_HOME="$work\\publisher" "$zk_exe" "$@"; }
+zk_in() { # <store name> <args>
+    local name=$1
+    shift
+    ZIGSAW_HOME="$work\\$name" "$zk_exe" "$@"
+}
+workflow=https://github.com/zigsaw-io/zigsaw/.github/workflows
+main_id="$workflow/reproduce.yml@refs/heads/main"
+other_id="$workflow/other.yml@refs/heads/main"
+bundle_tag() { printf 'sha256-%s.sigstore' "${1#sha256:}"; }
+fake_sign() { # <file> <identity> [<issuer>]: the bundle on stdout
+    bash "$(cygpath -u "$root")/tests/fake-sigstore.sh" "$fake" sign "$1" "$2" ${3:+"$3"}
+}
+sign_keyless() { # <identity> <image> [<store>]
+    local p="$work\\kp-$RANDOM" b="$work\\kb-$RANDOM"
+    zk signature payload "$2" >"$p" || return 1
+    fake_sign "$p" "$1" >"$b" || return 1
+    zk_in "${3:-publisher}" signature push-bundle "$2" "$p" "$b"
+}
+trust_keyless() { # <store> [<identity>]
+    zk_in "$1" trust add "$registry/$namespace" --keyless "${2:-$main_id}" >/dev/null 2>&1
+}
+
+built_in_keyless() {
+    zk_in plain trust | tr -d '\r' | grep -q "^ghcr.io/zigsaw-io  keyless $main_id, built in\$" &&
+        zk_in plain trust | tr -d '\r' | grep -q "^zigsaw's releases  keyless $workflow/release.yml@refs/tags/v<version>, built in\$"
+}
+check "zigsaw-io's images are signed keyless by Reproduce on main, its releases by Release" built_in_keyless
+keyless_added() {
+    ! zk_in kt trust add "$registry/$namespace" --keyless "$main_id" --issuer http://insecure.test 2>/dev/null || return 1
+    trust_keyless kt && zk_in kt trust | tr -d '\r' | grep -q "^$registry/$namespace  keyless $main_id\$" || return 1
+    zk_in kt trust add "$registry/$namespace" --keyless "$main_id" 2>&1 | grep -q 'already has'
+}
+check "trust add --keyless takes an identity, once, and an issuer only by https" keyless_added
+trust_keyless publisher
+
+publish 8 && digest8=$digest
+image="$repo:8"
+pushed_keyless() {
+    sign_keyless "$main_id" "$image" >/dev/null 2>&1 || return 1
+    local tags
+    tags=$(curl -sf "http://$registry/v2/$namespace/app/tags/list") || return 1
+    # Quoted, as the classic tag's name begins the other's.
+    grep -q "\"$(bundle_tag "$digest8")\"" <<<"$tags" && ! grep -q "\"$(sig_tag "$digest8")\"" <<<"$tags"
+}
+check "signature push-bundle puts a keyless one beside the image, under a tag of its own" pushed_keyless
+keyless_pull() {
+    trust_keyless kg
+    local out
+    out=$(zk_in kg pull --yes "$image" 2>&1) || { echo "$out"; return 1; }
+    grep -q "signed, by $main_id" <<<"$out" || { echo "$out"; return 1; }
+    [ "$(installed kg)" = 8 ]
+}
+check "pull installs it, and says who signed" keyless_pull
+keyless_info() { zk_in kg info "$image" 2>/dev/null | grep -q "signature *signed, by $main_id"; }
+check "  and info says so" keyless_info
+check "  and signature check passes" zk_in kg signature check "$image"
+keyless_key_only() {
+    # As a signature by a key that doesn't count is.
+    store_with_key ku one
+    local out
+    out=$(in_store ku pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    grep -q "nobody's keyless signature counts for it" <<<"$out"
+}
+check "  a store with only a key for it refuses it: nobody it trusts signed it" keyless_key_only
+not_sigstores() {
+    # zigsaw as released has only Sigstore's root, which never vouched for these.
+    zk_in kr trust add "$registry/$namespace" --keyless "$main_id" >/dev/null 2>&1
+    local out
+    out=$(in_store kr pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    grep -q "a log zigsaw doesn't know" <<<"$out"
+}
+check "  a zigsaw without the test's root refuses it" not_sigstores
+
+publish 9 && digest9=$digest
+image="$repo:9"
+push_refuses_other() {
+    local out
+    out=$(sign_keyless "$other_id" "$image" 2>&1) && { echo "it pushed: $out"; return 1; }
+    grep -q "isn't good for" <<<"$out" || { echo "$out"; return 1; }
+    ! curl -sf "http://$registry/v2/$namespace/app/tags/list" | grep -q "$(bundle_tag "$digest9")"
+}
+check "push-bundle refuses a bundle by someone who doesn't count, and pushes nothing" push_refuses_other
+other_workflow() {
+    # Pushed by a publisher who trusts that workflow; pulled by one who doesn't.
+    zk_in kp trust add "$registry/$namespace" --keyless "$other_id" >/dev/null 2>&1
+    sign_keyless "$other_id" "$image" kp >/dev/null 2>&1 || { echo "pushing failed"; return 1; }
+    trust_keyless kw
+    local out
+    out=$(zk_in kw pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    grep -q "it's signed by $other_id, not $main_id" <<<"$out" || { echo "$out"; return 1; }
+    grep -q 'Nothing was installed' <<<"$out" && [ "$(blobs_in kw)" = 0 ]
+}
+check "a keyless signature by another workflow is refused, with nothing downloaded" other_workflow
+key_beside_keyless() {
+    # The same image, signed with a key too: either signature counts.
+    sign_as one "$image" >/dev/null 2>&1 || return 1
+    zk_in kw trust add "$registry/$namespace" "$work\\one.pub" >/dev/null 2>&1
+    zk_in kw pull --yes "$image" 2>&1 | grep -q "signed, by key $one_fp"
+}
+check "  and a good key's signature beside it still counts" key_beside_keyless
+
+publish 10 && digest10=$digest
+image="$repo:10"
+replayed_keyless() {
+    # Version 8's keyless signature, under the tag for version 10's.
+    copy_manifest "$namespace/app" "$(bundle_tag "$digest8")" "$namespace/app" "$(bundle_tag "$digest10")" || { echo "copying failed"; return 1; }
+    trust_keyless kx
+    local out
+    out=$(zk_in kx pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    grep -q "signature of another file" <<<"$out"
+}
+check "a good keyless signature of another image is refused" replayed_keyless
+keyless_rm() {
+    zk_in kx trust rm "$registry/$namespace" "$main_id" >/dev/null 2>&1 || return 1
+    zk_in kx pull --yes "$image" 2>&1 | grep -q 'no key here for its registry'
+}
+check "trust rm takes a keyless one away by its identity" keyless_rm
+
+# A release: keyless, by Release for the release's own tag, and nobody else.
+release="$work\\release"
+mkdir -p "$release"
+release_of() { # <version> <signing identity, or none>
+    rm -f "$release"/*
+    printf '%s\n' "$1" >"$release\\VERSION"
+    printf '%s  VERSION\n' "$(sha256sum <"$release\\VERSION" | cut -d' ' -f1)" >"$release\\SHA256SUMS"
+    [ "$2" = none ] || fake_sign "$release\\SHA256SUMS" "$2" >"$release\\SHA256SUMS.sigstore.json"
+}
+updates_check() { ZIGSAW_UPGRADE_FROM="$release" zk_in kz updates check 2>&1; }
+release_told() {
+    release_of 999.0.0 "$workflow/release.yml@refs/tags/v999.0.0"
+    updates_check >/dev/null || return 1
+    ZIGSAW_UPGRADE_FROM="$release" zk_in kz updates 2>/dev/null | grep -q 'zigsaw 999.0.0 is out'
+}
+check "a release signed keyless by Release for its tag is told about" release_told
+release_other_tag() {
+    release_of 999.0.0 "$workflow/release.yml@refs/tags/v998.0.0"
+    local out
+    out=$(updates_check) && { echo "it exited 0: $out"; return 1; }
+    grep -q "Couldn't find out zigsaw's latest version" <<<"$out"
+}
+check "  signed for another tag, it isn't" release_other_tag
+release_by_reproduce() {
+    release_of 999.0.0 "$main_id"
+    ! updates_check >/dev/null
+}
+check "  nor signed by what signs images" release_by_reproduce
+release_unsigned() {
+    release_of 999.0.0 none
+    local out
+    out=$(updates_check) || { echo "$out"; return 1; }
+    ! ZIGSAW_UPGRADE_FROM="$release" zk_in kz updates 2>/dev/null | grep -q ' is out'
+}
+check "  nor unsigned, as before" release_unsigned
+release_other_key() {
+    release_of 999.0.0 none
+    "$signer" sign one "$release\\SHA256SUMS" >"$release\\SHA256SUMS.sig"
+    ! updates_check >/dev/null
+}
+check "  nor signed by a key that isn't a release's" release_other_key
 
 for s in "$work"/*/; do [ -f "${s}refs/$APP.json" ] && ZIGSAW_HOME="$(cygpath -w "$s")" "$zigsaw" rm --delete-data "$APP" >/dev/null 2>&1; done
 reg delete "HKCU\\$ZIGSAW_GRANTS_KEY" /f >/dev/null 2>&1

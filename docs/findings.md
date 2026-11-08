@@ -2346,6 +2346,64 @@ Two traps in the tests, which cost a run each: `curl -o /dev/null` under
 with `-f` the failure shows; and a Bash-tool heredoc broke on a Python script's backslashes,
 again.
 
+## Signing without hands
+
+Iteration 81, after the user found cosign by hand "too bothersome": a key on the user's
+machine, its path through Git Bash's quoting, a passphrase on every publish and every
+release, cosign 3.1.4's three flags to stay off Sigstore, and once (2026-11-08) a
+`COSIGN` in `~/.bashrc` that named a zigsaw shim, which exits 1 silently and read as a
+wrong passphrase. The user picked Sigstore keyless signing in CI over a key zigsaw would
+keep (DPAPI), a passphrase per run, or a key in a GitHub secret.
+
+What was found:
+
+- **Sigstore's public instance still logs to Rekor v1 by default**, cosign v3 included:
+  the move to Rekor v2 by default was called off ([Sigstore's
+  post](https://blog.sigstore.dev/rekor-evolution/)). A v1 entry carries the log's signed
+  promise (SET) and its time, which is all an offline check needs. A v2 entry has neither,
+  and needs an RFC 3161 timestamp checked besides. `trusted_root.json` (from
+  `cosign initialize` with `TUF_ROOT` set, which keeps it out of `~/.sigstore`) has
+  rekor.sigstore.dev's ECDSA P-256 key, valid since 2021-01-12, log2025-1's Ed25519 key,
+  and two Fulcio authorities, the current one a chain of two P-384 certificates, valid
+  since 2022-04-13 with no end.
+- **Zig 0.17's `std.crypto.Certificate` does the chain**: `Parsed.verify(issuer, time)`
+  takes the time to check validity at, so a ten-minute Fulcio certificate is checked at
+  Rekor's time, and P-384 issuers work. It skips the extensions that matter here: the
+  SAN, which it keeps but doesn't take apart (Fulcio's is a URI, not a DNS name), the
+  extended key usage, and Fulcio's own, 1.3.6.1.4.1.57264.1.8 for the issuer, a DER
+  UTF8String in the extension's octet string (`.1.1` held it bare before). Its
+  `der.Element.parse` doesn't check a length against the buffer.
+- **The SET is ECDSA over canonical JSON** of the entry, keys sorted:
+  `{"body":<base64 as in the bundle>,"integratedTime":N,"logID":<hex>,"logIndex":N}`,
+  `logID` hex though the bundle's `logId.keyId` is base64. A bundle writes `logIndex` and
+  `integratedTime` as strings, as protobuf's JSON does with 64-bit integers.
+- **zigsaws from 0.74 to 0.80 refuse what they can't check under `sha256-<hex>.sig`**,
+  so keyless signatures can't go there: they'd refuse every image. Under
+  `sha256-<hex>.sigstore` they find nothing, and warn as for any unsigned image. And they
+  read only `SHA256SUMS.sig` for a release, so v0.81.0 is signed with the key one last
+  time, or none of them could upgrade.
+- **Stock `cosign verify-blob --trusted-root` won't take a bundle without an inclusion
+  proof**: it says "--trusted-root only supported with --new-bundle-format", even with
+  that flag. So the fake Sigstore of the tests (`tests/fake-sigstore.sh`, openssl) makes
+  bundles only zigsaw reads; the probe's real one is what both read.
+- **A Debug build of zigsaw takes 21 s here, a safe one 1 min 47 s**, with a new
+  `-Dsigstore-test-root`. So `tests/signing.sh` builds its own in Debug.
+- Git Bash rewrites `-subj /O=x/CN=y` as a path before openssl (a Windows program) sees
+  it, and `jq -r` writes CRLF, which `base64 -d` calls invalid input.
+- A `.sig` tag's name begins a `.sigstore` one's, so a test grepping a tag list for one
+  finds the other.
+- **On a runner, keyless works with nothing set up** but `id-token: write`: cosign 3.1.4's
+  `sign-blob --yes --bundle` found the job's identity token, and its bundle had a Rekor v1
+  entry (rekor.sigstore.dev, logId `wNI9at…`) with promise and inclusion proof, and an RFC
+  3161 timestamp from timestamp.sigstore.dev beside it. The certificate lasts ten minutes,
+  with an empty subject and a critical SAN URI,
+  `.../sigstore-probe.yml@refs/heads/probe/sigstore`. A bundle is some 10 KB.
+- **`GITHUB_TOKEN` with `packages: write` can't push to packages a personal token made**:
+  ghcr.io answered 403 to `POST /v2/zigsaw-io/net.frippery.busybox/blobs/uploads/`. Such a
+  package grants a repository's workflows nothing until its settings say so (Manage Actions
+  access), one package at a time; a repository secret holding a classic token with
+  `write:packages` does for all of them.
+
 ## Defender and exact bytes
 
 Iteration 70's first run as the standard user stopped at `zigsaw.exe`: "Operation

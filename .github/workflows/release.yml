@@ -6,6 +6,13 @@
 # anywhere, with the same Zig, has those hashes; tests/self.sh checks that
 # zigsaw building its own zigsaw.json has them too. Images are still
 # published by hand (scripts/publish.sh).
+#
+# Then the sign job, on another runner, signs the release keyless
+# (scripts/sign-release.sh --keyless): once the Reproduce workflow passed on the
+# tag's commit, and a build of the tag there made the same six programs. Until
+# then the release is out but unsigned, and zigsaw tells nobody about it. If
+# Reproduce hadn't passed yet, the job fails saying so: re-run it ("Re-run failed
+# jobs" keeps the tag, which the signature names) once it has.
 name: Release
 
 on:
@@ -78,3 +85,30 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
               --title "zigsaw ${GITHUB_REF_NAME#v}" --notes-file notes.md \
               zigsaw-x86_64-windows.zip install.ps1 SHA256SUMS VERSION
+
+  sign:
+    needs: release
+    runs-on: windows-2025
+    timeout-minutes: 30
+    # The identity token is what Sigstore's certificate is for: this workflow, at
+    # this tag.
+    permissions:
+      contents: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.0
+
+      - name: Check the release, and sign it keyless
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/sign-release.sh --keyless "$GITHUB_REF_NAME"

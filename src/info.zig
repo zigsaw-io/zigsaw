@@ -18,7 +18,7 @@ pub fn info(ctx: *Context, image_text: []const u8) !void {
     const signature_text: []const u8 = switch (try remote.checkSignature(ctx, &registry, app.target.ref, app.index, app.manifest_digest)) {
         .no_key => "not checked: no key here for its registry",
         .missing => "none: nothing says who made it",
-        .signed => |fingerprint| try std.fmt.allocPrint(arena, "signed, by key {s}", .{fingerprint}),
+        .signed => |by| try std.fmt.allocPrint(arena, "signed, by {s}", .{by}),
         .wrong => |why| try std.fmt.allocPrint(arena, "WRONG: {s}, so pull refuses it", .{why}),
     };
 

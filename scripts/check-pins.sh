@@ -3,8 +3,10 @@
 # recipe names by digest ("org.gtk.Gtk4:4.24.1@sha256:...", as a runtime, an
 # SDK or an image source), and each recipe's own version, by tag. Something
 # missing means a fresh store can't build a recipe that pins it, which the
-# Reproduce workflow can't see for recipes it skips. On the default registry, each
-# recipe's own version must have its signature beside it too.
+# Reproduce workflow can't see for recipes it skips. On the default registry, it says
+# which recipes' own versions have no signature beside them yet, which isn't a
+# failure: the Reproduce workflow signs each once it has rebuilt it, after this runs
+# at the end of scripts/publish.sh, and alongside it in the same workflow.
 #
 #   scripts/check-pins.sh [recipe.json...]   (default: those in published-recipes.txt)
 #
@@ -176,8 +178,9 @@ for recipe in "$@"; do
     done
 done
 
-# Each recipe's own version has its signature beside it (scripts/sign-images.sh): pull
-# warns about one that hasn't. Only here, where zigsaw knows a key, and only that one's
+# Which recipes' own versions have a signature beside them: keyless, as the Reproduce
+# workflow signs (scripts/sign-images.sh), or a key's, from before. Pull warns about
+# one that hasn't. Only here, where zigsaw knows whose count, and only that one's
 # there: whether it's good is what `zigsaw signature check` and a pull are for.
 unsigned=0
 if [ "$registry" = ghcr.io/zigsaw-io ]; then
@@ -185,7 +188,7 @@ if [ "$registry" = ghcr.io/zigsaw-io ]; then
         for recipe in "$@"; do
             id=$(field id "$recipe")
             digest=${tag_digest[$id:$(field version "$recipe")]:-}
-            [ -z "$digest" ] || echo "$id sha256-${digest#sha256:}.sig"
+            [ -z "$digest" ] || printf '%s %s\n%s %s\n' "$id" "sha256-${digest#sha256:}.sigstore" "$id" "sha256-${digest#sha256:}.sig"
         done | sort -u | xargs -P 8 -n 2 bash "$0" --tag
     )
     for recipe in "$@"; do
@@ -193,13 +196,14 @@ if [ "$registry" = ghcr.io/zigsaw-io ]; then
         version=$(field version "$recipe")
         digest=${tag_digest[$id:$version]:-}
         [ -n "$digest" ] || continue
-        tag "$id" "sha256-${digest#sha256:}.sig"
+        tag "$id" "sha256-${digest#sha256:}.sigstore"
+        [ -n "$now" ] || tag "$id" "sha256-${digest#sha256:}.sig"
         if [ -z "$now" ]; then
-            echo "unsigned: $id:$version (@$(short "$digest")) has no signature"
+            echo "unsigned: $id:$version (@$(short "$digest")) has no signature yet: the Reproduce workflow signs it once it has rebuilt it"
             unsigned=$((unsigned + 1))
         fi
     done
 fi
 
-echo "$# recipe(s), $pins pin(s): $missing missing, $older older runtime(s), $unsigned unsigned"
-[ "$missing" -eq 0 ] && [ "$unsigned" -eq 0 ]
+echo "$# recipe(s), $pins pin(s): $missing missing, $older older runtime(s), $unsigned not signed yet"
+[ "$missing" -eq 0 ]

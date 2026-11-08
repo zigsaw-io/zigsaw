@@ -252,20 +252,37 @@
   ghcr.io serves can simply leave the signature off: wrong ones are refused, and a
   warning is all that stops this, which `--yes` doesn't stop for. Refusing is the
   direction, with no date set: only each image's current version is signed, so a plain
-  refusal would also stop `pull app:<older version>`. `zigsaw upgrade` already refuses.
+  refusal would also stop `pull app:<older version>`, and a new image is unsigned until
+  Reproduce has rebuilt it, after the push. `zigsaw upgrade` already refuses.
+- An image built with a host toolchain (MSVC) isn't compared by Reproduce, so CI never
+  signs it: it keeps the key signature it had, and a new version of it would be
+  unsigned.
 - **Signatures don't stop an old image.** A tag moved back to an older version that was
   signed installs, older and vulnerable, as a signature says who made an image and not
   that it's the newest. No freshness (TUF or the like) is checked. Nor does anything
   notice a tag that stops moving, so that a fix never shows up.
-- **A key that leaks can't be revoked.** Old zigsaws trust their built-in keys for good.
-  A new release can drop one, signed by the other, for those who upgrade; there's no
-  list to check, and no one is told. If both are lost, no upgrade can be signed, and
-  zigsaw has to be installed again by hand.
-- The signing key sits on the publisher's machine, encrypted with a passphrase, with no
-  hardware token, as cosign's PIV support needs cgo, which its image doesn't have. Whoever
-  gets the machine and the passphrase can sign anything.
-- Signatures aren't in Sigstore's public log, so nobody can see what's been signed, or
-  notice something signed that shouldn't have been.
+- **Whoever can change `main`, or the workflows, can sign.** Signing is keyless, by CI
+  (iteration 81), so a signature is only as good as GitHub's account security and the
+  repository's branch protection, and the workflow's pinned actions. It says CI rebuilt
+  the image to the same digest, not that a person looked at anything. Every signature is
+  in Sigstore's public log, so one that shouldn't be there can at least be found.
+- **Sigstore's keys are built in, with no TUF.** zigsaw has a fixed copy of Sigstore's
+  trusted root (`src/sigstore-root.json`). Should Fulcio's authority or Rekor's key
+  change, a zigsaw that doesn't know the new ones refuses what's signed with them: images
+  as wrongly signed, releases as not signed. Then a release signed by hand with the
+  offline backup key is how such a zigsaw is reached (`scripts/sign-release.sh`), and
+  `scripts/sigstore-root.sh` refreshes the copy.
+- **Rekor v2 isn't checked.** Its entries carry no time of the log's, only an RFC 3161
+  timestamp beside them, which zigsaw doesn't parse, so they're refused, saying so. If
+  Sigstore's public instance moves cosign to Rekor v2 by default, signing in CI goes
+  red (push-bundle refuses), and this has to be done first. Nor is a bundle's inclusion
+  proof checked: the log's signed promise is taken instead.
+- **A key that leaks can't be revoked.** Old zigsaws trust their built-in keys for good:
+  the one that signed until v0.81.0, for images and, before 0.81, releases, and the
+  backup, for releases. There's no list to check, and no one is told.
+- The backup key sits offline, encrypted with a passphrase, with no hardware token, as
+  cosign's PIV support needs cgo, which its image doesn't have. Whoever gets it and the
+  passphrase can sign a release.
 - The catalog `zigsaw search` reads isn't signed, so it can list what it likes. What
   gets installed is checked, by name.
 - `update --check` and the daily check don't look at signatures, so a tag moved to

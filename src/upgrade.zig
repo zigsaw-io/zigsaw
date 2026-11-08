@@ -1,10 +1,12 @@
 //! `zigsaw upgrade`: installs zigsaw's latest release over this one, as install.ps1
 //! does, and only when the user runs it. A release's files are the zip, VERSION, one
-//! line saying which release it is, SHA256SUMS, which lists both, and SHA256SUMS.sig,
-//! a signature of that by a key built into this zigsaw. So, unlike install.ps1, this
-//! doesn't trust the place the files come from. The signature is made by hand after a
-//! release is published (scripts/sign-release.sh), so until then, there's no release
-//! to tell anyone about.
+//! line saying which release it is, SHA256SUMS, which lists both, and a signature of
+//! that: SHA256SUMS.sigstore.json, keyless, by the Release workflow run for the
+//! release's own tag (trust.zig), or SHA256SUMS.sig, by the backup key built into this
+//! zigsaw. So, unlike install.ps1, this doesn't trust the place the files come from.
+//! The Release workflow signs once a second runner built the same programs and the
+//! Reproduce workflow passed on the commit, which may be after the release is
+//! published; until then, there's no release to tell anyone about.
 //!
 //! ZIGSAW_UPGRADE_FROM names a URL or a directory with those files, and
 //! ZIGSAW_UPGRADE_KEY a key that counts too, for tests.
@@ -20,6 +22,7 @@ const process = @import("process.zig");
 const prompt = @import("prompt.zig");
 const remote = @import("remote.zig");
 const repeat = @import("testing.zig").repeat;
+const sigstore = @import("sigstore.zig");
 const trust = @import("trust.zig");
 const win32 = @import("win32.zig");
 const zipfile = @import("zipfile.zig");
@@ -82,27 +85,42 @@ fn readSums(ctx: *Context, version: []const u8) !Sums {
     const arena = ctx.arena;
     const io = ctx.io;
     const sums_path = try ctx.store.tmpPath(arena, "sums");
+    const bundle_path = try ctx.store.tmpPath(arena, "sums-bundle");
     const sig_path = try ctx.store.tmpPath(arena, "sums-sig");
     defer Io.Dir.cwd().deleteFile(io, sums_path) catch {};
+    defer Io.Dir.cwd().deleteFile(io, bundle_path) catch {};
     defer Io.Dir.cwd().deleteFile(io, sig_path) catch {};
-    if (!try getIfThere(ctx, "SHA256SUMS.sig", sig_path)) return .{ .state = .not_signed_yet };
+    const has_bundle = try getIfThere(ctx, "SHA256SUMS.sigstore.json", bundle_path);
+    const has_sig = try getIfThere(ctx, "SHA256SUMS.sig", sig_path);
+    if (!has_bundle and !has_sig) return .{ .state = .not_signed_yet };
     try get(ctx, "SHA256SUMS", sums_path);
     const sums = try Io.Dir.cwd().readFileAlloc(io, sums_path, arena, .limited(64 << 10));
-    const text = try Io.Dir.cwd().readFileAlloc(io, sig_path, arena, .limited(4096));
-    const keys = try trust.forRelease(ctx);
-    for (keys) |key| {
-        if (!key.verifies(sums, text)) continue;
-        // Signed, so what it lists is what the release is: VERSION can't be from another.
-        const listed = try listedHash(arena, sums, "VERSION") orelse
-            return fail("the signed SHA256SUMS from {s} doesn't list VERSION. Nothing was changed", .{from(ctx)});
-        const version_line = try std.fmt.allocPrint(arena, "{s}\n", .{version});
-        var hash: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(version_line, &hash, .{});
-        if (!std.mem.eql(u8, listed, &std.fmt.bytesToHex(hash, .lower)))
-            return fail("the VERSION from {s} says {s}, which isn't what the release's signed SHA256SUMS lists. Nothing was changed", .{ from(ctx), version });
-        return .{ .state = .signed, .text = sums };
+    const bundle = if (has_bundle) try Io.Dir.cwd().readFileAlloc(io, bundle_path, arena, .limited(sigstore.max_bundle_size)) else "";
+    const text = if (has_sig) try Io.Dir.cwd().readFileAlloc(io, sig_path, arena, .limited(4096)) else "";
+
+    // Keyless first: what a release has now. A key's, for one signed by hand.
+    var why: ?[]const u8 = null;
+    const roots = try sigstore.trustRoots(arena);
+    const signed = for (try trust.forRelease(ctx, version)) |signer| switch (signer) {
+        .keyless => |identity| if (has_bundle) switch (try sigstore.verify(arena, roots, bundle, sums, identity)) {
+            .good => break true,
+            .bad => |b| why = b,
+        },
+        .key => |key| if (has_sig and key.verifies(sums, text)) break true,
+    } else false;
+    if (!signed) {
+        if (why) |w| return fail("the signature of SHA256SUMS from {s} isn't good: {s}. Nothing was changed", .{ from(ctx), w });
+        return fail("the signature of SHA256SUMS from {s} isn't by any key this zigsaw knows. Nothing was changed", .{from(ctx)});
     }
-    return fail("the signature of SHA256SUMS from {s} isn't by any key this zigsaw knows. Nothing was changed", .{from(ctx)});
+    // Signed, so what it lists is what the release is: VERSION can't be from another.
+    const listed = try listedHash(arena, sums, "VERSION") orelse
+        return fail("the signed SHA256SUMS from {s} doesn't list VERSION. Nothing was changed", .{from(ctx)});
+    const version_line = try std.fmt.allocPrint(arena, "{s}\n", .{version});
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(version_line, &hash, .{});
+    if (!std.mem.eql(u8, listed, &std.fmt.bytesToHex(hash, .lower)))
+        return fail("the VERSION from {s} says {s}, which isn't what the release's signed SHA256SUMS lists. Nothing was changed", .{ from(ctx), version });
+    return .{ .state = .signed, .text = sums };
 }
 
 fn latestVersion(ctx: *Context) ![]const u8 {

@@ -158,13 +158,15 @@ check "zigsaw still pulls the signed image" env ZIGSAW_HOME="$work\\pulled" "$zi
 # zigsaw's signatures are cosign's: made by the real thing, and read by it.
 signed="$registry/oci/signed"
 cosign_program=$(find "$(cygpath -u "$ZIGSAW_HOME\\deploy")" -maxdepth 2 -iname cosign.exe | head -1)
-signing_env=(env COSIGN_KEY="$work\\cwd\\cosign.key" COSIGN_PASSWORD=zigsaw-test COSIGN="$cosign_program" ZIGSAW_REGISTRY="$registry/oci" ZIGSAW="$zigsaw")
-printf '{ "id": "signed", "version": "1" }\n' >signed-recipe.json
 signs_blob() {
-    z push net.frippery.busybox "$signed:1" >/dev/null 2>&1 && z push net.frippery.busybox "$signed:latest" >/dev/null 2>&1 || return 1
-    "${signing_env[@]}" bash "$root\\scripts\\sign-images.sh" "$(cygpath -w "$work\\cwd\\signed-recipe.json")"
+    z push net.frippery.busybox "$signed:1" >/dev/null 2>&1 || return 1
+    z signature payload "$signed:1" >"$work\\cwd\\signed.payload" || return 1
+    # As scripts/sign-lib.sh's sign_blob does: with a key, and nothing logged.
+    COSIGN_PASSWORD=zigsaw-test "$cosign_program" sign-blob --key "$work\\cwd\\cosign.key" --new-bundle-format=false \
+        --use-signing-config=false --tlog-upload=false --yes --output-signature "$work\\cwd\\signed.sig" "$work\\cwd\\signed.payload" >/dev/null 2>&1 || return 1
+    z signature push "$signed:1" "$work\\cwd\\signed.payload" "$work\\cwd\\signed.sig"
 }
-check "scripts/sign-images.sh signs with the real cosign, and pushes with zigsaw" signs_blob
+check "the real cosign signs zigsaw's payload with a key, and zigsaw pushes it" signs_blob
 cosign_reads() { r $COSIGN "${offline[@]}" -- verify --key cosign.pub --insecure-ignore-tlog --allow-http-registry "$signed:1"; }
 check "  stock cosign verify reads what zigsaw pushed" cosign_reads
 zigsaw_reads() {
@@ -181,22 +183,6 @@ other_refused() {
     grep -q 'not by any key that counts' <<<"$out"
 }
 check "  and with another cosign key, refuses it" other_refused
-again_leaves_it() { "${signing_env[@]}" ZIGSAW_HOME="$work\\checks" bash "$root\\scripts\\sign-images.sh" "$(cygpath -w "$work\\cwd\\signed-recipe.json")" | grep -q '^0 signed, 2 signed already'; }
-check "  a second run of the script leaves it alone" again_leaves_it
-key_named_wrongly() { # <what COSIGN_KEY is> <what the error should say>
-    local out
-    out=$(env COSIGN_KEY="$1" COSIGN="$cosign_program" bash "$root\\scripts\\sign-images.sh" "$(cygpath -w "$work\\cwd\\signed-recipe.json")" 2>&1) && { echo "it went on"; return 1; }
-    grep -qF "$2" <<<"$out" || { echo "$out"; return 1; }
-}
-check "  a key's path with its backslashes eaten says so" key_named_wrongly 'E:keyscosign.key' "Git Bash ate them"
-check "  a key that's named otherwise says what's there" key_named_wrongly "$work\\cwd\\wrong.key" "cosign.key"
-check "  a folder says to name the file" key_named_wrongly "$work\\cwd" "That's a folder"
-wrong_passphrase() {
-    local out
-    out=$(env COSIGN_KEY="$work\\cwd\\cosign.key" COSIGN_PASSWORD=not-it COSIGN="$cosign_program" bash "$root\\scripts\\sign-images.sh" "$(cygpath -w "$work\\cwd\\signed-recipe.json")" 2>&1) && { echo "it went on"; return 1; }
-    grep -qF "COSIGN_PASSWORD doesn't open" <<<"$out" || { echo "$out"; return 1; }
-}
-check "  a passphrase that doesn't open the key says so, before signing anything" wrong_passphrase
 ZIGSAW_HOME="$work\\checks" "$zigsaw" rm --delete-data net.frippery.busybox >/dev/null 2>&1
 
 # A release, with programs that only have to be the same bytes.
@@ -230,6 +216,24 @@ release_mislabelled() {
     grep -q "VERSION says" <<<"$out" && [ ! -e rel/SHA256SUMS.sig ]
 }
 check "  or one whose VERSION isn't the tag's" release_mislabelled
+printf '9.9.9\n' >rel/VERSION
+# The key, as the rescue's is named: scripts/sign-lib.sh, before anything's signed.
+key_named_wrongly() { # <what COSIGN_KEY is> <what the error should say>
+    local out
+    out=$(env COSIGN_KEY="$1" COSIGN="$cosign_program" SIGN_RELEASE_FROM=rel SIGN_RELEASE_REBUILT=rebuilt bash "$root\\scripts\\sign-release.sh" v9.9.9 2>&1) && { echo "it went on"; return 1; }
+    grep -qF "$2" <<<"$out" || { echo "$out"; return 1; }
+}
+check "  a key's path with its backslashes eaten says so" key_named_wrongly 'E:keyscosign.key' "Git Bash ate them"
+check "  a key that's named otherwise says what's there" key_named_wrongly "$work\\cwd\\wrong.key" "cosign.key"
+check "  a folder says to name the file" key_named_wrongly "$work\\cwd" "That's a folder"
+wrong_passphrase() {
+    rm -f rel/SHA256SUMS.sig
+    local out
+    out=$(env COSIGN_KEY="$work\\cwd\\cosign.key" COSIGN_PASSWORD=not-it COSIGN="$cosign_program" SIGN_RELEASE_FROM=rel SIGN_RELEASE_REBUILT=rebuilt bash "$root\\scripts\\sign-release.sh" v9.9.9 2>&1) && { echo "it went on"; return 1; }
+    grep -qF "COSIGN_PASSWORD doesn't open" <<<"$out" || { echo "$out"; return 1; }
+    [ ! -e rel/SHA256SUMS.sig ]
+}
+check "  a passphrase that doesn't open the key says so, and nothing's signed" wrong_passphrase
 
 # --- In an AppContainer -----------------------------------------------------------
 

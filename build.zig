@@ -18,7 +18,14 @@ pub fn build(b: *std.Build) void {
     // Debug information names the directory zigsaw was built in, so releases
     // leave it out: zigsaw.exe then builds the same anywhere.
     const strip = b.option(bool, "strip", "Omit debug information from zigsaw.exe, as releases do");
-    const exe_mod = zigsawModule(b, target, chosen orelse .safe, strip);
+    // A Sigstore of a test's own (tests/fake-sigstore.sh), whose signatures this
+    // zigsaw takes besides Sigstore's. Only tests build with it: releases never do.
+    const sigstore_test_root: []const u8 = if (b.option([]const u8, "sigstore-test-root", "A trusted root (JSON) whose signatures count besides Sigstore's, for tests")) |file|
+        std.Io.Dir.cwd().readFileAlloc(b.graph.io, file, b.allocator, .limited(1 << 20)) catch |err|
+            std.debug.panic("reading -Dsigstore-test-root={s}: {t}", .{ file, err })
+    else
+        "";
+    const exe_mod = zigsawModule(b, target, chosen orelse .safe, strip, sigstore_test_root);
 
     const exe = b.addExecutable(.{
         .name = "zigsaw",
@@ -266,7 +273,7 @@ pub fn build(b: *std.Build) void {
     cred_helper_step.dependOn(&b.addInstallArtifact(cred_helper, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize, null) })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zigsawModule(b, target, optimize, null, "") })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shimModule(b, target, optimize, true) })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = relayModule(b, target, optimize) })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = hostModule(b, target, optimize) })).step);
@@ -323,7 +330,7 @@ fn shimModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lan
     return mod;
 }
 
-fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, strip: ?bool) *std.Build.Module {
+fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, strip: ?bool, sigstore_test_root: []const u8) *std.Build.Module {
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -333,6 +340,7 @@ fn zigsawModule(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
     // What `zigsaw version` prints: the package's version.
     const options = b.addOptions();
     options.addOption([]const u8, "version", @import("build.zig.zon").version);
+    options.addOption([]const u8, "sigstore_test_root", sigstore_test_root);
     mod.addOptions("options", options);
     // eStargz layers (see format.zig).
     const stargazer = b.dependency("stargazer", .{ .target = target, .optimize = optimize });

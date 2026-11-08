@@ -155,14 +155,22 @@ zigsaw rollback [--yes] <app-id>       go back to the version the installed one 
                                        though not a newer one
 zigsaw hold <app-id>...                have updates, and the daily check, leave the apps alone
 zigsaw unhold <app-id>...              let updates reach them again
-zigsaw trust                           list the keys images' signatures are checked against
+zigsaw trust                           list whose signatures images and releases are checked for
 zigsaw trust add <registry/path> <key> check images under that path against a public key, as
                                        `cosign generate-key-pair` makes in cosign.pub
-zigsaw trust rm <registry/path> [<fingerprint>]
-                                       stop checking them against keys added there
+zigsaw trust add <registry/path> --keyless <identity> [--issuer <url>]
+                                       check them for a keyless signature, by a certificate
+                                       Sigstore's Fulcio gave <identity> (a workflow's URI, as
+                                       cosign's --certificate-identity takes it); the issuer is
+                                       GitHub Actions' unless given
+zigsaw trust rm <registry/path> [<fingerprint or identity>]
+                                       stop checking them for signatures added there
 zigsaw signature payload <image>       print what to sign for an image, for `cosign sign-blob`
 zigsaw signature push <image> <payload file> <signature file>
-                                       put that signature beside the image, where pull looks
+                                       put a key's signature beside the image, where pull looks
+zigsaw signature push-bundle <image> <payload file> <bundle file>
+                                       put a keyless one, as `cosign sign-blob --bundle` writes
+                                       it, beside the image, once it's checked
 zigsaw signature check <image>         say whether an image has a good signature
 zigsaw volume create [--path=<dir>] <name>
                                        make a volume in the store, or keep one in a folder of
@@ -463,25 +471,39 @@ zigsaw push --sources net.frippery.busybox
 
 Whoever could change what a registry serves could otherwise change what you install:
 a tag is only a name, and a daily check would tell you to install it. So images and
-zigsaw's own releases are signed, with a key that isn't on the registry or on GitHub,
-and zigsaw checks those with keys built into it.
+zigsaw's own releases are signed, and zigsaw checks them before it installs anything.
+
+They're signed keyless, by [Sigstore](https://www.sigstore.dev/), from zigsaw's own CI:
+no key is kept anywhere. A certificate names who signed, and zigsaw takes only these:
+
+- **an image**, by the Reproduce workflow on `main`, right after it rebuilt the image
+  from its recipe and got the registry's digest. So a signature says what the
+  [published jobs](#testing) check: this is what the recipe builds.
+- **a release**, by the Release workflow run for that release's own tag, once a second
+  runner built the tag to the same six programs and Reproduce passed on the commit.
 
 ```
 > zigsaw pull org.nodejs.node
-ghcr.io/zigsaw-io/org.nodejs.node: signed, by key d58861ca1b29cc78
+ghcr.io/zigsaw-io/org.nodejs.node: signed, by https://github.com/zigsaw-io/zigsaw/.github/workflows/reproduce.yml@refs/heads/main
 ```
+
+The check is offline: the certificate must chain to Sigstore's Fulcio, and the signature
+be in Sigstore's Rekor log, at a time the certificate was good, by the log's own
+promise; the keys of both are built into zigsaw. Images signed before 0.81.0, with a key
+of zigsaw's, still count.
 
 **What happens to an image from `ghcr.io/zigsaw-io`, on `pull` and `update`**, before
 anything of it is downloaded:
 
-- **Signed by a key that counts**: it goes on, and says whose.
-- **Signed wrongly**: refused, and nothing changes. Wrongly means by another key, or of
-  another image, or of an image under another name, or about anything but what was
-  signed. An app already installed keeps running.
+- **Signed by someone who counts**: it goes on, and says who.
+- **Signed wrongly**: refused, and nothing changes. Wrongly means by someone else (another
+  workflow, branch or key), or of another image, or of an image under another name, or
+  about anything but what was signed. An app already installed keeps running.
 - **Not signed**: for now a warning, and it goes on. So this doesn't stop someone who
   simply leaves the signature off, unless you notice the warning, and a script with
-  `--yes` won't: **a later release will refuse these**. Only each image's latest version
-  is signed; older ones stay unsigned on purpose, as many have known vulnerabilities.
+  `--yes` won't: **a later release will refuse these**. A newly published image is unsigned
+  until Reproduce has rebuilt it, which is on the push after publishing. Older versions
+  stay unsigned on purpose, as many have known vulnerabilities.
 - **A registry that won't answer** is an error, not "not signed".
 
 `zigsaw info` has a line saying which of these an image is. What a recipe pins by digest
@@ -489,37 +511,49 @@ isn't checked, as the digest says exactly what it wants, and a signature on the 
 image covers its runtimes, whose layers its manifest lists.
 
 **`zigsaw upgrade` always requires a signature**, of the release's `SHA256SUMS`, which
-lists the zip and `VERSION`. A release is signed by hand after it's published, once a
-build of its tag here has given the same bytes and Reproduce has passed on it
-([`scripts/sign-release.sh`](scripts/sign-release.sh)). Until then, nobody is told about
-it. 0.73.0's `upgrade` doesn't check, so its upgrade to 0.74.0 isn't checked.
+lists the zip and `VERSION`: `SHA256SUMS.sigstore.json`, keyless, as above. Until the
+Release workflow has signed, nobody is told about a release. One more key counts for
+releases, kept offline: should Sigstore's keys ever change past what a zigsaw knows, a
+release signed with it by hand ([`scripts/sign-release.sh`](scripts/sign-release.sh))
+still reaches that zigsaw. 0.73.0's `upgrade` doesn't check, so its upgrade to 0.74.0
+isn't checked.
 
-**To check by hand**, with stock [cosign](https://github.com/sigstore/cosign) and the
-public keys in [`src/trust.zig`](src/trust.zig), saved as `zigsaw.pub`:
+**To check by hand**, with stock [cosign](https://github.com/sigstore/cosign):
 
 ```powershell
-cosign verify --key zigsaw.pub --insecure-ignore-tlog ghcr.io/zigsaw-io/org.nodejs.node:latest
-cosign verify-blob --key zigsaw.pub --insecure-ignore-tlog --signature SHA256SUMS.sig SHA256SUMS
+zigsaw signature payload org.nodejs.node > payload.json   # or the payload layer beside it
+cosign verify-blob --bundle bundle.json payload.json `
+  --certificate-identity https://github.com/zigsaw-io/zigsaw/.github/workflows/reproduce.yml@refs/heads/main `
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify-blob --bundle SHA256SUMS.sigstore.json SHA256SUMS `
+  --certificate-identity https://github.com/zigsaw-io/zigsaw/.github/workflows/release.yml@refs/tags/v0.81.0 `
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-`--insecure-ignore-tlog` says these signatures aren't in Sigstore's public log, which
-they aren't: a key is all there is to them. That stock `cosign verify` doesn't compare
-the image's name with what's signed is why zigsaw does.
+An image's bundle is the layer `application/vnd.dev.sigstore.bundle.v0.3+json` of the
+manifest tagged `sha256-<digest>.sigstore` beside it (`oras pull` gets it). That tag is
+zigsaw's, not where `cosign verify` looks: zigsaws before 0.81.0 refuse what they can't
+check where they look, so this is where they don't.
 
-**For your own images**, sign them the same way, and tell zigsaw the key once per store:
+**For your own images**, tell zigsaw whose signature counts, once per store: a workflow
+of yours that signs keyless, or a key.
 
 ```powershell
+zigsaw trust add ghcr.io/me --keyless https://github.com/me/app/.github/workflows/release.yml@refs/heads/main
 zigsaw trust add ghcr.io/me cosign.pub   # images under ghcr.io/me, by whole path components
-zigsaw trust                             # the keys there are, built-in ones too
+zigsaw trust                             # who counts where, built-in ones too
 zigsaw trust rm ghcr.io/me               # and away again
 ```
 
-Only ECDSA P-256 keys, which is what `cosign generate-key-pair` makes. An image under no
-key says it wasn't checked, and installs. To sign, have `cosign` sign what `zigsaw
-signature payload <image>` prints, and `zigsaw signature push` puts it beside the image
-with your registry login, in cosign's classic layout (a tag named `sha256-<digest>.sig`).
-[`scripts/sign-images.sh`](scripts/sign-images.sh) does that for the published recipes.
-No digest changes: a signature is beside its image, not in it.
+`--issuer` names another identity provider than GitHub Actions'. Keys are ECDSA P-256 only,
+which is what `cosign generate-key-pair` makes. An image under nobody says it wasn't
+checked, and installs. To sign keyless, have `cosign sign-blob --bundle` sign what
+`zigsaw signature payload <image>` prints, and `zigsaw signature push-bundle` puts the
+bundle beside the image with your registry login, once it's checked it as a pull would.
+With a key, `cosign sign-blob` and `zigsaw signature push`, in cosign's classic layout
+(a tag named `sha256-<digest>.sig`). [`scripts/sign-images.sh`](scripts/sign-images.sh)
+is what CI runs for the published recipes. No digest changes: a signature is beside its
+image, not in it.
 
 What this doesn't do is in [the gaps](docs/gaps.md).
 

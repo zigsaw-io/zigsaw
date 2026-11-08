@@ -23,7 +23,7 @@ pub const max_payload_size = 64 * 1024;
 
 /// How a P-256 public key starts in PKIX form, which is what `cosign.pub` holds: the
 /// algorithm's identifiers, then the 65-byte point.
-const p256_prefix = [_]u8{ 0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00 };
+pub const p256_prefix = [_]u8{ 0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00 };
 const point_size = 65;
 
 pub const Key = struct {
@@ -83,6 +83,13 @@ fn decodeBase64(buf: []u8, text: []const u8) ?[]const u8 {
 pub fn tagFor(arena: Allocator, digest: []const u8) ![]const u8 {
     const colon = std.mem.indexOfScalar(u8, digest, ':') orelse return error.InvalidDigest;
     return std.fmt.allocPrint(arena, "{s}-{s}.sig", .{ digest[0..colon], digest[colon + 1 ..] });
+}
+
+/// The tag a keyless signature of the image with this digest goes under: a tag of its
+/// own, as zigsaws before 0.81 refuse what they can't check under the classic one.
+pub fn bundleTagFor(arena: Allocator, digest: []const u8) ![]const u8 {
+    const colon = std.mem.indexOfScalar(u8, digest, ':') orelse return error.InvalidDigest;
+    return std.fmt.allocPrint(arena, "{s}-{s}.sigstore", .{ digest[0..colon], digest[colon + 1 ..] });
 }
 
 /// What a signature of this image says, as cosign would write it.
