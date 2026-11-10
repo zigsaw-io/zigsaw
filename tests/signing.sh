@@ -361,6 +361,8 @@ check "a signature of a multi-platform index covers its image" indexed
 # that one's built here, in Debug, as it's quicker to build (some 20 s).
 
 fake="$work\\fake-sigstore"
+# Which openssl makes the fakes: they differ (3.6 refuses what 3.2 took, iteration 84).
+echo "openssl: $(command -v openssl), $(openssl version | tr -d '\r')"
 bash "$(cygpath -u "$root")/tests/fake-sigstore.sh" "$fake" init || { echo "making a fake Sigstore failed"; exit 1; }
 (cd "$root" && zig build -Doptimize=Debug "-Dsigstore-test-root=$fake\\root.json" --prefix "$work\\keyless-zigsaw") ||
     { echo "building a zigsaw that takes the fake Sigstore failed"; exit 1; }
@@ -510,9 +512,10 @@ v2_not_sigstores() {
 }
 check "  a zigsaw without the test's root refuses it" v2_not_sigstores
 v2_expired() {
-    # A certificate that was never good, so not when the authority saw the signature.
+    # A certificate that had expired a day before, so not good when the authority saw the
+    # signature.
     local out
-    out=$(FAKE_REKOR=2 FAKE_LEAF_DAYS=-1 sign_keyless "$main_id" "$image" 2>&1) && { echo "it pushed: $out"; return 1; }
+    out=$(FAKE_REKOR=2 FAKE_LEAF_EXPIRED=1 sign_keyless "$main_id" "$image" 2>&1) && { echo "it pushed: $out"; return 1; }
     grep -q "wasn't good when it was signed" <<<"$out" || { echo "$out"; return 1; }
 }
 check "  one whose certificate wasn't good when it was timestamped is refused" v2_expired

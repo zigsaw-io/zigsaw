@@ -21,10 +21,11 @@
 #       With FAKE_REKOR=2, as Rekor v2 logs: a hashedrekord 0.0.2 entry, its proof
 #       and checkpoint, no time of the log's, and the timestamp authority's
 #       RFC 3161 timestamp of the signature, which is always now (<time> is
-#       ignored). FAKE_LEAF_DAYS=-1 makes a certificate that had expired before it
-#       was made, so one that was never good.
+#       ignored). FAKE_LEAF_EXPIRED=1 makes a certificate that expired a day
+#       before it was made, so one that wasn't good when it signed.
 #
-# Needs Git Bash and openssl (3.2 or later).
+# Needs Git Bash and openssl (3.2 or later). openssl says nothing unless it fails,
+# and then why: a quiet failure here is a test's row failing with no output.
 
 set -euo pipefail
 # openssl may be a Windows program, so nothing on its command line is rewritten as a
@@ -40,6 +41,11 @@ b64() { base64 -w0; }
 # Hex on stdin, as bytes on stdout.
 unhex() { local h; h=$(cat); printf '%b' "$(printf '%s' "$h" | sed 's/../\\x&/g')"; }
 sha256_hex() { openssl dgst -sha256 -binary | od -An -v -tx1 | tr -d ' \n'; }
+# Runs a command that writes its files itself, and shows what it said only if it fails.
+quiet() {
+    local said
+    said=$("$@" 2>&1 >/dev/null) || { printf '%s failed:\n%s\n' "$*" "$said" >&2; return 1; }
+}
 
 # The names the logs go by: v1's is its URL's host; v2's checkpoints say it, and a
 # signed note's key id is made from it.
@@ -48,26 +54,26 @@ v2_name=rekor2.invalid
 
 case $command in
 init)
-    openssl ecparam -name secp384r1 -genkey -noout -out "$dir/ca.key" 2>/dev/null
-    openssl req -x509 -new -key "$dir/ca.key" -sha384 -subj "/O=zigsaw tests/CN=fake fulcio" -days 3650 \
+    quiet openssl ecparam -name secp384r1 -genkey -noout -out "$dir/ca.key"
+    quiet openssl req -x509 -new -key "$dir/ca.key" -sha384 -subj "/O=zigsaw tests/CN=fake fulcio" -days 3650 \
         -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign \
-        -out "$dir/ca.pem" 2>/dev/null
+        -out "$dir/ca.pem"
     # Rekor v1's log key, and v2's.
-    openssl ecparam -name prime256v1 -genkey -noout -out "$dir/rekor.key" 2>/dev/null
-    openssl ec -in "$dir/rekor.key" -pubout -outform DER -out "$dir/rekor.der" 2>/dev/null
-    openssl genpkey -algorithm ed25519 -out "$dir/rekor2.key" 2>/dev/null
-    openssl pkey -in "$dir/rekor2.key" -pubout -outform DER -out "$dir/rekor2.der" 2>/dev/null
+    quiet openssl ecparam -name prime256v1 -genkey -noout -out "$dir/rekor.key"
+    quiet openssl ec -in "$dir/rekor.key" -pubout -outform DER -out "$dir/rekor.der"
+    quiet openssl genpkey -algorithm ed25519 -out "$dir/rekor2.key"
+    quiet openssl pkey -in "$dir/rekor2.key" -pubout -outform DER -out "$dir/rekor2.der"
     # The timestamp authority: a root, and the certificate it signs with, for time
     # stamping only, as Sigstore's is (P-384, signing with SHA-256).
-    openssl ecparam -name secp384r1 -genkey -noout -out "$dir/tsa-root.key" 2>/dev/null
-    openssl req -x509 -new -key "$dir/tsa-root.key" -sha384 -subj "/O=zigsaw tests/CN=fake tsa root" -days 3650 \
+    quiet openssl ecparam -name secp384r1 -genkey -noout -out "$dir/tsa-root.key"
+    quiet openssl req -x509 -new -key "$dir/tsa-root.key" -sha384 -subj "/O=zigsaw tests/CN=fake tsa root" -days 3650 \
         -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign \
-        -out "$dir/tsa-root.pem" 2>/dev/null
-    openssl ecparam -name secp384r1 -genkey -noout -out "$dir/tsa.key" 2>/dev/null
-    openssl req -new -key "$dir/tsa.key" -subj "/O=zigsaw tests/CN=fake tsa" -out "$dir/tsa.csr" 2>/dev/null
+        -out "$dir/tsa-root.pem"
+    quiet openssl ecparam -name secp384r1 -genkey -noout -out "$dir/tsa.key"
+    quiet openssl req -new -key "$dir/tsa.key" -subj "/O=zigsaw tests/CN=fake tsa" -out "$dir/tsa.csr"
     printf '[ext]\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,timeStamping\n' >"$dir/tsa.cnf"
-    openssl x509 -req -in "$dir/tsa.csr" -CA "$dir/tsa-root.pem" -CAkey "$dir/tsa-root.key" -sha384 -days 3650 \
-        -set_serial 1 -extfile "$dir/tsa.cnf" -extensions ext -out "$dir/tsa.pem" 2>/dev/null
+    quiet openssl x509 -req -in "$dir/tsa.csr" -CA "$dir/tsa-root.pem" -CAkey "$dir/tsa-root.key" -sha384 -days 3650 \
+        -set_serial 1 -extfile "$dir/tsa.cnf" -extensions ext -out "$dir/tsa.pem"
     rm -f "$dir/tsa.csr" "$dir/tsa.cnf"
 
     ca=$(openssl x509 -in "$dir/ca.pem" -outform DER | b64)
@@ -91,8 +97,8 @@ sign)
     rekor=${FAKE_REKOR:-1}
     work=$(cygpath -m "$(mktemp -d)")
     trap 'rm -rf "$work"' EXIT
-    openssl ecparam -name prime256v1 -genkey -noout -out "$work/leaf.key" 2>/dev/null
-    openssl req -new -key "$work/leaf.key" -subj "/" -out "$work/leaf.csr" 2>/dev/null
+    quiet openssl ecparam -name prime256v1 -genkey -noout -out "$work/leaf.key"
+    quiet openssl req -new -key "$work/leaf.key" -subj "/" -out "$work/leaf.csr"
     cat >"$work/ext.cnf" <<EOF
 [ext]
 subjectAltName=critical,URI:$identity
@@ -100,8 +106,21 @@ keyUsage=critical,digitalSignature
 extendedKeyUsage=codeSigning
 1.3.6.1.4.1.57264.1.8=ASN1:UTF8String:$issuer
 EOF
-    openssl x509 -req -in "$work/leaf.csr" -CA "$dir/ca.pem" -CAkey "$dir/ca.key" -sha384 -days "${FAKE_LEAF_DAYS:-1}" \
-        -set_serial "0x$(openssl rand -hex 16)" -extfile "$work/ext.cnf" -extensions ext -out "$work/leaf.pem" 2>/dev/null
+    if [ "${FAKE_LEAF_EXPIRED:-}" = 1 ]; then
+        # Good from two days ago to one day ago. Not with x509 -days -1, whose end
+        # before its start OpenSSL 3.6 refuses ("end date before start date"), and
+        # -not_before isn't in 3.2: openssl ca takes both dates, in any 3.x.
+        : >"$work/index.txt"
+        openssl rand -hex 16 >"$work/serial"
+        printf '[ca]\ndefault_ca=fake\n[fake]\ndatabase=%s\nnew_certs_dir=%s\nserial=%s\ndefault_md=sha384\npolicy=any\nunique_subject=no\n[any]\n' \
+            "$work/index.txt" "$work" "$work/serial" >"$work/ca.cnf"
+        quiet openssl ca -batch -notext -config "$work/ca.cnf" -cert "$dir/ca.pem" -keyfile "$dir/ca.key" -in "$work/leaf.csr" \
+            -startdate "$(date -u -d '2 days ago' +%Y%m%d%H%M%SZ)" -enddate "$(date -u -d '1 day ago' +%Y%m%d%H%M%SZ)" \
+            -extfile "$work/ext.cnf" -extensions ext -out "$work/leaf.pem"
+    else
+        quiet openssl x509 -req -in "$work/leaf.csr" -CA "$dir/ca.pem" -CAkey "$dir/ca.key" -sha384 -days 1 \
+            -set_serial "0x$(openssl rand -hex 16)" -extfile "$work/ext.cnf" -extensions ext -out "$work/leaf.pem"
+    fi
     # Now, once the certificate is made: its notBefore is when it was, to the second,
     # and a time read before it could fall a second earlier, before it was good.
     [ -n "$time" ] || time=$(date +%s)
@@ -159,8 +178,8 @@ digests = sha256, sha384, sha512
 accuracy = secs:1
 ess_cert_id_alg = sha256
 EOF
-        openssl ts -query -data "$work/sig.der" -sha256 -no_nonce -out "$work/ts.tsq" 2>/dev/null
-        openssl ts -reply -config "$work/ts.cnf" -queryfile "$work/ts.tsq" -out "$work/ts.tsr" 2>/dev/null
+        quiet openssl ts -query -data "$work/sig.der" -sha256 -no_nonce -out "$work/ts.tsq"
+        quiet openssl ts -reply -config "$work/ts.cnf" -queryfile "$work/ts.tsq" -out "$work/ts.tsr"
         stamp=$(b64 <"$work/ts.tsr")
         printf '{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","verificationMaterial":{"certificate":{"rawBytes":"%s"},"tlogEntries":[{"logIndex":"%s","logId":{"keyId":"%s"},"kindVersion":{"kind":"hashedrekord","version":"0.0.2"},"inclusionProof":%s,"canonicalizedBody":"%s"}],"timestampVerificationData":{"rfc3161Timestamps":[{"signedTimestamp":"%s"}]}},"messageSignature":{"messageDigest":{"algorithm":"SHA2_256","digest":"%s"},"signature":"%s"}}\n' \
             "$certificate" "$index" "$log_id" "$proof" "$body64" "$stamp" "$digest" "$signature"
