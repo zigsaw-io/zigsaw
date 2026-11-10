@@ -1,21 +1,28 @@
 //! Keyless signatures, as Sigstore makes them: a bundle, as `cosign sign-blob
 //! --bundle` writes one, holds a signature of a file, the short-lived certificate
-//! whose key made it, and the entry of that signature in Rekor's log, with the log's
-//! promise of when it was entered. The certificate is Fulcio's, and names who signed:
-//! for GitHub Actions, the workflow, at the branch or tag it ran on.
+//! whose key made it, and the entry of that signature in Rekor's log. The
+//! certificate is Fulcio's, and names who signed: for GitHub Actions, the workflow,
+//! at the branch or tag it ran on.
+//!
+//! Rekor comes in two kinds. v1 (rekor.sigstore.dev) writes hashedrekord 0.0.1
+//! entries and promises when it entered each, signing that time. v2 (log2025-1 on)
+//! writes 0.0.2 entries and says nothing of time: a timestamp authority's RFC 3161
+//! timestamp of the signature, in the bundle beside the entry, does (timestamp.zig).
 //!
 //! What's checked, all offline, against a trusted root built in (sigstore-root.json,
 //! as Sigstore's TUF repository hands it out):
-//! - the log's promise is signed by a Rekor key the root has, and its time is one the
-//!   key was good for;
+//! - the entry's proof leads to the root of a tree whose checkpoint is signed by a
+//!   Rekor key the root has (merkle.zig): required for v2, and checked for v1 when
+//!   it's there, as it is in every bundle cosign 3 makes;
+//! - when it was signed: v1's promise, signed by the log's key; for v2, a timestamp
+//!   of this signature by an authority the root has, whose certificate is for time
+//!   stamping and was good then. The log's key must have been good at that time;
 //! - the certificate chains to a Fulcio authority the root has, at that time, which
 //!   also says the certificate hadn't expired when the file was signed;
 //! - the certificate names the workflow and issuer wanted, and is for code signing;
 //! - its key signed the file, and the log's entry names the same file, signature and
 //!   certificate.
-//! Only Rekor v1's entries carry a promise with a time: an entry in a Rekor v2 log
-//! needs a timestamp authority besides, which zigsaw doesn't check, so it isn't
-//! taken.
+//! A v1 bundle's timestamps aren't read: its log's promise is the time.
 //!
 //! No files or network here: see remote.zig for images, upgrade.zig for releases, and
 //! trust.zig for whose signatures count.
@@ -23,9 +30,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Certificate = std.crypto.Certificate;
-const der = Certificate.der;
 const Ecdsa = std.crypto.sign.ecdsa.EcdsaP256Sha256;
+const Ed25519 = std.crypto.sign.Ed25519;
 const Sha256 = std.crypto.hash.sha2.Sha256;
+const der = @import("der.zig");
+const merkle = @import("merkle.zig");
+const timestamp = @import("timestamp.zig");
 const signature = @import("signature.zig");
 const options = @import("options");
 
@@ -64,10 +74,30 @@ const Window = struct {
 };
 
 const Log = struct {
-    key: Ecdsa.PublicKey,
-    /// SHA-256 of the key's DER: how an entry names its log.
+    /// Rekor v1's is ECDSA P-256; v2's (log2025-1) is Ed25519.
+    key: union(enum) {
+        p256: Ecdsa.PublicKey,
+        ed25519: Ed25519.PublicKey,
+    },
+    /// How an entry names its log, and the first 4 bytes how a checkpoint does:
+    /// SHA-256 of the key's DER for P-256, and for Ed25519 a signed note's key id,
+    /// SHA-256 of the log's name, a newline, 0x01 and the key.
     id: [32]u8,
     window: Window,
+
+    /// Whether `sig` is the log's signature of `message`: DER for ECDSA, 64 bytes
+    /// for Ed25519.
+    fn signed(log: Log, message: []const u8, sig: []const u8) bool {
+        switch (log.key) {
+            .p256 => |key| return verifiesDer(sig, message, key),
+            .ed25519 => |key| {
+                if (sig.len != Ed25519.Signature.encoded_length) return false;
+                const s = Ed25519.Signature.fromBytes(sig[0..Ed25519.Signature.encoded_length].*);
+                s.verify(message, key) catch return false;
+                return true;
+            },
+        }
+    }
 };
 
 const Authority = struct {
@@ -77,9 +107,15 @@ const Authority = struct {
 };
 
 pub const TrustRoot = struct {
-    logs: []const Log,
-    authorities: []const Authority,
+    logs: []const Log = &.{},
+    /// Fulcio's: they vouch for whose key signed.
+    authorities: []const Authority = &.{},
+    /// Timestamp authorities': they vouch for when, where a log doesn't (Rekor v2).
+    timestamp_authorities: []const Authority = &.{},
 };
+
+/// An Ed25519 public key's DER, up to the key itself.
+const ed25519_prefix = [_]u8{ 0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00 };
 
 /// The trusted roots zigsaw has: Sigstore's, and the one a test build adds.
 pub fn trustRoots(arena: Allocator) ![]const TrustRoot {
@@ -90,19 +126,23 @@ pub fn trustRoots(arena: Allocator) ![]const TrustRoot {
     return roots.items;
 }
 
-/// Reads a trusted root as Sigstore's TUF repository has it. Of its logs, only Rekor
-/// v1's (ECDSA P-256) are kept; of its authorities, all.
+/// Reads a trusted root as Sigstore's TUF repository has it. Of its logs, those with
+/// an ECDSA P-256 key (Rekor v1) or an Ed25519 one (Rekor v2) are kept, the rest
+/// passed over; of its authorities, all.
 pub fn parseTrustRoot(arena: Allocator, json: []const u8) error{ NotATrustRoot, OutOfMemory }!TrustRoot {
     const ValidFor = struct { start: []const u8, end: ?[]const u8 = null };
+    const RawAuthority = struct {
+        certChain: struct { certificates: []const struct { rawBytes: []const u8 } },
+        validFor: ValidFor,
+    };
     const Raw = struct {
         tlogs: []const struct {
+            baseUrl: []const u8 = "",
             publicKey: struct { rawBytes: []const u8, keyDetails: []const u8, validFor: ValidFor },
             logId: struct { keyId: []const u8 },
         } = &.{},
-        certificateAuthorities: []const struct {
-            certChain: struct { certificates: []const struct { rawBytes: []const u8 } },
-            validFor: ValidFor,
-        } = &.{},
+        certificateAuthorities: []const RawAuthority = &.{},
+        timestampAuthorities: []const RawAuthority = &.{},
     };
     const raw = std.json.parseFromSliceLeaky(Raw, arena, json, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         error.OutOfMemory => |e| return e,
@@ -119,28 +159,46 @@ pub fn parseTrustRoot(arena: Allocator, json: []const u8) error{ NotATrustRoot, 
 
     var logs: std.ArrayList(Log) = .empty;
     for (raw.tlogs) |t| {
-        if (!std.mem.eql(u8, t.publicKey.keyDetails, "PKIX_ECDSA_P256_SHA_256")) continue;
         const key_der = try decode(arena, t.publicKey.rawBytes) orelse return error.NotATrustRoot;
-        if (key_der.len != signature.p256_prefix.len + 65 or !std.mem.startsWith(u8, key_der, &signature.p256_prefix)) return error.NotATrustRoot;
-        var id: [32]u8 = undefined;
-        Sha256.hash(key_der, &id, .{});
         const named = try decode(arena, t.logId.keyId) orelse return error.NotATrustRoot;
+        var id: [32]u8 = undefined;
+        const key: @FieldType(Log, "key") = if (std.mem.eql(u8, t.publicKey.keyDetails, "PKIX_ECDSA_P256_SHA_256")) key: {
+            if (key_der.len != signature.p256_prefix.len + 65 or !std.mem.startsWith(u8, key_der, &signature.p256_prefix)) return error.NotATrustRoot;
+            Sha256.hash(key_der, &id, .{});
+            break :key .{ .p256 = Ecdsa.PublicKey.fromSec1(key_der[signature.p256_prefix.len..]) catch return error.NotATrustRoot };
+        } else if (std.mem.eql(u8, t.publicKey.keyDetails, "PKIX_ED25519")) key: {
+            if (key_der.len != ed25519_prefix.len + 32 or !std.mem.startsWith(u8, key_der, &ed25519_prefix)) return error.NotATrustRoot;
+            const raw_key = key_der[ed25519_prefix.len..][0..32];
+            // A signed note's key id: the log's name is its URL's host.
+            const name = std.mem.trimEnd(u8, if (std.mem.startsWith(u8, t.baseUrl, "https://")) t.baseUrl["https://".len..] else return error.NotATrustRoot, "/");
+            var h = Sha256.init(.{});
+            h.update(name);
+            h.update("\n\x01");
+            h.update(raw_key);
+            h.final(&id);
+            break :key .{ .ed25519 = Ed25519.PublicKey.fromBytes(raw_key.*) catch return error.NotATrustRoot };
+        } else continue;
         if (!std.mem.eql(u8, named, &id)) return error.NotATrustRoot;
-        try logs.append(arena, .{
-            .key = Ecdsa.PublicKey.fromSec1(key_der[signature.p256_prefix.len..]) catch return error.NotATrustRoot,
-            .id = id,
-            .window = try window(t.publicKey.validFor),
-        });
+        try logs.append(arena, .{ .key = key, .id = id, .window = try window(t.publicKey.validFor) });
     }
-    var authorities: std.ArrayList(Authority) = .empty;
-    for (raw.certificateAuthorities) |a| {
-        var chain: std.ArrayList([]const u8) = .empty;
-        for (a.certChain.certificates) |c| try chain.append(arena, try decode(arena, c.rawBytes) orelse return error.NotATrustRoot);
-        if (chain.items.len == 0) return error.NotATrustRoot;
-        for (chain.items) |c| _ = Certificate.parse(.{ .buffer = c, .index = 0 }) catch return error.NotATrustRoot;
-        try authorities.append(arena, .{ .chain = chain.items, .window = try window(a.validFor) });
-    }
-    return .{ .logs = logs.items, .authorities = authorities.items };
+    const authoritiesOf = struct {
+        fn of(a: Allocator, list: []const RawAuthority) error{ NotATrustRoot, OutOfMemory }![]const Authority {
+            var out: std.ArrayList(Authority) = .empty;
+            for (list) |each| {
+                var chain: std.ArrayList([]const u8) = .empty;
+                for (each.certChain.certificates) |c| try chain.append(a, try decode(a, c.rawBytes) orelse return error.NotATrustRoot);
+                if (chain.items.len == 0) return error.NotATrustRoot;
+                for (chain.items) |c| _ = Certificate.parse(.{ .buffer = c, .index = 0 }) catch return error.NotATrustRoot;
+                try out.append(a, .{ .chain = chain.items, .window = try window(each.validFor) });
+            }
+            return out.items;
+        }
+    }.of;
+    return .{
+        .logs = logs.items,
+        .authorities = try authoritiesOf(arena, raw.certificateAuthorities),
+        .timestamp_authorities = try authoritiesOf(arena, raw.timestampAuthorities),
+    };
 }
 
 /// Whether `bundle` is a good signature of `blob` by `identity`, as one of `roots`
@@ -152,6 +210,7 @@ pub fn verify(arena: Allocator, roots: []const TrustRoot, bundle: []const u8, bl
         kindVersion: struct { kind: []const u8, version: []const u8 },
         integratedTime: std.json.Value = .null,
         inclusionPromise: ?struct { signedEntryTimestamp: []const u8 } = null,
+        inclusionProof: ?Proof = null,
         canonicalizedBody: []const u8,
     };
     const Raw = struct {
@@ -160,6 +219,9 @@ pub fn verify(arena: Allocator, roots: []const TrustRoot, bundle: []const u8, bl
             certificate: ?struct { rawBytes: []const u8 } = null,
             x509CertificateChain: ?struct { certificates: []const struct { rawBytes: []const u8 } } = null,
             tlogEntries: []const Entry = &.{},
+            timestampVerificationData: ?struct {
+                rfc3161Timestamps: []const struct { signedTimestamp: []const u8 } = &.{},
+            } = null,
         },
         messageSignature: ?struct {
             messageDigest: ?struct { algorithm: []const u8, digest: []const u8 } = null,
@@ -186,63 +248,128 @@ pub fn verify(arena: Allocator, roots: []const TrustRoot, bundle: []const u8, bl
     else if (raw.verificationMaterial.x509CertificateChain) |chain| (if (chain.certificates.len > 0) chain.certificates[0].rawBytes else return bad("it has no certificate")) else return bad("it has no certificate: it was signed with a key, not keyless");
     const leaf_der = try decode(arena, cert_text) orelse return bad("its certificate isn't base64");
 
-    // The entry, in a log one of the roots has.
-    var found: ?struct { entry: Entry, log: Log, root: TrustRoot } = null;
-    var any_v2 = false;
+    // The entry, in a log one of the roots has: a hashedrekord, 0.0.1 as Rekor v1
+    // writes it, or 0.0.2 as v2 does.
+    var found: ?struct { entry: Entry, log: Log, root: TrustRoot, v2: bool } = null;
+    var other_version: ?[]const u8 = null;
     search: for (raw.verificationMaterial.tlogEntries) |entry| {
         if (!std.mem.eql(u8, entry.kindVersion.kind, "hashedrekord")) continue;
-        if (!std.mem.eql(u8, entry.kindVersion.version, "0.0.1")) {
-            any_v2 = true;
+        const v2 = std.mem.eql(u8, entry.kindVersion.version, "0.0.2");
+        if (!v2 and !std.mem.eql(u8, entry.kindVersion.version, "0.0.1")) {
+            other_version = entry.kindVersion.version;
             continue;
         }
         const id = try decode(arena, entry.logId.keyId) orelse continue;
         for (roots) |root| for (root.logs) |log| if (std.mem.eql(u8, id, &log.id)) {
-            found = .{ .entry = entry, .log = log, .root = root };
+            found = .{ .entry = entry, .log = log, .root = root, .v2 = v2 };
             break :search;
         };
     }
-    const at = found orelse return bad(if (any_v2)
-        "it's logged in a Rekor v2 log, whose entries zigsaw can't check yet"
+    const at = found orelse return bad(if (other_version) |v|
+        try std.fmt.allocPrint(arena, "it's logged as a hashedrekord {s}, which zigsaw doesn't know", .{v})
     else if (raw.verificationMaterial.tlogEntries.len == 0)
         "it isn't logged in Rekor"
     else
         "it's logged in a log zigsaw doesn't know");
     const entry = at.entry;
+    const body_json = try decode(arena, entry.canonicalizedBody) orelse return bad("its log entry isn't base64");
 
-    // The log's promise: that it entered this body, at this time.
-    const time = jsonInt(entry.integratedTime) orelse return bad("its log entry has no time");
-    const index = jsonInt(entry.logIndex) orelse return bad("its log entry has no index");
+    // That the log holds the entry: its proof, to the root of a tree the log signed.
+    // Rekor v2 has nothing else; v1 promises it besides, and its proof, if there,
+    // has to hold too.
+    if (entry.inclusionProof) |proof| {
+        if (try checkProof(arena, at.log, body_json, proof)) |why| return bad(why);
+    } else if (at.v2) return bad("its log entry has no proof that it's in the log");
+
+    // When it was signed: the log's promised time in v1; in v2, which has none, an
+    // authority's timestamp of the signature.
+    const time = if (!at.v2) time: {
+        const time = jsonInt(entry.integratedTime) orelse return bad("its log entry has no time");
+        const index = jsonInt(entry.logIndex) orelse return bad("its log entry has no index");
+        const promise = entry.inclusionPromise orelse return bad("its log entry has no promise from the log");
+        const promised = try std.fmt.allocPrint(arena, "{{\"body\":\"{s}\",\"integratedTime\":{d},\"logID\":\"{s}\",\"logIndex\":{d}}}", .{
+            entry.canonicalizedBody, time, std.fmt.bytesToHex(at.log.id, .lower), index,
+        });
+        const promise_der = try decode(arena, promise.signedEntryTimestamp) orelse return bad("its log's promise isn't base64");
+        if (!at.log.signed(promised, promise_der)) return bad("its log's promise isn't the log's");
+        break :time time;
+    } else time: {
+        const stamps = if (raw.verificationMaterial.timestampVerificationData) |t| t.rfc3161Timestamps else &.{};
+        if (stamps.len == 0) return bad("it's logged in Rekor v2 with no timestamp, and that's the only time it would have");
+        var why: []const u8 = "its timestamp isn't from an authority zigsaw knows";
+        for (stamps) |stamp| {
+            const stamp_der = try decode(arena, stamp.signedTimestamp) orelse {
+                why = "its timestamp isn't base64";
+                continue;
+            };
+            const t = timestamp.parse(stamp_der) catch {
+                why = "its timestamp isn't one zigsaw can read";
+                continue;
+            };
+            if (!t.imprint.of(sig_der)) {
+                why = "its timestamp is of another signature";
+                continue;
+            }
+            if (timestampedBy(at.root, t)) break :time t.time;
+        }
+        return bad(why);
+    };
     if (!at.log.window.contains(time)) return bad("its log entry is from a time the log's key wasn't good for");
-    const promise = entry.inclusionPromise orelse return bad("its log entry has no promise from the log");
-    const promised = try std.fmt.allocPrint(arena, "{{\"body\":\"{s}\",\"integratedTime\":{d},\"logID\":\"{s}\",\"logIndex\":{d}}}", .{
-        entry.canonicalizedBody, time, std.fmt.bytesToHex(at.log.id, .lower), index,
-    });
-    const promise_der = try decode(arena, promise.signedEntryTimestamp) orelse return bad("its log's promise isn't base64");
-    if (!verifiesDer(promise_der, promised, at.log.key)) return bad("its log's promise isn't the log's");
 
     // What the log entered: this file, this signature, this certificate.
-    const Body = struct {
-        kind: []const u8,
-        apiVersion: []const u8,
-        spec: struct {
-            data: struct { hash: struct { algorithm: []const u8, value: []const u8 } },
-            signature: struct { content: []const u8, publicKey: struct { content: []const u8 } },
-        },
+    const Logged = struct { digest: []const u8, signature: []const u8, certificate: []const u8 };
+    const logged: Logged = if (!at.v2) logged: {
+        const Body = struct {
+            kind: []const u8,
+            apiVersion: []const u8,
+            spec: struct {
+                data: struct { hash: struct { algorithm: []const u8, value: []const u8 } },
+                signature: struct { content: []const u8, publicKey: struct { content: []const u8 } },
+            },
+        };
+        const body = std.json.parseFromSliceLeaky(Body, arena, body_json, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+            error.OutOfMemory => |e| return e,
+            else => return bad("its log entry isn't a hashedrekord"),
+        };
+        if (!std.mem.eql(u8, body.kind, "hashedrekord") or !std.mem.eql(u8, body.apiVersion, "0.0.1")) return bad("its log entry isn't a hashedrekord");
+        if (!std.mem.eql(u8, body.spec.data.hash.algorithm, "sha256")) return bad("it's a signature of another file");
+        var hash: [32]u8 = undefined;
+        _ = std.fmt.hexToBytes(&hash, body.spec.data.hash.value) catch return bad("it's a signature of another file");
+        const logged_pem = try decode(arena, body.spec.signature.publicKey.content) orelse return bad("its log entry's certificate isn't base64");
+        break :logged .{
+            .digest = try arena.dupe(u8, &hash),
+            .signature = try decode(arena, body.spec.signature.content) orelse return bad("its log entry's signature isn't base64"),
+            .certificate = try pemCertificate(arena, logged_pem) orelse return bad("its log entry's certificate isn't one"),
+        };
+    } else logged: {
+        const Body = struct {
+            kind: []const u8,
+            apiVersion: []const u8,
+            spec: struct { hashedRekordV002: struct {
+                data: struct { algorithm: []const u8, digest: []const u8 },
+                signature: struct {
+                    content: []const u8,
+                    verifier: struct { x509Certificate: ?struct { rawBytes: []const u8 } = null },
+                },
+            } },
+        };
+        const body = std.json.parseFromSliceLeaky(Body, arena, body_json, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+            error.OutOfMemory => |e| return e,
+            else => return bad("its log entry isn't a hashedrekord"),
+        };
+        if (!std.mem.eql(u8, body.kind, "hashedrekord") or !std.mem.eql(u8, body.apiVersion, "0.0.2")) return bad("its log entry isn't a hashedrekord");
+        const spec = body.spec.hashedRekordV002;
+        if (!std.mem.eql(u8, spec.data.algorithm, "SHA2_256")) return bad("it's a signature of another file");
+        const cert = spec.signature.verifier.x509Certificate orelse return bad("its log entry is of another certificate");
+        break :logged .{
+            .digest = try decode(arena, spec.data.digest) orelse return bad("it's a signature of another file"),
+            .signature = try decode(arena, spec.signature.content) orelse return bad("its log entry's signature isn't base64"),
+            .certificate = try decode(arena, cert.rawBytes) orelse return bad("its log entry's certificate isn't base64"),
+        };
     };
-    const body_json = try decode(arena, entry.canonicalizedBody) orelse return bad("its log entry isn't base64");
-    const body = std.json.parseFromSliceLeaky(Body, arena, body_json, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
-        error.OutOfMemory => |e| return e,
-        else => return bad("its log entry isn't a hashedrekord"),
-    };
-    if (!std.mem.eql(u8, body.kind, "hashedrekord") or !std.mem.eql(u8, body.apiVersion, "0.0.1")) return bad("its log entry isn't a hashedrekord");
-    if (!std.mem.eql(u8, body.spec.data.hash.algorithm, "sha256") or
-        !std.ascii.eqlIgnoreCase(body.spec.data.hash.value, &std.fmt.bytesToHex(digest, .lower)))
-        return bad("it's a signature of another file");
-    const logged_sig = try decode(arena, body.spec.signature.content) orelse return bad("its log entry's signature isn't base64");
-    if (!std.mem.eql(u8, logged_sig, sig_der)) return bad("its log entry is of another signature");
-    const logged_pem = try decode(arena, body.spec.signature.publicKey.content) orelse return bad("its log entry's certificate isn't base64");
-    const logged_cert = try pemCertificate(arena, logged_pem) orelse return bad("its log entry's certificate isn't one");
-    if (!std.mem.eql(u8, logged_cert, leaf_der)) return bad("its log entry is of another certificate");
+    if (!std.mem.eql(u8, logged.digest, &digest)) return bad("it's a signature of another file");
+    if (!std.mem.eql(u8, logged.signature, sig_der)) return bad("its log entry is of another signature");
+    if (!std.mem.eql(u8, logged.certificate, leaf_der)) return bad("its log entry is of another certificate");
 
     // The certificate: Fulcio's, then, for code signing, and whose.
     const leaf = Certificate.parse(.{ .buffer = leaf_der, .index = 0 }) catch return bad("its certificate isn't one zigsaw can read");
@@ -267,6 +394,55 @@ pub fn verify(arena: Allocator, roots: []const TrustRoot, bundle: []const u8, bl
     if (!std.mem.eql(u8, san, identity.san))
         return bad(try std.fmt.allocPrint(arena, "it's signed by {s}, not {s}", .{ san, identity.san }));
     return .good;
+}
+
+/// A log entry's proof that the log holds it, as a bundle has it.
+const Proof = struct {
+    logIndex: std.json.Value,
+    rootHash: []const u8,
+    treeSize: std.json.Value,
+    hashes: []const []const u8 = &.{},
+    checkpoint: ?struct { envelope: []const u8 } = null,
+};
+
+/// Why `proof` isn't `log`'s word that it holds `entry`, or null if it is.
+fn checkProof(arena: Allocator, log: Log, entry: []const u8, proof: Proof) Allocator.Error!?[]const u8 {
+    const index = jsonInt(proof.logIndex) orelse return "its log's proof has no index";
+    const size = jsonInt(proof.treeSize) orelse return "its log's proof has no tree size";
+    if (index < 0 or size < 0) return "its log's proof has no index";
+    const root = try decode(arena, proof.rootHash) orelse return "its log's proof isn't base64";
+    if (root.len != 32) return "its log's proof isn't base64";
+    const path = try arena.alloc(merkle.Hash, proof.hashes.len);
+    for (proof.hashes, path) |text, *h| {
+        const bytes = try decode(arena, text) orelse return "its log's proof isn't base64";
+        if (bytes.len != 32) return "its log's proof isn't base64";
+        h.* = bytes[0..32].*;
+    }
+    const computed = merkle.rootFromPath(merkle.leafHash(entry), @intCast(index), @intCast(size), path) orelse
+        return "its log entry isn't in the tree its proof names";
+    if (!std.mem.eql(u8, &computed, root)) return "its log entry isn't in the tree its proof names";
+
+    const envelope = (proof.checkpoint orelse return "its log's proof has no checkpoint").envelope;
+    const checkpoint = try merkle.parseCheckpoint(arena, envelope) orelse return "its log's checkpoint isn't one";
+    if (checkpoint.size != @as(u64, @intCast(size)) or !std.mem.eql(u8, &checkpoint.root, root)) return "its log's checkpoint is of another tree";
+    for (checkpoint.signatures) |s| {
+        if (std.mem.eql(u8, &s.hint, log.id[0..4]) and log.signed(checkpoint.body, s.bytes)) return null;
+    }
+    return "its log's checkpoint isn't the log's";
+}
+
+/// Whether one of `root`'s timestamp authorities signed `t`, with a certificate
+/// for time stamping that was good then.
+fn timestampedBy(root: TrustRoot, t: timestamp.Token) bool {
+    for (root.timestamp_authorities) |authority| {
+        if (!authority.window.contains(t.time)) continue;
+        const leaf = Certificate.parse(.{ .buffer = authority.chain[0], .index = 0 }) catch continue;
+        if (!chainVerifies(leaf, authority.chain[1..], t.time)) continue;
+        const named = readExtensions(authority.chain[0]) catch continue;
+        if (!named.time_stamping) continue;
+        if (t.signedBy(leaf)) return true;
+    }
+    return false;
 }
 
 fn bad(why: []const u8) Verdict {
@@ -295,17 +471,20 @@ const Named = struct {
     san: ?[]const u8 = null,
     issuer: ?[]const u8 = null,
     code_signing: bool = false,
+    time_stamping: bool = false,
 };
 
 const oid_san = [_]u8{ 0x55, 0x1d, 0x11 };
 const oid_eku = [_]u8{ 0x55, 0x1d, 0x25 };
 const oid_code_signing = [_]u8{ 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x03 };
+const oid_time_stamping = [_]u8{ 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x08 };
 /// Fulcio's extensions are under 1.3.6.1.4.1.57264.1: .8 is the issuer as a DER
 /// string, .1 the same as bare bytes, from before .8.
 const oid_fulcio = [_]u8{ 0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xbf, 0x30, 0x01 };
 
 /// The certificate's subject alternative name (a URI, or else an email address),
-/// Fulcio's issuer extension, and whether it's for code signing. std's parser skips
+/// Fulcio's issuer extension, and whether it's for code signing or for time
+/// stamping. std's parser skips
 /// all of these but the first, which it doesn't take apart.
 fn readExtensions(bytes: []const u8) !Named {
     var named: Named = .{};
@@ -325,7 +504,7 @@ fn readExtensions(bytes: []const u8) !Named {
         const oid = try element(bytes, ext.slice.start, ext.slice.end);
         var next = try element(bytes, oid.slice.end, ext.slice.end);
         if (next.identifier.tag == .boolean) next = try element(bytes, next.slice.end, ext.slice.end);
-        if (next.identifier.tag != .octetstring) return error.NotACertificate;
+        if (next.identifier.tag != .octetstring) return error.Malformed;
         const id = bytes[oid.slice.start..oid.slice.end];
         const value = bytes[next.slice.start..next.slice.end];
         if (std.mem.eql(u8, id, &oid_san)) {
@@ -336,7 +515,9 @@ fn readExtensions(bytes: []const u8) !Named {
             while (j < seq.slice.end) {
                 const purpose = try element(value, j, seq.slice.end);
                 j = purpose.slice.end;
-                if (std.mem.eql(u8, value[purpose.slice.start..purpose.slice.end], &oid_code_signing)) named.code_signing = true;
+                const what = value[purpose.slice.start..purpose.slice.end];
+                if (std.mem.eql(u8, what, &oid_code_signing)) named.code_signing = true;
+                if (std.mem.eql(u8, what, &oid_time_stamping)) named.time_stamping = true;
             }
         } else if (id.len == oid_fulcio.len + 1 and std.mem.startsWith(u8, id, &oid_fulcio)) {
             switch (id[oid_fulcio.len]) {
@@ -371,16 +552,7 @@ fn readSan(value: []const u8) !?[]const u8 {
     return email;
 }
 
-/// A DER element at `i`, which must end by `end`: std's parser takes the length as
-/// it comes, and this is a certificate from anyone.
-fn element(bytes: []const u8, i: usize, end: usize) !der.Element {
-    if (end > bytes.len or i + 2 > end) return error.NotACertificate;
-    // A long form's length bytes, which std's parser reads without looking.
-    if (bytes[i + 1] & 0x80 != 0 and i + 2 + (bytes[i + 1] & 0x7f) > end) return error.NotACertificate;
-    const e = der.Element.parse(bytes[0..end], @intCast(i)) catch return error.NotACertificate;
-    if (e.slice.start > end or e.slice.end > end or e.slice.end < e.slice.start) return error.NotACertificate;
-    return e;
-}
+const element = der.element;
 
 /// The DER of the one certificate in a PEM text.
 fn pemCertificate(arena: Allocator, pem: []const u8) !?[]const u8 {
@@ -427,16 +599,7 @@ fn parseTime(text: []const u8) ?i64 {
     const hh = n(text[11..13]) orelse return null;
     const mm = n(text[14..16]) orelse return null;
     const ss = n(text[17..19]) orelse return null;
-    if (m < 1 or m > 12 or d < 1 or d > 31 or hh > 23 or mm > 59 or ss > 60) return null;
-    // Days from 1970-01-01 to the date (Howard Hinnant's days_from_civil).
-    const yy = if (m <= 2) y - 1 else y;
-    const era = @divFloor(yy, 400);
-    const yoe = yy - era * 400;
-    const mp = @mod(m + 9, 12);
-    const doy = @divFloor(153 * mp + 2, 5) + d - 1;
-    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
-    const days = era * 146097 + doe - 719468;
-    return days * 86400 + hh * 3600 + mm * 60 + ss;
+    return der.epochSeconds(y, m, d, hh, mm, ss);
 }
 
 // --- Tests -------------------------------------------------------------------------
@@ -447,6 +610,12 @@ const fake_blob = @embedFile("testdata/sigstore/fake/blob");
 const fake_bundle = @embedFile("testdata/sigstore/fake/bundle.json");
 const fake_late = @embedFile("testdata/sigstore/fake/late.json");
 const fake_gitlab = @embedFile("testdata/sigstore/fake/gitlab.json");
+const fake_v2 = @embedFile("testdata/sigstore/fake/bundle-v2.json");
+const fake_late_v2 = @embedFile("testdata/sigstore/fake/late-v2.json");
+// Made by tests/fake-sigstore.sh (in a scratch dir: `init`, then the blob signed as
+// reproduce.yml on main; late = <time> three days on; gitlab = issuer
+// https://gitlab.com; -v2 = FAKE_REKOR=2, late-v2 with FAKE_LEAF_DAYS=-1), and its
+// root.json copied here.
 const reproduce_main: Identity = .{
     .issuer = github_issuer,
     .san = "https://github.com/zigsaw-io/zigsaw/.github/workflows/reproduce.yml@refs/heads/main",
@@ -462,14 +631,20 @@ fn expectBad(verdict: Verdict, why: []const u8) !void {
     }
 }
 
-test "Sigstore's trusted root, as built in, has Rekor v1's key and Fulcio" {
+test "Sigstore's trusted root, as built in, has both Rekors' keys, Fulcio and a timestamp authority" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const root = try parseTrustRoot(arena.allocator(), built_in_root);
-    try testing.expect(root.logs.len >= 1);
+    try testing.expect(root.logs.len >= 2);
     try testing.expect(root.authorities.len >= 1);
-    // rekor.sigstore.dev's, since 2021.
+    try testing.expect(root.timestamp_authorities.len >= 1);
+    // rekor.sigstore.dev's, since 2021, by its key's hash.
     try testing.expectEqualStrings("c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d", &std.fmt.bytesToHex(root.logs[0].id, .lower));
+    try testing.expect(root.logs[0].key == .p256);
+    // log2025-1.rekor.sigstore.dev's (v2), by its signed-note key id, which the root
+    // names and parseTrustRoot works out again.
+    try testing.expectEqualStrings("cf1199155bddd051", std.fmt.bytesToHex(root.logs[1].id, .lower)[0..16]);
+    try testing.expect(root.logs[1].key == .ed25519);
 }
 
 test "a bundle made as cosign makes one, by a fake Sigstore, is good" {
@@ -478,6 +653,7 @@ test "a bundle made as cosign makes one, by a fake Sigstore, is good" {
     const a = arena.allocator();
     const roots = &.{try parseTrustRoot(a, fake_root)};
     try testing.expectEqual(Verdict.good, try verify(a, roots, fake_bundle, fake_blob, reproduce_main));
+    try testing.expectEqual(Verdict.good, try verify(a, roots, fake_v2, fake_blob, reproduce_main));
 }
 
 test "a bundle isn't good for another file, workflow, branch or issuer" {
@@ -527,6 +703,7 @@ test "a bundle with anything changed isn't good" {
         verificationMaterial: struct { tlogEntries: []const struct {
             integratedTime: []const u8,
             inclusionPromise: struct { signedEntryTimestamp: []const u8 },
+            inclusionProof: struct { hashes: []const []const u8, checkpoint: struct { envelope: []const u8 } },
             canonicalizedBody: []const u8,
         } },
         messageSignature: struct { signature: []const u8 },
@@ -535,14 +712,17 @@ test "a bundle with anything changed isn't good" {
     const entry = raw.verificationMaterial.tlogEntries[0];
     const cases = [_]struct { what: []const u8, why: []const u8 }{
         .{ .what = entry.inclusionPromise.signedEntryTimestamp, .why = "promise" },
-        .{ .what = entry.canonicalizedBody, .why = "promise isn't the log's" },
+        .{ .what = entry.canonicalizedBody, .why = "isn't in the tree its proof names" },
         .{ .what = raw.messageSignature.signature, .why = "log entry is of another signature" },
+        .{ .what = entry.inclusionProof.hashes[0], .why = "isn't in the tree its proof names" },
+        .{ .what = entry.inclusionProof.checkpoint.envelope[entry.inclusionProof.checkpoint.envelope.len - 40 .. entry.inclusionProof.checkpoint.envelope.len - 1], .why = "checkpoint isn't the log's" },
     };
     for (cases) |case| {
         // The same text with one base64 character in its middle changed.
         const changed = try a.dupe(u8, case.what);
         const at = changed.len / 2;
         changed[at] = if (changed[at] == 'A') 'B' else 'A';
+        try testing.expect(std.mem.indexOf(u8, fake_bundle, case.what) != null);
         const tampered = try std.mem.replaceOwned(u8, a, fake_bundle, case.what, changed);
         try expectBad(try verify(a, roots, tampered, fake_blob, reproduce_main), case.why);
     }
@@ -550,6 +730,95 @@ test "a bundle with anything changed isn't good" {
     const later = try std.fmt.allocPrint(a, "\"integratedTime\":\"{d}\"", .{(std.fmt.parseInt(i64, entry.integratedTime, 10) catch unreachable) + 1});
     const moved = try std.mem.replaceOwned(u8, a, fake_bundle, try std.fmt.allocPrint(a, "\"integratedTime\":\"{s}\"", .{entry.integratedTime}), later);
     try expectBad(try verify(a, roots, moved, fake_blob, reproduce_main), "promise isn't the log's");
+}
+
+test "a Rekor v2 bundle isn't good unless the root has its log, a timestamp authority and Fulcio" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sigstore = try parseTrustRoot(a, built_in_root);
+    const fake = try parseTrustRoot(a, fake_root);
+    try expectBad(try verify(a, &.{sigstore}, fake_v2, fake_blob, reproduce_main), "a log zigsaw doesn't know");
+    const cases = [_]struct { root: TrustRoot, why: []const u8 }{
+        .{ .root = .{ .logs = fake.logs, .authorities = fake.authorities }, .why = "its timestamp isn't from an authority zigsaw knows" },
+        .{ .root = .{ .logs = fake.logs, .authorities = fake.authorities, .timestamp_authorities = sigstore.timestamp_authorities }, .why = "its timestamp isn't from an authority zigsaw knows" },
+        .{ .root = .{ .logs = fake.logs, .authorities = sigstore.authorities, .timestamp_authorities = fake.timestamp_authorities }, .why = "isn't from a Fulcio zigsaw knows" },
+        // An authority whose certificate isn't for time stamping: Fulcio's, as one.
+        .{ .root = .{ .logs = fake.logs, .authorities = fake.authorities, .timestamp_authorities = fake.authorities }, .why = "its timestamp isn't from an authority zigsaw knows" },
+    };
+    for (cases) |case| try expectBad(try verify(a, &.{case.root}, fake_v2, fake_blob, reproduce_main), case.why);
+}
+
+test "a Rekor v2 bundle isn't good if its certificate wasn't good when it was timestamped" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try expectBad(try verify(a, &.{try parseTrustRoot(a, fake_root)}, fake_late_v2, fake_blob, reproduce_main), "wasn't good when it was signed");
+}
+
+test "a Rekor v2 bundle with anything changed or left out isn't good" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const roots = &.{try parseTrustRoot(a, fake_root)};
+    const Raw = struct {
+        verificationMaterial: struct {
+            tlogEntries: []const struct {
+                inclusionProof: struct {
+                    logIndex: []const u8,
+                    rootHash: []const u8,
+                    hashes: []const []const u8,
+                    checkpoint: struct { envelope: []const u8 },
+                },
+                canonicalizedBody: []const u8,
+            },
+            timestampVerificationData: struct { rfc3161Timestamps: []const struct { signedTimestamp: []const u8 } },
+        },
+        messageSignature: struct { signature: []const u8 },
+    };
+    const raw = try std.json.parseFromSliceLeaky(Raw, a, fake_v2, .{ .ignore_unknown_fields = true });
+    const proof = raw.verificationMaterial.tlogEntries[0].inclusionProof;
+    const envelope = proof.checkpoint.envelope;
+    const stamp = raw.verificationMaterial.timestampVerificationData.rfc3161Timestamps[0].signedTimestamp;
+    const cases = [_]struct { what: []const u8, why: []const u8 }{
+        .{ .what = raw.verificationMaterial.tlogEntries[0].canonicalizedBody, .why = "isn't in the tree its proof names" },
+        .{ .what = proof.hashes[0], .why = "isn't in the tree its proof names" },
+        .{ .what = proof.rootHash, .why = "isn't in the tree its proof names" },
+        // The checkpoint's signature, past its 4-byte hint.
+        .{ .what = envelope[envelope.len - 40 .. envelope.len - 1], .why = "checkpoint isn't the log's" },
+        .{ .what = stamp, .why = "timestamp" },
+        // Then the timestamp is of the signature the bundle had.
+        .{ .what = raw.messageSignature.signature, .why = "its timestamp is of another signature" },
+    };
+    for (cases) |case| {
+        const changed = try a.dupe(u8, case.what);
+        const at = changed.len / 2;
+        changed[at] = if (changed[at] == 'A') 'B' else 'A';
+        try testing.expect(std.mem.indexOf(u8, fake_v2, case.what) != null);
+        const tampered = try std.mem.replaceOwned(u8, a, fake_v2, case.what, changed);
+        try expectBad(try verify(a, roots, tampered, fake_blob, reproduce_main), case.why);
+    }
+    const late = try std.json.parseFromSliceLeaky(Raw, a, fake_late_v2, .{ .ignore_unknown_fields = true });
+    const replaced = [_]struct { from: []const u8, to: []const u8, why: []const u8 }{
+        // Another place in the tree.
+        .{
+            .from = try std.fmt.allocPrint(a, "\"logIndex\":\"{s}\",\"rootHash\"", .{proof.logIndex}),
+            .to = try std.fmt.allocPrint(a, "\"logIndex\":\"{s}\",\"rootHash\"", .{if (proof.logIndex[0] == '0') "1" else "0"}),
+            .why = "isn't in the tree its proof names",
+        },
+        // A checkpoint for a tree of another size (the JSON's escaped newlines).
+        .{ .from = "\\n2\\n", .to = "\\n3\\n", .why = "checkpoint is of another tree" },
+        // No proof, or no timestamp.
+        .{ .from = "\"inclusionProof\"", .to = "\"inclusionProofs\"", .why = "no proof that it's in the log" },
+        .{ .from = "\"timestampVerificationData\"", .to = "\"timestampVerificationDatas\"", .why = "no timestamp" },
+        // Another bundle's timestamp.
+        .{ .from = stamp, .to = late.verificationMaterial.timestampVerificationData.rfc3161Timestamps[0].signedTimestamp, .why = "its timestamp is of another signature" },
+    };
+    for (replaced) |r| {
+        try testing.expect(std.mem.indexOf(u8, fake_v2, r.from) != null);
+        const tampered = try std.mem.replaceOwned(u8, a, fake_v2, r.from, r.to);
+        try expectBad(try verify(a, roots, tampered, fake_blob, reproduce_main), r.why);
+    }
 }
 
 // Made by iteration 81's probe on a GitHub runner: `cosign sign-blob --yes --bundle`,
@@ -594,13 +863,88 @@ test "real bundles aren't good for anything else" {
     try expectBad(try verify(a, roots, try std.mem.replaceOwned(u8, a, real_blob_bundle, set, changed), real_blob, probe), "promise isn't the log's");
 }
 
+// Made by iteration 83's probe on a GitHub runner: `cosign sign-blob --yes
+// --signing-config` with `cosign signing-config create --with-default-rekor-v2`,
+// keyless, cosign 3.1.4, against Sigstore's public instance, 2026-11-10: logged in
+// log2025-1.rekor.sigstore.dev, timestamped by timestamp.sigstore.dev; stock
+// `cosign verify-blob --use-signed-timestamps` said "Verified OK" to both there. The
+// blob is the same as iteration 81's.
+const real_v2_blob_bundle = @embedFile("testdata/sigstore/real/v2/blob.v2.bundle.json");
+const real_v2_payload = @embedFile("testdata/sigstore/real/v2/payload.json");
+const real_v2_payload_bundle = @embedFile("testdata/sigstore/real/v2/payload.json.v2.bundle.json");
+const probe_v2: Identity = .{
+    .issuer = github_issuer,
+    .san = "https://github.com/zigsaw-io/zigsaw/.github/workflows/rekor-v2-probe.yml@refs/heads/probe/rekor-v2",
+};
+
+test "real Rekor v2 bundles from Sigstore's public instance are good, against the root built in" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const roots = &.{try parseTrustRoot(a, built_in_root)};
+    try testing.expectEqual(Verdict.good, try verify(a, roots, real_v2_blob_bundle, real_blob, probe_v2));
+    try testing.expectEqual(Verdict.good, try verify(a, roots, real_v2_payload_bundle, real_v2_payload, probe_v2));
+}
+
+test "real Rekor v2 bundles aren't good for anything else" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const sigstore = try parseTrustRoot(a, built_in_root);
+    const roots = &.{sigstore};
+    try expectBad(try verify(a, roots, real_v2_payload_bundle, real_v2_payload, probe), "it's signed by https://github.com/zigsaw-io/zigsaw/.github/workflows/rekor-v2-probe.yml@refs/heads/probe/rekor-v2, not");
+    try expectBad(try verify(a, roots, real_v2_blob_bundle, real_v2_payload, probe_v2), "another file");
+    try expectBad(try verify(a, roots, real_v2_payload_bundle, real_blob, probe_v2), "another file");
+    // Without Sigstore's timestamp authority, or its log, or its Fulcio.
+    try expectBad(try verify(a, &.{TrustRoot{ .logs = sigstore.logs, .authorities = sigstore.authorities }}, real_v2_blob_bundle, real_blob, probe_v2), "its timestamp isn't from an authority zigsaw knows");
+    try expectBad(try verify(a, &.{TrustRoot{ .logs = sigstore.logs[0..1], .authorities = sigstore.authorities, .timestamp_authorities = sigstore.timestamp_authorities }}, real_v2_blob_bundle, real_blob, probe_v2), "a log zigsaw doesn't know");
+    try expectBad(try verify(a, &.{try parseTrustRoot(a, fake_root)}, real_v2_blob_bundle, real_blob, probe_v2), "a log zigsaw doesn't know");
+    // Each of what proves it, changed.
+    const Raw = struct {
+        verificationMaterial: struct {
+            tlogEntries: []const struct {
+                inclusionProof: struct { rootHash: []const u8, hashes: []const []const u8, checkpoint: struct { envelope: []const u8 } },
+                canonicalizedBody: []const u8,
+            },
+            timestampVerificationData: struct { rfc3161Timestamps: []const struct { signedTimestamp: []const u8 } },
+        },
+    };
+    const raw = try std.json.parseFromSliceLeaky(Raw, a, real_v2_blob_bundle, .{ .ignore_unknown_fields = true });
+    const entry = raw.verificationMaterial.tlogEntries[0];
+    // Its checkpoint has the log's signature, then witnesses' cosignatures, which
+    // zigsaw doesn't read: the log's is the one that counts.
+    const envelope = entry.inclusionProof.checkpoint.envelope;
+    const log_line = "\u{2014} log2025-1.rekor.sigstore.dev ";
+    const log_sig_start = std.mem.indexOf(u8, envelope, log_line).? + log_line.len;
+    const log_sig = envelope[log_sig_start..std.mem.indexOfScalarPos(u8, envelope, log_sig_start, '\n').?];
+    const witness_line = "\u{2014} witness.stagemole.eu ";
+    const witness_sig_start = std.mem.indexOf(u8, envelope, witness_line).? + witness_line.len;
+    const witness_sig = envelope[witness_sig_start..std.mem.indexOfScalarPos(u8, envelope, witness_sig_start, '\n').?];
+    const cases = [_]struct { what: []const u8, why: ?[]const u8 }{
+        .{ .what = entry.canonicalizedBody, .why = "isn't in the tree its proof names" },
+        .{ .what = entry.inclusionProof.hashes[entry.inclusionProof.hashes.len / 2], .why = "isn't in the tree its proof names" },
+        .{ .what = entry.inclusionProof.rootHash, .why = "isn't in the tree its proof names" },
+        .{ .what = log_sig, .why = "checkpoint isn't the log's" },
+        .{ .what = witness_sig, .why = null },
+        .{ .what = raw.verificationMaterial.timestampVerificationData.rfc3161Timestamps[0].signedTimestamp, .why = "timestamp" },
+    };
+    for (cases) |case| {
+        try testing.expect(std.mem.indexOf(u8, real_v2_blob_bundle, case.what) != null);
+        const changed = try a.dupe(u8, case.what);
+        const at = changed.len / 2;
+        changed[at] = if (changed[at] == 'A') 'B' else 'A';
+        const verdict = try verify(a, roots, try std.mem.replaceOwned(u8, a, real_v2_blob_bundle, case.what, changed), real_blob, probe_v2);
+        if (case.why) |why| try expectBad(verdict, why) else try testing.expectEqual(Verdict.good, verdict);
+    }
+}
+
 test "a certificate's lengths that run past it are an error, not a crash" {
     // A sequence whose long-form length says 4 bytes follow, and only 1 does.
-    try testing.expectError(error.NotACertificate, readExtensions(&.{ 0x30, 0x84, 0x01 }));
+    try testing.expectError(error.Malformed, readExtensions(&.{ 0x30, 0x84, 0x01 }));
     // A length past the end.
-    try testing.expectError(error.NotACertificate, readExtensions(&.{ 0x30, 0x05, 0x30, 0x00 }));
-    try testing.expectError(error.NotACertificate, readExtensions(&.{0x30}));
-    try testing.expectError(error.NotACertificate, readExtensions(""));
+    try testing.expectError(error.Malformed, readExtensions(&.{ 0x30, 0x05, 0x30, 0x00 }));
+    try testing.expectError(error.Malformed, readExtensions(&.{0x30}));
+    try testing.expectError(error.Malformed, readExtensions(""));
 }
 
 test "what isn't a bundle, or is one zigsaw can't check, says so" {
@@ -610,8 +954,12 @@ test "what isn't a bundle, or is one zigsaw can't check, says so" {
     const roots = &.{try parseTrustRoot(a, fake_root)};
     try expectBad(try verify(a, roots, "nope", fake_blob, reproduce_main), "isn't a Sigstore bundle");
     try expectBad(try verify(a, roots, "{\"mediaType\":\"x\",\"verificationMaterial\":{}}", fake_blob, reproduce_main), "isn't a Sigstore bundle");
+    // A v1 entry taken for a v2 one has no timestamp; a version zigsaw doesn't know
+    // isn't taken.
     const v2 = try std.mem.replaceOwned(u8, a, fake_bundle, "\"version\":\"0.0.1\"", "\"version\":\"0.0.2\"");
-    try expectBad(try verify(a, roots, v2, fake_blob, reproduce_main), "Rekor v2");
+    try expectBad(try verify(a, roots, v2, fake_blob, reproduce_main), "no timestamp");
+    const v3 = try std.mem.replaceOwned(u8, a, fake_bundle, "\"version\":\"0.0.1\"", "\"version\":\"0.0.3\"");
+    try expectBad(try verify(a, roots, v3, fake_blob, reproduce_main), "hashedrekord 0.0.3, which zigsaw doesn't know");
     const unlogged = try std.mem.replaceOwned(u8, a, fake_bundle, "\"kind\":\"hashedrekord\"", "\"kind\":\"dsse\"");
     try expectBad(try verify(a, roots, unlogged, fake_blob, reproduce_main), "a log zigsaw doesn't know");
 }

@@ -2711,6 +2711,52 @@ Two loose ends, not looked into: libtiff is configured with `-Dcxx=OFF`, yet bui
 `tiffxx`; and whether `-DCMAKE_STATIC_LINKER_FLAGS=/Brepro` makes it reproduce. The
 recipe isn't published, and `tests/published.sh` doesn't compare MSVC images.
 
+## Rekor v2 (iteration 83)
+
+**What cosign signs with today.** Sigstore's TUF signing config (read 2026-11-10 with
+`cosign signing-config create --with-default-services`) lists one log, rekor.sigstore.dev,
+API version 1, plus the timestamp authority and Fulcio. On a runner (probe run
+42752799354, cosign 3.1.4), a default `sign-blob --bundle` made a hashedrekord 0.0.1 entry
+with the log's promise, a proof, a checkpoint and one RFC 3161 timestamp, as in 81. The
+switch hasn't happened. `--with-default-rekor-v2` puts log2025-1.rekor.sigstore.dev
+(API version 2, valid from 2026-01-01) first, and cosign then logs there.
+
+**What a v2 bundle is.** The same bundle v0.3, 9.8 KB (the v1 one 10.6 KB):
+
+- `kindVersion` hashedrekord **0.0.2**;
+- `logId` = the trusted root's id for log2025-1, `cf119915…`, a signed note's key id;
+- no `integratedTime` and no `inclusionPromise`;
+- an `inclusionProof` (index, root, tree size 191,856,125, the path) with a checkpoint;
+- one RFC 3161 timestamp from timestamp.sigstore.dev, as in v1.
+
+The body is `spec.hashedRekordV002`:
+
+- `data`: {algorithm SHA2_256, digest in base64};
+- `signature`: {content, verifier: {keyDetails, x509Certificate: {rawBytes}}}: the
+  certificate itself, as DER, where v1 had a PEM in `publicKey`.
+
+**The checkpoint has witnesses.** After the log's own line (`— log2025-1.rekor.sigstore.dev`,
+Ed25519) come four cosignatures, by witness.stagemole.eu, krabbel.ct.ipng.ch,
+staging.witness.transparency.goog/ring-any-bells and witness.navigli.sunlight.geomys.org.
+Each is a 4-byte hint, an 8-byte time and a 64-byte signature. zigsaw finds the log's line
+by its hint and reads no other: the witnesses aren't in the trusted root, and nothing says
+how many should count. A test changes a witness's line and the bundle stays good.
+
+**The timestamp.** Sigstore's authority answers with a full TimeStampResp:
+
+- granted, with no certificates in it;
+- its signer named by issuer and serial;
+- signed attributes: content type, signing time, message digest, signingCertificateV2;
+- ecdsa-with-SHA256 on the P-384 key of `CN=sigstore-tsa`, whose certificate is for time
+  stamping only (critical EKU) and chains to `sigstore-tsa-selfsigned` in the root;
+- its imprint is SHA-256 of the bundle's signature bytes;
+- its time, in the v1 bundle of 81, is the log's integratedTime to the second.
+
+Zig 0.17's std ECDSA verifies P-384 with a SHA-256 digest, padding it on the left.
+
+**Stock cosign** said "Verified OK" to both v2 bundles with `--use-signed-timestamps`, and
+zigsaw 0.83.0 takes both against the root built in (`src/testdata/sigstore/real/v2/`).
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

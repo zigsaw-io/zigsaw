@@ -484,6 +484,39 @@ keyless_rm() {
 }
 check "trust rm takes a keyless one away by its identity" keyless_rm
 
+# Rekor v2: no time of the log's, a timestamp authority's instead, and a proof that
+# the log holds the entry, as cosign makes them with a v2 signing config.
+publish 11 && digest11=$digest
+image="$repo:11"
+pushed_v2() {
+    FAKE_REKOR=2 sign_keyless "$main_id" "$image" >/dev/null 2>&1 || return 1
+    curl -sf "http://$registry/v2/$namespace/app/tags/list" | grep -q "\"$(bundle_tag "$digest11")\""
+}
+check "a keyless signature logged in Rekor v2: push-bundle takes it" pushed_v2
+v2_pull() {
+    trust_keyless k2
+    local out
+    out=$(zk_in k2 pull --yes "$image" 2>&1) || { echo "$out"; return 1; }
+    grep -q "signed, by $main_id" <<<"$out" || { echo "$out"; return 1; }
+    [ "$(installed k2)" = 11 ]
+}
+check "  pull installs it, and says who signed" v2_pull
+check "  and signature check passes" zk_in k2 signature check "$image"
+v2_not_sigstores() {
+    zk_in k2r trust add "$registry/$namespace" --keyless "$main_id" >/dev/null 2>&1
+    local out
+    out=$(in_store k2r pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    grep -q "a log zigsaw doesn't know" <<<"$out"
+}
+check "  a zigsaw without the test's root refuses it" v2_not_sigstores
+v2_expired() {
+    # A certificate that was never good, so not when the authority saw the signature.
+    local out
+    out=$(FAKE_REKOR=2 FAKE_LEAF_DAYS=-1 sign_keyless "$main_id" "$image" 2>&1) && { echo "it pushed: $out"; return 1; }
+    grep -q "wasn't good when it was signed" <<<"$out" || { echo "$out"; return 1; }
+}
+check "  one whose certificate wasn't good when it was timestamped is refused" v2_expired
+
 # A release: keyless, by Release for the release's own tag, and nobody else.
 release="$work\\release"
 mkdir -p "$release"
@@ -500,6 +533,14 @@ release_told() {
     ZIGSAW_UPGRADE_FROM="$release" zk_in kz updates 2>/dev/null | grep -q 'zigsaw 999.0.0 is out'
 }
 check "a release signed keyless by Release for its tag is told about" release_told
+release_v2() {
+    FAKE_REKOR=2 release_of 999.0.0 "$workflow/release.yml@refs/tags/v999.0.0"
+    grep -q '"version":"0.0.2"' "$release\\SHA256SUMS.sigstore.json" || return 1
+    local out
+    out=$(ZIGSAW_UPGRADE_FROM="$release" zk_in kz2 updates check 2>&1) || { echo "$out"; return 1; }
+    ZIGSAW_UPGRADE_FROM="$release" zk_in kz2 updates 2>/dev/null | grep -q 'zigsaw 999.0.0 is out'
+}
+check "  as one logged in Rekor v2 is" release_v2
 release_other_tag() {
     release_of 999.0.0 "$workflow/release.yml@refs/tags/v998.0.0"
     local out

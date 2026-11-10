@@ -488,9 +488,11 @@ ghcr.io/zigsaw-io/org.nodejs.node: signed, by https://github.com/zigsaw-io/zigsa
 ```
 
 The check is offline: the certificate must chain to Sigstore's Fulcio, and the signature
-be in Sigstore's Rekor log, at a time the certificate was good, by the log's own
-promise; the keys of both are built into zigsaw. Images signed before 0.81.0, with a key
-of zigsaw's, still count.
+be in Sigstore's Rekor log, at a time the certificate was good. In Rekor v1 the log
+promises that time; in Rekor v2 (from zigsaw 0.83.0) Sigstore's timestamp authority
+vouches for it. Either way, the log's signed checkpoint and the entry's proof against it
+must show the log holds the signature. The keys of all three are built into zigsaw.
+Images signed before 0.81.0, with a key of zigsaw's, still count.
 
 **What happens to an image from `ghcr.io/zigsaw-io`, on `pull` and `update`**, before
 anything of it is downloaded:

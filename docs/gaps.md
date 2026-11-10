@@ -267,16 +267,20 @@
   the image to the same digest, not that a person looked at anything. Every signature is
   in Sigstore's public log, so one that shouldn't be there can at least be found.
 - **Sigstore's keys are built in, with no TUF.** zigsaw has a fixed copy of Sigstore's
-  trusted root (`src/sigstore-root.json`). Should Fulcio's authority or Rekor's key
-  change, a zigsaw that doesn't know the new ones refuses what's signed with them: images
-  as wrongly signed, releases as not signed. Then a release signed by hand with the
-  offline backup key is how such a zigsaw is reached (`scripts/sign-release.sh`), and
-  `scripts/sigstore-root.sh` refreshes the copy.
-- **Rekor v2 isn't checked.** Its entries carry no time of the log's, only an RFC 3161
-  timestamp beside them, which zigsaw doesn't parse, so they're refused, saying so. If
-  Sigstore's public instance moves cosign to Rekor v2 by default, signing in CI goes
-  red (push-bundle refuses), and this has to be done first. Nor is a bundle's inclusion
-  proof checked: the log's signed promise is taken instead.
+  trusted root (`src/sigstore-root.json`). Should Fulcio's authority, Rekor's keys
+  (either log's) or the timestamp authority's certificates change, a zigsaw that doesn't
+  know the new ones refuses what's signed with them: images as wrongly signed, releases
+  as not signed. Rekor v2 rotates its log every so often (log2025-1 is the first), so
+  this will come. Then a release signed by hand with the offline backup key is how such
+  a zigsaw is reached (`scripts/sign-release.sh`), and `scripts/sigstore-root.sh`
+  refreshes the copy.
+- **Zigsaws before 0.83.0 don't take Rekor v2.** CI signs with cosign's default, which
+  on 2026-11-10 is still Rekor v1 (Sigstore's signing config lists only
+  rekor.sigstore.dev). If Sigstore moves that default to v2, v0.81.0 refuses every
+  image and release signed from then on (v0.80.0 and older only warn, for images, as
+  they don't read keyless signatures at all), and `zigsaw upgrade` from it can't go on:
+  a release signed by hand with the backup key reaches it. Pinning CI to v1 was the
+  other way; it was left as it is (iteration 83).
 - **A key that leaks can't be revoked.** Old zigsaws trust their built-in keys for good:
   the one that signed until v0.81.0, for images and, before 0.81, releases, and the
   backup, for releases. There's no list to check, and no one is told.

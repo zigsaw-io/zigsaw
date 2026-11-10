@@ -1024,6 +1024,9 @@ test {
     _ = @import("services.zig");
     _ = @import("signature.zig");
     _ = @import("sigstore.zig");
+    _ = @import("der.zig");
+    _ = @import("merkle.zig");
+    _ = @import("timestamp.zig");
     _ = @import("trust.zig");
     _ = @import("shortcuts.zig");
     _ = @import("Sidecar.zig");
