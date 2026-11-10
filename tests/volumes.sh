@@ -297,6 +297,39 @@ root_rm_keeps() {
 }
 check "rm --delete-data keeps the volume, and takes the link" root_rm_keeps
 
+# An app that keeps registry keys: their hive is in its data, so in the
+# folder mounted there, and HKCU has them only while it runs.
+REG=test.volumes.registry
+REG_KEY='HKCU\Software\ZigsawTest\VolumesRoot'
+z build "$root\\tests\\volumes\\registry.json" >/dev/null 2>&1
+z run $REG true >/dev/null 2>&1
+registry_root() {
+    mkdir -p "$work\\regroot" && z override --volume="$work\\regroot:." $REG >/dev/null 2>&1 &&
+        z run $REG sh -c "reg add '$REG_KEY' /v v /d root /f >/dev/null" >/dev/null 2>&1 || return 1
+    test -f "$work\\regroot\\registry\\user.dat" || { echo "no hive in the mounted folder"; return 1; }
+    reg query "$REG_KEY" >/dev/null 2>&1 && { echo "the key stayed in HKCU"; return 1; }
+    z run $REG sh -c "reg query '$REG_KEY' /v v" | grep -q root
+}
+check "an app's registry keys at a mount at . are kept in that folder, and in HKCU only while it runs" registry_root
+z override --novolume=. $REG >/dev/null 2>&1
+# Another drive: SECOND_DRIVE names it (CI: C: while the store is on D:).
+if [ -n "${SECOND_DRIVE:-}" ]; then
+    other_drive="${SECOND_DRIVE%\\}\\zigsaw-volumes-$$"
+    across_drives() {
+        z run $REG sh -c 'echo mine > "$USERPROFILE/../own.txt"' >/dev/null 2>&1 &&
+            mkdir -p "$other_drive" && z override --volume="$other_drive:." $REG >/dev/null 2>&1 &&
+            refuses "on another drive, without copying them" z run $REG true &&
+            ! is_link "$(data_of $REG)" && test -f "$(data_of $REG)\\own.txt"
+    }
+    check "a mount at . on another drive refuses to move the app's files, and leaves them" across_drives
+    z override --novolume=. $REG >/dev/null 2>&1
+    rm -rf "$(cygpath -u "$other_drive")"
+else
+    echo "skip  a mount at . on another drive: SECOND_DRIVE isn't set"
+fi
+z rm --delete-data $REG >/dev/null 2>&1
+reg delete "$REG_KEY" /f >/dev/null 2>&1
+
 # --- Data from before 0.85 -------------------------------------------------
 
 z build "$work\\whole.json" >/dev/null 2>&1
@@ -322,6 +355,25 @@ left_behind() {
 }
 check "what an older zigsaw leaves there afterwards is said, and not used" left_behind
 rm -rf "$(cygpath -u "$ZIGSAW_HOME")/data"
+folders_only() {
+    local out
+    mkdir -p "$(old_data_of $WHOLE)\\home\\AppData\\Local" "$(old_data_of $WHOLE)\\cache" || return 1
+    out=$(z run $WHOLE true 2>&1) || { echo "$out"; return 1; }
+    grep -q "before 0.85" <<<"$out" && { echo "$out"; return 1; }
+    absent "$(old_data_of $WHOLE)" && absent "$ZIGSAW_HOME\\data" && reads $WHOLE low legacy.txt old
+}
+check "  folders with no files in them go, without a word" folders_only
+link_kept() {
+    local r=1
+    mkdir -p "$work\\linked" "$(old_data_of $WHOLE)\\home" && echo mine >"$work\\linked\\mine.txt" &&
+        cmd /c mklink /J "$(old_data_of $WHOLE)\\home\\mount" "$work\\linked" >/dev/null &&
+        says "a zigsaw before 0.85 left" z run $WHOLE true && test -f "$work\\linked\\mine.txt" &&
+        test -d "$(old_data_of $WHOLE)\\home" && r=0
+    cmd /c rmdir "$(old_data_of $WHOLE)\\home\\mount" >/dev/null 2>&1
+    rm -rf "$(cygpath -u "$ZIGSAW_HOME")/data"
+    return $r
+}
+check "  but a link among them keeps it all, and what it leads to" link_kept
 
 # --- Pruning ---------------------------------------------------------------
 

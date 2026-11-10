@@ -240,9 +240,12 @@ jobs:
         shell: bash
         run: bash tests/sandbox.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/sandbox.txt"
 
+      # The store is on D:, so C: is another drive for a mount at the root.
       - name: tests/volumes.sh
         if: ${{ !cancelled() }}
         shell: bash
+        env:
+          SECOND_DRIVE: C:\zigsaw-second-drive
         run: bash tests/volumes.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/volumes.txt"
 
       - name: tests/batch.sh
@@ -271,10 +274,25 @@ jobs:
         run: bash tests/reach.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/reach.txt"
 
       # What the Release workflow publishes, and installing it.
+      - name: Package
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash scripts/package.sh
+
       - name: tests/install.sh
         if: ${{ !cancelled() }}
         shell: bash
+        env:
+          PACKAGE_DIR: zig-out\release
         run: bash tests/install.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/install.txt"
+
+      # Older releases, from GitHub, upgraded to the package with their stores.
+      - name: tests/upgrade.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PACKAGE_DIR: zig-out\release
+        run: bash tests/upgrade.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/upgrade.txt"
 
       # zot is the app recipes/zot.json builds, here as published (which a
       # published job checks); tests/zot.sh runs it with zigsaw.

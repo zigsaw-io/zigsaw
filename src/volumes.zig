@@ -958,9 +958,12 @@ pub fn adopt(ctx: *Context, id: []const u8, quiet: bool) !void {
     const new = try ctx.store.dataDir(arena, id);
     const new_place = try junction.inspect(io, arena, new);
     if (new_place != .missing and new_place != .empty_dir) {
-        // An older zigsaw ran the app after its data moved.
+        // An older zigsaw ran the app after its data moved. Folders with
+        // nothing in them are what any run makes: they go without a word.
         if (old_place == .empty_dir) {
             _ = win32.RemoveDirectoryW(try win32.wide(arena, old));
+        } else if (try removeEmptyTree(io, arena, old)) {
+            return;
         } else if (!quiet) {
             note("warning: {s} has files a zigsaw before 0.85 left after {s}'s data moved to {s}; no run uses them: move what you need from there, then delete it", .{ old, id, new });
         }
@@ -1053,6 +1056,31 @@ fn isDir(io: Io, p: []const u8) !bool {
         else => |e| return e,
     };
     return stat.kind == .directory;
+}
+
+/// Deletes a tree with nothing in it but folders, deepest first, and says
+/// whether it did. A file or a link anywhere in it (an older zigsaw's mount
+/// is a junction) leaves the whole tree, so nothing a link leads to is
+/// touched; and RemoveDirectoryW never takes a folder that isn't empty.
+fn removeEmptyTree(io: Io, arena: Allocator, p: []const u8) !bool {
+    var dirs: std.ArrayList([]const u8) = .empty;
+    {
+        var dir = try Io.Dir.cwd().openDir(io, p, .{ .iterate = true });
+        defer dir.close(io);
+        var walker = try dir.walk(arena);
+        defer walker.deinit();
+        while (try walker.next(io)) |entry| {
+            if (entry.kind != .directory) return false;
+            try dirs.append(arena, try std.fs.path.join(arena, &.{ p, entry.path }));
+        }
+    }
+    // A walk lists a folder before what's in it.
+    var i = dirs.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (win32.RemoveDirectoryW(try win32.wide(arena, dirs.items[i])) == 0) return false;
+    }
+    return win32.RemoveDirectoryW(try win32.wide(arena, p)) != 0;
 }
 
 fn isEmptyDir(io: Io, p: []const u8) !bool {

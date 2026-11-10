@@ -62,6 +62,13 @@ jobs:
           PACKAGE_DIR: zig-out\release
         run: bash tests/install.sh
 
+      # Older releases, with stores they made, upgraded to the package.
+      - name: tests/upgrade.sh, on the package
+        shell: bash
+        env:
+          PACKAGE_DIR: zig-out\release
+        run: bash tests/upgrade.sh
+
       # The package's zigsaw builds the checkout's zigsaw.json, and makes the
       # package's programs.
       - name: tests/self.sh, on the package

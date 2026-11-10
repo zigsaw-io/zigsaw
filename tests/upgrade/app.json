@@ -1,0 +1,26 @@
+{
+  "id": "test.upgrade.app",
+  "version": "1",
+  "command": "busybox.exe",
+  "permissions": { "sandbox": "soft" },
+  "path": ["${data}\\bin"],
+  "registry": ["Software\\ZigsawTest\\UpgradeApp"],
+  "exports": {
+    "upgrade-sh": { "command": "busybox.exe", "args": ["sh"] }
+  },
+  "shortcuts": {
+    "Zigsaw Upgrade Test": { "command": "upgrade-sh", "description": "An app an older zigsaw installed" }
+  },
+  "modules": [
+    {
+      "name": "busybox",
+      "sources": [
+        {
+          "url": "https://frippery.org/files/busybox/busybox-w64-FRP-6075-g169694ebd.exe",
+          "sha256": "07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075",
+          "dest": "busybox.exe"
+        }
+      ]
+    }
+  ]
+}

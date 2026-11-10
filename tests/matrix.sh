@@ -204,9 +204,9 @@ tool git
 expect ok "$(ac_if self-path-dos nul)" ok "runs" run $GIT --version
 git_global_config() {
     run $GIT config --global user.email t@example.com &&
-        run $GIT config --global --show-origin user.email | grep -q "data"
+        run $GIT config --global --show-origin user.email | grep -qiE "volumes[/\\]$GIT[/\\]"
 }
-expect ok "$(ac_if self-path-dos nul)" ok "global config in data dir" git_global_config
+expect ok "$(ac_if self-path-dos nul)" ok "global config in its volume" git_global_config
 git_commit() {
     echo hi >a.txt && run $GIT init -q && run $GIT add a.txt && run $GIT -c user.name=T commit -qm first
 }

@@ -1061,7 +1061,9 @@ pgdata                    store                                    org.postgresq
   which installing and `zigsaw upgrade` run, points commands and shortcuts there. A
   path an app saved in its own settings as `...\data\<app-id>\...` no longer leads
   anywhere, and a zigsaw before 0.85 run on the store afterwards starts each app
-  with empty data in `data\`, which the new one then tells you about and leaves.
+  with empty data in `data\`. If that left files, the new one tells you about them
+  and leaves them; if it left only empty folders, from 0.86 on the new one deletes
+  them without a word.
 
 ### Batch files
 
@@ -1347,6 +1349,7 @@ bash tests/chromium.sh # ungoogled-chromium and VSCodium in each sandbox, with W
 bash tests/zls.sh       # ZLS's language server sessions over stdio in each sandbox: the standard library's documentation, a module a project's build.zig declares, a syntax error; its shim (needs ZLS_HOME or BUILD_HOME, or builds it)
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API, in an AppContainer through its service too (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key); `zigsaw upgrade` from a later release of the same code, a running program moved aside and every way of refusing; the daily check in a scratch default store (about 2 min)
+bash tests/upgrade.sh   # v0.80.0 and v0.83.0 from GitHub, each with a store of its own (data, a command a run added, a shortcut, a named volume, keys a killed run left in HKCU), upgraded with `zigsaw upgrade` to this checkout's package: everything where this zigsaw keeps it, and still working (RELEASES narrows it; under 1 min)
 bash tests/zot.sh bash tests/updates.sh # what a check finds, keeps and tells, and that nothing installs anything; real scheduled tasks under this run's own name, which it removes, and the real one untouched (under 1 min; without a registry, only the task rows)
 bash tests/zot.sh bash tests/rollback.sh # the version an update replaces is kept, rollback goes back to it without the network and updates pass over the version left, a newer one gets through, hold and unhold (under 1 min)
 bash tests/zot.sh bash tests/lazy.sh # pull --lazy: placeholders served under each sandbox, a file's chunks in a few requests, a recipe's prefetch files first in the layer and hydrated ahead, a helper that comes back, goes on from what the last one fetched and says what it couldn't fetch, a download that fetches nothing twice, the swap once the download's done and no run uses it, rm, a job that keeps what it starts, a whole download where placeholders can't be, update --lazy copying what the version before has (a source gone, a copy wrong), and a slow fetch telling Windows how far it's got (under 1 min; needs NTFS: LAZY_WORK, and LAZY_DEV_DRIVE for a real Dev Drive row; LAZY_WAIT=90000 for a fetch past Windows' 60 s)
