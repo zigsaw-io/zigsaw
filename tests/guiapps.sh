@@ -149,7 +149,7 @@ reg query 'HKCU\Software\7-Zip' >/dev/null 2>&1 && had_7zip_key=true
 
 cd "$work" || exit 1
 
-data() { echo "$ZIGSAW_HOME\\data\\$1"; }
+data() { echo "$ZIGSAW_HOME\\volumes\\$1"; }
 # opens <id> <export> <file> <title> <settings file name> <sandbox>: the app
 # opens the file, the title names it within $window_wait seconds (15 unless
 # set), it closes when asked, and its settings are then in its data

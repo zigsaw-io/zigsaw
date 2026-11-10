@@ -116,17 +116,20 @@ const usage =
     \\  volume create [--path=<dir>] <name>
     \\                                  make a volume in the store, or keep one in a folder of
     \\                                  yours; a run's --volume makes one it doesn't find
-    \\  volume ls                       list the volumes, where each is, and what mounts it
+    \\  volume ls                       list the volumes, each app's own (its data, named by
+    \\                                  its id) too, where each is, and what mounts it
     \\  volume inspect <name>           show a volume's size, mounts, use and grants
     \\  volume rm <name>...             delete volumes in the store, or forget ones kept
     \\                                  elsewhere, leaving their files; not one an override
-    \\                                  mounts
-    \\  volume prune [--dry-run]        delete the volumes in the store that no override mounts
-    \\  rm [--delete-data] <app-id>     uninstall an app and its commands; its volumes stay
-    \\  prune [--dry-run] [--downloads] [--data] [--previous]
+    \\                                  mounts, nor the data of an installed app
+    \\  volume prune [--dry-run]        delete the volumes in the store that nothing mounts:
+    \\                                  those no override names, and uninstalled apps' data
+    \\  rm [--delete-data] <app-id>     uninstall an app and its commands; --delete-data also
+    \\                                  deletes its own volume; the others it mounted stay
+    \\  prune [--dry-run] [--downloads] [--volumes] [--previous]
     \\                                  delete what no installed app needs; also cached
-    \\                                  downloads and tool caches, the data of uninstalled
-    \\                                  apps, and the versions kept for rollback
+    \\                                  downloads and tool caches, the volumes nothing
+    \\                                  mounts, and the versions kept for rollback
     \\  repair                          write every app's commands, shortcuts and file
     \\                                  associations again, as after installing a new zigsaw,
     \\                                  and take back what apps may no longer reach, and what
@@ -175,10 +178,12 @@ const usage =
     \\  --extension=<id>                have an extension an override leaves out join again
     \\  --volume=<source>:<path>[:ro]   make <path> in the app's data directory the volume of
     \\                                  that name, or a folder of yours by its absolute path;
-    \\                                  it outlives the data, and other apps may mount it too
+    \\                                  it outlives the data, and other apps may mount it too;
+    \\                                  the path . puts it in the place of the app's own
+    \\                                  volume, as all of its data
     \\  --novolume=<path>               take away the mount an override has there
-    \\  --ephemeral                     use a fresh data directory, deleted afterwards; its
-    \\                                  volumes stay
+    \\  --ephemeral                     use a fresh data directory, deleted afterwards; the
+    \\                                  volumes mounted in it stay
     \\
     \\What the low and appcontainer sandboxes grant on host paths stays while the app's
     \\permissions and overrides give it; what a command line adds goes when the app's
@@ -263,6 +268,11 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
 
     ctx.store = try .open(ctx.io, ctx.arena, ctx.env);
     ctx.store.verbose = ctx.verbose;
+    // A store from before 0.85 keeps apps' data in data\: into their own
+    // volumes, the apps' that aren't running (see volumes.zig). `repair`
+    // then points their commands and shortcuts there.
+    if (try volumes.adoptAll(ctx) and !std.mem.eql(u8, command, "repair"))
+        note("note: `zigsaw repair` points the commands and shortcuts of those apps at where their data is now", .{});
     // Commands hold the store lock shared, and prune exclusively; see Store.zig.
     // `run` takes it itself, and `list` only reads.
     if (std.mem.eql(u8, command, "build")) {
@@ -429,8 +439,12 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
                 opts.dry_run = true;
             } else if (isFlag(arg, "downloads")) {
                 opts.downloads = true;
+            } else if (isFlag(arg, "volumes")) {
+                opts.volumes = true;
             } else if (isFlag(arg, "data")) {
-                opts.data = true;
+                // What it deleted is a part of what --volumes does: nobody is
+                // to delete more by habit.
+                return fail("--data is --volumes from zigsaw 0.85: an app's data is its own volume, and --volumes deletes every volume nothing mounts, the named ones too; `zigsaw prune --dry-run --volumes` shows which", .{});
             } else if (isFlag(arg, "previous")) {
                 opts.previous = true;
             } else return usageError();
@@ -509,7 +523,8 @@ fn updatesCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
     return usageError();
 }
 
-/// `zigsaw volume`: the named volumes runs mount (see volumes.zig).
+/// `zigsaw volume`: the apps' own volumes, and the ones runs mount (see
+/// volumes.zig).
 fn volumeCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
     if (args.len == 0) return usageError();
     const what = args[0];
@@ -537,7 +552,11 @@ fn volumeCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
         for (rest) |arg| {
             if (isFlag(arg, "dry-run")) dry_run = true else return usageError();
         }
-        try volumes.prune(ctx, dry_run);
+        const pruned = try volumes.prune(ctx, dry_run);
+        if (pruned.count == 0)
+            note("no volume to remove: each is mounted by an app, kept outside the store, or in use", .{})
+        else
+            note("{s} {d} volume(s), {Bi:.1}", .{ if (dry_run) "would remove" else "removed", pruned.count, pruned.bytes });
         return 0;
     }
     for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
@@ -969,11 +988,15 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     }
     if (try store.deleteUnusedDeployments(arena, ref.manifest))
         note("kept {s}'s files, which are still in use; `zigsaw prune` removes them later", .{id});
-    // Deleting the data stops at the junctions of its volumes (see
-    // volumes.zig), which stay.
+    // Its own volume, its data, goes only if asked. Deleting it stops at the
+    // junctions of the volumes it mounted (see volumes.zig), which stay.
     var kept_volumes: []const []const u8 = &.{};
     if (delete_data) {
         kept_volumes = try volumes.namedIn(arena, (try override.load(store, arena, id)).volumes);
+        const data_dir = try store.dataDir(arena, id);
+        try Store.deleteTree(io, arena, data_dir);
+        Io.Dir.cwd().deleteFile(io, try std.fmt.allocPrint(arena, "{s}.hkcu.lock", .{data_dir})) catch {};
+        // And what a zigsaw before 0.85 left that couldn't move there.
         try Store.deleteTree(io, arena, try store.path(arena, &.{ "data", id }));
         try override.delete(store, arena, id);
     }

@@ -60,7 +60,12 @@ pub fn link(io: Io, arena: Allocator, at: []const u8, to: []const u8) !Linked {
         .empty_dir => try removeLink(arena, at),
         .other => return .kept,
     }
-    if (std.fs.path.dirname(at)) |parent| try Io.Dir.cwd().createDirPath(io, parent);
+    // Unless it's there: it may itself be a link, which isn't a directory to
+    // make (a volume mounted as an app's data directory, see volumes.zig).
+    if (std.fs.path.dirname(at)) |parent| {
+        const attrs = win32.GetFileAttributesW(try win32.wide(arena, parent));
+        if (attrs == win32.INVALID_FILE_ATTRIBUTES or attrs & win32.FILE_ATTRIBUTE_DIRECTORY == 0) try Io.Dir.cwd().createDirPath(io, parent);
+    }
     try create(arena, at, to);
     return .made;
 }

@@ -38,7 +38,7 @@ for id in $APP $PG $PG.PostGIS; do
 done
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
-data="$ZIGSAW_HOME\\data\\$PG"
+data="$ZIGSAW_HOME\\volumes\\$PG"
 port=$((58000 + RANDOM % 900))
 
 failures=0

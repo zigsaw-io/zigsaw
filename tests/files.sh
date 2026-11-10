@@ -132,7 +132,7 @@ stays_up() {
     wait $run
     return 0
 }
-state="$ZIGSAW_HOME\\data\\$FILES\\home\\AppData\\Local\\Files Community\\FilesDev\\LocalState"
+state="$ZIGSAW_HOME\\volumes\\$FILES\\home\\AppData\\Local\\Files Community\\FilesDev\\LocalState"
 launches() { grep -c '|Information|App launched' "$state\\debug.log" 2>/dev/null || echo 0; }
 # Startup ends with "App launched" in Files' log, and the drives it found.
 # Files catches what goes wrong at startup and carries on, so a run that
@@ -161,7 +161,7 @@ check "it opens a folder given on its command line" opens_folder
 # declares) are in a hive there, and not in the real registry between runs.
 kept() {
     test -f "$state\\settings\\user_settings.json" || { echo "no settings in its data directory"; return 1; }
-    grep -aq TotalLaunchCount "$ZIGSAW_HOME\\data\\$FILES\\registry\\user.dat" || { echo "no Files values in its hive"; return 1; }
+    grep -aq TotalLaunchCount "$ZIGSAW_HOME\\volumes\\$FILES\\registry\\user.dat" || { echo "no Files values in its hive"; return 1; }
     ! reg query 'HKCU\Software\Files Community\FilesDev' >/dev/null 2>&1 || { echo "HKCU\\Software\\Files Community\\FilesDev is in the registry"; return 1; }
 }
 check "it keeps its settings in its data directory, and its registry values in a hive there" kept

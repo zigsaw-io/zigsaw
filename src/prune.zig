@@ -25,8 +25,9 @@ pub const Options = struct {
     /// the caches of build tools, which they would fill again, and the work
     /// directories projects' builds keep, which they would start afresh.
     downloads: bool = false,
-    /// Also delete the data directories of apps that aren't installed.
-    data: bool = false,
+    /// Also delete the volumes nothing mounts, as `zigsaw volume prune` does:
+    /// those no override names, and the data of apps that aren't installed.
+    volumes: bool = false,
     /// Also forget the versions kept for `rollback`, so that their blobs go.
     previous: bool = false,
 };
@@ -209,18 +210,10 @@ pub fn prune(ctx: *Context, opts: Options) !void {
             try Io.Dir.cwd().deleteFile(io, try store.path(arena, &.{ "cache", "images", oci.digestHex(digest).? }));
     }
 
-    // Data of apps that were removed without --delete-data.
-    var data: Tally = .{};
-    var orphans: std.ArrayList([]const u8) = .empty;
-    const data_dir = try store.path(arena, &.{"data"});
-    for (try listDir(io, arena, data_dir)) |entry| {
-        if (entry.kind != .directory or isInstalled(refs, entry.name)) continue;
-        const p = try std.fs.path.join(arena, &.{ data_dir, entry.name });
-        const size = try treeSize(io, arena, p);
-        data.add(size);
-        try orphans.append(arena, try std.fmt.allocPrint(arena, "{s} ({Bi:.1})", .{ entry.name, size }));
-        if (opts.data and !opts.dry_run) try Store.deleteTree(io, arena, p);
-    }
+    // The volumes nothing mounts: those no override names, and the data of
+    // apps that were removed without --delete-data (see volumes.zig).
+    const pruned: volumes.Pruned = if (opts.volumes) try volumes.prune(ctx, opts.dry_run) else .{};
+    const unmounted: Tally = .{ .count = pruned.count, .bytes = pruned.bytes };
 
     // The alias shims of apps that aren't installed, unless one is running.
     // (Tiny files, so not reported.)
@@ -261,7 +254,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         .{ downloads, opts.downloads, "cached download", "cached downloads" },
         .{ tool_caches, opts.downloads, "build tool cache", "build tool caches" },
         .{ work, opts.downloads, "project's work directories", "projects' work directories" },
-        .{ data, opts.data, "data directory", "data directories" },
+        .{ unmounted, opts.volumes, "volume", "volumes" },
     };
     for (parts) |part| {
         const t, const selected, const one, const many = part;
@@ -281,8 +274,6 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         note("kept {d} unused deployment(s) that a running app still uses; prune again once it exits", .{deployments_in_use});
     if (tmp_in_use > 0)
         note("kept the data of {d} running --ephemeral app(s)", .{tmp_in_use});
-    if (!opts.data and orphans.items.len > 0)
-        note("kept data of apps that aren't installed: {s}; --data deletes it", .{try std.mem.join(arena, ", ", orphans.items)});
     if (!opts.downloads and downloads.count > 0)
         note("kept {d} cached download(s) ({Bi:.1}) for rebuilds; --downloads deletes them", .{ downloads.count, downloads.bytes });
     if (!opts.downloads and tool_caches.count > 0)
@@ -295,10 +286,12 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         note("kept {d} previous version(s) ({Bi:.1}) for `zigsaw rollback`; --previous deletes them", .{ previous_only.count, previous_only.bytes });
     if (!kept_previous and previous.items.len > 0)
         note("{s} {d} previous version(s): `zigsaw rollback` has nothing to go back to", .{ if (opts.dry_run) "would forget" else "forgot", previous.items.len });
-    // Volumes outlive apps, and their data (see volumes.zig).
-    const unused = try volumes.unused(ctx);
-    if (unused.count > 0)
-        note("kept {d} volume(s) ({Bi:.1}) that no override mounts; `zigsaw volume prune` deletes them", .{ unused.count, unused.bytes });
+    // Volumes outlive apps: their own, their data, and the ones they mounted.
+    if (!opts.volumes) {
+        const left = try volumes.unmounted(ctx);
+        if (left.names.len > 0)
+            note("kept {d} volume(s) that nothing mounts: {s}; --volumes deletes them", .{ left.names.len, try std.mem.join(arena, ", ", left.names) });
+    }
 }
 
 const Entry = struct { name: []const u8, kind: Io.File.Kind };

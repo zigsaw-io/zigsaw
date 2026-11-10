@@ -404,7 +404,7 @@ kanboard_data() {
     local out
     out=$(z run --command=kanboard-cli $KANBOARD db:version 2>&1 | tr -d '\r')
     grep -qE '^Current version: [0-9]+' <<<"$out" || { echo "kanboard-cli: $out"; return 1; }
-    [ -f "$ZIGSAW_HOME\\data\\$KANBOARD\\db.sqlite" ] || { echo "no db.sqlite in its data"; return 1; }
+    [ -f "$ZIGSAW_HOME\\volumes\\$KANBOARD\\db.sqlite" ] || { echo "no db.sqlite in its data"; return 1; }
 }
 check "kanboard-cli makes its database in the app's data" kanboard_data
 # PHP's is_writable() is false at low integrity, even for what the run may

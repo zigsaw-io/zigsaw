@@ -2,8 +2,9 @@
 # End-to-end checks for volumes (src/volumes.zig): named volumes, in the store
 # and kept elsewhere, and folders of yours, mounted in an app's data directory
 # as junctions; what each sandbox lets a run do with them, how long the
-# junctions and grants last, an app's files moved into an empty volume, and
-# `zigsaw volume`. Busybox apps.
+# junctions and grants last, an app's files moved into an empty volume, an
+# app's own volume (its data), one mounted in its place, data from before 0.85
+# moved into it, and `zigsaw volume`. Busybox apps.
 #
 #   tests/volumes.sh [path\to\zigsaw.exe]
 #
@@ -34,6 +35,7 @@ fi
 
 BB=net.frippery.busybox
 OTHER=test.volumes.other
+WHOLE=test.volumes.whole
 
 failures=0
 check() {
@@ -51,7 +53,10 @@ fails() { ! "$@"; }
 
 z() { "$zigsaw" "$@" </dev/null; }
 vol() { printf '%s\\volumes\\%s' "$ZIGSAW_HOME" "$1"; }
-data_of() { printf '%s\\data\\%s' "$ZIGSAW_HOME" "$1"; }
+# An app's data directory: its own volume.
+data_of() { printf '%s\\volumes\\%s' "$ZIGSAW_HOME" "$1"; }
+# Where a zigsaw before 0.85 kept it.
+old_data_of() { printf '%s\\data\\%s' "$ZIGSAW_HOME" "$1"; }
 # writes <app> <sandbox> <path in its data> [run options...]: whether a run
 # can create the file.
 writes() {
@@ -107,7 +112,9 @@ cd "$work" || exit 1
 "$zigsaw" build "$root/recipes/busybox.json" >/dev/null 2>&1 || { echo "building busybox failed"; exit 1; }
 sed "s/\"net.frippery.busybox\"/\"$OTHER\"/" "$root/recipes/busybox.json" >"$work\\other.json"
 "$zigsaw" build "$work\\other.json" >/dev/null 2>&1 || { echo "building the second app failed"; exit 1; }
-mkdir -p "$work\\hold" "$work\\bind"
+sed "s/\"net.frippery.busybox\"/\"$WHOLE\"/" "$root/recipes/busybox.json" >"$work\\whole.json"
+"$zigsaw" build "$work\\whole.json" >/dev/null 2>&1 || { echo "building the third app failed"; exit 1; }
+mkdir -p "$work\\hold" "$work\\bind" "$work\\whole"
 
 # --- Named volumes, in each sandbox ----------------------------------------
 #
@@ -232,15 +239,107 @@ ac_takes_back() {
 }
 check "an AppContainer's access to a volume goes when its app stops mounting it" ac_takes_back
 
+# --- An app's own volume: its data -----------------------------------------
+
+z run $WHOLE sh -c 'echo mine > "$USERPROFILE/../own.txt"' >/dev/null 2>&1
+check "an app's data is its own volume, in the store" test -f "$(vol $WHOLE)\\own.txt"
+check "  ls lists it, by the app's id" sh -c "\"$zigsaw\" volume ls | grep -F $WHOLE | grep -qF '$WHOLE as its data'"
+check "  inspect says whose it is" says "the app's own" z volume inspect $WHOLE
+check "  volume rm refuses it while the app is installed" refuses "rm --delete-data $WHOLE" z volume rm $WHOLE
+check "  no store keeps data\\ any more" absent "$ZIGSAW_HOME\\data"
+check "prune --data says it's --volumes now" refuses "--volumes" z prune --data
+# An id without a dot could be a volume's name: the app's own has it.
+sed "s/\"net.frippery.busybox\"/\"plainapp\"/" "$root/recipes/busybox.json" >"$work\\plain.json"
+z override --volume=plainapp:p $OTHER >/dev/null 2>&1 && z run $OTHER true >/dev/null 2>&1
+z build "$work\\plain.json" >/dev/null 2>&1
+check "an app whose id is a mounted volume's name won't take it for its data" refuses "give that volume another name" z run plainapp true
+z override --novolume=p $OTHER >/dev/null 2>&1 && z volume rm plainapp >/dev/null 2>&1
+check "  once it's free, the app's own volume has that name" sh -c "\"$zigsaw\" run plainapp true </dev/null && \"$zigsaw\" volume ls | grep -qF 'plainapp as its data'"
+check "  which no other app mounts" refuses "own volume, which only it mounts" z run --volume=plainapp:p $OTHER true
+check "  nor volume create takes" refuses "there's a volume plainapp already" z volume create plainapp
+z rm --delete-data plainapp >/dev/null 2>&1
+
+# --- A volume in its place: a mount at the root ----------------------------
+
+check "the root can't be read-only" refuses "can't be read-only" z override --volume="$work\\whole:.:ro" $WHOLE
+check "a run's --volume at the root, over the app's data, refuses" refuses "only on the command line" z run --volume="$work\\whole:." $WHOLE true
+root_moves_in() {
+    z override --volume="$work\\whole:." $WHOLE >/dev/null 2>&1 && says "moved $WHOLE's files at . into" z run $WHOLE true &&
+        test -f "$work\\whole\\own.txt" && is_link "$(data_of $WHOLE)" && reads $WHOLE low own.txt mine
+}
+check "a saved one moves the app's data into the empty folder" root_moves_in
+check "  which is labelled as a grant, and recorded" sh -c "$(declare -f label_of low_label granted); ZIGSAW_HOME='$ZIGSAW_HOME'; low_label '$work\\whole' && granted $WHOLE 'low $work\\whole'"
+check "  ls no longer lists a volume of the app's own" sh -c "! \"$zigsaw\" volume ls | grep -qF $WHOLE"
+for sb in soft low appcontainer; do
+    check "$sb: a run writes its data there" writes $WHOLE $sb "w-$sb"
+    check "  in the folder" test -f "$work\\whole\\w-$sb"
+done
+check "a volume mounted in it is linked in the folder" sh -c "$(declare -f z writes is_link); zigsaw='$zigsaw'; writes $WHOLE low sub/f --volume=inner:sub && [ -f '$(vol inner)\\f' ]"
+check "an --ephemeral run has a data directory of its own" z run --ephemeral $WHOLE sh -c 'test ! -f "$USERPROFILE/../own.txt"'
+z override --volume="$work\\whole:." $OTHER >/dev/null 2>&1
+check "a second app can't keep its data in the same folder" refuses "two apps can't keep theirs in one folder" z run $OTHER true
+z override --novolume=. $OTHER >/dev/null 2>&1
+root_goes() {
+    z override --novolume=. $WHOLE >/dev/null 2>&1 && absent "$(data_of $WHOLE)" && test -f "$work\\whole\\own.txt" &&
+        no_label "$work\\whole" && ! granted $WHOLE "low $work\\whole" || return 1
+    # Its own volume again, afresh.
+    z run $WHOLE sh -c 'test ! -f "$USERPROFILE/../own.txt"' && test -d "$(vol $WHOLE)\\home" && ! is_link "$(data_of $WHOLE)"
+}
+check "--novolume=. takes the link and the label away, not the files" root_goes
+named_root() {
+    z override --volume=whole:. $WHOLE >/dev/null 2>&1 && z run $WHOLE sh -c 'echo named > "$USERPROFILE/../n.txt"' >/dev/null 2>&1 &&
+        test -f "$(vol whole)\\n.txt" && z volume ls | grep -w whole | grep -qF "$WHOLE as its data"
+}
+check "a named volume there: ls says whose data it is" named_root
+check "  volume rm refuses it" refuses "take that away first" z volume rm whole
+root_rm_keeps() {
+    says "kept volume whole" z rm --delete-data $WHOLE && test -f "$(vol whole)\\n.txt" && absent "$(data_of $WHOLE)"
+}
+check "rm --delete-data keeps the volume, and takes the link" root_rm_keeps
+
+# --- Data from before 0.85 -------------------------------------------------
+
+z build "$work\\whole.json" >/dev/null 2>&1
+kept_while_running() {
+    local r=1
+    # As an older zigsaw's run would be: one of the app's runs, with no volume
+    # of the app's own yet.
+    hold "$work\\hold" $WHOLE --ephemeral && mkdir -p "$(old_data_of $WHOLE)\\home" && echo old >"$(old_data_of $WHOLE)\\legacy.txt" &&
+        z list >/dev/null 2>&1 && test -f "$(old_data_of $WHOLE)\\legacy.txt" &&
+        refuses "a run of the app goes on" z run $WHOLE true && r=0
+    release
+    return $r
+}
+check "data in data\\ stays there while a run of the app goes on" kept_while_running
+adopted() {
+    says "moved $WHOLE's data" z list && test -f "$(data_of $WHOLE)\\legacy.txt" && absent "$ZIGSAW_HOME\\data" &&
+        reads $WHOLE low legacy.txt old
+}
+check "  and moves to the app's own volume with the next command" adopted
+left_behind() {
+    mkdir -p "$(old_data_of $WHOLE)" && echo late >"$(old_data_of $WHOLE)\\late.txt"
+    says "a zigsaw before 0.85 left" z run $WHOLE true && test -f "$(old_data_of $WHOLE)\\late.txt" && reads $WHOLE low legacy.txt old
+}
+check "what an older zigsaw leaves there afterwards is said, and not used" left_behind
+rm -rf "$(cygpath -u "$ZIGSAW_HOME")/data"
+
 # --- Pruning ---------------------------------------------------------------
 
-check "zigsaw prune counts the volumes no override mounts" says "volume prune" z prune --dry-run
+z rm $WHOLE >/dev/null 2>&1
+check "rm keeps the app's own volume" test -f "$(vol $WHOLE)\\legacy.txt"
+check "zigsaw prune names the volumes nothing mounts" says "--volumes deletes them" z prune --dry-run
+check "  an uninstalled app's data among them" sh -c "\"$zigsaw\" prune --dry-run 2>&1 | grep -F 'nothing mounts' | grep -qF '$WHOLE ('"
 dry_prune() { z volume prune --dry-run 2>&1 | grep -q 'would remove volume v-low' && test -d "$(vol v-low)"; }
 check "volume prune --dry-run removes nothing" dry_prune
 prunes() {
-    z volume prune >/dev/null 2>&1 && absent "$(vol v-low)" && absent "$(vol keep)" && test -d "$(vol pop)" && test -f "$(vol pop)\\x"
+    z volume prune >/dev/null 2>&1 && absent "$(vol v-low)" && absent "$(vol keep)" && absent "$(vol $WHOLE)" &&
+        test -d "$(vol pop)" && test -f "$(vol pop)\\x" && test -d "$(vol $BB)"
 }
-check "volume prune removes them, not one an override mounts" prunes
+check "volume prune removes them: not one an override mounts, nor an installed app's data" prunes
+prune_volumes() {
+    z volume create spare >/dev/null 2>&1 && says "1 volume" z prune --volumes && absent "$(vol spare)" && test -d "$(vol $BB)"
+}
+check "prune --volumes does the same" prune_volumes
 
 z rm $BB >/dev/null 2>&1
 z rm $OTHER >/dev/null 2>&1

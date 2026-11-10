@@ -60,7 +60,7 @@ verbose: bool = false,
 /// from another.
 ledger_key: ?[]const u8 = null,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "deploy", "lazy", "data", "volumes", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "deploy", "lazy", "volumes", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|
@@ -85,6 +85,13 @@ pub fn path(s: Store, arena: Allocator, parts: []const []const u8) ![]u8 {
     try all.append(arena, s.root);
     try all.appendSlice(arena, parts);
     return std.fs.path.join(arena, all.items);
+}
+
+/// An app's data directory: its own volume, volumes\<id>, or a link there to
+/// what a mount at `.` put in its place (see volumes.zig). Before 0.85 it was
+/// data\<id>, which volumes.adopt moves here.
+pub fn dataDir(s: Store, arena: Allocator, id: []const u8) ![]u8 {
+    return s.path(arena, &.{ "volumes", id });
 }
 
 /// Creates a uniquely named directory under tmp\ and returns its path.
@@ -160,7 +167,10 @@ fn discard(s: Store, arena: Allocator, p: []const u8) !void {
 //   `rm`.
 // - volumes\<name>.lock is held shared by each run that mounts the volume,
 //   for as long as it runs, and exclusively by `volume rm` and `volume
-//   prune` as they delete it (see volumes.zig).
+//   prune` as they delete it (see volumes.zig). An app's own volume has the
+//   lock of its runs, above, for that.
+// - volumes.adopt.lock is held exclusively while an app's data moves from
+//   data\<id>, where a zigsaw before 0.85 kept it, to volumes\<id>.
 //
 // Locks end when zigsaw exits, however it exits.
 

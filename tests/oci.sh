@@ -101,7 +101,7 @@ pulled() {
 check "  and pulls it into another folder, the same bytes" pulled
 oras_login() {
     printf '%s' "$AUTH_PASSWORD" | r $ORAS -- login --plain-http -u "$AUTH_USER" --password-stdin "$AUTH_REGISTRY" || return 1
-    find "$(cygpath -u "$ZIGSAW_HOME\\data\\$ORAS")" -name config.json -path '*.docker*' -exec grep -l "$AUTH_REGISTRY" {} + | grep -q . ||
+    find "$(cygpath -u "$ZIGSAW_HOME\\volumes\\$ORAS")" -name config.json -path '*.docker*' -exec grep -l "$AUTH_REGISTRY" {} + | grep -q . ||
         { echo "no .docker\\config.json with the login in its data"; return 1; }
 }
 check "oras logs in to the registry that wants a login, in its own data" oras_login
@@ -263,7 +263,7 @@ cd "$root" || exit 1
 ZIGSAW_HOME="$work\\pulled" "$zigsaw" rm --delete-data net.frippery.busybox >/dev/null 2>&1
 for id in $installed_here; do z rm --delete-data "$id" >/dev/null 2>&1; done
 if [ -n "$temp_store" ]; then
-    z prune --downloads --data >/dev/null 2>&1
+    z prune --downloads --volumes >/dev/null 2>&1
     rm -rf "$temp_store"
 fi
 rm -rf "$work"

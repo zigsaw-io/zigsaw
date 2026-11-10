@@ -229,7 +229,7 @@ expect ok "$(ac_if final-path-dos self-path-dos nul)" ok "npm install" run --com
 npm_global() {
     run --command=npm $NODE install -g --no-audit --no-fund semver@7 &&
         run --command=npm $NODE ls -g | grep -q semver &&
-        [ -f "$ZIGSAW_HOME\\data\\$NODE\\npm\\node_modules\\semver\\package.json" ]
+        [ -f "$ZIGSAW_HOME\\volumes\\$NODE\\npm\\node_modules\\semver\\package.json" ]
 }
 # npm itself lstat()s each directory of the data directory's path.
 expect ok gap ok "npm install -g into data dir" npm_global

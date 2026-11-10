@@ -81,7 +81,7 @@ check "zls --version says 0.17.0" sh -c "[ \"\$(\"\$0\" run $ZLS --version | tr 
 caches_in_data() {
     local dir
     dir=$(z run $ZLS env | tr -d '\r' | grep '"global_cache_dir"' | sed -e 's/.*: "//' -e 's/",*$//' -e 's/\\\\/\\/g')
-    [[ $dir == "$ZIGSAW_HOME\\data\\$ZLS\\"* ]] || { echo "global_cache_dir is $dir"; return 1; }
+    [[ $dir == "$ZIGSAW_HOME\\volumes\\$ZLS\\"* ]] || { echo "global_cache_dir is $dir"; return 1; }
 }
 check "its caches and log are in its data" caches_in_data
 
@@ -173,7 +173,7 @@ cd "$root" || exit 1
 acprobe_rm "$zigsaw"
 for id in $installed_here; do z rm --delete-data "$id" >/dev/null 2>&1; done
 if [ -n "$temp_store" ]; then
-    z prune --downloads --data >/dev/null 2>&1
+    z prune --downloads --volumes >/dev/null 2>&1
     rm -rf "$temp_store"
 fi
 rm -rf "$work"

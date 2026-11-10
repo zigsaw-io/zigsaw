@@ -286,7 +286,7 @@ check "with --sandbox=appcontainer" python_says gi3.py 'GTK 3 24 52|GtkSourceVie
 meld_dir="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $MELD | cut -d: -f2)" | tail -1 | cut -d: -f2)"
 # Meld's command is pythonw.exe, which shows nothing: python.exe runs it here.
 check "Meld 3.24.1 is installed" sh -c "timeout 60 \"\$0\" run --command='$pygobject_dir\\python.exe' $MELD '$meld_dir\\bin\\meld' --version 2>&1 | tr -d '\r' | grep -qx 'meld 3.24.1'" "$zigsaw"
-rm -f "$ZIGSAW_HOME\\data\\$MELD\\share\\meld.log"
+rm -f "$ZIGSAW_HOME\\volumes\\$MELD\\share\\meld.log"
 printf 'one\ntwo\nthree\n' >"$work\\left.txt"
 printf 'one\n2\nthree\nfour\n' >"$work\\right.txt"
 mkdir -p "$work\\left" "$work\\right"
@@ -311,7 +311,7 @@ meld_draws() {
 meld_logs() {
     [ -n "${LOG_DIR:-}" ] || return 0
     { echo "zigsaw run ${opts[*]} $MELD ${what[*]}"; cat "$work\\meld-run.txt"; } >"$LOG_DIR\\meld-$draws.txt"
-    cp "$ZIGSAW_HOME\\data\\$MELD\\share\\meld.log" "$LOG_DIR\\meld-$draws.log" 2>/dev/null
+    cp "$ZIGSAW_HOME\\volumes\\$MELD\\share\\meld.log" "$LOG_DIR\\meld-$draws.log" 2>/dev/null
 }
 check "Meld compares two files and draws its window" meld_draws left.txt right.txt
 check "with --sandbox=soft" meld_draws left.txt right.txt -- --sandbox=soft
@@ -339,7 +339,7 @@ check "Meld's git support finds the repository, and what's changed in it" python
 check "with --sandbox=soft" python_says vc.py "$vc_says" --sandbox=soft
 check_want "$(ac_if nul)" "with --sandbox=appcontainer" python_says vc.py "$vc_says" --sandbox=appcontainer
 check "it shows the repository's changes in its window" meld_draws repo -- --sandbox=low
-check "its log has no Python traceback" sh -c "! grep -q Traceback '$ZIGSAW_HOME\\data\\$MELD\\share\\meld.log'"
+check "its log has no Python traceback" sh -c "! grep -q Traceback '$ZIGSAW_HOME\\volumes\\$MELD\\share\\meld.log'"
 meld_shortcut() {
     shim_is meld zigsaw-shimw.exe || { echo "meld.exe isn't the windowless shim"; return 1; }
     case $(lnk_icon "$links\\Meld.lnk") in "$meld_dir\\share\\icons\\org.gnome.Meld.ico,0") ;; *) echo "icon: $(lnk_icon "$links\\Meld.lnk")"; return 1 ;; esac

@@ -38,6 +38,7 @@ const folders = @import("folders.zig");
 const forward = @import("forward.zig");
 const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
+const junction = @import("junction.zig");
 const lazy = @import("lazy.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
@@ -115,8 +116,11 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // (see extensions.zig).
     const found = try extensions.find(ctx.store, arena, cfg, settings.noextension);
     for (found.skipped) |s| if (s.warn or ctx.verbose) note("note: {s} doesn't join this run: {s}", .{ s.id, s.reason });
+    // Its data, from where a zigsaw before 0.85 kept it (see volumes.zig).
+    try volumes.adopt(ctx, cfg.id, false);
+    if (run_dir == null) try volumes.checkOwn(ctx, cfg.id);
     if (sandbox == .soft and run_dir == null) try unlabelData(ctx, cfg.id);
-    const data_dir = if (run_dir) |d| d.path else try ctx.store.path(arena, &.{ "data", cfg.id });
+    const data_dir = if (run_dir) |d| d.path else try ctx.store.dataDir(arena, cfg.id);
     // Its volumes, in its data directory, before it joins the app's runs:
     // whether another goes on decides what may change there. Each is granted
     // as a host path is (see volumes.zig).
@@ -129,6 +133,9 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     });
     defer mounted.release(io);
     for (mounted.mounts) |m| try host_grants.append(arena, .{ .path = m.host, .read_only = m.mount.read_only });
+    // A mount at the root: the data directory is a link to that folder, which
+    // is granted as the other mounts' are, and not as the app's own volume.
+    const data_root = mounted.dataRoot();
     // One of the app's runs from here on: the last to end takes back what
     // its command line asked for, and what no longer stands.
     const runs = try grants.begin(ctx, cfg.id);
@@ -270,6 +277,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         },
         .low => token = try setUpLow(ctx, cfg.id, .{
             .data_dir = data_dir,
+            .data_root = data_root,
             .host_cwd = host_cwd,
             .grants = host_grants.items,
             .network = network,
@@ -282,6 +290,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             .relay_dir = if (relay_exe) |r| std.fs.path.dirname(r).? else null,
             .roots_file = roots_file,
             .data_dir = data_dir,
+            .data_root = data_root,
             .local_app_data = profile.local,
             .host_cwd = host_cwd,
             .grants = host_grants.items,
@@ -309,7 +318,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // ports it forwards at once.
     const job = try process.newJob();
     if (relay_exe) |r| startRelay(ctx, cfg.id, job, r, published, forwards, security.?, env_block);
-    const watcher = written.Watcher.start(arena, ctx.io, try watchedDirs(arena, sandbox, host_grants.items, host_cwd, data_dir, ctx.env.get("USERPROFILE"), own));
+    const watcher = written.Watcher.start(arena, ctx.io, try watchedDirs(arena, sandbox, host_grants.items, host_cwd, data_dir, data_root, ctx.env.get("USERPROFILE"), own));
     const child: process.Child = .{
         .job = job,
         .process = try process.startIn(arena, job, .{
@@ -589,6 +598,8 @@ const AppContainerSetup = struct {
     /// when it's made.
     roots_file: ?[]const u8,
     data_dir: []const u8,
+    /// The folder a mount at the root has there, among `grants`, if one is.
+    data_root: ?[]const u8,
     /// The run's LOCALAPPDATA, in its data directory.
     local_app_data: []const u8,
     host_cwd: []const u8,
@@ -613,7 +624,8 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
     if (setup.alias_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     if (setup.relay_dir) |dir| try wanted.append(arena, .{ .path = dir, .access = .read_execute, .host = false });
     if (setup.roots_file) |file| try wanted.append(arena, .{ .path = file, .access = .read_execute, .host = false });
-    try wanted.append(arena, .{ .path = setup.data_dir, .access = .full, .host = false });
+    // The app's own volume; a folder mounted in its place is among the grants.
+    if (setup.data_root == null) try wanted.append(arena, .{ .path = setup.data_dir, .access = .full, .host = false });
     for (setup.grants) |g| {
         const p = g.path orelse setup.host_cwd;
         var access: acl.Access = if (g.read_only) .read_execute else .full;
@@ -721,6 +733,8 @@ fn exemptLoopback(ctx: *Context, id: []const u8, network: bool, uses: bool) !Loo
 
 const LowSetup = struct {
     data_dir: []const u8,
+    /// The folder a mount at the root has there, among `grants`, if one is.
+    data_root: ?[]const u8,
     host_cwd: []const u8,
     grants: []const HostGrant,
     network: bool,
@@ -735,8 +749,13 @@ const LowSetup = struct {
 /// low one. An app's first run has no data directory yet, so no label.
 fn unlabelData(ctx: *Context, id: []const u8) !void {
     const arena = ctx.arena;
-    const data_dir = try ctx.store.path(arena, &.{ "data", id });
-    if (!try Store.exists(ctx.io, data_dir)) return;
+    const data_dir = try ctx.store.dataDir(arena, id);
+    // Only the app's own volume: a folder mounted in its place has the label
+    // its grant gave it, which goes as such grants do (see grants.zig).
+    switch (try junction.inspect(ctx.io, arena, data_dir)) {
+        .missing, .link => return,
+        .empty_dir, .other => {},
+    }
     const rid = (acl.ownLabel(arena, data_dir) catch return) orelse return;
     if (rid > win32.SECURITY_MANDATORY_LOW_RID) return;
     const below = try acl.belowMedium();
@@ -762,13 +781,17 @@ fn setUpLow(ctx: *Context, id: []const u8, setup: LowSetup) !win32.HANDLE {
     // access, which keeps low-integrity processes out (see appcontainer.zig).
     // The app's next AppContainer run grants its capability instead.
     const package = try appcontainer.packageSid(arena, id);
-    _ = try acl.revoke(arena, setup.data_dir, .package_sids);
-    // Once for each app, but a large data directory takes seconds, as an
-    // app's first low run after zigsaw 0.54 made low the default may.
-    const data_start = Io.Timestamp.now(ctx.io, .awake);
-    if (try acl.labelLow(arena, setup.data_dir)) {
-        const ms = data_start.untilNow(ctx.io, .awake).toMilliseconds();
-        if (ms >= 1000 or ctx.verbose) note("labelled {s} low integrity ({d} ms)", .{ setup.data_dir, ms });
+    // The app's own volume; a folder mounted in its place is among the
+    // grants, and labelled as they are.
+    if (setup.data_root == null) {
+        _ = try acl.revoke(arena, setup.data_dir, .package_sids);
+        // Once for each app, but a large data directory takes seconds, as an
+        // app's first low run after zigsaw 0.54 made low the default may.
+        const data_start = Io.Timestamp.now(ctx.io, .awake);
+        if (try acl.labelLow(arena, setup.data_dir)) {
+            const ms = data_start.untilNow(ctx.io, .awake).toMilliseconds();
+            if (ms >= 1000 or ctx.verbose) note("labelled {s} low integrity ({d} ms)", .{ setup.data_dir, ms });
+        }
     }
 
     // Host paths change under grants.lock (see grants.zig).
@@ -831,6 +854,8 @@ fn watchedDirs(
     host_grants: []const HostGrant,
     host_cwd: []const u8,
     data_dir: []const u8,
+    /// The folder mounted as the data directory, if one is: the same to this.
+    data_root: ?[]const u8,
     user_profile: ?[]const u8,
     own: grants.Own,
 ) ![]const []const u8 {
@@ -839,6 +864,7 @@ fn watchedDirs(
         if (g.read_only) continue;
         const p = g.path orelse host_cwd;
         if (isWithin(p, data_dir)) continue;
+        if (data_root) |r| if (isWithin(p, r)) continue;
         const read_only = switch (sandbox) {
             .low => labelRefusal(p, user_profile, own) != null,
             .appcontainer => own.refusal(p) != null,

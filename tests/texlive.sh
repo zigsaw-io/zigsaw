@@ -38,7 +38,7 @@ if [ -z "$ZIGSAW_HOME" ] || [ ! -f "$ZIGSAW_HOME\\refs\\$APP.json" ]; then
 fi
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
-data="$ZIGSAW_HOME\\data\\$APP"
+data="$ZIGSAW_HOME\\volumes\\$APP"
 # First use is what's checked: the formats, fontconfig's cache and
 # luaotfload's names are made in an empty data directory. One the store had
 # is set aside, and put back at the end.

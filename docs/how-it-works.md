@@ -34,10 +34,12 @@ deploy\<hex>\          an unpacked layer, by layer digest, shared by all runs an
                        placeholders while a lazy pull fetches it
 lazy\<hex>\            a layer pulled lazily: its TOC, its download, what to copy from the
                        store's other layers, its helper's state and log
-data\<id>\             per-app writable state, kept across runs
-volumes\<name>\        a volume's files, which outlive the data of the apps that mount it
+volumes\<id>\          an app's own volume: its data directory, per-app writable state, kept
+                       across runs; a link instead, if a volume is mounted in its place
+volumes\<name>\        a named volume's files, which outlive the data of the apps that mount it
 volumes\<name>.json    a volume kept in a folder elsewhere: where
 volumes\<name>.lock    held shared by each run that mounts the volume
+data\<id>\             where a zigsaw before 0.85 kept an app's data, until it moves to volumes\
 grants\<id>.txt        host paths granted to the app's AppContainer, or labelled low for its runs
 grants\<id>.cwd        those of them that were a run's working directory
 grants\<id>.mounts     where in the app's data directory zigsaw linked a volume
@@ -91,7 +93,7 @@ yours and not the run's.
 
 **Runs** get an environment built from scratch: `PATH` is the app's
 directories, then its runtimes', then System32. `USERPROFILE`, `APPDATA`,
-`LOCALAPPDATA` and `TEMP` point into `data\<id>\home`, and the user's folders
+`LOCALAPPDATA` and `TEMP` point into `volumes\<id>\home`, and the user's folders
 the app may use are directory junctions there, to the real ones. Windows
 follows a junction as a path, and grants or denies access by what it
 points to; deleting a tree or changing its ACL (inheritance) stops at the
@@ -101,9 +103,19 @@ object ends the whole process tree when the run ends. Deployed files deny
 writes and deletes to the user, so no run, and nothing else running as you,
 can change an installed app or runtime.
 
-**Volumes** are junctions too, at the paths in `data\<id>\` that `--volume` names,
+**An app's data directory is its own volume**, `volumes\<id>\`: one of the store's
+volumes, named by the app's id, which only that app mounts. It's listed, inspected,
+removed and pruned as the others are; what tells them apart is who mounts what. An
+installed app mounts its own, a saved `--volume` the one it names, and a volume
+nothing mounts is what `volume prune` deletes. A named volume's name has no dot, and
+an id nearly always has; an app whose id has none owns the volume of that name.
+
+**Mounts** are junctions too, at the paths in `volumes\<id>\` that `--volume` names,
 to a folder in `volumes\`, one elsewhere that `volume create --path` recorded, or
-one of yours. A run makes them before it joins the app's runs, while it can tell
+one of yours. One at `.` is a junction at `volumes\<id>` itself: the folder is then
+the app's data, granted and labelled as a host path rather than as the app's own
+volume, and the other mounts' links are made in it, after it, and taken away before
+it. A run makes them before it joins the app's runs, while it can tell
 whether another goes on: only then may it replace a link, or move the app's own
 files into an empty volume (by renaming them, and then having the volume's ACL
 inherited again, as moved files keep what they inherited where they were). The

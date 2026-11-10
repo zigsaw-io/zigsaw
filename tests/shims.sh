@@ -247,22 +247,22 @@ shortcut_written() {
     local fields deploy
     fields=$(lnk_fields "$lnk")
     deploy="$ZIGSAW_HOME\\deploy\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$GUI.json" | cut -d: -f2)" | tail -1 | cut -d: -f2)"
-    [ "$fields" = "$(printf '%s\n' "$bin\\gui-app.exe" "$ZIGSAW_HOME\\data\\$GUI\\home" "Records that it ran" "$deploy\\gui.exe,0")" ] ||
+    [ "$fields" = "$(printf '%s\n' "$bin\\gui-app.exe" "$ZIGSAW_HOME\\volumes\\$GUI\\home" "Records that it ran" "$deploy\\gui.exe,0")" ] ||
         { echo "got: $fields"; return 1; }
 }
 check "a declared shortcut runs the export's shim, from the app's home, with its icon" shortcut_written
 check "list shows it" sh -c "\"\$0\" list | grep '^$GUI ' | grep -q '(shortcut \"Zigsaw GUI Test\")'" "$zigsaw"
 from_shortcut() {
-    rm -f "$ZIGSAW_HOME\\data\\$GUI\\home\\gui-record.txt"
+    rm -f "$ZIGSAW_HOME\\volumes\\$GUI\\home\\gui-record.txt"
     powershell -NoProfile -Command "Start-Process -FilePath '$lnk' -Wait" || return 1
     # Start-Process returns once the shim has; give the record a moment.
-    for _ in 1 2 3 4 5; do [ -f "$ZIGSAW_HOME\\data\\$GUI\\home\\gui-record.txt" ] && return 0; sleep 1; done
+    for _ in 1 2 3 4 5; do [ -f "$ZIGSAW_HOME\\volumes\\$GUI\\home\\gui-record.txt" ] && return 0; sleep 1; done
     echo "the app didn't run"; return 1
 }
 check "starting the shortcut runs the app" from_shortcut
 # What the taskbar goes by when the app's window is pinned.
-check "  which counts as started from the shortcut, as the shim was" sh -c "tr -d '\r' <'$ZIGSAW_HOME\\data\\$GUI\\home\\gui-record.txt' | grep -qxF 'shortcut: $lnk'"
-check "  and from none when a command line started it" sh -c "cd '$work' && '$bin\\gui-app.exe' && sleep 1 && tr -d '\r' <'$ZIGSAW_HOME\\data\\$GUI\\home\\gui-record.txt' | grep -qx 'shortcut: none'"
+check "  which counts as started from the shortcut, as the shim was" sh -c "tr -d '\r' <'$ZIGSAW_HOME\\volumes\\$GUI\\home\\gui-record.txt' | grep -qxF 'shortcut: $lnk'"
+check "  and from none when a command line started it" sh -c "cd '$work' && '$bin\\gui-app.exe' && sleep 1 && tr -d '\r' <'$ZIGSAW_HOME\\volumes\\$GUI\\home\\gui-record.txt' | grep -qx 'shortcut: none'"
 # variant <name> <sed script>: a copy of the test app's recipe, next to it.
 variant() { sed "$2" "$root\\tests\\gui\\app.json" >"$root\\tests\\gui\\$1.json"; }
 variant renamed 's/"Zigsaw GUI Test"/"Zigsaw GUI Renamed"/'
@@ -382,8 +382,8 @@ check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep
 "$zigsaw" rm "$OTHER" >/dev/null 2>&1
 # The global packages, in case the store isn't ours.
 for pkg in zigsaw-hello other-tool; do
-    rm -rf "$ZIGSAW_HOME\\data\\$NODE\\npm\\node_modules\\$pkg"
-    for ext in "" .cmd .ps1; do rm -f "$ZIGSAW_HOME\\data\\$NODE\\npm\\$pkg$ext"; done
+    rm -rf "$ZIGSAW_HOME\\volumes\\$NODE\\npm\\node_modules\\$pkg"
+    for ext in "" .cmd .ps1; do rm -f "$ZIGSAW_HOME\\volumes\\$NODE\\npm\\$pkg$ext"; done
 done
 # The scratch key, and the one above it unless another run has one in it.
 reg delete "HKCU\\$classes" /f >/dev/null 2>&1

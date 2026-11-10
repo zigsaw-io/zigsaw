@@ -126,9 +126,9 @@ sleep 1
 rm_while_running() { z rm $BB 2>&1 | grep -q 'still in use' && expect_count deployments 1; }
 check "rm: keeps the files of a running app" rm_while_running
 wait $running
-orphaned_data() { z prune 2>&1 | grep -q "kept data of apps that aren't installed: $BB" && expect_count deployments 0; }
-check "prune: removes them afterwards, and lists orphaned data" orphaned_data
-check "prune --data deletes it" sh -c "\"\$0\" prune --data >/dev/null 2>&1 && [ ! -e '$ZIGSAW_HOME\\data\\$BB' ]" "$zigsaw"
+orphaned_data() { z prune 2>&1 | grep -q "volume(s) that nothing mounts: $BB (" && expect_count deployments 0; }
+check "prune: removes them afterwards, and names the removed app's own volume, its data" orphaned_data
+check "prune --volumes deletes it" sh -c "\"\$0\" prune --volumes >/dev/null 2>&1 && [ ! -e '$ZIGSAW_HOME\\volumes\\$BB' ]" "$zigsaw"
 downloads() { find "$ZIGSAW_HOME/cache/downloads" -type f | wc -l; }
 prune_downloads() { z prune --downloads >/dev/null 2>&1 && expect_count downloads 0; }
 check "prune --downloads clears the download cache" prune_downloads
@@ -149,7 +149,7 @@ waits_for_lock() {
 check "prune waits for the store lock" waits_for_lock
 wait $holder
 
-z prune --downloads --data >/dev/null 2>&1
+z prune --downloads --volumes >/dev/null 2>&1
 rm -rf "$ZIGSAW_HOME" "$work"
 echo
 echo "$failures check(s) failed."

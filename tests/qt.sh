@@ -123,7 +123,7 @@ check "qtbase's French catalogue translates a string" sh -c "\"\$0\" run $APP --
 app_data() {
     local out
     out=$(say 'app data' | tr '/' '\\')
-    case $out in "$ZIGSAW_HOME\\data\\$APP\\"*) ;; *) echo "app data in $out"; return 1 ;; esac
+    case $out in "$ZIGSAW_HOME\\volumes\\$APP\\"*) ;; *) echo "app data in $out"; return 1 ;; esac
 }
 check "it keeps its files in the app's data directory" app_data
 
@@ -291,7 +291,7 @@ notes_qml() {
     grep -q '^Database: connection ok$' <<<"$out" && ! grep -q 'qrc:/' <<<"$out" || { echo "got: $(grep -m3 'qrc:/\|Database' <<<"$out")"; return 1; }
 }
 check "its QML loads without errors, and it opens its database" notes_qml
-check "it keeps its notes in its data directory" test -f "$ZIGSAW_HOME\\data\\$NOTES\\home\\AppData\\Roaming\\Awesomeness\\notes.db"
+check "it keeps its notes in its data directory" test -f "$ZIGSAW_HOME\\volumes\\$NOTES\\home\\AppData\\Roaming\\Awesomeness\\notes.db"
 
 cd "$root" || exit 1
 $installed_notes && z rm --delete-data $NOTES >/dev/null 2>&1

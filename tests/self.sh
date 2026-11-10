@@ -118,7 +118,7 @@ if [ -z "${PACKAGE_DIR:-}" ]; then
 fi
 
 z rm --delete-data $APP >/dev/null 2>&1
-z prune --downloads --data >/dev/null 2>&1
+z prune --downloads --volumes >/dev/null 2>&1
 rm -rf "$ZIGSAW_HOME" "$work"
 echo
 echo "$failures check(s) failed."

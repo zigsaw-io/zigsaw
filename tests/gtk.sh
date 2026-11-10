@@ -133,7 +133,7 @@ check "its gtk4-demo is GTK 4.24.1" sh -c "timeout 60 \"\$0\" run --command=gtk4
 xdg() {
     local out
     out=$(timeout 120 "$zigsaw" run $APP 2>&1 | tr -d '\r')
-    grep -qF "config in $ZIGSAW_HOME\\data\\$APP\\config" <<<"$out" || { echo "got: $out"; return 1; }
+    grep -qF "config in $ZIGSAW_HOME\\volumes\\$APP\\config" <<<"$out" || { echo "got: $out"; return 1; }
     grep -q '^settings in GKeyfileSettingsBackend$' <<<"$out" || { echo "got: $out"; return 1; }
 }
 check "GLib keeps its files in the app's data directory, and settings in a key file there" xdg

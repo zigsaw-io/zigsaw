@@ -509,7 +509,7 @@ junction as the folder's own:
   Downloads by its GUID), which is why a run's `USERPROFILE` moves them.
 - Creating a junction needs no privilege, unlike a symbolic link, which
   needs Developer Mode or an administrator.
-- So zigsaw's own deletes (`zigsaw rm --delete-data`, `prune --data`,
+- So zigsaw's own deletes (`zigsaw rm --delete-data`, `prune --volumes`,
   `--ephemeral`) were safe as they were; `tests/sandbox.sh` now checks that
   they leave a folder's files.
 

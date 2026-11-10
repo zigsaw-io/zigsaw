@@ -609,7 +609,7 @@ formats() {
 }
 check "prettier formats a file in the working directory" formats
 npm_prefix() {
-    [ "$(z run --command=node io.prettier.prettier -e 'console.log(process.env.NPM_CONFIG_PREFIX)' | tr -d '\r')" = "$ZIGSAW_HOME\\data\\io.prettier.prettier\\npm" ]
+    [ "$(z run --command=node io.prettier.prettier -e 'console.log(process.env.NPM_CONFIG_PREFIX)' | tr -d '\r')" = "$ZIGSAW_HOME\\volumes\\io.prettier.prettier\\npm" ]
 }
 check "node's variables point into prettier's data directory" npm_prefix
 fi
@@ -675,7 +675,7 @@ warm_hello() {
 start=$SECONDS
 check "a rebuild with zig's kept cache makes the same image" warm_hello
 printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$hello_time"
-check "zig run as an app has its cache in its data directory" sh -c "\"\$0\" run org.ziglang.zig env | grep '\.global_cache_dir' | grep -qF 'data\\\\org.ziglang.zig\\\\cache\"'" "$zigsaw"
+check "zig run as an app has its cache in its data directory" sh -c "\"\$0\" run org.ziglang.zig env | grep '\.global_cache_dir' | grep -qF 'volumes\\\\org.ziglang.zig\\\\cache\"'" "$zigsaw"
 # A toolchain's image asks for soft: at low, what it built would be labelled
 # low, and Windows starts a program labelled low at low integrity, wherever
 # it's started from.
@@ -1213,7 +1213,7 @@ sdk_builds_cwd() {
 check "the SDK run as an app makes, builds and runs a project in the working directory" sdk_builds_cwd
 nuget_in_data() {
     z run com.microsoft.dotnet.Sdk nuget locals global-packages --list | tr -d '\r' |
-        grep -qF "global-packages: $ZIGSAW_HOME\\data\\com.microsoft.dotnet.Sdk\\dotnet\\.nuget\\packages"
+        grep -qF "global-packages: $ZIGSAW_HOME\\volumes\\com.microsoft.dotnet.Sdk\\dotnet\\.nuget\\packages"
 }
 check "NuGet keeps its packages in the SDK's data directory" nuget_in_data
 # A program built with the SDK image, its NuGet package from nuget.org through
@@ -1281,7 +1281,7 @@ jdk_runs_cwd() {
     local sb out
     for sb in soft low appcontainer; do
         out=$(cd "$work\\javatiny" && z run --sandbox=$sb org.openjdk.java.Sdk Tiny.java 2>/dev/null | tr -d '\r')
-        [ "$out" = "home $ZIGSAW_HOME\\data\\org.openjdk.java.Sdk\\home" ] || { echo "$sb, got: $out"; return 1; }
+        [ "$out" = "home $ZIGSAW_HOME\\volumes\\org.openjdk.java.Sdk\\home" ] || { echo "$sb, got: $out"; return 1; }
     done
 }
 check "the JDK run as an app runs a program in the working directory, its user.home in its data, under soft, low and appcontainer" jdk_runs_cwd
@@ -1325,7 +1325,7 @@ java_app_runs() {
         [ "$(sed -E 's/from Java [0-9][^,]*/from Java (version)/' <<<"$out")" = "hello, zigsaw, from Java (version)$built
 Built with a vendored package
 runs on $(jre_dir)
-home is $ZIGSAW_HOME\\data\\$id\\home" ] || { echo "$sb, got: $out"; return 1; }
+home is $ZIGSAW_HOME\\volumes\\$id\\home" ] || { echo "$sb, got: $out"; return 1; }
     done
 }
 # Maven, on the JDK: its vendor step is the build itself, with the local
@@ -1419,7 +1419,7 @@ fi
 # protected deployments. Every installed app has refs\<id>.json.
 for id in $(ls "$ZIGSAW_HOME\\refs" | sed 's/\.json$//'); do z rm --delete-data "$id" >/dev/null 2>&1; done
 check "every app is removed" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\refs')\" ]"
-z prune --downloads --data >/dev/null 2>&1
+z prune --downloads --volumes >/dev/null 2>&1
 check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
 cd / && rm -rf "$ZIGSAW_HOME" "$work"
 check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"

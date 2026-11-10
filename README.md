@@ -175,15 +175,20 @@ zigsaw signature check <image>         say whether an image has a good signature
 zigsaw volume create [--path=<dir>] <name>
                                        make a volume in the store, or keep one in a folder of
                                        yours; a run's --volume makes one it doesn't find
-zigsaw volume ls                       list the volumes, where each is, and what mounts it
+zigsaw volume ls                       list the volumes, each app's own (its data, named by
+                                       its id) too, where each is, and what mounts it
 zigsaw volume inspect <name>           show a volume's size, mounts, use and grants
 zigsaw volume rm <name>...             delete volumes in the store, or forget ones kept
-                                       elsewhere, leaving their files; not one an override mounts
-zigsaw volume prune [--dry-run]        delete the volumes in the store that no override mounts
-zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands; its volumes stay
-zigsaw prune [--dry-run] [--downloads] [--data] [--previous]
-                                       delete what no installed app needs; --previous also
-                                       the versions kept for rollback
+                                       elsewhere, leaving their files; not one an override
+                                       mounts, nor the data of an installed app
+zigsaw volume prune [--dry-run]        delete the volumes in the store that nothing mounts:
+                                       those no override names, and uninstalled apps' data
+zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands; --delete-data also
+                                       deletes its own volume; the others it mounted stay
+zigsaw prune [--dry-run] [--downloads] [--volumes] [--previous]
+                                       delete what no installed app needs; --volumes also the
+                                       volumes nothing mounts, --previous the versions kept
+                                       for rollback
 zigsaw repair                          write every app's commands, shortcuts and file
                                        associations again, as after installing a new zigsaw,
                                        and take back what apps may no longer reach, and what
@@ -721,8 +726,9 @@ running, and whatever an interrupted build left in `tmp\`. It keeps the blobs
 of each app's previous version, for [`rollback`](#going-back-and-holding), and
 says how much they take; `--previous` deletes them too. `--dry-run` shows
 what it would delete. Cached downloads, the runtimes that builds used, and
-build tools' caches are kept for rebuilds unless you add `--downloads`. The data of uninstalled
-apps is kept unless you add `--data`.
+build tools' caches are kept for rebuilds unless you add `--downloads`. The
+[volumes](#volumes) nothing mounts, the data of uninstalled apps among them, are kept
+unless you add `--volumes`; `prune` names them.
 
 Nothing a running app uses is deleted, and zigsaw commands can run at the same
 time: a run locks the files it uses, and `prune` waits for builds and pulls
@@ -745,9 +751,9 @@ to finish.
 | `--port=<name>=<port>` | Serve one of the app's [services](#services) on another port, or reach a port it [uses](#reaching-this-machine) on another |
 | `--env=NAME=VALUE` | Set an environment variable |
 | `--noextension=<id>` | Leave out an installed [extension](docs/recipes.md#extension-points), which otherwise joins the runs of what it extends; `--extension=<id>` has one an override leaves out join again |
-| `--volume=<source>:<path>[:ro]` | Mount a [volume](#volumes), by its name, or a folder of yours, by its absolute path, at a path in the app's data directory |
+| `--volume=<source>:<path>[:ro]` | Mount a [volume](#volumes), by its name, or a folder of yours, by its absolute path, at a path in the app's data directory; at `.`, as all of its data |
 | `--novolume=<path>` | Take away the mount an override has at that path |
-| `--ephemeral` | Use a fresh data directory, deleted after the run; its volumes stay |
+| `--ephemeral` | Use a fresh data directory, deleted after the run; the volumes mounted in it stay |
 | `-v`, `--verbose` | Print the resolved command, environment and grants |
 
 ### Sandboxes
@@ -941,7 +947,7 @@ zigsaw override --nofilesystem=documents org.gnome.TextEditor
 - A folder the app made itself in its home before it had the permission,
   with files in it, stays: zigsaw never deletes app data, and says so
   instead of linking.
-- Deleting the app's data (`zigsaw rm --delete-data`, `prune --data`,
+- Deleting the app's data (`zigsaw rm --delete-data`, `prune --volumes`,
   `--ephemeral`) removes the links, never what's in your folders.
 - A store that isn't your default one, `%LOCALAPPDATA%\zigsaw`, leaves your real
   folders out of its apps' runs, and says so, until `zigsaw override --global
@@ -979,32 +985,53 @@ later one, is left out of a run with a warning, rather than refused.
 
 ### Volumes
 
-An app's data directory goes with it: `zigsaw rm --delete-data`, `prune --data`
-and the end of an `--ephemeral` run delete all of it. A volume, as Docker has
-them, is a folder that outlives that, and that other apps may share. `--volume`
-mounts one at a path in the app's data directory:
+A volume, as Docker has them, is a folder that apps keep files in. Every app has
+one of its own, named by its id: its data directory, `volumes\<app-id>` in the
+store, which its first run makes. `zigsaw rm --delete-data` deletes it with the
+app; without that it stays, a volume nothing mounts, until `zigsaw volume prune`
+or the app's return. An `--ephemeral` run has a fresh one instead, deleted as
+the run ends.
+
+`--volume` mounts another volume at a path in the app's data directory. It
+outlives the app's own, and other apps may mount it too:
 
 ```powershell
 zigsaw override --volume=pgdata:data org.postgresql.PostgreSQL   # its cluster, PGDATA, in a volume
 zigsaw override --volume=D:\settings\codium:home\AppData\Roaming\VSCodium com.vscodium.codium
                                                                   # its settings in a folder of yours
+zigsaw override --volume=D:\pg:. org.postgresql.PostgreSQL        # all of its data on D:
 zigsaw volume create --path=D:\volumes\pg pg                      # a named volume kept on D:
 zigsaw volume ls
+```
+
+```
+> zigsaw volume ls
+NAME                      LOCATION                                 MOUNTED BY
+org.postgresql.PostgreSQL store                                    org.postgresql.PostgreSQL as its data
+pgdata                    store                                    org.postgresql.PostgreSQL at data
 ```
 
 - The source is a volume's name, or a folder of yours by its absolute path (a bind
   mount). A volume's name has 2 to 64 letters, digits, `_` and `-`; one the store
   doesn't have yet is made in it, in `volumes\<name>`, by the first run that mounts it.
   `zigsaw volume create --path=<dir> <name>` names a folder elsewhere instead, which
-  may have files already.
+  may have files already. An app's own volume has the app's id for its name, and
+  only that app mounts it.
 - The path is relative to the app's data directory: `data` is the folder PostgreSQL's
   `PGDATA` names, `home\AppData\Roaming\<app>` where an app keeps its settings. It
   can't be where zigsaw keeps something of its own (`registry`, `home` and its
   `AppData`, the temporary folder, your folders' links), and two mounts can't
   overlap. `:ro` makes the mount read-only, under `low` and `appcontainer`.
+- The path `.` is the data directory itself: the source takes the place of the app's
+  own volume, and everything the app keeps is then in it, its settings and registry
+  keys too. That is how an app's data goes to another drive. Only one app may have a
+  folder as its data, it can't be read-only, and an `--ephemeral` run leaves it out.
+  `--novolume=.` gives the app a volume of its own again, a fresh one: the files stay
+  in the folder.
 - Windows has no mount namespaces, so a mount is a link (a directory junction) at that
-  path, to the volume's folder. Deleting the data directory, as the commands above do,
-  stops at the link, and leaves the volume as it is.
+  path, to the volume's folder; one at `.` is a link at `volumes\<app-id>`, so the
+  app's paths stay what they were. Deleting the app's own volume stops at a link, and
+  leaves the volume it points to as it is.
 - The folder is granted as a `--filesystem` path is, and as long: labelled low under
   `low`, given to the app's AppContainer under `appcontainer`. A mount only on the
   command line, and its link, go when the app's last run ends; a saved one
@@ -1018,12 +1045,23 @@ zigsaw volume ls
   that has files refuses instead, and leaves the app's files as they are.
 - `zigsaw volume inspect <name>` shows a volume's size, what mounts it, and what it was
   granted. `zigsaw volume rm` deletes a volume in the store, and forgets one kept
-  elsewhere, leaving its files; it refuses one an override mounts, or a run uses.
-  `zigsaw volume prune` deletes the volumes in the store no override mounts; `zigsaw
-  prune` counts them.
+  elsewhere, leaving its files; it refuses one an override mounts, one a run uses,
+  and the data of an app that's installed (`zigsaw rm --delete-data` deletes that).
+- One rule says what's left over: a volume in the store that nothing mounts. No
+  override names it, and it isn't the data of an installed app. `zigsaw volume prune`
+  and `zigsaw prune --volumes` delete those, the data of uninstalled apps with the
+  named ones; `zigsaw prune` names them, and `--dry-run` shows what would go. Before
+  0.85 that was `prune --data`, for apps' data only: it now says to use `--volumes`.
 - An `--ephemeral` run mounts its volumes too: a fresh app, and the volume's files.
 - A zigsaw before 0.80 can't read overrides that have volumes: `override --reset`
   makes it work again.
+- **Coming from a zigsaw before 0.85**, which kept an app's data in `data\<app-id>`:
+  the first command of the new one moves each app's data to `volumes\<app-id>`, and
+  says so; the data of an app that's running moves once it has ended. `zigsaw repair`,
+  which installing and `zigsaw upgrade` run, points commands and shortcuts there. A
+  path an app saved in its own settings as `...\data\<app-id>\...` no longer leads
+  anywhere, and a zigsaw before 0.85 run on the store afterwards starts each app
+  with empty data in `data\`, which the new one then tells you about and leaves.
 
 ### Batch files
 

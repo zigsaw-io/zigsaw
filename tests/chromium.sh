@@ -144,7 +144,7 @@ note="$work\\zigsaw-note.txt"
 printf 'a note for zigsaw\r\n' >"$note"
 printf 'a second note\r\n' >"$work\\zigsaw-second.txt"
 
-data() { echo "$ZIGSAW_HOME\\data\\$1"; }
+data() { echo "$ZIGSAW_HOME\\volumes\\$1"; }
 
 runner=
 winpid=
@@ -380,7 +380,7 @@ terminal() {
     grep -q '^git version .*windows' "$proj\\term.txt" || { echo "git isn't there: $(cat "$proj\\term.txt")"; return 1; }
     grep -q '^## ' "$proj\\term.txt" || { echo "git status failed: $(cat "$proj\\term.txt")"; return 1; }
     grep -qE '^[0-9]+\.[0-9]+\.[0-9]+' "$proj\\term.txt" || { echo "codium isn't on its terminal's PATH: $(cat "$proj\\term.txt")"; return 1; }
-    grep -qF "env USERPROFILE = $ZIGSAW_HOME\\data\\test.reach.tool\\home" "$proj\\term.txt" || { echo "another app's command didn't run as itself: $(tail -5 "$proj\\term.txt")"; return 1; }
+    grep -qF "env USERPROFILE = $ZIGSAW_HOME\\volumes\\test.reach.tool\\home" "$proj\\term.txt" || { echo "another app's command didn't run as itself: $(tail -5 "$proj\\term.txt")"; return 1; }
     grep -qF "USERPROFILE=$USERPROFILE" "$proj\\term.txt" || { echo "zigsaw-host didn't give your environment: $(tail -5 "$proj\\term.txt")"; return 1; }
     local log
     log=$(find "$(cygpath -u "$(data $CODIUM)")" -name Git.log 2>/dev/null | xargs -r ls -t 2>/dev/null | head -1)

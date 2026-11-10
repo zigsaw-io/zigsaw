@@ -1,19 +1,29 @@
-//! Volumes, as Docker has them: folders of files that outlive the data of the
-//! apps that use them, and that several apps may share.
+//! Volumes, as Docker has them: the folders apps keep their files in.
 //!
-//! An app's state is its data directory, and deleting that (`rm
-//! --delete-data`, `prune --data`, the end of an `--ephemeral` run) deletes
-//! all of it. A mount, `--volume=<source>:<target>`, makes <target>, a path in
-//! the app's data directory, a directory junction to the volume's folder (see
+//! Every app has a volume of its own, named by its id: volumes\<id>\, its data
+//! directory, which its first run makes. It goes with `rm --delete-data`, and
+//! once the app is gone it's a volume nothing mounts, as any other may be. An
+//! `--ephemeral` run has a fresh one in tmp\ instead, deleted as it ends.
+//!
+//! A mount, `--volume=<source>:<target>`, makes <target>, a path in the app's
+//! data directory, a directory junction to another volume's folder (see
 //! junction.zig). Windows has no mount namespaces, so a volume can only appear
-//! where the app keeps its data; but deleting the data directory stops at the
-//! junction, and leaves the volume as it is.
+//! where the app keeps its data; but deleting the app's own volume stops at
+//! the junction, and leaves the other as it is. The target `.` is the data
+//! directory itself: volumes\<id> is then the junction, and the source takes
+//! the place of the app's own volume, for one app only.
 //!
 //! The source is either
 //! - a named volume: a folder in the store, volumes\<name>\, which the first
 //!   run that mounts it makes, or one kept elsewhere, which `zigsaw volume
 //!   create --path=<dir> <name>` records in volumes\<name>.json; or
 //! - a folder of yours, by its absolute path: a bind mount.
+//!
+//! A name has no dot, and the ids of apps nearly always do; an app whose id
+//! has none owns the volume of that name, which no other app may then mount.
+//!
+//! Before 0.85 an app's data was in data\<id>\: `adopt` moves it here, when
+//! no run of the app goes on.
 //!
 //! Whichever it is, a run grants the folder as it grants a `--filesystem` path
 //! (see run.zig and grants.zig): labelled low or given to the app's
@@ -36,6 +46,7 @@ const Allocator = std.mem.Allocator;
 const win32 = @import("win32.zig");
 const acl = @import("acl.zig");
 const grants = @import("grants.zig");
+const hkcu = @import("hkcu.zig");
 const junction = @import("junction.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
@@ -57,9 +68,14 @@ pub const Source = union(enum) {
 pub const Mount = struct {
     source: Source,
     /// Where it appears: a path in the app's data directory, its parts
-    /// separated by '\'.
+    /// separated by '\'; or `root`, the data directory itself.
     target: []const u8,
     read_only: bool = false,
+
+    /// Whether it's the app's data directory: in place of its own volume.
+    pub fn isRoot(m: Mount) bool {
+        return std.mem.eql(u8, m.target, root);
+    }
 
     /// "<source>:<target>", and ":ro" if read-only: how settings keep it.
     pub fn spec(m: Mount, arena: Allocator) ![]const u8 {
@@ -94,7 +110,10 @@ pub fn Parsed(comptime T: type) type {
     return union(enum) { ok: T, invalid: []const u8 };
 }
 
-const format_hint = "--volume expects <volume or folder>:<path in the app's data>, and :ro to make it read-only, such as pgdata:data or D:\\pgdata:data";
+/// The target that is the app's data directory itself.
+pub const root = ".";
+
+const format_hint = "--volume expects <volume or folder>:<path in the app's data>, and :ro to make it read-only, such as pgdata:data or D:\\pgdata:data; the path . is all of the app's data";
 
 /// Parses a `--volume` value.
 pub fn parse(arena: Allocator, value: []const u8) !Parsed(Mount) {
@@ -116,7 +135,10 @@ pub fn parse(arena: Allocator, value: []const u8) !Parsed(Mount) {
     else
         .{ .name = parts.source };
     return switch (try parseTarget(arena, rest)) {
-        .ok => |t| .{ .ok = .{ .source = source, .target = t, .read_only = read_only } },
+        .ok => |t| if (read_only and std.mem.eql(u8, t, root))
+            .{ .invalid = "an app's data can't be read-only: it keeps its settings and temporary files there" }
+        else
+            .{ .ok = .{ .source = source, .target = t, .read_only = read_only } },
         .invalid => |why| .{ .invalid = why },
     };
 }
@@ -139,19 +161,20 @@ pub fn targetOf(value: []const u8) []const u8 {
     return rest;
 }
 
-const target_hint = "the path in the app's data must be relative to its data directory, such as data or home\\AppData\\Roaming\\<app>";
+const target_hint = "the path in the app's data must be relative to its data directory, such as data or home\\AppData\\Roaming\\<app>, or . for all of it";
 
 /// Checks a target, a path in the app's data directory (`${data}\` before it
-/// is allowed), and returns it with '\' between its parts.
+/// is allowed), and returns it with '\' between its parts; or `root`, for
+/// `.` and `${data}`, the data directory itself.
 pub fn parseTarget(arena: Allocator, raw: []const u8) !Parsed([]const u8) {
-    var t = raw;
+    var t = std.mem.trimEnd(u8, raw, "\\/");
+    if (std.mem.eql(u8, t, root) or std.mem.eql(u8, t, "${data}")) return .{ .ok = root };
     for ([_][]const u8{ "${data}\\", "${data}/" }) |prefix| if (std.mem.startsWith(u8, t, prefix)) {
         t = t[prefix.len..];
         break;
     };
-    t = std.mem.trimEnd(u8, t, "\\/");
     if (t.len == 0 or isSep(t[0]) or std.mem.indexOfScalar(u8, t, ':') != null) return .{ .invalid = target_hint };
-    // Only a leading ${data}\ is; the whole data directory can't be a mount.
+    // Only a leading ${data} is.
     if (std.mem.indexOf(u8, t, "${") != null) return .{ .invalid = target_hint };
     var parts: std.ArrayList([]const u8) = .empty;
     var it = std.mem.splitAny(u8, t, "\\/");
@@ -187,10 +210,14 @@ fn overlaps(a: []const u8, b: []const u8) bool {
 }
 
 /// Fails unless the mounts' targets are apart: a junction in another
-/// mount's folder would be in the volume.
+/// mount's folder would be in the volume. All but the one at the root, which
+/// is the app's alone, as its own volume is: the others' links are in it.
 fn checkApart(id: []const u8, mounts: []const Mount) !void {
-    for (mounts, 0..) |m, i| for (mounts[0..i]) |earlier| if (overlaps(m.target, earlier.target))
-        return fail("{s}'s mounts at {s} and {s} overlap: give each its own place in the app's data", .{ id, earlier.target, m.target });
+    for (mounts, 0..) |m, i| for (mounts[0..i]) |earlier| {
+        if (m.isRoot() != earlier.isRoot()) continue;
+        if (m.isRoot() or overlaps(m.target, earlier.target))
+            return fail("{s}'s mounts at {s} and {s} overlap: give each its own place in the app's data", .{ id, earlier.target, m.target });
+    };
 }
 
 /// Why `name` can't be a volume's, if it can't. A name has no dots, so that
@@ -259,6 +286,8 @@ pub const Volume = struct {
     /// Kept outside the store (`volume create --path`): `volume rm` forgets
     /// it, and never deletes its files.
     external: bool,
+    /// An app's own, named by the app's id: its data directory.
+    own: bool = false,
 
     /// For messages: "in the store" or where it's kept.
     pub fn format(v: Volume, w: *Io.Writer) Io.Writer.Error!void {
@@ -286,10 +315,24 @@ fn lockPath(store: Store, arena: Allocator, name: []const u8) ![]const u8 {
     return std.fs.path.join(arena, &.{ try volumesDir(store, arena), try std.fmt.allocPrint(arena, "{s}.lock", .{name}) });
 }
 
-/// The volume of that name, if there is one.
+/// Whether a volume of that name is an app's own: the name is an id that
+/// can't be a volume's name, or an app of that id is installed.
+fn isOwn(store: Store, arena: Allocator, name: []const u8) !bool {
+    return !isValidName(name) or try store.readRef(arena, name) != null;
+}
+
+/// The volume of that name, if there is one: an app's own, by the app's id,
+/// or a named one. A link at volumes\<id> is no volume: it's where a mount at
+/// the root put another in the place of the app's own.
 pub fn find(store: Store, arena: Allocator, name: []const u8) !?Volume {
+    if (!isValidName(name) and !oci.isValidId(name)) return null;
     const in_store = try inStorePath(store, arena, name);
-    if (try isDir(store.io, in_store)) return .{ .name = name, .path = in_store, .external = false };
+    switch (try junction.inspect(store.io, arena, in_store)) {
+        .missing, .link => {},
+        .empty_dir, .other => if (try isDir(store.io, in_store))
+            return .{ .name = name, .path = in_store, .external = false, .own = try isOwn(store, arena, name) },
+    }
+    if (!isValidName(name)) return null;
     const record = try recordPath(store, arena, name);
     const bytes = Io.Dir.cwd().readFileAlloc(store.io, record, arena, .limited(64 << 10)) catch |err| switch (err) {
         error.FileNotFound => return null,
@@ -308,11 +351,16 @@ pub fn list(store: Store, arena: Allocator) ![]const Volume {
     var it = dir.iterate();
     while (try it.next(store.io)) |entry| {
         const name = switch (entry.kind) {
-            .directory => entry.name,
-            .file => if (std.mem.endsWith(u8, entry.name, ".json")) entry.name[0 .. entry.name.len - ".json".len] else continue,
+            // A link too, however it shows: `find` tells it from a folder.
+            .directory, .sym_link => entry.name,
+            .file => name: {
+                if (!std.mem.endsWith(u8, entry.name, ".json")) continue;
+                const stem = entry.name[0 .. entry.name.len - ".json".len];
+                if (!isValidName(stem)) continue;
+                break :name stem;
+            },
             else => continue,
         };
-        if (!isValidName(name)) continue;
         // The folder wins, as `find` has it.
         const seen = for (out.items) |v| {
             if (std.ascii.eqlIgnoreCase(v.name, name)) break true;
@@ -343,6 +391,7 @@ pub fn create(ctx: *Context, name: []const u8, at: ?[]const u8) !void {
     const arena = ctx.arena;
     if (nameProblem(name)) |why| return fail("\"{s}\": {s}", .{ name, why });
     if (try find(ctx.store, arena, name)) |v| return fail("there's a volume {s} already, {f}", .{ name, v });
+    if (try ctx.store.readRef(arena, name) != null) return fail("{s} is an app's id, and its own volume's name: give this one another", .{name});
     const given = at orelse {
         _ = try createInStore(ctx, name);
         return;
@@ -395,6 +444,13 @@ pub const Prepared = struct {
     pub fn release(p: Prepared, io: Io) void {
         for (p.locks) |l| l.release(io);
     }
+
+    /// The folder mounted as the data directory, in place of the app's own
+    /// volume, if one is.
+    pub fn dataRoot(p: Prepared) ?[]const u8 {
+        for (p.mounts) |m| if (m.mount.isRoot()) return m.host;
+        return null;
+    }
 };
 
 pub const Options = struct {
@@ -419,9 +475,18 @@ pub fn prepare(ctx: *Context, opts: Options) !Prepared {
     const arena = ctx.arena;
     var mounts: std.ArrayList(Mount) = .empty;
     for (opts.values) |value| switch (try parse(arena, value)) {
-        .ok => |m| try mounts.append(arena, m),
+        .ok => |m| {
+            // A fresh data directory is what an --ephemeral run is for.
+            if (m.isRoot() and opts.ephemeral) {
+                if (ctx.verbose) note("note: an --ephemeral run has a data directory of its own, not {f}", .{m});
+                continue;
+            }
+            // The one at the root first: the others' links are made in it.
+            if (m.isRoot()) try mounts.insert(arena, 0, m) else try mounts.append(arena, m);
+        },
         .invalid => |why| return fail("{s}: --volume={s}: {s}", .{ opts.id, value, why }),
     };
+    if (mounts.items.len == 0) return .{};
     try checkApart(opts.id, mounts.items);
     // Recorded before any is made, so that one made before a later step
     // fails still goes (see `settle`); an --ephemeral run's go with its data
@@ -440,6 +505,8 @@ pub fn prepare(ctx: *Context, opts: Options) !Prepared {
     for (mounts.items) |m| {
         const host = switch (m.source) {
             .name => |name| host: {
+                if (try ctx.store.readRef(arena, name) != null)
+                    return fail("{s}: {s} is the app {s}'s own volume, which only it mounts", .{ opts.id, name, name });
                 // Before it's looked up: `volume rm` deletes it under this lock.
                 try locks.append(arena, try Store.openLock(io, try lockPath(ctx.store, arena, name), .shared, .wait));
                 const v = try find(ctx.store, arena, name) orelse try createInStore(ctx, name);
@@ -458,8 +525,9 @@ pub fn prepare(ctx: *Context, opts: Options) !Prepared {
             return fail("{s}: {f} holds zigsaw's store, and so the app's data: it can't be mounted in it", .{ opts.id, m });
         if (isWithin(host, opts.data_dir))
             return fail("{s}: {f} is in the app's data already", .{ opts.id, m });
+        if (m.isRoot()) try checkAlone(ctx, opts.id, m, host);
 
-        const at = try std.fs.path.join(arena, &.{ opts.data_dir, m.target });
+        const at = if (m.isRoot()) opts.data_dir else try std.fs.path.join(arena, &.{ opts.data_dir, m.target });
         switch (try junction.inspect(io, arena, at)) {
             .missing, .empty_dir => {},
             .link => |old| if (!alone and !(if (old) |o| samePath(o, host) else false))
@@ -485,6 +553,34 @@ pub fn prepare(ctx: *Context, opts: Options) !Prepared {
         try out.append(arena, .{ .mount = m, .host = host });
     }
     return .{ .mounts = out.items, .locks = locks.items };
+}
+
+/// Fails if the volume the app's id names, its own, is one a saved mount
+/// names: a named volume made before an app whose id has no dot came. Only
+/// such an id can be a volume's name, so only then is anything read.
+pub fn checkOwn(ctx: *Context, id: []const u8) !void {
+    if (!isValidName(id)) return;
+    const users = try mountsOf(try allSaved(ctx), ctx.arena, id);
+    if (users.len > 0) return fail("{s}: the volume of its name, which would be its data, is mounted by {s}: take that away with `zigsaw override --novolume={s} {s}`, and give that volume another name", .{
+        id, try describeMounts(ctx.arena, users), users[0].mount.target, users[0].id orelse "--global",
+    });
+}
+
+/// Fails unless the app is the only one whose saved mounts have `host` as
+/// their data directory: two apps' settings, registry keys and temporary
+/// files can't be in one folder.
+fn checkAlone(ctx: *Context, id: []const u8, m: Mount, host: []const u8) !void {
+    for (try allSaved(ctx)) |s| {
+        if (!s.mount.isRoot()) continue;
+        const other = s.id orelse
+            return fail("{s}: the overrides for every app (--global) mount {f} as the data of each: take that away with `zigsaw override --global --novolume=.`", .{ id, s.mount });
+        if (std.ascii.eqlIgnoreCase(other, id)) continue;
+        const theirs = switch (s.mount.source) {
+            .name => |n| if (try find(ctx.store, ctx.arena, n)) |v| v.path else continue,
+            .path => |p| p,
+        };
+        if (samePath(theirs, host)) return fail("{s}: {f} is {s}'s data already, and two apps can't keep theirs in one folder", .{ id, m, other });
+    }
 }
 
 /// Adds the mounts' targets to grants\<id>.mounts, the junctions to take away
@@ -560,26 +656,49 @@ pub fn settle(ctx: *Context, id: []const u8) !void {
     if (recorded.len == 0) return;
     const saved = (try override.loadFor(ctx.store, arena, id)).volumes;
     var kept: std.ArrayList([]const u8) = .empty;
-    for (recorded) |t| {
-        const stands = for (saved) |value| {
-            if (std.os.windows.eqlIgnoreCaseWtf8(targetOf(value), t)) break true;
-        } else false;
-        if (stands or !try unmount(ctx, id, t)) try kept.append(arena, t);
+    const root_goes = for (recorded) |t| {
+        if (std.mem.eql(u8, t, root)) break !standsIn(saved, t);
+    } else false;
+    for (try rootLast(arena, recorded)) |t| {
+        const stands = standsIn(saved, t);
+        // With the root's, the others' links go from its folder too: a run
+        // makes those that stand again, in the app's own volume.
+        if (stands and !(root_goes and !std.mem.eql(u8, t, root))) {
+            try kept.append(arena, t);
+            continue;
+        }
+        if (!try unmount(ctx, id, t) or stands) try kept.append(arena, t);
     }
     if (kept.items.len != recorded.len) try ctx.store.writeMounts(arena, id, kept.items);
+}
+
+/// Whether a saved mount is at the target.
+fn standsIn(saved: []const []const u8, target: []const u8) bool {
+    for (saved) |value| if (std.os.windows.eqlIgnoreCaseWtf8(targetOf(value), target)) return true;
+    return false;
 }
 
 /// Takes away every junction the app's mounts made, for `zigsaw rm`: a later
 /// install's runs make them again. With grants.lock held.
 pub fn unmountAll(ctx: *Context, id: []const u8) !void {
-    for (try ctx.store.readMounts(ctx.arena, id)) |t| _ = try unmount(ctx, id, t);
+    for (try rootLast(ctx.arena, try ctx.store.readMounts(ctx.arena, id))) |t| _ = try unmount(ctx, id, t);
     try ctx.store.writeMounts(ctx.arena, id, &.{});
+}
+
+/// The targets with the root's after the others: their links are found
+/// through it.
+fn rootLast(arena: Allocator, targets: []const []const u8) ![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (targets) |t| if (!std.mem.eql(u8, t, root)) try out.append(arena, t);
+    if (out.items.len != targets.len) try out.append(arena, root);
+    return out.items;
 }
 
 /// Removes the junction at the target, if there's one; false if that failed
 /// (reported).
 fn unmount(ctx: *Context, id: []const u8, target: []const u8) !bool {
-    const at = try ctx.store.path(ctx.arena, &.{ "data", id, target });
+    const data_dir = try ctx.store.dataDir(ctx.arena, id);
+    const at = if (std.mem.eql(u8, target, root)) data_dir else try std.fs.path.join(ctx.arena, &.{ data_dir, target });
     const removed = junction.unlink(ctx.io, ctx.arena, at) catch |err| switch (err) {
         error.Failed => return false,
         else => |e| return e,
@@ -611,11 +730,38 @@ const Saved = struct {
     /// Null for the store-wide overrides.
     id: ?[]const u8,
     mount: Mount,
+    /// Not saved at all: an installed app and its own volume.
+    own: bool = false,
 
     fn who(s: Saved) []const u8 {
         return s.id orelse "every app";
     }
 };
+
+/// What mounts the volume: the saved mounts that name it, and, its own, the
+/// app if it's installed.
+fn usersOf(ctx: *Context, saved: []const Saved, v: Volume) ![]const Saved {
+    const arena = ctx.arena;
+    var out: std.ArrayList(Saved) = .empty;
+    if (v.own and try ctx.store.readRef(arena, v.name) != null)
+        try out.append(arena, .{ .id = v.name, .mount = .{ .source = .{ .name = v.name }, .target = root }, .own = true });
+    if (isValidName(v.name)) try out.appendSlice(arena, try mountsOf(saved, arena, v.name));
+    return out.items;
+}
+
+/// The lock that says no run uses the volume, if none does: an app's own has
+/// its runs' lock, another its own.
+fn lockUnused(ctx: *Context, v: Volume) !?Store.Lock {
+    const p = if (isValidName(v.name) and !v.own) try lockPath(ctx.store, ctx.arena, v.name) else try ctx.store.runsLockPath(ctx.arena, v.name);
+    return Store.tryLock(ctx.io, p, .exclusive);
+}
+
+/// Deletes a volume in the store, and what zigsaw keeps beside an app's own.
+fn delete(ctx: *Context, v: Volume) !void {
+    try grants.undoPath(ctx, v.path);
+    try Store.deleteTree(ctx.io, ctx.arena, v.path);
+    Io.Dir.cwd().deleteFile(ctx.io, try std.fmt.allocPrint(ctx.arena, "{s}.hkcu.lock", .{v.path})) catch {};
+}
 
 /// Every saved mount: the store-wide overrides', and each app's, installed or
 /// not (`rm` keeps an app's overrides, for when it comes back).
@@ -661,13 +807,18 @@ fn mountsOf(saved: []const Saved, arena: Allocator, name: []const u8) ![]const S
 fn describeMounts(arena: Allocator, saved: []const Saved) ![]const u8 {
     if (saved.len == 0) return "-";
     const parts = try arena.alloc([]const u8, saved.len);
-    for (parts, saved) |*p, s| p.* = try std.fmt.allocPrint(arena, "{s} at {s}{s}", .{ s.who(), s.mount.target, if (s.mount.read_only) " (read-only)" else "" });
+    for (parts, saved) |*p, s| p.* = if (s.mount.isRoot())
+        try std.fmt.allocPrint(arena, "{s} as its data", .{s.who()})
+    else
+        try std.fmt.allocPrint(arena, "{s} at {s}{s}", .{ s.who(), s.mount.target, if (s.mount.read_only) " (read-only)" else "" });
     return std.mem.join(arena, ", ", parts);
 }
 
-/// Whether a run holds the volume's lock.
-fn inUse(ctx: *Context, name: []const u8) !bool {
-    return Store.isLocked(ctx.io, try lockPath(ctx.store, ctx.arena, name));
+/// Whether a run uses the volume.
+fn inUse(ctx: *Context, v: Volume) !bool {
+    const l = try lockUnused(ctx, v) orelse return true;
+    l.release(ctx.io);
+    return false;
 }
 
 /// `zigsaw volume ls`.
@@ -677,10 +828,13 @@ pub fn show(ctx: *Context) !void {
     var buf: [4096]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;
-    try w.print("{s:<24} {s:<40} {s}\n", .{ "NAME", "LOCATION", "MOUNTED BY" });
-    for (try list(ctx.store, arena)) |v| {
+    const all = try list(ctx.store, arena);
+    var width: usize = 24;
+    for (all) |v| width = @max(width, v.name.len);
+    try w.print("{[n]s:<[w]} {[l]s:<40} {[m]s}\n", .{ .n = "NAME", .w = width, .l = "LOCATION", .m = "MOUNTED BY" });
+    for (all) |v| {
         const where = if (v.external) v.path else "store";
-        try w.print("{s:<24} {s:<40} {s}\n", .{ v.name, where, try describeMounts(arena, try mountsOf(saved, arena, v.name)) });
+        try w.print("{[n]s:<[w]} {[l]s:<40} {[m]s}\n", .{ .n = v.name, .w = width, .l = where, .m = try describeMounts(arena, try usersOf(ctx, saved, v)) });
     }
     try w.flush();
 }
@@ -692,14 +846,14 @@ pub fn inspect(ctx: *Context, name: []const u8) !void {
     var buf: [4096]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;
-    try w.print("name        {s}\n", .{v.name});
+    try w.print("name        {s}{s}\n", .{ v.name, if (v.own) " (the app's own: its data)" else "" });
     try w.print("location    {s} ({s})\n", .{ v.path, if (v.external) "kept outside the store" else "in the store" });
     if (try isDir(ctx.io, v.path)) {
         const size = try measure(ctx.io, arena, v.path);
         try w.print("size        {Bi:.1} in {d} file(s)\n", .{ size.bytes, size.files });
     } else try w.writeAll("size        -, as the folder isn't there\n");
-    try w.print("mounted by  {s}\n", .{try describeMounts(arena, try mountsOf(try allSaved(ctx), arena, v.name))});
-    try w.print("in use      {s}\n", .{if (try inUse(ctx, v.name)) "yes, by a run" else "no"});
+    try w.print("mounted by  {s}\n", .{try describeMounts(arena, try usersOf(ctx, try allSaved(ctx), v))});
+    try w.print("in use      {s}\n", .{if (try inUse(ctx, v)) "yes, by a run" else "no"});
     var lines: std.ArrayList([]const u8) = .empty;
     for (try ctx.store.listGrantIds(arena)) |id| for (try ctx.store.readGrants(arena, id)) |g| {
         if (g.kind == .loopback or !samePath(g.path, v.path)) continue;
@@ -717,66 +871,163 @@ pub fn remove(ctx: *Context, names: []const []const u8) !void {
     const saved = try allSaved(ctx);
     for (names) |name| {
         const v = try find(ctx.store, arena, name) orelse return fail("there's no volume {s}; `zigsaw volume ls` lists them", .{name});
-        const users = try mountsOf(saved, arena, name);
+        const users = try usersOf(ctx, saved, v);
+        if (users.len > 0 and users[0].own)
+            return fail("{s} is the data of an app that's installed: `zigsaw rm --delete-data {s}` removes both", .{ name, name });
         if (users.len > 0) return fail("{s} is mounted by {s}: take that away first, with `zigsaw override --novolume={s} {s}`", .{
             name, try describeMounts(arena, users), users[0].mount.target, users[0].id orelse "--global",
         });
-        const lock = try Store.tryLock(ctx.io, try lockPath(ctx.store, arena, name), .exclusive) orelse
-            return fail("volume {s} is in use by a run of an app", .{name});
+        const lock = try lockUnused(ctx, v) orelse return fail("volume {s} is in use by a run of an app", .{name});
         defer lock.release(ctx.io);
-        try grants.undoPath(ctx, v.path);
         if (v.external) {
+            try grants.undoPath(ctx, v.path);
             try Io.Dir.cwd().deleteFile(ctx.io, try recordPath(ctx.store, arena, name));
             note("forgot volume {s}; its files stay in {s}", .{ name, v.path });
         } else {
-            try Store.deleteTree(ctx.io, arena, v.path);
+            try delete(ctx, v);
             note("removed volume {s}", .{name});
         }
     }
 }
 
-/// `zigsaw volume prune [--dry-run]`: deletes the volumes in the store that no
-/// saved mount names and no run uses. Never one kept elsewhere: those are
-/// folders of yours.
-pub fn prune(ctx: *Context, dry_run: bool) !void {
+/// What `prune` deleted, or would.
+pub const Pruned = struct { count: usize = 0, bytes: u64 = 0 };
+
+/// `zigsaw volume prune [--dry-run]`, and `zigsaw prune --volumes`: deletes
+/// the volumes in the store that nothing mounts and no run uses: those no
+/// saved mount names, and the data of apps that aren't installed. Never one
+/// kept elsewhere: those are folders of yours.
+pub fn prune(ctx: *Context, dry_run: bool) !Pruned {
     const arena = ctx.arena;
     const saved = try allSaved(ctx);
-    var total: u64 = 0;
-    var count: usize = 0;
+    var out: Pruned = .{};
     for (try list(ctx.store, arena)) |v| {
-        if (v.external or (try mountsOf(saved, arena, v.name)).len > 0) continue;
-        const lock = try Store.tryLock(ctx.io, try lockPath(ctx.store, arena, v.name), .exclusive) orelse {
+        if (v.external or (try usersOf(ctx, saved, v)).len > 0) continue;
+        const lock = try lockUnused(ctx, v) orelse {
             note("kept volume {s}, which a run uses", .{v.name});
             continue;
         };
         defer lock.release(ctx.io);
         const size = (try measure(ctx.io, arena, v.path)).bytes;
-        total += size;
-        count += 1;
+        out.bytes += size;
+        out.count += 1;
         if (dry_run) {
             note("would remove volume {s} ({Bi:.1})", .{ v.name, size });
             continue;
         }
-        try grants.undoPath(ctx, v.path);
-        try Store.deleteTree(ctx.io, arena, v.path);
+        try delete(ctx, v);
         note("removed volume {s} ({Bi:.1})", .{ v.name, size });
     }
-    if (count == 0) note("no volume to remove: each is mounted by an app, kept outside the store, or in use", .{}) else if (!dry_run) note("removed {d} volume(s), {Bi:.1}", .{ count, total });
+    return out;
 }
 
-/// The volumes in the store that no saved mount names, and their size, for
-/// what `zigsaw prune` says.
-pub fn unused(ctx: *Context) !struct { count: usize, bytes: u64 } {
+/// The volumes in the store that nothing mounts, with their sizes, for what
+/// `zigsaw prune` says it kept.
+pub fn unmounted(ctx: *Context) !struct { names: []const []const u8, bytes: u64 } {
     const arena = ctx.arena;
     const saved = try allSaved(ctx);
-    var count: usize = 0;
+    var names: std.ArrayList([]const u8) = .empty;
     var bytes: u64 = 0;
     for (try list(ctx.store, arena)) |v| {
-        if (v.external or (try mountsOf(saved, arena, v.name)).len > 0) continue;
-        count += 1;
-        bytes += (try measure(ctx.io, arena, v.path)).bytes;
+        if (v.external or (try usersOf(ctx, saved, v)).len > 0) continue;
+        const size = (try measure(ctx.io, arena, v.path)).bytes;
+        try names.append(arena, try std.fmt.allocPrint(arena, "{s} ({Bi:.1})", .{ v.name, size }));
+        bytes += size;
     }
-    return .{ .count = count, .bytes = bytes };
+    return .{ .names = names.items, .bytes = bytes };
+}
+
+// ---------------------------------------------------------------------------
+// Data from before 0.85
+
+/// Moves an app's data from data\<id>, where a zigsaw before 0.85 kept it, to
+/// its own volume. Only while no run of the app goes on, an older zigsaw's
+/// included: `quiet` leaves it for later then, and a run of the app fails.
+/// What a run that didn't end left in HKCU goes back into the data first:
+/// its record names the old place.
+pub fn adopt(ctx: *Context, id: []const u8, quiet: bool) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+    const old = try ctx.store.path(arena, &.{ "data", id });
+    if (!try isDir(io, old)) return;
+    // One at a time: a second zigsaw then finds it moved.
+    const moving = try Store.openLock(io, try ctx.store.path(arena, &.{"volumes.adopt.lock"}), .exclusive, .wait);
+    defer moving.release(io);
+    const old_place = try junction.inspect(io, arena, old);
+    if (old_place == .missing) return;
+    const new = try ctx.store.dataDir(arena, id);
+    const new_place = try junction.inspect(io, arena, new);
+    if (new_place != .missing and new_place != .empty_dir) {
+        // An older zigsaw ran the app after its data moved.
+        if (old_place == .empty_dir) {
+            _ = win32.RemoveDirectoryW(try win32.wide(arena, old));
+        } else if (!quiet) {
+            note("warning: {s} has files a zigsaw before 0.85 left after {s}'s data moved to {s}; no run uses them: move what you need from there, then delete it", .{ old, id, new });
+        }
+        return;
+    }
+    const why: ?[]const u8 = if (try acl.belowMedium())
+        "zigsaw runs at low integrity here: run `zigsaw repair` from a prompt that isn't"
+    else
+        null;
+    const alone = if (why == null) try Store.tryLock(io, try ctx.store.runsLockPath(arena, id), .exclusive) else null;
+    defer if (alone) |l| l.release(io);
+    if (alone == null) {
+        if (quiet) return;
+        return fail("{s}'s data is still in {s}, where a zigsaw before 0.85 kept it, and can't move to {s}: {s}", .{
+            id, old, new, why orelse "a run of the app goes on; let it end first",
+        });
+    }
+    try hkcu.settleLeftovers(ctx, id);
+    if (new_place == .empty_dir) _ = win32.RemoveDirectoryW(try win32.wide(arena, new));
+    if (win32.MoveFileExW(try win32.wide(arena, old), try win32.wide(arena, new), 0) == 0) {
+        const code = win32.GetLastError();
+        if (quiet) return;
+        return fail("moving {s}'s data from {s} to {s}: error {d} ({s}); close what has files open there, then try again", .{ id, old, new, code, win32.errorName(code) });
+    }
+    Io.Dir.cwd().deleteFile(io, try std.fmt.allocPrint(arena, "{s}.hkcu.lock", .{old})) catch {};
+    note("moved {s}'s data to {s}: an app's data is its own volume from zigsaw 0.85 (`zigsaw volume ls`)", .{ id, new });
+}
+
+/// Moves the data of every app from data\, for any command of a zigsaw that
+/// finds a store an older one made. Leaves what it can't move yet, without a
+/// word: a run of that app says why. Says whether anything moved, as shims
+/// and shortcuts that name the old place then need `zigsaw repair`.
+pub fn adoptAll(ctx: *Context) !bool {
+    const io = ctx.io;
+    const arena = ctx.arena;
+    const old = try ctx.store.path(arena, &.{"data"});
+    var ids: std.ArrayList([]const u8) = .empty;
+    {
+        var dir = Io.Dir.cwd().openDir(io, old, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => return false,
+            else => |e| return e,
+        };
+        defer dir.close(io);
+        var it = dir.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind == .directory and oci.isValidId(entry.name)) try ids.append(arena, try arena.dupe(u8, entry.name));
+        }
+    }
+    var moved = false;
+    for (ids.items) |id| {
+        adopt(ctx, id, true) catch |err| switch (err) {
+            error.Failed => continue, // Reported.
+            else => |e| return e,
+        };
+        if (!try isDir(io, try std.fs.path.join(arena, &.{ old, id }))) moved = true;
+    }
+    // Gone once it's empty: the lock files of data that moved go first.
+    if (moved) {
+        var dir = try Io.Dir.cwd().openDir(io, old, .{ .iterate = true });
+        defer dir.close(io);
+        var it = dir.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".hkcu.lock")) dir.deleteFile(io, entry.name) catch {};
+        }
+    }
+    _ = win32.RemoveDirectoryW(try win32.wide(arena, old));
+    return moved;
 }
 
 /// The named volumes the app's saved mounts name, for what `rm
@@ -882,11 +1133,15 @@ test parse {
     // Targets: relative, plain, and none of zigsaw's own.
     for ([_][]const u8{
         "pg:D:\\x",                         "pg:\\data",                            "pg:..\\x",                             "pg:a\\..\\b",
-        "pg:.",                             "pg:a\\\\b",                            "pg:a.",                                "pg:con",
+        "pg:.:ro",                          "pg:a\\\\b",                            "pg:a.",                                "pg:con",
         "pg:registry",                      "pg:registry\\x",                       "pg:home",                              "pg:home\\AppData",
         "pg:home\\AppData\\Local\\Temp\\x", "pg:home\\AppData\\Local\\Packages\\x", "pg:home\\AppData\\Roaming\\Microsoft", "pg:home\\Documents",
-        "pg:home\\documents\\notes",        "pg:${data}",
+        "pg:home\\documents\\notes",        "pg:${data}:ro",
     }) |v| try expectInvalid(v);
+    // The data directory itself, which can't be read-only.
+    try expectMount("pg:.", .{ .name = "pg" }, root, false);
+    try expectMount("D:\\pg:${data}\\", .{ .path = "D:\\pg" }, root, false);
+    try expectMount("D:\\pg:.:rw", .{ .path = "D:\\pg" }, root, false);
 }
 
 test "a mount as settings keep it, and its target" {
@@ -912,6 +1167,19 @@ test checkApart {
     try checkApart("t", &.{ a, c });
     try std.testing.expectError(error.Failed, checkApart("t", &.{ a, b }));
     try std.testing.expectError(error.Failed, checkApart("t", &.{ b, a }));
+    // The one at the root holds the others' links; there's only one.
+    const r: Mount = .{ .source = .{ .path = "D:\\pg" }, .target = root };
+    const r2: Mount = .{ .source = .{ .name = "all" }, .target = root };
+    try checkApart("t", &.{ r, a, c });
+    try std.testing.expectError(error.Failed, checkApart("t", &.{ r, a, r2 }));
+}
+
+test rootLast {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const got = try rootLast(arena_state.allocator(), &.{ "a", root, "b\\c" });
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "a", "b\\c", root }), got);
+    try std.testing.expectEqual(1, (try rootLast(arena_state.allocator(), &.{"a"})).len);
 }
 
 test "volumes in a store: in it, kept elsewhere, and listed" {
@@ -921,12 +1189,15 @@ test "volumes in a store: in it, kept elsewhere, and listed" {
     const arena = arena_state.allocator();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", arena);
+    const root_dir = try tmp.dir.realPathFileAlloc(io, ".", arena);
     try tmp.dir.createDirPath(io, "volumes\\pgdata");
+    try tmp.dir.createDirPath(io, "volumes\\org.example.App");
+    try tmp.dir.createDirPath(io, "refs");
+    try tmp.dir.writeFile(io, .{ .sub_path = "volumes\\org.example.App.hkcu.lock", .data = "" });
     try tmp.dir.createDirPath(io, "elsewhere");
     try tmp.dir.writeFile(io, .{ .sub_path = "volumes\\pgdata.lock", .data = "" });
-    try tmp.dir.writeFile(io, .{ .sub_path = "volumes\\media.json", .data = try oci.toJson(arena, Record{ .path = try std.fs.path.join(arena, &.{ root, "elsewhere" }) }) });
-    const store: Store = .{ .io = io, .root = root };
+    try tmp.dir.writeFile(io, .{ .sub_path = "volumes\\media.json", .data = try oci.toJson(arena, Record{ .path = try std.fs.path.join(arena, &.{ root_dir, "elsewhere" }) }) });
+    const store: Store = .{ .io = io, .root = root_dir };
 
     const pg = (try find(store, arena, "PGDATA")).?;
     try std.testing.expect(!pg.external);
@@ -934,9 +1205,21 @@ test "volumes in a store: in it, kept elsewhere, and listed" {
     try std.testing.expect(media.external);
     try std.testing.expect(std.mem.endsWith(u8, media.path, "elsewhere"));
     try std.testing.expectEqual(null, try find(store, arena, "other"));
+    try std.testing.expectEqual(null, try find(store, arena, "..\\refs"));
+    try std.testing.expect(!pg.own);
+    // An app's own, by its id.
+    const app = (try find(store, arena, "org.example.App")).?;
+    try std.testing.expect(app.own and !app.external);
+
+    // A link at an app's id is a mount at the root, and no volume.
+    const linked = try std.fs.path.join(arena, &.{ root_dir, "volumes", "org.example.Linked" });
+    try std.testing.expectEqual(junction.Linked.made, try junction.link(io, arena, linked, try std.fs.path.join(arena, &.{ root_dir, "elsewhere" })));
+    defer _ = junction.unlink(io, arena, linked) catch {};
+    try std.testing.expectEqual(null, try find(store, arena, "org.example.Linked"));
 
     const all = try list(store, arena);
-    try std.testing.expectEqual(2, all.len);
+    try std.testing.expectEqual(3, all.len);
     try std.testing.expectEqualStrings("media", all[0].name);
-    try std.testing.expectEqualStrings("pgdata", all[1].name);
+    try std.testing.expectEqualStrings("org.example.App", all[1].name);
+    try std.testing.expectEqualStrings("pgdata", all[2].name);
 }

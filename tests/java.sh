@@ -84,7 +84,7 @@ build_image $PDFBOX pdfbox.json
 build_image $PLANTUML plantuml.json
 build_image $LOGISIM logisim-evolution.json
 build_image $SCENEBUILDER scenebuilder.json
-data() { echo "$ZIGSAW_HOME\\data\\$1"; }
+data() { echo "$ZIGSAW_HOME\\volumes\\$1"; }
 # Runs from the work directory's sandbox folders, never the repository: the
 # apps have the cwd permission, which low runs label and AppContainer runs
 # grant. (A check's `cd` lasts only for that check.)
@@ -282,7 +282,7 @@ reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU
 rm -rf "$docs"
 for id in $installed_here; do z rm --delete-data "$id" >/dev/null 2>&1; done
 if [ -n "$temp_store" ]; then
-    z prune --downloads --data >/dev/null 2>&1
+    z prune --downloads --volumes >/dev/null 2>&1
     rm -rf "$temp_store"
 fi
 rm -rf "$work"

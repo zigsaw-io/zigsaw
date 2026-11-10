@@ -47,7 +47,7 @@ for id in $APP $APP.pgvector $APP.pg_cron $APP.PostGIS; do
 done
 export ZIGSAW_HOME
 work=$(cygpath -w "$(mktemp -d)")
-data="$ZIGSAW_HOME\\data\\$APP"
+data="$ZIGSAW_HOME\\volumes\\$APP"
 port=$((57000 + RANDOM % 900))
 # Every run gets it: the server listens there, or in an AppContainer is
 # published there, and its clients connect there (PGPORT).

@@ -68,7 +68,7 @@ fn syncAs(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, when: Wh
     const lock = try ctx.store.lockShims(ctx.arena);
     defer lock.release(ctx.io);
     try syncLocked(ctx, manifest, config, when);
-    const data_dir = try ctx.store.path(ctx.arena, &.{ "data", config.id });
+    const data_dir = try ctx.store.dataDir(ctx.arena, config.id);
     const placeholders = try deployedPlaceholders(ctx, manifest, config, data_dir);
     try shortcuts.sync(ctx, config, placeholders);
     try associations.sync(ctx, config, placeholders);
@@ -131,7 +131,7 @@ fn syncLocked(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, when
     const arena = ctx.arena;
     const installed = try list(ctx);
     const zigsaw = try win32.selfExePath(arena);
-    const data_dir = try ctx.store.path(arena, &.{ "data", config.id });
+    const data_dir = try ctx.store.dataDir(arena, config.id);
     const found = try findCommands(io, arena, try commandDirs(arena, config, data_dir));
     const placeholders = try deployedPlaceholders(ctx, manifest, config, data_dir);
 

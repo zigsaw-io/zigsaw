@@ -89,10 +89,10 @@ commands_own_app() {
     local out
     out=$(in_run --share=commands -- 'reach-probe')
     has "$out" "# integrity low" || return 1
-    has "$out" "env USERPROFILE = $ZIGSAW_HOME\\data\\test.reach.tool\\home" || return 1
+    has "$out" "env USERPROFILE = $ZIGSAW_HOME\\volumes\\test.reach.tool\\home" || return 1
 }
 check "commands: a tool runs as its own app, with its data and its sandbox" commands_own_app
-docs_link() { powershell -NoProfile -Command "(Get-Item -LiteralPath '$ZIGSAW_HOME\\data\\test.reach.docs\\home\\Documents' -ErrorAction SilentlyContinue).Target" | tr -d '\r'; }
+docs_link() { powershell -NoProfile -Command "(Get-Item -LiteralPath '$ZIGSAW_HOME\\volumes\\test.reach.docs\\home\\Documents' -ErrorAction SilentlyContinue).Target" | tr -d '\r'; }
 # This store isn't the default one, so its apps don't get your real folders. In
 # a throwaway account (tests/standard-user.sh), it's told they may: a tool's
 # folders are then the user's, as the nested zigsaw finds them, not those of the
@@ -296,7 +296,7 @@ stale_repaired() {
 check "repair removes such a key that no app declares, and nothing else" stale_repaired
 
 opens_link() {
-    local record="$ZIGSAW_HOME\\data\\$URL\\record.txt"
+    local record="$ZIGSAW_HOME\\volumes\\$URL\\record.txt"
     rm -f "$record"
     "$urlshim" 'reachtest68://a/b?c=1&d=2' >/dev/null 2>&1 || { echo "exit code $?"; return 1; }
     has "$(cat "$record")" 'reachtest68://a/b?c=1&d=2' || return 1
@@ -306,7 +306,7 @@ opens_link() {
 }
 check "a scheme's shim passes on a link of it, in any case" opens_link
 refuses() {
-    local record="$ZIGSAW_HOME\\data\\$URL\\record.txt" out
+    local record="$ZIGSAW_HOME\\volumes\\$URL\\record.txt" out
     rm -f "$record"
     out=$("$urlshim" 'reachtest68://a' --gpu-launcher=calc 2>&1) && { echo "two arguments were taken"; return 1; }
     has "$out" "came as several" || return 1
@@ -363,7 +363,7 @@ REAL=test.reach.real
 real_key='HKCU\Software\Classes\reachreal68'
 registered_key='HKCU\Software\RegisteredApplications'
 through_windows() {
-    local record="$ZIGSAW_HOME\\data\\$REAL\\record.txt" i
+    local record="$ZIGSAW_HOME\\volumes\\$REAL\\record.txt" i
     ZIGSAW_CLASSES_KEY='Software\Classes' "$zigsaw" build "$root\\tests\\reach\\real.json" >/dev/null 2>&1 || { echo "building it failed"; return 1; }
     reg query "$real_key" /v "URL Protocol" >/dev/null 2>&1 || { echo "not registered"; return 1; }
     reg query "$registered_key" /v "Zigsaw.$REAL" >/dev/null 2>&1 || { echo "not on Windows' list"; return 1; }
@@ -373,7 +373,7 @@ through_windows() {
 }
 check "a link Windows follows reaches the app, through its shim" through_windows
 injected() {
-    local record="$ZIGSAW_HOME\\data\\$REAL\\record.txt" i
+    local record="$ZIGSAW_HOME\\volumes\\$REAL\\record.txt" i
     rm -f "$record"
     # What Electron's CVE-2018-1000006 was: Windows encodes or splits a quote.
     powershell -NoProfile -Command "Start-Process 'reachreal68://x\" --evil \"y'" || return 1

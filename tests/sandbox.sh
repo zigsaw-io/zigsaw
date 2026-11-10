@@ -118,7 +118,7 @@ check "low: can't write elsewhere" fails writes $BB low "$work\\outside\\f"
 check "low: reads elsewhere (not enforced)" z run --sandbox=low $BB cat "$work\\outside\\secret.txt"
 check "low: writes cwd with the cwd permission" sh -c "cd '$work\\cwd' && \"\$0\" run --sandbox=low --filesystem=cwd $BB sh -c 'echo x > \"\$1\"' sh '$work\\cwd\\f' </dev/null" "$zigsaw"
 check "  which, given on the command line, isn't labelled after it" label_gone "$work\\cwd"
-check "  and the run's data directory is labelled" low_label "$ZIGSAW_HOME\\data\\$BB"
+check "  and the run's data directory is labelled" low_label "$ZIGSAW_HOME\\volumes\\$BB"
 refuses_profile() {
     local out
     out=$(writes $BB low "$USERPROFILE\\zigsaw-sandbox-test" --filesystem="$USERPROFILE" 2>&1) && return 1
@@ -178,7 +178,7 @@ read_only_cwd() {
 }
 drive=${work:0:3}
 home_run_quiet() {
-    local home="$ZIGSAW_HOME\\data\\$BB\\home" out
+    local home="$ZIGSAW_HOME\\volumes\\$BB\\home" out
     out=$(from "$home" $BB) || { echo "$out"; return 1; }
     ! grep -q labelled <<<"$out" && fails granted $BB "low $home" && [ ! -e "$ZIGSAW_HOME\\grants\\$BB.cwd" ]
 }
@@ -382,7 +382,7 @@ echo mine >"$folders\\Documents\\mine.txt"
 # Windows' own Documents holds hidden links that deny listing, as "My Music".
 powershell -NoProfile -Command "New-Item -ItemType Junction -Path '$folders\\Documents\\My Music' -Target '$folders\\Music' | Out-Null; icacls '$folders\\Documents\\My Music' /deny 'Everyone:(RD)' | Out-Null"
 export ZIGSAW_USER_FOLDERS="$folders"
-home="$ZIGSAW_HOME\\data\\$FOLD\\home"
+home="$ZIGSAW_HOME\\volumes\\$FOLD\\home"
 # Git Bash takes a junction for a symbolic link.
 is_junction() { [ -L "$1" ]; }
 folder_files_kept() { [ -f "$folders\\Documents\\mine.txt" ] && [ -f "$folders\\Music\\song.txt" ]; }
@@ -445,7 +445,7 @@ check "an update that no longer permits the folder takes the grant back" update_
 check "--ephemeral: linked too, and its data deleted without what the link pointed to" ephemeral_keeps_folder
 rm_delete_data_keeps_folder() {
     "$zigsaw" rm --delete-data $FOLD >/dev/null 2>&1 </dev/null || return 1
-    [ ! -e "$ZIGSAW_HOME\\data\\$FOLD" ] && folder_files_kept &&
+    [ ! -e "$ZIGSAW_HOME\\volumes\\$FOLD" ] && folder_files_kept &&
         [ -f "$folders\\Documents\\low.txt" ] && [ -f "$folders\\Documents\\ac.txt" ]
 }
 check "rm --delete-data leaves the folder's files" rm_delete_data_keeps_folder
@@ -454,10 +454,10 @@ prune_data_keeps_folder() {
     "$zigsaw" build "$work\\folders.json" >/dev/null 2>&1 &&
         z run $FOLD true 2>/dev/null && is_junction "$home\\Documents" &&
         "$zigsaw" rm $FOLD >/dev/null 2>&1 </dev/null &&
-        "$zigsaw" prune --data >/dev/null 2>&1 </dev/null || return 1
-    [ ! -e "$ZIGSAW_HOME\\data\\$FOLD" ] && folder_files_kept
+        "$zigsaw" prune --volumes >/dev/null 2>&1 </dev/null || return 1
+    [ ! -e "$ZIGSAW_HOME\\volumes\\$FOLD" ] && folder_files_kept
 }
-check "prune --data of a removed app's data leaves the folder's files" prune_data_keeps_folder
+check "prune --volumes of a removed app's data leaves the folder's files" prune_data_keeps_folder
 unset ZIGSAW_USER_FOLDERS
 
 # --- Registry keys an app keeps (its config's "registry") --------------------------
@@ -533,11 +533,11 @@ rm_settles() {
     start_sleeping $REG || return 1
     kill -9 $runner
     wait $runner 2>/dev/null
-    "$zigsaw" rm --delete-data $REG >/dev/null 2>&1 </dev/null && not_in_hkcu && [ ! -e "$ZIGSAW_HOME\\data\\$REG" ] && [ ! -e "$ZIGSAW_HOME\\data\\$REG.hkcu.lock" ]
+    "$zigsaw" rm --delete-data $REG >/dev/null 2>&1 </dev/null && not_in_hkcu && [ ! -e "$ZIGSAW_HOME\\volumes\\$REG" ] && [ ! -e "$ZIGSAW_HOME\\volumes\\$REG.hkcu.lock" ]
 }
 
 check "registry: a value one run sets is there in the next, in each sandbox" in_order
-check "  in a hive in the app's data" test -f "$ZIGSAW_HOME\\data\\$REG\\registry\\user.dat"
+check "  in a hive in the app's data" test -f "$ZIGSAW_HOME\\volumes\\$REG\\registry\\user.dat"
 check "  and HKCU has neither the key nor zigsaw's record of it between runs" not_in_hkcu
 check "--ephemeral: starts without the app's keys, and leaves them as they were" ephemeral_starts_empty
 check "a key of the same name that was there is moved aside for the run, and back after" moved_aside
@@ -678,7 +678,7 @@ check "soft: a run of a program labelled low says it starts at low integrity" wa
 # The data directory: a low run labels it low, and what's written there
 # inherits the label; a soft run takes it off first, and the next low run
 # labels it again (src/run.zig, unlabelData). zig 0.17 builds its Maker there.
-data="$ZIGSAW_HOME\\data\\$PROG"
+data="$ZIGSAW_HOME\\volumes\\$PROG"
 # soft_starts <sh command>: a soft run of it, whose last program, started by
 # the app, is the probe at the level of what started zigsaw: medium, or high
 # where that's elevated (CI's runners), as a file with no label caps nothing.

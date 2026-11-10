@@ -56,7 +56,7 @@ port=$((47000 + RANDOM % 900))
 crlport=$((port + 900))
 pgport=$((port + 1000))
 url="https://localhost:$port"
-pgdata="$ZIGSAW_HOME\\data\\$PG"
+pgdata="$ZIGSAW_HOME\\volumes\\$PG"
 
 . "$(dirname "$0")/acprobe.sh"
 
