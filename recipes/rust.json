@@ -1,6 +1,6 @@
 {
   "id": "org.rust-lang.rust",
-  "version": "1.99.0",
+  "version": "1.99.1",
   "command": "bin/cargo.exe",
   "path": ["bin", "${data}\\cargo\\bin"],
   "env": { "CARGO_HOME": "${data}\\cargo", "CARGO_PROFILE_RELEASE_STRIP": "symbols" },
@@ -23,23 +23,23 @@
       "name": "rust",
       "sources": [
         {
-          "url": "https://static.rust-lang.org/dist/rustc-1.99.0-x86_64-pc-windows-gnu.tar.xz",
-          "sha256": "015f770c3ca0b3226a24fe159f30b03782a91679ba16159f7d83550f768fb795",
+          "url": "https://static.rust-lang.org/dist/rustc-1.99.1-x86_64-pc-windows-gnu.tar.xz",
+          "sha256": "a48f186defb3d57538b34e14a24a94f6e29906f191630b627dcb091198bae438",
           "strip": 2
         },
         {
-          "url": "https://static.rust-lang.org/dist/cargo-1.99.0-x86_64-pc-windows-gnu.tar.xz",
-          "sha256": "36dc7cba4be341c5a6cb3e10f660c4565b6f87f318d3cb87519b2cfe8c630bca",
+          "url": "https://static.rust-lang.org/dist/cargo-1.99.1-x86_64-pc-windows-gnu.tar.xz",
+          "sha256": "e4b9107e9f655d37200c884294e74930829f236a3e81982fc678e9fc56ae9a6b",
           "strip": 2
         },
         {
-          "url": "https://static.rust-lang.org/dist/rust-std-1.99.0-x86_64-pc-windows-gnu.tar.xz",
-          "sha256": "a2382bf189d5621e09db647da419a8e1d4c604d60941cb116da00ce34042b1dd",
+          "url": "https://static.rust-lang.org/dist/rust-std-1.99.1-x86_64-pc-windows-gnu.tar.xz",
+          "sha256": "b17e3bc962ff24b3bc47a750d838defed85b280746250e3a3ad029e6c1a29dd7",
           "strip": 2
         },
         {
-          "url": "https://static.rust-lang.org/dist/rust-mingw-1.99.0-x86_64-pc-windows-gnu.tar.xz",
-          "sha256": "ad2b4b41362a99a86e20a8dbcec4be81b99f2d507f6408a72c7a139bc1919080",
+          "url": "https://static.rust-lang.org/dist/rust-mingw-1.99.1-x86_64-pc-windows-gnu.tar.xz",
+          "sha256": "1dca8e0d253565dbf21296eabc3e8d6e06e607e92c59dc00e3ecff902fe3d5ae",
           "strip": 2
         }
       ]

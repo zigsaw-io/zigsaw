@@ -16,10 +16,10 @@
   },
   "cleanup": ["/bin/flameshot-cli.exe"],
   "runtimes": {
-    "qt": "io.qt.Qt6:6.12.0@sha256:4a6ae197bfabbc24239ac6c946e38a6e8f665dae5f5eb60c297ace8a93c4dcc3"
+    "qt": "io.qt.Qt6:6.12.0@sha256:c74a07f23cadd6354081fc5ea858451fb8cdafeb8e926f04b652791ef0d9b22b"
   },
   "sdk": {
-    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:965dba80c2f86cd874d5603658b48ed0d0c8f01d1204aba2cb1c077fb7ba0128"
+    "qtsdk": "io.qt.Qt6.Sdk:6.12.0@sha256:b1c559007667e012db5978cf7dd72df2d352537b628e1b208a7556ee1b14a2d7"
   },
   "modules": [
     {
@@ -37,8 +37,8 @@
           "dest": "external/Qt-Color-Widgets"
         },
         {
-          "url": "https://github.com/KDAB/KDSingleApplication/archive/refs/tags/v1.2.0.tar.gz",
-          "sha256": "ff4ae6a4620beed1cdb3e6a9b78a17d7d1dae7139c3d4746d4856b7547d42c38",
+          "url": "https://github.com/KDAB/KDSingleApplication/archive/refs/tags/v1.2.1.tar.gz",
+          "sha256": "e3254ce9dc5ecf6d61ef83264bc61d486a307f0e3c9ed1bb2176f068cdbcbe09",
           "strip": 1,
           "dest": "external/KDSingleApplication"
         },

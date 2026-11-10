@@ -11,7 +11,7 @@
   "exports": {},
   "sdk": {
     "phpsdk": "net.php.php.Sdk:8.5.12-1@sha256:2e0bfb6e3555a368c25ec5b318f508fed836f8a032ed35b0560e642aa102ae2a",
-    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
+    "cmake": "org.cmake.cmake:4.4.5@sha256:0d8b18ea81b08ab99795400ad9099d16060ee374907f08a2b6a15a4abf14d4ca"
   },
   "cleanup": ["/cmake", "/include", "/lib/libyaml.a", "/lib/libyaml_a.lib"],
   "modules": [

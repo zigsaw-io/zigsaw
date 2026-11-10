@@ -1036,7 +1036,7 @@ fi
 
 if section sqlite; then
 check "sqlite.json builds SQLite and zlib from source" z build "$root\\recipes\\sqlite.json"
-check "sqlite3 runs, with zlib" sh -c "[ \"\$(\"\$0\" run org.sqlite.sqlite3 :memory: 'select sqlite_version(), length(sqlar_uncompress(sqlar_compress(zeroblob(1000)), 1000))' | tr -d '\r')\" = '3.53.4|1000' ]" "$zigsaw"
+check "sqlite3 runs, with zlib" sh -c "[ \"\$(\"\$0\" run org.sqlite.sqlite3 :memory: 'select sqlite_version(), length(sqlar_uncompress(sqlar_compress(zeroblob(1000)), 1000))' | tr -d '\r')\" = '3.54.1|1000' ]" "$zigsaw"
 fi
 
 # --- 7-Zip, for sources zigsaw doesn't unpack -----------------------------------------

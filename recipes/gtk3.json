@@ -29,7 +29,7 @@
   "modules": [
     {
       "name": "gtk",
-      "sources": [{ "image": "org.gtk.Gtk3.Sdk:3.24.52@sha256:100f44c0111f325b3289c380071f2c6039908f70b34c7ef3ec469fe69312773c" }]
+      "sources": [{ "image": "org.gtk.Gtk3.Sdk:3.24.52@sha256:de76c5d8de614de7632cb0e7fae80d0d52875be2a790caaaaa9903eedeb30d48" }]
     }
   ]
 }

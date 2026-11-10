@@ -26,13 +26,13 @@
     ".gaphor": { "command": "gaphor", "description": "Gaphor model", "icon": "share/icons/org.gaphor.Gaphor.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:e61173f2deba589f1f1b40a38e5a4d6584c8efbbff1f40be5c173ccee5b27c49",
-    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:a4bf172f6bc255b664efe11f1dfe8aee226333650b5cd2f607bb4c6d05551493"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:02b9871c241590b8f970e921a820999c37f4114421a0f43e1111e33349b23c8e",
+    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:ff491f9fff29970a10a1b28c4323ebaa6954dc939fa2b912e3ef68b98ee9cf92"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:31b88a3d1d0a4530f3a31cf558d7c6c6c58e04a42ced0d7aeb28d0cf501de104",
-    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:7e122384cf9a04c7f4f1d3b09cd6aaa0bd95a0ef96121249672ecda232a91210",
-    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:fcb101c71406354cbabb72722d713fd0c38e73cce4d71cfdcc60d869c29640db",
+    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:0820d5c5884ba1749ca4c1fb13eb772424e664f8a057bacc957a7467f5ba1a76",
+    "cmake": "org.cmake.cmake:4.4.5@sha256:0d8b18ea81b08ab99795400ad9099d16060ee374907f08a2b6a15a4abf14d4ca"
   },
   "cleanup": [
     "/include",
@@ -75,8 +75,8 @@
       "name": "graphviz",
       "sources": [
         {
-          "url": "https://gitlab.com/graphviz/graphviz/-/archive/16.1.0/graphviz-16.1.0.zip",
-          "sha256": "4bb3694c2f0a1f58886a140df4347df636bdb477f0406de30aeaef0258056aca",
+          "url": "https://gitlab.com/graphviz/graphviz/-/archive/16.1.1/graphviz-16.1.1.zip",
+          "sha256": "a5ed02ce6dcb0845901a11a307e2f0133c681c0cbc2c439f8bb4da3c7df8e9ea",
           "strip": 1
         }
       ],

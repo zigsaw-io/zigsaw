@@ -43,7 +43,7 @@
     "pgbench": { "command": "bin/pgbench.exe" }
   },
   "sdk": {
-    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:1026b6edae04ffd2eaed19bdd96933db131857bd3fd5843c5d3735a41160b646"
+    "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:4000d6e98d8eb1a0a305bd17d5e79c30ddccb1750e24fff96ede64d9b0c5af2c"
   },
   "runtimes": {
     "perl": "org.perl.perl:5.42.3.1@sha256:3bd9e281698960a2cf62cfb8168edfd84f376305af45eb743270672aaca1ca22",
@@ -53,7 +53,7 @@
   "modules": [
     {
       "name": "postgresql",
-      "sources": [{ "image": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:1026b6edae04ffd2eaed19bdd96933db131857bd3fd5843c5d3735a41160b646" }]
+      "sources": [{ "image": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:4000d6e98d8eb1a0a305bd17d5e79c30ddccb1750e24fff96ede64d9b0c5af2c" }]
     }
   ]
 }

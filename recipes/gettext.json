@@ -16,7 +16,7 @@
     "iconv": { "command": "bin/iconv.exe" }
   },
   "sdk": {
-    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:115b5e484a219e75e899eedcb456cfc3d7177859e704937f13db301b49fc9f64",
+    "llvm": "com.github.mstorsjo.llvm-mingw:20261104@sha256:7af21d46909fd905b0d054c92d6ddd82a7909b27cc1240f7dc1f1a4d90841bf7",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "cleanup": ["/share/doc/gettext/examples", "/share/info", "/share/gettext/archive.dir.tar.gz", "/share/gettext/javaversion.class", "*.la"],
@@ -32,8 +32,8 @@
       "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "EGREP_TRADITIONAL": "grep -E", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2", "WINDRES": "windres" },
       "sources": [
         {
-          "url": "https://ftp.gnu.org/gnu/libiconv/libiconv-1.19.tar.gz",
-          "sha256": "88dd96a8c0464eca144fc791ae60cd31cd8ee78321e67397e25fc095c4a19aa6",
+          "url": "https://ftp.gnu.org/gnu/libiconv/libiconv-1.19.1.tar.gz",
+          "sha256": "9a06844846d664d7122161700c10a64480d7c7bcead3091925a785b38c91edab",
           "strip": 1
         },
         { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" }

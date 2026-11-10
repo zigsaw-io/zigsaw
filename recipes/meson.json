@@ -23,8 +23,8 @@
       "name": "python",
       "sources": [
         {
-          "url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip",
-          "sha256": "d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15"
+          "url": "https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-amd64.zip",
+          "sha256": "90905e64a840557d8c1bc4f5b74db3d7ee85e3ffb217611cac1c7813acea4159"
         }
       ]
     },
@@ -59,8 +59,8 @@
       "name": "pkgconf",
       "sources": [
         {
-          "url": "https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.7.tar.xz",
-          "sha256": "c926ff491cbd9a331a589160811bd97ab1749b4d5198a519338f2cdfabe6940a",
+          "url": "https://distfiles.ariadne.space/pkgconf/pkgconf-3.0.10.tar.xz",
+          "sha256": "9371b2f6372da574d4c6dc96fe9b1463037bcf6afcb6671c1555afde7b17e2de",
           "strip": 1
         }
       ],

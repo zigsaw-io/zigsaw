@@ -11,9 +11,9 @@
     "pg_config": { "command": "bin/pg_config.exe" }
   },
   "sdk": {
-    "meson": "com.mesonbuild.meson:1.12.1@sha256:9f1660936c3c00e44f1b90a83c72f20a28023b8f5f85bb61505f33c00ef4f767",
-    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d",
-    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:1fd5d6d8ada26770ad03d85e375e007e4b3bfcfa6d07201e93f5ad01a72c025e",
+    "meson": "com.mesonbuild.meson:1.12.1@sha256:f0b0932603e2dd7596a352f663e1011b63917ec648a68ebcddc7efef48380885",
+    "cmake": "org.cmake.cmake:4.4.5@sha256:0d8b18ea81b08ab99795400ad9099d16060ee374907f08a2b6a15a4abf14d4ca",
+    "llvm": "com.github.mstorsjo.llvm-mingw:20261104@sha256:7af21d46909fd905b0d054c92d6ddd82a7909b27cc1240f7dc1f1a4d90841bf7",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d",
     "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85",
     "python": "org.python.python:3.14.10@sha256:ccd0d0e3ef77fd28cfa787f19405ffe747d47f1483312df00819dce1a356c5b4"

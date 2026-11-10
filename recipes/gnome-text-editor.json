@@ -21,11 +21,11 @@
     ".log": { "command": "gnome-text-editor", "description": "Log file", "icon": "share/icons/org.gnome.TextEditor.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:e61173f2deba589f1f1b40a38e5a4d6584c8efbbff1f40be5c173ccee5b27c49"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:02b9871c241590b8f970e921a820999c37f4114421a0f43e1111e33349b23c8e"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:31b88a3d1d0a4530f3a31cf558d7c6c6c58e04a42ced0d7aeb28d0cf501de104",
-    "cmake": "org.cmake.cmake:4.4.4@sha256:fdc6a6bb933b2d7994fba0ccdb07a2a91a02012a6e4879cf67ad451e53e6f53d"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:fcb101c71406354cbabb72722d713fd0c38e73cce4d71cfdcc60d869c29640db",
+    "cmake": "org.cmake.cmake:4.4.5@sha256:0d8b18ea81b08ab99795400ad9099d16060ee374907f08a2b6a15a4abf14d4ca"
   },
   "cleanup": [
     "/include",
@@ -58,8 +58,8 @@
       "env": { "CFLAGS": "-IB:/src/libspelling/zigsaw" },
       "sources": [
         {
-          "url": "https://download.gnome.org/sources/libspelling/0.4/libspelling-0.4.10.tar.xz",
-          "sha256": "56e3f01a3a18b575beea4c34349f99cdaba316e1f7c271b1231f7bcf5d9af73b",
+          "url": "https://download.gnome.org/sources/libspelling/0.4/libspelling-0.4.11.tar.xz",
+          "sha256": "52e53ec3fba0f604cfd0931e26af7f7241a0d4f0208dd5574f43b3589f6d28b2",
           "strip": 1
         },
         { "path": "gnome-text-editor/icu-uloc.h", "dest": "zigsaw/unicode/uloc.h" }

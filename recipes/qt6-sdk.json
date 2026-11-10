@@ -487,14 +487,14 @@
   },
   "cleanup": ["*.bat"],
   "runtimes": {
-    "cmake": "org.cmake.cmake:4.4.4@sha256:fa7efc2e143063055620628a8867dbd904bb0464a36f6a44943f7dba50a8bcd0",
-    "llvm": "com.github.mstorsjo.llvm-mingw:20261020@sha256:69f40e5c8bfbf0d42be44d3ddaa0df8d07775af88b9cf593595b00b0f779d718",
+    "cmake": "org.cmake.cmake:4.4.5@sha256:0d8b18ea81b08ab99795400ad9099d16060ee374907f08a2b6a15a4abf14d4ca",
+    "llvm": "com.github.mstorsjo.llvm-mingw:20261104@sha256:7af21d46909fd905b0d054c92d6ddd82a7909b27cc1240f7dc1f1a4d90841bf7",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [
     {
       "name": "base",
-      "sources": [{ "image": "io.qt.Qt6.Sdk.Base:6.12.0@sha256:9b87aa9aed10798a0b989175b89360d08a162914cfaa8493432176e1cd591042" }]
+      "sources": [{ "image": "io.qt.Qt6.Sdk.Base:6.12.0@sha256:77492dcc450ff47e7771dce9c951e6f5fadf451a3bb4a458993d4506008a0aed" }]
     },
     {
       "name": "qtdeclarative",
@@ -505,8 +505,8 @@
           "strip": 1
         },
         {
-          "url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip",
-          "sha256": "d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15",
+          "url": "https://www.python.org/ftp/python/3.14.10/python-3.14.10-embed-amd64.zip",
+          "sha256": "90905e64a840557d8c1bc4f5b74db3d7ee85e3ffb217611cac1c7813acea4159",
           "dest": "zigsaw/python"
         }
       ],

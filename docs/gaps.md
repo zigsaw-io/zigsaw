@@ -475,7 +475,9 @@
   running already.
 - GTK built with MSVC ([`recipes/gtk4-msvc.json`](recipes/gtk4-msvc.json))
   is an experiment: no translations, SVG loader, HTTP, spell checking or
-  apps, and it isn't published or checked in CI.
+  apps, and it isn't published or checked in CI. It doesn't reproduce:
+  `tiffxx.lib` keeps the time it was archived
+  ([findings](findings.md#gtk4-msvc-doesnt-reproduce-an-archives-member-dates-iteration-82)).
 - Text Editor has no help pages (no yelp on Windows). Its spell checking
   has the languages Windows has, through WinSpell, and English (US) from
   hunspell; other hunspell dictionaries aren't in the runtime.

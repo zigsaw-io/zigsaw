@@ -1,6 +1,6 @@
 {
   "id": "org.cmake.cmake",
-  "version": "4.4.4",
+  "version": "4.4.5",
   "command": "bin/cmake.exe",
   "path": ["bin"],
   "env": {
@@ -19,8 +19,8 @@
       "name": "cmake",
       "sources": [
         {
-          "url": "https://github.com/Kitware/CMake/releases/download/v4.4.4/cmake-4.4.4-windows-x86_64.zip",
-          "sha256": "bace36e94b31c68ab6fa295f26dfa11219e0701cf7c94b0284a7d1cb13dac536",
+          "url": "https://github.com/Kitware/CMake/releases/download/v4.4.5/cmake-4.4.5-windows-x86_64.zip",
+          "sha256": "326c826486d46a23cf9d5a1c9ee3a567d427bdd02c4a34071937a2a675cff004",
           "strip": 1
         }
       ]

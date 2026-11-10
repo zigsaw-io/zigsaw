@@ -17,11 +17,11 @@
     "GTK 3 Widget Factory": { "command": "gtk3-widget-factory", "description": "GTK 3's widgets in every state", "icon": "gtk3-widget-factory.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:e61173f2deba589f1f1b40a38e5a4d6584c8efbbff1f40be5c173ccee5b27c49",
-    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:fc4deee61a122ee76c7ea15a5745b52247357d8ae4044cd39e411d99645a45e9"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:02b9871c241590b8f970e921a820999c37f4114421a0f43e1111e33349b23c8e",
+    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:a700ac8af113fef63a04507bb98f9ed68e1307e6e876228de19c13d212c7d7cd"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:31b88a3d1d0a4530f3a31cf558d7c6c6c58e04a42ced0d7aeb28d0cf501de104"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:fcb101c71406354cbabb72722d713fd0c38e73cce4d71cfdcc60d869c29640db"
   },
   "modules": [
     {

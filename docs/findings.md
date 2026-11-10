@@ -2676,6 +2676,41 @@ An eStargz layer's files as placeholders, fetched as they're first opened: see
   (a fresh `pull --lazy` of the same image takes 13.6; where the other 10 s go wasn't
   looked into).
 
+## llvm-mingw's prefetch list (iteration 82)
+
+- **What a first C++ compile reads**: recorded with `scripts/record-prefetch.sh` from the
+  published 20261020, `x86_64-w64-mingw32-clang++ hello.cpp -o hello.exe` (iostream,
+  string, vector): 464 files, 145.4 MB, of them `clang-23.exe`, `libLLVM-23.dll`,
+  `libclang-cpp.dll`, `ld.lld.exe`, libc++'s headers and `libc++.a`, and the CRT's
+  objects. The 20261104 build found every one (its log has no "isn't a file of the
+  app's"), as `lib/clang/23` kept its name.
+- **Through a local zot** (zigsaw 0.81.0, 2026-11-10), the pull's start to `hello.exe`:
+
+  | | full pull | `--lazy` | fetched on demand |
+  |---|---|---|---|
+  | 20261020, no list | 3.3 + 0.7 = 4.2 s | 1.3 + 2.2 = 3.6 s | 463 files, 145.4 MB |
+  | 20261104, the list | 3.3 + 0.8 = 4.2 s | 1.5 + 1.6 = 3.2 s | 126 files, 50.2 MB; 341 hydrated ahead |
+
+  From a local registry the list saves 0.6 s of the first compile. The 463 files the
+  unlisted run fetched one by one are about the list's 145.4 MB, so the list is what
+  the run reads, not more. The gain from ghcr.io waits for the published image.
+
+## gtk4-msvc doesn't reproduce: an archive's member dates (iteration 82)
+
+Built in two stores (`E:\zs\i82\p` and `D:\zs\i82\p2`, 0.81.0, the same recipe and pins),
+`gtk4-msvc` gave `729f584e` and `1434ee07`: the same config, and of 2,358 files, one
+differs. `lib\tiffxx.lib`, libtiff's C++ stream library, carries the time it was archived
+in each member header's date field (Unix 1794260641 against 1794261147, the two builds'
+8.5 minutes apart). The recipe gives `/Brepro` to `cl` and `link` through `CL` and
+`LINK`; CMake makes a static library with `lib`, which reads neither. The other 32
+`.lib` files are import libraries, which `link` writes. Iteration 75's build had
+`tiffxx.lib` too and was built in one store only, so this is the first comparison, not
+a change.
+
+Two loose ends, not looked into: libtiff is configured with `-Dcxx=OFF`, yet builds
+`tiffxx`; and whether `-DCMAKE_STATIC_LINKER_FLAGS=/Brepro` makes it reproduce. The
+recipe isn't published, and `tests/published.sh` doesn't compare MSVC images.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

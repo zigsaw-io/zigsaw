@@ -9,7 +9,7 @@
     "cargo-cinstall": { "command": "bin/cargo-cinstall.exe" }
   },
   "sdk": {
-    "rust": "org.rust-lang.rust:1.99.0@sha256:e7e9706485bba88759915d9509993d0e41d340d7d8dfec6426fce1feda9a10e2",
+    "rust": "org.rust-lang.rust:1.99.1@sha256:3bd7b93d9579ed8de3aefb358a3da033dc0caf3a5b67f176f79c15f970782e09",
     "zig": "org.ziglang.zig:0.17.0@sha256:93ec2b6b36708ae80ffac87872e70dafaee350cd2d49a95dd2fa5847d0a10449",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
