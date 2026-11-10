@@ -1,0 +1,85 @@
+# Iteration 83's probe, on branch probe/rekor-v2 only; it never reaches main.
+# Finds out, before zigsaw's Rekor v2 checks are called done:
+# - what a keyless `cosign sign-blob --bundle` makes with cosign's default signing
+#   config today (Rekor v1 or v2), to see how close a switch is;
+# - what it makes with Sigstore's Rekor v2 config (`signing-config create
+#   --with-default-rekor-v2`): a bundle v0.3 with a hashedrekord 0.0.2 entry in
+#   log2025-1, an inclusion proof, a checkpoint and an RFC 3161 timestamp, which
+#   zigsaw's tests take as their real golden v2 bundles (the fixed blob of
+#   iteration 81's probe, and the payload of busybox's image as `zigsaw signature
+#   payload` prints it);
+# - that stock cosign verifies them with the workflow's identity.
+# Nothing is pushed anywhere; each signature is an entry in Sigstore's public logs.
+name: Rekor v2 probe
+
+on:
+  push:
+    branches: [probe/rekor-v2]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.0
+
+      - name: Build zigsaw
+        run: zig build
+
+      - name: Sign keyless with cosign's default and with Rekor v2, and verify with stock cosign
+        shell: bash
+        run: |
+          set -eux
+          export MSYS_NO_PATHCONV=1
+          out=$RUNNER_TEMP/probe
+          mkdir -p "$out"
+          export ZIGSAW_HOME=$RUNNER_TEMP\\store ZIGSAW_USER_FOLDERS=$RUNNER_TEMP\\no-folders
+          mkdir -p "$(cygpath -u "$ZIGSAW_USER_FOLDERS")"
+          zigsaw=$PWD/zig-out/bin/zigsaw.exe
+          "$zigsaw" pull --yes dev.sigstore.cosign
+          cosign=$(find "$(cygpath -u "$ZIGSAW_HOME\\deploy")" -maxdepth 2 -iname cosign.exe | head -1)
+          "$cosign" version
+          identity="https://github.com/$GITHUB_REPOSITORY/.github/workflows/rekor-v2-probe.yml@$GITHUB_REF"
+          summary() {
+              jq '{mediaType, kind: .verificationMaterial.tlogEntries[0].kindVersion, logId: .verificationMaterial.tlogEntries[0].logId, integratedTime: .verificationMaterial.tlogEntries[0].integratedTime, set: (.verificationMaterial.tlogEntries[0].inclusionPromise != null), proof: (.verificationMaterial.tlogEntries[0].inclusionProof != null), checkpoint: .verificationMaterial.tlogEntries[0].inclusionProof.checkpoint.envelope, timestamps: (.verificationMaterial.timestampVerificationData.rfc3161Timestamps // [] | length), certificate: (.verificationMaterial | keys)}' "$1"
+          }
+          printf 'zigsaw sigstore probe\n' >"$out/blob"
+          "$zigsaw" signature payload ghcr.io/zigsaw-io/net.frippery.busybox:latest >"$out/payload.json"
+
+          # What cosign does by default today.
+          "$cosign" signing-config create --with-default-services --out "$out/default-signing-config.json"
+          jq . "$out/default-signing-config.json"
+          "$cosign" sign-blob --yes --bundle "$out/blob.default.bundle.json" "$out/blob"
+          summary "$out/blob.default.bundle.json"
+
+          # Rekor v2, as Sigstore's TUF repository describes it.
+          "$cosign" signing-config create --with-default-rekor-v2 --out "$out/v2-signing-config.json"
+          jq . "$out/v2-signing-config.json"
+          for f in blob payload.json; do
+              "$cosign" sign-blob --yes --signing-config "$out/v2-signing-config.json" --bundle "$out/$f.v2.bundle.json" "$out/$f"
+              summary "$out/$f.v2.bundle.json"
+              verify() {
+                  "$cosign" verify-blob --bundle "$out/$f.v2.bundle.json" "$@" \
+                      --certificate-identity "$identity" \
+                      --certificate-oidc-issuer https://token.actions.githubusercontent.com "$out/$f"
+              }
+              verify --use-signed-timestamps || { echo "PROBE: verify with --use-signed-timestamps failed"; verify || echo "PROBE: stock verify failed"; }
+          done
+          cp -r ~/.sigstore "$out/sigstore-cache" || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: rekor-v2-probe
+          path: ${{ runner.temp }}/probe
