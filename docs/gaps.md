@@ -876,10 +876,35 @@
   build`, in Zig 0.17's std (`client.now.?` in `connectTcpOptions`, which only a first
   request over TLS sets). No published recipe has such a source. `https://` from the
   start is fine, redirects included.
-- `zigsaw rollback` changes an app's files, not its data: the data directory stays as
-  the newer version left it. An app that changed how it keeps its data may not read it
-  after going back, as PostgreSQL's server doesn't read a cluster a newer major version
-  made, and nothing warns about it.
+- `zigsaw rollback` takes back only the data in the app's own volume. What it keeps in
+  a volume it mounts, or in a folder of yours, stays as the newer version left it, and
+  so does all of its data if that is mounted from elsewhere (`--volume=<source>:.`):
+  PostgreSQL's server set up with its cluster in a named volume doesn't read it after
+  going back across a major version, and nothing warns about it.
+- The data kept for going back is one copy for each app, replaced at the app's next
+  install. That goes for data a rollback set aside too: go back with the data, work a
+  week, and take an update, and what the version you left had written is gone (the
+  update says "dropped"). It's in the store beside the data, and no backup.
+- If you go back and leave the data, then go forward again, the copy kept of the older
+  version's data is replaced by one of the data as it is now, which that version may
+  not read: zigsaw can't tell whether it did.
+- The copy leaves out the app's temporary files and its cache (`cache\` and
+  `home\AppData\Local\Temp` in its data): data taken back starts with neither. An app
+  that keeps something it needs there loses it by going back with its data.
+- An app that runs while its version is replaced has its data copied by its next run,
+  before it starts. From a shortcut, nothing shows that: a large data directory makes
+  that start slow once. If the new version is started while the old one still runs, no
+  copy is kept at all (a note says so, in a console).
+- A file in the app's data that another program holds open without sharing it stops
+  the copy, and the update goes on with a warning and no copy. Taking the data back
+  fails the same way on a folder something has open, with the version already gone
+  back; `zigsaw rollback --data-only` tries again.
+- Copying costs the data's size and the time to read it, at every install over a
+  version, `build` included; `zigsaw override --nosnapshot` is the way out for an app
+  with gigabytes of it. Only on ReFS (a Dev Drive) is the copy a clone that costs
+  neither. Many small files cost more than their size says: 20,000 files of 4 KiB took
+  6 s here, on either kind of drive, where 1 GB in 10 files took half a second. An app
+  with a profile of a hundred thousand files makes every update of it that much longer.
 - Only one version is kept to go back to: the one the installed version replaced. Two
   updates in a row, and the first version is gone, as before 0.76.
 - Going back brings back whatever the newer version fixed. Updates pass over only the

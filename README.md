@@ -128,7 +128,9 @@ zigsaw run [options] <app-id> [args]   run an installed app
 zigsaw list                            list installed apps, their commands and shortcuts,
                                        and the kinds of file they open
 zigsaw override [options] <app-id>     save run options that every run of the app gets;
-                                       --show shows them, --reset removes them
+                                       --show shows them, --reset removes them; also
+                                       --nosnapshot has updates keep no copy of its data
+                                       for rollback, --snapshot has them keep one again
 zigsaw override [options] --global     the same for every app, below each app's own; also
                                        --real-folders lets the apps of a store that isn't your
                                        default one use your real folders, --noreal-folders
@@ -152,7 +154,10 @@ zigsaw update --check [<app-id>...]    list the apps a new image waits for, and 
                                        reach beyond theirs, installing nothing
 zigsaw rollback [--yes] <app-id>       go back to the version the installed one replaced, with
                                        no network; updates then pass over the version left,
-                                       though not a newer one
+                                       though not a newer one. Asks whether its data is to
+                                       go back too, to the copy kept of it as that version
+                                       left it: --data says yes, --keep-data no
+zigsaw rollback --data-only <app-id>   take the data back after a rollback that left it
 zigsaw hold <app-id>...                have updates, and the daily check, leave the apps alone
 zigsaw unhold <app-id>...              let updates reach them again
 zigsaw trust                           list whose signatures images and releases are checked for
@@ -188,7 +193,7 @@ zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands; --dele
 zigsaw prune [--dry-run] [--downloads] [--volumes] [--previous]
                                        delete what no installed app needs; --volumes also the
                                        volumes nothing mounts, --previous the versions kept
-                                       for rollback
+                                       for rollback with the copies of their data
 zigsaw repair                          write every app's commands, shortcuts and file
                                        associations again, as after installing a new zigsaw,
                                        and take back what apps may no longer reach, and what
@@ -646,7 +651,8 @@ From then on, `update`, `update --check` and the [daily check](#being-told-about
 pass over the version you went back from, with a note, but not a newer one: when the
 next version comes out, it's an update as any other. `rollback` again returns to the
 version you left. `zigsaw list` shows `(previous <version>)` while there's one to go
-back to, and `(skips <version>)` after a rollback.
+back to, `(previous <version>, with data)` if its data is kept as well, and
+`(skips <version>)` after a rollback.
 
 Only one version is kept, the one the installed version replaced, and only its blobs:
 `prune` keeps them, and deletes its unpacked files as before. `prune --previous` forgets
@@ -654,9 +660,55 @@ those versions, and deletes their blobs. A zigsaw before 0.76 doesn't know of th
 its `prune` deletes them; `rollback` then says how to have the version back, as
 `zigsaw pull <image>@<digest>` while its registry still has it.
 
-**Going back changes the app's files, not its data.** An app's data directory stays as
-the newer version left it, and an app that changed how it keeps its data, as
-PostgreSQL's server does from one major version to the next, may not read it any more.
+**Its data can go back too.** An app that changed how it keeps its data, as
+PostgreSQL's server does from one major version to the next, may not read it any more
+after going back. So when an install replaces an app's version, zigsaw first copies the
+app's data, [its own volume](#volumes), as that version left it, and says how much that
+was and how long it took:
+
+```
+  kept     its data as 18.6 left it (39.9MiB in 978 file(s), copied in 280 ms), for `zigsaw rollback`
+```
+
+`rollback` then says what is kept, and asks whether the data is to go back with the
+version. Its answer is no unless you say yes. Here between two images of PostgreSQL
+18.6, a new cluster with one table:
+
+```
+> zigsaw rollback org.postgresql.PostgreSQL
+org.postgresql.PostgreSQL's data as 18.6 left it just now is kept (39.9MiB in 978 file(s)). Taking it back sets aside what 18.6 wrote since, until the next update of the app.
+Take its data back too? [y/N] y
+installed org.postgresql.PostgreSQL 18.6
+  ...
+went back: org.postgresql.PostgreSQL 18.6 -> 18.6 (sha256:0198588f23b9 -> sha256:f0f2fa89b421)
+  `zigsaw update` passes over 18.6 from now on, and takes a newer version; `zigsaw rollback org.postgresql.PostgreSQL` returns to it
+  its data went back too, to how 18.6 left it just now; what 18.6 wrote since is set aside, and returns with `zigsaw rollback --data org.postgresql.PostgreSQL`, until the next update of the app
+```
+
+`--data` answers yes and `--keep-data` no, without asking; with nothing to answer, as
+in a script, the data stays. Taking the data back swaps two folders in the store, so it
+takes no time, and nothing is lost by it: what the newer version wrote since is set
+aside in the copy's place, and going forward again, with `rollback --data`, brings it
+back. If you left the data and the older version turns out not to read it,
+`zigsaw rollback --data-only <app-id>` takes the data back without changing the version.
+
+What to know about the copy:
+
+- **One is kept for each app**, as one previous version is. The next install of the app
+  replaces it, the data a rollback set aside included: the update says so when it drops
+  that. `prune` keeps the copies and says what they take; `prune --previous` deletes them
+  with the versions, and `rm` deletes an app's.
+- **It's the app's own volume only.** A volume the app mounts and a folder of yours it
+  may use are neither copied nor changed, and are there again after going back. An app
+  whose data is mounted from elsewhere (`--volume=<source>:.`) gets no copy.
+- **Its temporary files and cache are left out**, and start empty in data taken back.
+- **It's taken while the app doesn't run.** If it runs when its version is replaced, its
+  next run takes the copy before it starts, which a large one makes slower to start.
+- **It costs the size of the data, and the time to copy it, at each update.**
+  `zigsaw override --nosnapshot <app-id>` keeps an app's data from being copied, and
+  `--snapshot` has it copied again; with `--global`, every app's. On a Dev Drive the
+  copy shares its blocks with the data, and takes next to nothing of either.
+- **It's no backup**: it's in the store, beside the data, and gone with the next update.
 
 `zigsaw hold <app-id>...` keeps updates away from apps altogether, until
 `zigsaw unhold <app-id>...`. `update` notes that a held app is held and leaves it, named
@@ -723,7 +775,8 @@ Installing a new version deletes the files of the one it replaces, unless
 that version is still running. `zigsaw prune` deletes everything else no
 installed app needs: the blobs of old versions, files kept because they were
 running, and whatever an interrupted build left in `tmp\`. It keeps the blobs
-of each app's previous version, for [`rollback`](#going-back-and-holding), and
+of each app's previous version, and the copy of the app's data as that version
+left it, for [`rollback`](#going-back-and-holding), and
 says how much they take; `--previous` deletes them too. `--dry-run` shows
 what it would delete. Cached downloads, the runtimes that builds used, and
 build tools' caches are kept for rebuilds unless you add `--downloads`. The
@@ -1351,7 +1404,7 @@ bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key); `zigsaw upgrade` from a later release of the same code, a running program moved aside and every way of refusing; the daily check in a scratch default store (about 2 min)
 bash tests/upgrade.sh   # v0.80.0 and v0.83.0 from GitHub, each with a store of its own (data, a command a run added, a shortcut, a named volume, keys a killed run left in HKCU), upgraded with `zigsaw upgrade` to this checkout's package: everything where this zigsaw keeps it, and still working (RELEASES narrows it; under 1 min)
 bash tests/zot.sh bash tests/updates.sh # what a check finds, keeps and tells, and that nothing installs anything; real scheduled tasks under this run's own name, which it removes, and the real one untouched (under 1 min; without a registry, only the task rows)
-bash tests/zot.sh bash tests/rollback.sh # the version an update replaces is kept, rollback goes back to it without the network and updates pass over the version left, a newer one gets through, hold and unhold (under 1 min)
+bash tests/zot.sh bash tests/rollback.sh # the version an update replaces is kept, rollback goes back to it without the network and updates pass over the version left, a newer one gets through, hold and unhold; an install over a version copies the app's data, a rollback asks and takes it back or leaves it, --data-only, while the app runs, a swap that didn't finish, --nosnapshot (under 1 min)
 bash tests/zot.sh bash tests/lazy.sh # pull --lazy: placeholders served under each sandbox, a file's chunks in a few requests, a recipe's prefetch files first in the layer and hydrated ahead, a helper that comes back, goes on from what the last one fetched and says what it couldn't fetch, a download that fetches nothing twice, the swap once the download's done and no run uses it, rm, a job that keeps what it starts, a whole download where placeholders can't be, update --lazy copying what the version before has (a source gone, a copy wrong), and a slow fetch telling Windows how far it's got (under 1 min; needs NTFS: LAZY_WORK, and LAZY_DEV_DRIVE for a real Dev Drive row; LAZY_WAIT=90000 for a fetch past Windows' 60 s)
 bash tests/zot.sh bash tests/signing.sh # what pull, update and info do with an image's good, wrong and missing signature, with keys `zigsaw trust` adds (under 1 min)
 bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package); an incremental build of a copy after a change makes what --clean does

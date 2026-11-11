@@ -21,6 +21,7 @@ const override = @import("override.zig");
 const prune = @import("prune.zig");
 const remote = @import("remote.zig");
 const rollback = @import("rollback.zig");
+const snapshot = @import("snapshot.zig");
 const runtime = @import("run.zig");
 const shortcuts = @import("shortcuts.zig");
 const associations = @import("associations.zig");
@@ -69,7 +70,9 @@ const usage =
     \\  list                            list installed apps, their commands and shortcuts,
     \\                                  and the kinds of file they open
     \\  override [options] <app-id>     save run options that every run of the app gets;
-    \\                                  --show shows them, --reset removes them
+    \\                                  --show shows them, --reset removes them; also
+    \\                                  --nosnapshot has updates keep no copy of its data
+    \\                                  for rollback, --snapshot has them keep one again
     \\  override [options] --global     the same for every app, below each app's own; also
     \\                                  --real-folders lets the apps of a store that isn't your
     \\                                  default one use your real folders, --noreal-folders
@@ -86,7 +89,10 @@ const usage =
     \\                                  reach beyond theirs, installing nothing
     \\  rollback [--yes] <app-id>       go back to the version the installed one replaced, with
     \\                                  no network; updates then pass over the version left,
-    \\                                  though not a newer one
+    \\                                  though not a newer one. Asks whether its data is to
+    \\                                  go back too, to the copy kept of it as that version
+    \\                                  left it: --data says yes, --keep-data no
+    \\  rollback --data-only <app-id>   take the data back after a rollback that left it
     \\  hold <app-id>...                have updates, and the daily check, leave the apps alone
     \\  unhold <app-id>...              let updates reach them again
     \\  updates                         say what the last check found waiting, and whether a
@@ -129,7 +135,8 @@ const usage =
     \\  prune [--dry-run] [--downloads] [--volumes] [--previous]
     \\                                  delete what no installed app needs; also cached
     \\                                  downloads and tool caches, the volumes nothing
-    \\                                  mounts, and the versions kept for rollback
+    \\                                  mounts, and the versions kept for rollback with
+    \\                                  the copies of their data
     \\  repair                          write every app's commands, shortcuts and file
     \\                                  associations again, as after installing a new zigsaw,
     \\                                  and take back what apps may no longer reach, and what
@@ -388,15 +395,20 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     if (std.mem.eql(u8, command, "rollback")) {
         var consent: remote.Consent = .ask;
         var id: ?[]const u8 = null;
+        var data: ?rollback.Data = null;
         for (rest) |arg| {
-            if (isFlag(arg, "yes")) {
+            const chosen: ?rollback.Data = if (isFlag(arg, "data")) .take else if (isFlag(arg, "keep-data")) .keep else if (isFlag(arg, "data-only")) .only else null;
+            if (chosen) |d| {
+                if (data != null and data.? != d) return fail("--data, --keep-data and --data-only each say what becomes of the app's data: give one", .{});
+                data = d;
+            } else if (isFlag(arg, "yes")) {
                 consent = .given;
             } else if (id == null and !std.mem.startsWith(u8, arg, "-")) {
                 id = arg;
             } else return usageError();
         }
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try rollback.rollback(ctx, id orelse return usageError(), consent);
+        try rollback.rollback(ctx, id orelse return usageError(), consent, data orelse .ask);
         return 0;
     }
     if (std.mem.eql(u8, command, "hold") or std.mem.eql(u8, command, "unhold")) {
@@ -841,6 +853,7 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
     var reset = false;
     var global = false;
     var real_folders: ?bool = null;
+    var keep_data: ?bool = null;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (!std.mem.startsWith(u8, args[i], "--")) {
@@ -848,7 +861,7 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
             id = args[i];
             continue;
         }
-        const opt = try Option.read(args, &i, &(SettingsParser.flags ++ [_][]const u8{ "show", "reset", "global", "real-folders", "noreal-folders" }));
+        const opt = try Option.read(args, &i, &(SettingsParser.flags ++ [_][]const u8{ "show", "reset", "global", "real-folders", "noreal-folders", "snapshot", "nosnapshot" }));
         if (opt.value == null and std.mem.eql(u8, opt.name, "reset")) {
             reset = true;
         } else if (opt.value == null and std.mem.eql(u8, opt.name, "global")) {
@@ -859,6 +872,10 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
             real_folders = true;
         } else if (opt.value == null and std.mem.eql(u8, opt.name, "noreal-folders")) {
             real_folders = false;
+        } else if (opt.value == null and std.mem.eql(u8, opt.name, "snapshot")) {
+            keep_data = true;
+        } else if (opt.value == null and std.mem.eql(u8, opt.name, "nosnapshot")) {
+            keep_data = false;
         } else if (!try settings.apply(arena, opt)) {
             return fail("--{s} can't be saved as an override", .{opt.name});
         }
@@ -870,6 +887,7 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
     if (real_folders != null and app != null) return fail("--real-folders is for a whole store: use it with --global", .{});
     var new = settings.finish();
     new.real_folders = real_folders;
+    new.snapshot = keep_data;
 
     if (reset) {
         if (!new.isEmpty()) return fail("--reset removes all of {s}'s overrides; add new ones separately", .{whose});
@@ -940,7 +958,10 @@ fn list(ctx: *Context) !void {
         if (!saved.isEmpty()) try w.print("  (override {f})", .{saved});
         if (try lazy.describe(ctx.store, arena, image.manifest)) |state| try w.print("  {s}", .{state});
         if (try ctx.store.isHeld(arena, ref.id)) try w.writeAll("  (held)");
-        if (try ctx.store.readPrevious(arena, ref.id)) |p| if (!std.mem.eql(u8, p.manifest, ref.manifest)) try w.print("  (previous {s})", .{p.version});
+        if (try ctx.store.readPrevious(arena, ref.id)) |p| if (!std.mem.eql(u8, p.manifest, ref.manifest)) {
+            const with_data = if (try ctx.store.readKeptData(arena, ref.id)) |k| std.mem.eql(u8, k.manifest, p.manifest) else false;
+            try w.print("  (previous {s}{s})", .{ p.version, if (with_data) ", with data" else "" });
+        };
         if (try ctx.store.readSkip(arena, ref.id)) |s| try w.print("  (skips {s})", .{s.version});
         try w.writeByte('\n');
     }
@@ -977,8 +998,11 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     try hkcu.settleLeftovers(ctx, id);
 
     try store.deleteRef(arena, id);
-    // Its previous version, whose blobs prune then deletes, and whether it
-    // was held: a new install starts afresh.
+    // Its previous version, whose blobs prune then deletes, the data kept as
+    // that one left it, and whether it was held: a new install starts afresh.
+    try snapshot.finishSwap(ctx, id);
+    if (try snapshot.forget(ctx, id)) |kept|
+        note("deleted its data as {s} left it ({Bi:.1}), kept for `zigsaw rollback`", .{ kept.version, kept.bytes });
     try store.forgetVersions(arena, id);
     {
         const aliases_lock = try store.lockAliases(arena, id);
@@ -1040,6 +1064,7 @@ test {
     _ = @import("remote.zig");
     _ = @import("roots.zig");
     _ = @import("rollback.zig");
+    _ = @import("snapshot.zig");
     _ = @import("layer.zig");
     _ = @import("ledger.zig");
     _ = @import("run.zig");

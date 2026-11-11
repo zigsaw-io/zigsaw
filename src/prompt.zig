@@ -67,7 +67,17 @@ pub const Answer = enum { yes, no, none };
 /// console, the answer is the next line on stdin; `none` at its end, or when
 /// there's no stdin.
 pub fn askYesNo(ctx: *Context, question: []const u8) !Answer {
-    const label = try std.fmt.allocPrint(ctx.arena, "{s} [Y/n] ", .{question});
+    return ask(ctx, question, .yes);
+}
+
+/// The same, for a question whose answer is no by default: one that only a
+/// yes should change anything for.
+pub fn askNoYes(ctx: *Context, question: []const u8) !Answer {
+    return ask(ctx, question, .no);
+}
+
+fn ask(ctx: *Context, question: []const u8, default: Answer) !Answer {
+    const label = try std.fmt.allocPrint(ctx.arena, "{s} {s} ", .{ question, if (default == .yes) "[Y/n]" else "[y/N]" });
     while (true) {
         const line = (consoleLine(ctx.arena, label, .echo) catch |err| switch (err) {
             error.EndOfInput => {
@@ -85,16 +95,17 @@ pub fn askYesNo(ctx: *Context, question: []const u8) !Answer {
             Context.printStderr("{s}\n", .{l});
             break :piped l;
         };
-        if (parseAnswer(line)) |a| return a;
+        if (parseAnswer(line, default)) |a| return a;
         note("answer y or n", .{});
     }
 }
 
-/// "y", "yes" or nothing is yes; "n" or "no" is no; anything else is no
-/// answer yet.
-fn parseAnswer(line: []const u8) ?Answer {
+/// "y" or "yes" is yes; "n" or "no" is no; nothing is the default; anything
+/// else is no answer yet.
+fn parseAnswer(line: []const u8, default: Answer) ?Answer {
     const a = std.mem.trim(u8, line, " \t\r");
-    if (a.len == 0 or std.ascii.eqlIgnoreCase(a, "y") or std.ascii.eqlIgnoreCase(a, "yes")) return .yes;
+    if (a.len == 0) return default;
+    if (std.ascii.eqlIgnoreCase(a, "y") or std.ascii.eqlIgnoreCase(a, "yes")) return .yes;
     if (std.ascii.eqlIgnoreCase(a, "n") or std.ascii.eqlIgnoreCase(a, "no")) return .no;
     return null;
 }
@@ -112,10 +123,15 @@ fn stdinLine(ctx: *Context) ?[]const u8 {
 }
 
 test parseAnswer {
-    try std.testing.expectEqual(Answer.yes, parseAnswer("").?);
-    try std.testing.expectEqual(Answer.yes, parseAnswer("Y\r").?);
-    try std.testing.expectEqual(Answer.yes, parseAnswer(" yes ").?);
-    try std.testing.expectEqual(Answer.no, parseAnswer("n").?);
-    try std.testing.expectEqual(Answer.no, parseAnswer("NO").?);
-    try std.testing.expectEqual(@as(?Answer, null), parseAnswer("maybe"));
+    try std.testing.expectEqual(Answer.yes, parseAnswer("", .yes).?);
+    try std.testing.expectEqual(Answer.yes, parseAnswer("Y\r", .yes).?);
+    try std.testing.expectEqual(Answer.yes, parseAnswer(" yes ", .yes).?);
+    try std.testing.expectEqual(Answer.no, parseAnswer("n", .yes).?);
+    try std.testing.expectEqual(Answer.no, parseAnswer("NO", .yes).?);
+    try std.testing.expectEqual(@as(?Answer, null), parseAnswer("maybe", .yes));
+    // A question that only a yes answers yes.
+    try std.testing.expectEqual(Answer.no, parseAnswer("", .no).?);
+    try std.testing.expectEqual(Answer.no, parseAnswer(" \r", .no).?);
+    try std.testing.expectEqual(Answer.yes, parseAnswer("y", .no).?);
+    try std.testing.expectEqual(Answer.no, parseAnswer("no", .no).?);
 }

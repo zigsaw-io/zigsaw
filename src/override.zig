@@ -55,12 +55,16 @@ pub const Settings = struct {
     /// that isn't the default one, whose apps otherwise don't (see
     /// folders.zig). Saved store-wide only.
     real_folders: ?bool = null,
+    /// Whether an install that replaces the app's version keeps a copy of
+    /// its data, for `rollback`, which it otherwise does (see snapshot.zig).
+    /// No run option: saved only.
+    snapshot: ?bool = null,
 
     pub fn isEmpty(s: Settings) bool {
         return s.sandbox == null and s.network == null and s.commands == null and s.host == null and s.ephemeral == null and
             s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.env.len == 0 and
             s.noextension.len == 0 and s.extension.len == 0 and s.ports.len == 0 and
-            s.volumes.len == 0 and s.novolume.len == 0 and s.real_folders == null;
+            s.volumes.len == 0 and s.novolume.len == 0 and s.real_folders == null and s.snapshot == null;
     }
 
     /// `upper` over `lower`. For the lists, an entry of `upper` replaces
@@ -81,6 +85,7 @@ pub const Settings = struct {
             .volumes = try mergeList(arena, try without(arena, lower.volumes, upper.novolume, volumes.targetOf, itself), upper.volumes, volumes.targetOf),
             .novolume = try mergeList(arena, try without(arena, lower.novolume, upper.volumes, itself, volumes.targetOf), upper.novolume, itself),
             .real_folders = upper.real_folders orelse lower.real_folders,
+            .snapshot = upper.snapshot orelse lower.snapshot,
         };
     }
 
@@ -169,6 +174,10 @@ pub const Settings = struct {
         }
         if (s.real_folders) |on| {
             try w.print("{s}--{s}real-folders", .{ sep, if (on) "" else "no" });
+            sep = " ";
+        }
+        if (s.snapshot) |on| {
+            try w.print("{s}--{s}snapshot", .{ sep, if (on) "" else "no" });
             sep = " ";
         }
     }

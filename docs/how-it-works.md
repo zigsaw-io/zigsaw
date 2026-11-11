@@ -30,6 +30,9 @@ refs\<id>.json         installed app -> manifest digest
 versions\<id>.previous.json  the version the installed one replaced, whose blobs prune keeps
 versions\<id>.skip.json      the version a rollback left, which updates pass over
 versions\<id>.held     there while `zigsaw hold` keeps updates away from the app
+versions\<id>.data.json      which version left the data in snapshots\<id>
+versions\<id>.data-owed.json the version whose data the app's next run is to copy
+snapshots\<id>\        the app's data as an earlier version left it, for rollback
 deploy\<hex>\          an unpacked layer, by layer digest, shared by all runs and apps;
                        placeholders while a lazy pull fetches it
 lazy\<hex>\            a layer pulled lazily: its TOC, its download, what to copy from the
@@ -227,6 +230,44 @@ previous version's image from the store (`Store.readCompleteImage`, which refuse
 image with a missing blob), asks as an update would about what it may reach beyond
 the installed one, installs it with the source it came from, and writes the version
 it left to `versions\<id>.skip.json`. Any install of another version deletes that.
+
+Before it writes any of that, an install that replaces a version copies the app's own
+volume, `volumes\<id>`, to `snapshots\<id>` (`snapshot.keep`): the data as the replaced
+version left it, which no run of the new one has touched yet. It holds the app's runs
+lock exclusively meanwhile, so no run goes on, and first has `hkcu.settleLeftovers` put
+the keys a killed run left in HKCU back into `registry\user.dat`, so that the copy has
+them. The copy is made in `tmp\` and renamed into place, and `versions\<id>.data.json`,
+which names the version and the manifest that left the data so, is written last: a copy
+that stopped is a leftover `prune` deletes, and a record always has its folder. The walk
+is zigsaw's own, not std's: it never enters a directory that is a reparse point, nor
+copies one, so a mounted volume and a link to one of the user's folders stay out, and
+the app's next run makes them again. `home\AppData\Local\Temp` and `cache` are left out.
+Files go through `CopyFileW`, which keeps their times, attributes and streams, and on
+ReFS (a Dev Drive) clones their blocks instead of copying them; the paths have the
+`\\?\` prefix, as zigsaw's manifest doesn't ask for long paths. The walk makes the
+folders itself and hands the files to up to eight threads, 2048 at a time: a small
+file costs more to open and close than to copy, and 20,000 of them took 13 s one
+after another (robocopy with one thread) and 6 s this way. If a run of the app goes
+on, nothing is copied: `versions\<id>.data-owed.json` names the version, and the app's
+next run that isn't `--ephemeral` takes the copy before it joins the app's runs
+(`snapshot.beforeRun`), if it can lock them exclusively; if it can't, the new version
+runs beside the old one, the data is no longer as the old one left it, and the debt is
+dropped with a note.
+
+`rollback` offers the copy only if its record's manifest is the previous version's, so
+one an older zigsaw made stale by updating the app is never taken for what it isn't.
+Taking the data back (`snapshot.swap`) is three renames under the runs lock: the app's
+data to `snapshots\.swap-<id>`, the copy to `volumes\<id>`, and that folder to
+`snapshots\<id>`, whose record then names the version left, with `set_aside`. The
+record is deleted before the first rename, and written back if a rename fails. If
+zigsaw stops in between, the app's next run, the next install or the next swap
+finishes it (`finishSwap`): with nothing at `volumes\<id>`, the data goes back where
+it was; otherwise only the last step was left. `prune` never deletes a `.swap-`
+folder, whose name no app's id can be. The swap happens after the install, not before: a version
+that doesn't install leaves the data alone, and a swap that fails leaves the version
+gone back to, with `rollback --data-only` to try again. The data set aside keeps the
+low integrity label and the links it had; the copy taken back has neither, and gets
+them from the app's next run, as a new data directory does.
 
 These are files of their own, rather than fields of the ref, because refs and
 overrides are parsed strictly: a zigsaw before 0.76 would refuse a ref with a field it

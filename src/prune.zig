@@ -1,7 +1,7 @@
 //! `zigsaw prune`: deletes what no installed app needs: the blobs and
 //! deployments of versions that were replaced or removed, and leftovers in
 //! tmp\. Each app's previous version keeps its blobs, for `rollback`, though
-//! not its deployments. On request, also cached downloads, build tools'
+//! not its deployments, and the copy of the app's data as it left it. On request, also cached downloads, build tools'
 //! caches, projects' kept work directories, the data of apps that are no
 //! longer installed, and those previous versions. Anything a running app uses
 //! is kept.
@@ -15,6 +15,7 @@ const lazy = @import("lazy.zig");
 const oci = @import("oci.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
+const snapshot = @import("snapshot.zig");
 const volumes = @import("volumes.zig");
 const note = Context.note;
 
@@ -215,6 +216,12 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     const pruned: volumes.Pruned = if (opts.volumes) try volumes.prune(ctx, opts.dry_run) else .{};
     const unmounted: Tally = .{ .count = pruned.count, .bytes = pruned.bytes };
 
+    // The data kept as apps' previous versions left it (see snapshot.zig):
+    // with those versions, all of it; otherwise what apps that aren't
+    // installed left, and what nothing records.
+    const data_gone = try snapshot.prune(ctx, refs, opts.previous, opts.dry_run);
+    const kept_data: Tally = .{ .count = data_gone.files, .bytes = data_gone.bytes };
+
     // The alias shims of apps that aren't installed, unless one is running.
     // (Tiny files, so not reported.)
     const aliases_dir = try store.path(arena, &.{"aliases"});
@@ -255,6 +262,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         .{ tool_caches, opts.downloads, "build tool cache", "build tool caches" },
         .{ work, opts.downloads, "project's work directories", "projects' work directories" },
         .{ unmounted, opts.volumes, "volume", "volumes" },
+        .{ kept_data, true, "copy of an app's data", "copies of apps' data" },
     };
     for (parts) |part| {
         const t, const selected, const one, const many = part;
@@ -284,6 +292,11 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         note("kept {d} image(s) that builds use as runtimes or SDKs; --downloads deletes them", .{build_only});
     if (kept_previous and previous_only.count > 0)
         note("kept {d} previous version(s) ({Bi:.1}) for `zigsaw rollback`; --previous deletes them", .{ previous_only.count, previous_only.bytes });
+    if (kept_previous) {
+        const data = try snapshot.keptTotal(ctx, refs);
+        if (data.files > 0)
+            note("kept the data of {d} app(s) as an earlier version left it ({Bi:.1}) for `zigsaw rollback`; --previous deletes it", .{ data.files, data.bytes });
+    }
     if (!kept_previous and previous.items.len > 0)
         note("{s} {d} previous version(s): `zigsaw rollback` has nothing to go back to", .{ if (opts.dry_run) "would forget" else "forgot", previous.items.len });
     // Volumes outlive apps: their own, their data, and the ones they mounted.

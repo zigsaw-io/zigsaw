@@ -44,6 +44,7 @@ const override = @import("override.zig");
 const process = @import("process.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
+const snapshot = @import("snapshot.zig");
 const volumes = @import("volumes.zig");
 const written = @import("written.zig");
 const repeat = @import("testing.zig").repeat;
@@ -118,6 +119,9 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     for (found.skipped) |s| if (s.warn or ctx.verbose) note("note: {s} doesn't join this run: {s}", .{ s.id, s.reason });
     // Its data, from where a zigsaw before 0.85 kept it (see volumes.zig).
     try volumes.adopt(ctx, cfg.id, false);
+    // And as the version this one replaced left it, if a copy of that is
+    // still owed (see snapshot.zig): before this run changes it.
+    if (run_dir == null) try snapshot.beforeRun(ctx, cfg.id);
     if (run_dir == null) try volumes.checkOwn(ctx, cfg.id);
     if (sandbox == .soft and run_dir == null) try unlabelData(ctx, cfg.id);
     const data_dir = if (run_dir) |d| d.path else try ctx.store.dataDir(arena, cfg.id);

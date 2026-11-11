@@ -740,6 +740,20 @@ pub const MOUNT_POINT_REPARSE_HEADER = extern struct {
 };
 
 pub extern "kernel32" fn GetFileAttributesW(name: LPCWSTR) callconv(.winapi) DWORD;
+/// A file's attributes, times (FILETIMEs, as two DWORDs each) and size.
+pub const WIN32_FILE_ATTRIBUTE_DATA = extern struct {
+    dwFileAttributes: DWORD,
+    ftCreationTime: [2]DWORD,
+    ftLastAccessTime: [2]DWORD,
+    ftLastWriteTime: [2]DWORD,
+    nFileSizeHigh: DWORD,
+    nFileSizeLow: DWORD,
+};
+pub const GetFileExInfoStandard: c_int = 0;
+pub extern "kernel32" fn GetFileAttributesExW(name: LPCWSTR, level: c_int, data: *WIN32_FILE_ATTRIBUTE_DATA) callconv(.winapi) BOOL;
+/// Copies a file with its attributes, times and streams; on a Dev Drive
+/// (ReFS) by cloning its blocks.
+pub extern "kernel32" fn CopyFileW(existing: LPCWSTR, new: LPCWSTR, fail_if_exists: BOOL) callconv(.winapi) BOOL;
 pub extern "kernel32" fn CreateDirectoryW(name: LPCWSTR, security: ?*anyopaque) callconv(.winapi) BOOL;
 pub extern "kernel32" fn DeviceIoControl(
     device: HANDLE,

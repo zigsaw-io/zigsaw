@@ -8,6 +8,7 @@ const exports = @import("exports.zig");
 const grants = @import("grants.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
+const snapshot = @import("snapshot.zig");
 const note = Context.note;
 
 pub const Image = struct {
@@ -19,6 +20,10 @@ pub const Image = struct {
     /// Whether what the app may reach was told already, as `remote.fetch`
     /// does before downloading the layers.
     described: bool = false,
+    /// What becomes of the app's data as the version this one replaces left
+    /// it: a copy is kept (see snapshot.zig), or it's left to the caller, as
+    /// a rollback that has that version's data to take back does.
+    data: enum { keep, leave } = .keep,
 };
 
 /// Deploys the image's layers, points the app's ref at it, and syncs its
@@ -40,6 +45,9 @@ pub fn install(ctx: *Context, image: Image) !void {
     }
     ctx.timed(start, "deploy", .{});
     const replaced = if (previous) |p| !std.mem.eql(u8, p.manifest, image.manifest_digest) else false;
+    // Its data as the replaced version left it, before a run of this one can
+    // change it.
+    if (replaced and image.data == .keep) try snapshot.keep(ctx, cfg.id, previous.?);
     // Before the ref moves, so that an install that stops between the two
     // still has the replaced version in one of them.
     if (replaced) try ctx.store.writePrevious(arena, previous.?);

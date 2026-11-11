@@ -230,7 +230,7 @@ fn writeList(ctx: *Context, state: State, on: bool) !void {
     try w.flush();
 }
 
-const Ago = struct {
+pub const Ago = struct {
     seconds: i64,
 
     pub fn format(a: Ago, w: *Io.Writer) Io.Writer.Error!void {

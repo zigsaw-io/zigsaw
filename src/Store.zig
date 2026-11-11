@@ -7,7 +7,13 @@
 //!                                 blobs prune keeps for `rollback` (see rollback.zig)
 //!   <root>\versions\<id>.skip.json  the version a rollback left, which updates pass over
 //!   <root>\versions\<id>.held     there while updates leave the app alone (`hold`)
-//!   <root>\deploy\<hex>\          an unpacked layer, by layer digest: an app's own
+//!   <root>\versions\<id>.data.json  which version left the data kept in snapshots\<id>
+//!   <root>\versions\<id>.data-owed.json
+//!                                 the version whose data is still to be copied, as a
+//!                                 run of the app went on when it was replaced
+//!   <root>\snapshots\<id>\        the app's data as an earlier version left it, which
+//!                                 `rollback` may bring back (see snapshot.zig)
+//!   <root>\deploy\<hex>\         an unpacked layer, by layer digest: an app's own
 //!                                 files, or a runtime's, shared by the apps using it;
 //!                                 placeholders while a lazy pull fetches it
 //!   <root>\lazy\<hex>\            what a layer has while it's pulled lazily: its TOC,
@@ -60,7 +66,7 @@ verbose: bool = false,
 /// from another.
 ledger_key: ?[]const u8 = null,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "deploy", "lazy", "volumes", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "snapshots", "deploy", "lazy", "volumes", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|
@@ -359,10 +365,25 @@ pub const Skip = struct {
     manifest: []const u8,
 };
 
+/// The data kept in snapshots\<id>, and which version's runs left it so.
+pub const KeptData = struct {
+    version: []const u8,
+    manifest: []const u8,
+    /// When it was copied or set aside, in seconds since 1970.
+    taken: i64,
+    bytes: u64,
+    files: u64,
+    /// Not a copy: the data itself, which a rollback that took the earlier
+    /// version's data back set aside. The next update replaces it.
+    set_aside: bool = false,
+};
+
 const previous_suffix = ".previous.json";
 const skip_suffix = ".skip.json";
 const held_suffix = ".held";
-const version_suffixes = [_][]const u8{ previous_suffix, skip_suffix, held_suffix };
+const data_suffix = ".data.json";
+const data_owed_suffix = ".data-owed.json";
+const version_suffixes = [_][]const u8{ previous_suffix, skip_suffix, held_suffix, data_suffix, data_owed_suffix };
 
 fn versionPath(s: Store, arena: Allocator, id: []const u8, suffix: []const u8) ![]u8 {
     return s.path(arena, &.{ "versions", try std.mem.concat(arena, u8, &.{ id, suffix }) });
@@ -439,6 +460,42 @@ pub fn setHeld(s: Store, arena: Allocator, id: []const u8, held: bool) !bool {
     if (try s.isHeld(arena, id)) return false;
     try s.writeVersionFile(arena, id, held_suffix, "");
     return true;
+}
+
+/// Where the data kept of an app's earlier version is (see snapshot.zig).
+pub fn snapshotDir(s: Store, arena: Allocator, id: []const u8) ![]u8 {
+    return s.path(arena, &.{ "snapshots", id });
+}
+
+/// What says which version left the data in snapshots\<id>; null if none is
+/// kept. Written after the data is there, and deleted before it goes.
+pub fn readKeptData(s: Store, arena: Allocator, id: []const u8) !?KeptData {
+    const bytes = try s.readVersionFile(arena, id, data_suffix) orelse return null;
+    // Nothing to go by is nothing kept: `prune` deletes the folder.
+    return std.json.parseFromSliceLeaky(KeptData, arena, bytes, .{ .ignore_unknown_fields = true }) catch null;
+}
+
+pub fn writeKeptData(s: Store, arena: Allocator, id: []const u8, kept: KeptData) !void {
+    try s.writeVersionFile(arena, id, data_suffix, try oci.toJson(arena, kept));
+}
+
+pub fn forgetKeptData(s: Store, arena: Allocator, id: []const u8) !bool {
+    return s.deleteVersionFile(arena, id, data_suffix);
+}
+
+/// The version whose data a run of the app is to copy before it starts, as
+/// one went on when an install replaced it.
+pub fn readOwedData(s: Store, arena: Allocator, id: []const u8) !?Skip {
+    const bytes = try s.readVersionFile(arena, id, data_owed_suffix) orelse return null;
+    return std.json.parseFromSliceLeaky(Skip, arena, bytes, .{ .ignore_unknown_fields = true }) catch null;
+}
+
+pub fn writeOwedData(s: Store, arena: Allocator, id: []const u8, of: Skip) !void {
+    try s.writeVersionFile(arena, id, data_owed_suffix, try oci.toJson(arena, of));
+}
+
+pub fn forgetOwedData(s: Store, arena: Allocator, id: []const u8) !bool {
+    return s.deleteVersionFile(arena, id, data_owed_suffix);
 }
 
 /// Forgets all of it, as when the app is removed.
@@ -1172,6 +1229,23 @@ test "versions: previous, skip and held round-trip, apart, and go together" {
     try std.testing.expect(!try s.forgetPrevious(arena, "b.app"));
     try std.testing.expect(try s.setHeld(arena, "c.app", false));
     try std.testing.expect(!try s.setHeld(arena, "c.app", false));
+    // What says whose data is kept, and whose is owed, are of the same kind.
+    try std.testing.expectEqual(null, try s.readKeptData(arena, "a.app"));
+    try s.writeKeptData(arena, "a.app", .{ .version = "1", .manifest = "sha256:aa", .taken = 1794355200, .bytes = 5, .files = 2 });
+    try s.writeOwedData(arena, "d.app", .{ .version = "3", .manifest = "sha256:dd" });
+    const kept = (try s.readKeptData(arena, "a.app")).?;
+    try std.testing.expectEqualStrings("sha256:aa", kept.manifest);
+    try std.testing.expectEqual(5, kept.bytes);
+    try std.testing.expect(!kept.set_aside);
+    try std.testing.expectEqualStrings("3", (try s.readOwedData(arena, "d.app")).?.version);
+    try std.testing.expectEqual(null, try s.readOwedData(arena, "a.app"));
+    try std.testing.expectEqual(2, (try s.listVersionIds(arena)).len);
+    // One that can't be read is none: nothing is offered on its word.
+    try tmp.dir.writeFile(io, .{ .sub_path = "versions\\e.app.data.json", .data = "{ \"version\": 1 }" });
+    try std.testing.expectEqual(null, try s.readKeptData(arena, "e.app"));
+    try std.testing.expect(try s.forgetOwedData(arena, "d.app"));
+    try std.testing.expect(!try s.forgetOwedData(arena, "d.app"));
+    try s.forgetVersions(arena, "e.app");
     try s.forgetVersions(arena, "a.app");
     try std.testing.expectEqual(0, (try s.listVersionIds(arena)).len);
 }
