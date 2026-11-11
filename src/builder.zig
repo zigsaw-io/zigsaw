@@ -11,10 +11,9 @@
 //! mapped to B: while it runs (see drive.zig), so that paths in what it builds
 //! are the same on every machine:
 //!
-//!   B:\src\<module>\  a module's sources, and the working directory of its commands;
-//!                     a project's module keeps it between builds (see `Work`)
+//!   B:\src\<module>\  a module's sources, and the working directory of its commands
 //!   B:\prefix\        $PREFIX, where the modules install the app's files
-//!   B:\home\          the profile folders of the build's tools, fresh for each build
+//!   B:\home\          the profile folders of the build's tools
 //!   B:\data\          the data directory runtimes' variables point to while building
 //!   B:\cache\<id>\    ${cache} of a tool that uses it, kept between builds in the
 //!                     store's cache\tools\<id>, and moved here for the build;
@@ -25,12 +24,20 @@
 //! B:\prefix\bin and the SDK's and runtimes' directories on PATH (after the
 //! aliases' B:\bin), and in a job object that ends
 //! whatever they leave running.
+//!
+//! The build root is kept in the store afterwards, a failed build's too, and
+//! the recipe's next build happens in it: the modules whose inputs are the
+//! same are skipped, and one that stopped goes on at the command that
+//! didn't finish (see `Resume`, and checkpoint.zig). `--rebuild`, `--no-resume` and
+//! `--keep-build-dir` build in a new root under the store's tmp\, as a host
+//! toolchain's builds always do.
 
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const aliases = @import("aliases.zig");
+const checkpoint = @import("checkpoint.zig");
 const Tree = @import("Tree.zig");
 const deps = @import("deps.zig");
 const drive = @import("drive.zig");
@@ -53,11 +60,19 @@ pub const Options = struct {
     /// Keep the build root afterwards, to look at what a build left. Builds
     /// even if an earlier build with the same inputs could be reused.
     keep_build_dir: bool = false,
-    /// Build even if an earlier build with the same inputs could be reused.
+    /// Build every module, in a new build root, even if an earlier build
+    /// with the same inputs could be reused. The kept build is left alone.
     rebuild: bool = false,
-    /// Start a project's modules from fresh work directories (see `Work`),
-    /// and build even if an earlier build could be reused.
+    /// Delete the kept build first (see `Resume`), and build even if an
+    /// earlier build could be reused.
     clean: bool = false,
+    /// Start this module and those after it afresh, and build even if an
+    /// earlier build could be reused.
+    clean_from: ?[]const u8 = null,
+    /// Neither use the kept build nor leave one, and reuse an earlier build
+    /// only if it built every module: for what is published, or compared
+    /// with what is.
+    no_resume: bool = false,
 };
 
 /// The fixed time builds see as SOURCE_DATE_EPOCH: 1980-01-01, the earliest
@@ -79,20 +94,30 @@ pub fn build(ctx: *Context, recipe_path: []const u8, opts: Options) !install.Ima
 
     // A host toolchain is an input zigsaw can't pin, so those builds are
     // never reused.
-    const inputs = if (r.host.len == 0) try inputHash(ctx, r, bytes, recipe_path, &projects, .with_projects) else null;
-    const work: ?Work = if (r.host.len == 0 and Work.wanted(r, &projects)) try .init(ctx, r, bytes, recipe_path, source, &projects) else null;
-    if (opts.clean) if (work) |w| try w.drop(ctx);
-    if (inputs) |*h| if (!opts.rebuild and !opts.clean and !opts.keep_build_dir) {
-        if (try ctx.store.readBuildCache(arena, h)) |digest| if (try ctx.store.readCompleteImage(arena, digest)) |image| {
-            if (ctx.verbose) note("{s} {s}: built before from the same inputs ({s}); --rebuild builds it again", .{ r.id, r.version, oci.shortDigest(digest) });
-            return .{ .manifest_digest = digest, .manifest = image.manifest, .config = image.config, .source = source };
+    const inputs = if (r.host.len == 0) try inputHash(ctx, r, bytes, recipe_path, &projects) else null;
+    if (opts.clean_from) |name| if (moduleIndex(r, name) == null)
+        return fail("{s} has no module {s} to start afresh", .{ recipe_path, name });
+    const forced = opts.rebuild or opts.clean or opts.clean_from != null or opts.keep_build_dir;
+    if (inputs) |*h| if (!forced) {
+        // With --no-resume, only what a build of every module made.
+        if (try ctx.store.readBuildCache(arena, h)) |earlier| if (!(opts.no_resume and earlier.resumed)) {
+            if (try ctx.store.readCompleteImage(arena, earlier.digest)) |image| {
+                if (ctx.verbose) note("{s} {s}: built before from the same inputs ({s}); --rebuild builds it again", .{ r.id, r.version, oci.shortDigest(earlier.digest) });
+                return .{ .manifest_digest = earlier.digest, .manifest = image.manifest, .config = image.config, .source = source };
+            }
         };
     };
     const start = ctx.now();
-    const image = try buildImage(ctx, r, recipe_path, source, &projects, work, opts);
+    var resumed = false;
+    const image = try buildImage(ctx, r, recipe_path, source, &projects, opts, &resumed);
     if (r.hasBuildCommands()) note("built {s} {s} in {f}", .{ r.id, r.version, ctx.since(start) });
-    if (inputs) |*h| try ctx.store.writeBuildCache(arena, h, image.manifest_digest);
+    if (inputs) |*h| try ctx.store.writeBuildCache(arena, h, image.manifest_digest, resumed);
     return image;
+}
+
+fn moduleIndex(r: recipe.Recipe, name: []const u8) ?usize {
+    for (r.modules, 0..) |m, i| if (std.ascii.eqlIgnoreCase(m.name, name)) return i;
+    return null;
 }
 
 /// The recipe `zigsaw build` builds: the one given, or the zigsaw.json of
@@ -115,23 +140,19 @@ pub fn recipePath(ctx: *Context, arg: ?[]const u8) ![]const u8 {
 /// A hash of everything a build's result depends on: this zigsaw, the
 /// recipe, and the contents of its local sources, files and directories.
 /// URL sources, runtimes and SDK images are pinned by hash in the recipe
-/// itself. `.without_projects` leaves the directories out: what a project's
-/// kept work directories depend on (see `Work`).
-fn inputHash(ctx: *Context, r: recipe.Recipe, bytes: []const u8, recipe_path: []const u8, projects: *const project.Snapshots, which: enum { with_projects, without_projects }) ![64]u8 {
+/// itself.
+fn inputHash(ctx: *Context, r: recipe.Recipe, bytes: []const u8, recipe_path: []const u8, projects: *const project.Snapshots) ![64]u8 {
     const io = ctx.io;
     const arena = ctx.arena;
     var h: std.crypto.hash.sha2.Sha256 = .init(.{});
-    h.update(switch (which) {
-        .with_projects => "zigsaw build inputs\n",
-        .without_projects => "zigsaw work inputs\n",
-    });
+    h.update("zigsaw build inputs\n");
     h.update(&(try Store.sha256File(io, try win32.selfExePath(arena))).hex);
     h.update(bytes);
     const base_dir = std.fs.path.dirname(recipe_path) orelse ".";
     for (r.modules) |m| for (m.sources, 0..) |src, i| {
         const p = src.path orelse continue;
         if (projects.get(m.name, i)) |s| {
-            if (which == .with_projects) h.update(s.hash);
+            h.update(s.hash);
             continue;
         }
         const full = if (std.fs.path.isAbsolute(p)) p else try std.fs.path.join(arena, &.{ base_dir, p });
@@ -142,7 +163,7 @@ fn inputHash(ctx: *Context, r: recipe.Recipe, bytes: []const u8, recipe_path: []
     return std.fmt.bytesToHex(h.finalResult(), .lower);
 }
 
-fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: []const u8, projects: *const project.Snapshots, work: ?Work, opts: Options) !install.Image {
+fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: []const u8, projects: *const project.Snapshots, opts: Options, resumed: *bool) !install.Image {
     const arena = ctx.arena;
 
     // Runtimes go into the image and are on PATH while building. The SDK is
@@ -194,16 +215,24 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
     };
     try sources.fetcher.fetchAll(downloads.items);
     if (building) {
-        root = try .init(ctx, r, tools.list.items);
-        root.?.work = work;
+        // A host toolchain is an input zigsaw can't pin, so nothing of such
+        // a build is taken into the next.
+        const from_last: ?*Resume = if (r.host.len == 0 and !opts.keep_build_dir and !opts.rebuild and !opts.no_resume)
+            try Resume.init(ctx, r, recipe_path, source, projects, tools.list.items, opts)
+        else
+            null;
+        if (from_last) |res| resumed.* = res.plan.resumes();
+        root = try .init(ctx, r, tools.list.items, from_last);
         if (root.?.msvc) |tc| {
             try build_info.host.map.put(arena, "msvc", tc.tools_version);
             try build_info.host.map.put(arena, "windows-sdk", tc.sdk_version);
         }
-        // Then every vendor step, for the same reason.
+        // Then every vendor step, for the same reason. A module that's
+        // skipped was built with what its step is pinned to.
+        const done = if (from_last) |res| res.plan.done else 0;
         var vendored: std.json.ArrayHashMap([]const u8) = .{};
-        for (r.modules) |m| if (m.vendor != null) {
-            try vendored.map.put(arena, m.name, try root.?.vendor(ctx, m, recipe_path, projects));
+        for (r.modules, 0..) |m, i| if (m.vendor) |v| {
+            try vendored.map.put(arena, m.name, if (i < done) v.sha256.? else try root.?.vendor(ctx, m, recipe_path, projects));
         };
         if (vendored.map.count() > 0) build_info.vendor = vendored;
         tree = try root.?.buildModules(ctx, &sources, r, recipe_path);
@@ -298,6 +327,26 @@ const Sources = struct {
     fn deinit(s: *Sources) void {
         for (s.archives.items) |a| a.close(s.ctx.io);
         s.fetcher.deinit();
+    }
+
+    /// Notes the hashes of a module's sources, as `add` does, without
+    /// reading what's in them: for a module that isn't built again.
+    fn record(s: *Sources, m: recipe.Module, recipe_path: []const u8) !void {
+        const ctx = s.ctx;
+        const arena = ctx.arena;
+        for (m.sources, 0..) |src, i| {
+            if (s.projects.get(m.name, i)) |snapshot| {
+                try s.hashes.append(arena, snapshot.hash);
+            } else if (src.image) |reference| {
+                const dep = try deps.resolve(ctx, recipe_path, .source, m.name, reference);
+                try s.images.append(arena, dep.manifest_digest);
+            } else if (src.sha256) |hash| {
+                try s.hashes.append(arena, hash);
+            } else {
+                const h = try Store.sha256File(ctx.io, try s.fetcher.fetch(src));
+                try s.hashes.append(arena, try arena.dupe(u8, &h.hex));
+            }
+        }
     }
 
     /// Adds a module's sources to `tree`.
@@ -429,7 +478,7 @@ fn runtimeDirs(arena: Allocator, c: oci.AppConfig, dirs: []const []const u8) ![]
 
 /// The directory a build happens in, mapped to the build drive.
 const BuildRoot = struct {
-    /// The real path, under the store's tmp\.
+    /// The real path: the kept build's root, or one under the store's tmp\.
     path: []const u8,
     drive: drive.Drive,
     id: []const u8,
@@ -442,19 +491,22 @@ const BuildRoot = struct {
     msvc: ?msvc_host.Toolchain,
     /// The ids of the tools whose caches are in cache\ for the build.
     caches: []const []const u8,
-    /// Where a project's modules keep their work directories, if the recipe
-    /// has any.
-    work: ?Work = null,
+    /// The kept build this one happens in, and what it takes from it.
+    from_last: ?*Resume = null,
 
     const letter = drive.letter;
 
-    fn init(ctx: *Context, r: recipe.Recipe, tools: []const Tool) !BuildRoot {
+    fn init(ctx: *Context, r: recipe.Recipe, tools: []const Tool, from_last: ?*Resume) !BuildRoot {
         const io = ctx.io;
         const arena = ctx.arena;
-        const path = try ctx.store.makeTmpDir(arena, drive.dir_prefix[0 .. drive.dir_prefix.len - 1]);
-        errdefer Io.Dir.cwd().deleteTree(io, path) catch {};
+        errdefer if (from_last) |res| res.kept.release();
+        const path = if (from_last) |res| res.kept.root else try ctx.store.makeTmpDir(arena, drive.dir_prefix[0 .. drive.dir_prefix.len - 1]);
+        errdefer if (from_last == null) Io.Dir.cwd().deleteTree(io, path) catch {};
         for ([_][]const u8{ "src", "prefix", "cache" }) |sub| try Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ path, sub }));
-        try makeScratchDirs(ctx, path, .new);
+        // The tools' folders are as the skipped modules left them, and the
+        // commands that aren't run again. With none of either, they start
+        // empty, as in a first build.
+        try makeScratchDirs(ctx, path, if (from_last != null and from_last.?.plan.done == 0 and from_last.?.plan.step == null) .fresh else .new);
         const profile: environment.Profile = try .init(arena, letter ++ "\\");
 
         var path_dirs: std.ArrayList([]const u8) = .empty;
@@ -474,7 +526,13 @@ const BuildRoot = struct {
         // Of two tools with an alias of the same name, the first's wins, as
         // on PATH.
         const resolved = try aliases.resolve(ctx, providers.items, .fail);
-        try aliases.writeAll(ctx, try std.fs.path.join(arena, &.{ path, "bin" }), resolved);
+        const bin = try std.fs.path.join(arena, &.{ path, "bin" });
+        // In a kept root, a shim that's as it was is left as it is, with
+        // its time: build tools note the programs they found, and Meson's
+        // build files are out of date once `strip` is newer than them.
+        if (from_last != null and (resolved.len > 0 or try Store.exists(io, bin))) {
+            _ = try aliases.sync(ctx, bin, resolved);
+        } else try aliases.writeAll(ctx, bin, resolved);
         // The aliases come first: a tool's image says what they are. BusyBox's
         // sh runs its own applets before anything on PATH, so they win over
         // those too (zig's ar over BusyBox's).
@@ -501,6 +559,7 @@ const BuildRoot = struct {
             .tool_vars = tool_vars.items,
             .msvc = msvc,
             .caches = caches.items,
+            .from_last = from_last,
         };
         // Once the drive is this build's, so builds take turns with the
         // caches too.
@@ -542,6 +601,9 @@ const BuildRoot = struct {
         const kept = try ctx.store.path(arena, &.{ "cache", "tools", id });
         const here = try std.fs.path.join(arena, &.{ b.path, "cache", id });
         if (try Store.exists(io, kept)) {
+            // One that a build which was stopped left in a kept root is
+            // older than the store's.
+            if (try Store.exists(io, here)) Store.deleteTree(io, arena, here) catch {};
             Store.renameRetrying(io, kept, here, cache_move_wait_ms) catch |err| {
                 if (ctx.verbose) note("couldn't use {s}'s cache ({t}); building without it", .{ id, err });
             };
@@ -550,20 +612,17 @@ const BuildRoot = struct {
     }
 
     /// Moves the tools' caches back into the store, unmaps the drive, and
-    /// deletes the build root, unless it's to be kept.
+    /// deletes the build root, unless it's the kept build's, or to be kept
+    /// for a look.
     fn finish(b: *BuildRoot, ctx: *Context, keep: bool) void {
         b.drive.release();
         for (b.caches) |id| b.keepCache(ctx, id) catch |err| {
             if (ctx.verbose) note("couldn't keep {s}'s cache ({t}); the next build starts without it", .{ id, err });
         };
-        // A kept build directory keeps them, and the next build starts
-        // afresh.
-        if (b.work) |w| if (!keep) for (w.taken.items) |module| w.put(ctx, b.path, module) catch |err| {
-            if (ctx.verbose) note("couldn't keep module {s}'s work directory ({t}); its next build starts afresh", .{ module, err });
-        };
-        if (keep) {
+        if (b.from_last) |res| {
+            res.kept.release();
+        } else if (keep) {
             note("kept the build directory: {s}", .{b.path});
-            if (b.work != null) note("its work directories stay there; the project's next build starts afresh", .{});
         } else {
             Store.deleteTree(ctx.io, ctx.arena, b.path) catch |err|
                 note("warning: couldn't delete all of {s} ({t}); `zigsaw prune` will retry", .{ b.path, err });
@@ -590,23 +649,50 @@ const BuildRoot = struct {
         const io = ctx.io;
         const arena = ctx.arena;
         const prefix = try std.fs.path.join(arena, &.{ b.path, "prefix" });
-        for (r.modules) |m| {
-            var tree: Tree = .{};
-            try sources.add(&tree, m, recipe_path);
-            // A module with a vendor step has its files already.
-            if (m.vendor == null) {
-                if (b.work != null and Work.keeps(m, sources.projects)) {
-                    try b.work.?.take(ctx, b.path, &tree, m);
-                } else {
-                    const dest = if (m.build.len == 0) prefix else try std.fs.path.join(arena, &.{ b.path, "src", m.name });
-                    try writeSources(io, arena, &tree, m, dest);
-                }
-                try sources.projects.recheck(ctx, m.name);
+        for (r.modules, 0..) |m, i| {
+            const from_last = b.from_last;
+            if (from_last != null and i < from_last.?.plan.done) {
+                try sources.record(m, recipe_path);
+                continue;
             }
-            if (m.build.len > 0) try b.runCommands(ctx, m, .build, .fail);
+            var how: Commands = .{ .index = i };
+            if (from_last != null and i == from_last.?.plan.done and from_last.?.plan.step != null) {
+                // It goes on at the command that stopped, in its directory
+                // as that command left it.
+                try sources.record(m, recipe_path);
+                how.from = from_last.?.plan.step.?.commands;
+                how.continued = true;
+            } else {
+                var tree: Tree = .{};
+                try sources.add(&tree, m, recipe_path);
+                // A module with a vendor step has its files already.
+                if (m.vendor == null) {
+                    const dest = if (m.build.len == 0) prefix else try std.fs.path.join(arena, &.{ b.path, "src", m.name });
+                    if (from_last) |res| {
+                        how.continued = try res.bringSources(ctx, i, m, &tree, dest, sources.projects);
+                    } else try writeSources(io, arena, &tree, m, dest);
+                    try sources.projects.recheck(ctx, m.name);
+                }
+                if (from_last) |res| res.started(ctx, i, m);
+            }
+            if (m.build.len > 0) {
+                try b.runCommands(ctx, m, .build, .fail, how);
+            } else if (from_last) |res| res.stepped(ctx, i, m, 0);
+            if (from_last) |res| res.finished(ctx, i, m);
         }
         return Tree.fromDir(io, arena, prefix);
     }
+
+    /// How a module's commands run.
+    const Commands = struct {
+        /// The module's place in the recipe.
+        index: usize = 0,
+        /// How many commands, from the first, ran in an earlier build, and
+        /// aren't run again.
+        from: usize = 0,
+        /// Whether the module's directory is the one its last build left.
+        continued: bool = false,
+    };
 
     /// Runs a module's vendor step, or takes what an earlier one made from
     /// the download cache, and leaves the module's directory with its sources
@@ -627,7 +713,7 @@ const BuildRoot = struct {
         var cached: ?[]const u8 = if (v.sha256) |h| try ctx.store.path(arena, &.{ "cache", "downloads", h }) else null;
         if (cached != null and try Store.exists(io, cached.?)) {
             if (ctx.verbose) note("module {s}: vendored files from the cache (sha256 {s})", .{ m.name, v.sha256.? });
-        } else if (b.runCommands(ctx, m, .vendor, if (v.sha256 != null) .warn else .fail)) |_| {
+        } else if (b.runCommands(ctx, m, .vendor, if (v.sha256 != null) .warn else .fail, .{})) |_| {
             const made = try std.fs.path.join(arena, &.{ dest, v.dir });
             if (!try Store.exists(io, made))
                 return fail("module {s}: the vendor commands left nothing in {s}", .{ m.name, v.dir });
@@ -691,8 +777,9 @@ const BuildRoot = struct {
 
     /// Runs a module's build commands, or its vendor commands, which have
     /// network access. If one fails, the build fails, or with `.warn`,
-    /// runCommands returns error.CommandFailed after saying so.
-    fn runCommands(b: *const BuildRoot, ctx: *Context, m: recipe.Module, step: Step, on_failure: enum { fail, warn }) !void {
+    /// runCommands returns error.CommandFailed after saying so. After each
+    /// build command, the kept build records how far the module is.
+    fn runCommands(b: *const BuildRoot, ctx: *Context, m: recipe.Module, step: Step, on_failure: enum { fail, warn }, how: Commands) !void {
         const arena = ctx.arena;
         const system_root = ctx.env.get("SystemRoot") orelse "C:\\Windows";
         const commands = switch (step) {
@@ -710,8 +797,8 @@ const BuildRoot = struct {
         // any (cc-rs's) answers otherwise once it has run before: cargo-c
         // gained AVX-512 code in a store that had built it twice. So each
         // module has its own, in its directory, as `zig build` has by
-        // default: fresh for each build, unless the module keeps its work
-        // directory. ${cache} keeps zig's libc and compiler-rt.
+        // default: as fresh as the module's directory is. ${cache} keeps
+        // zig's libc and compiler-rt.
         try environment.set(arena, &vars, "ZIG_LOCAL_CACHE_DIR", try std.fmt.allocPrint(arena, "{s}\\src\\{s}\\.zig-cache", .{ letter, m.name }));
         // With its stderr on a console, zig 0.16 draws a progress line from
         // another thread; if zig cancels that thread just as it first takes
@@ -741,6 +828,7 @@ const BuildRoot = struct {
 
         const label = if (step == .vendor) " vendor" else "";
         for (commands, 1..) |command, n| {
+            if (n <= how.from) continue;
             note("[{s}{s} {d}/{d}] {s}", .{ m.name, label, n, commands.len, command });
             const start = ctx.now();
             const code = try process.spawn(arena, .{
@@ -753,12 +841,16 @@ const BuildRoot = struct {
             const took = ctx.since(start);
             if (took.ms >= 1000) note("[{s}{s} {d}/{d}] took {f}", .{ m.name, label, n, commands.len, took });
             if (code != 0) switch (on_failure) {
-                .fail => return fail("module {s}: {t} command {d} exited with code {d}:\n  {s}", .{ m.name, step, n, code, command }),
+                .fail => {
+                    if (how.continued) note("module {s} went on from what its last build left; if that's what's wrong, `zigsaw build --clean={s}` starts it afresh", .{ m.name, m.name });
+                    return fail("module {s}: {t} command {d} exited with code {d}:\n  {s}", .{ m.name, step, n, code, command });
+                },
                 .warn => {
                     note("warning: module {s}: {t} command {d} exited with code {d}", .{ m.name, step, n, code });
                     return error.CommandFailed;
                 },
             };
+            if (step == .build) if (b.from_last) |res| res.stepped(ctx, how.index, m, n);
         }
     }
 
@@ -779,121 +871,220 @@ const BuildRoot = struct {
     }
 };
 
-/// A project's work directories: a module whose sources include a
-/// project's own files (a directory `path`) keeps B:\src\<module>, with what
-/// its build left there (zig's .zig-cache, CMake's build directory, cargo's
-/// target), in the store between builds, as makepkg keeps src/. Each build
-/// brings the module's sources up to date in it, rewriting only files whose
-/// contents differ (changed, or edited by the last build), so make, ninja
-/// and cargo see only those as new. A module starts afresh when zigsaw, the
-/// recipe or its other local files change, and with `zigsaw build --clean`.
-/// Modules with only pinned sources, as published recipes', never keep one.
+/// What a build takes from the recipe's kept build (see checkpoint.zig): the
+/// modules it skips, and the directories it builds in again.
 ///
-/// In the store, cache\work\<key>\ holds <module>\ and <module>.state (the
-/// stamp, then the files the last build brought), keyed by the recipe's
-/// path and the app's id, so two checkouts don't share them.
-const Work = struct {
-    dir: []const u8,
-    stamp: [64]u8,
-    /// The modules whose work directories are in the build root.
-    taken: *std.ArrayList([]const u8),
+/// A module is skipped while it and the modules before it have the inputs
+/// they were built with. From the first that hasn't, modules are built,
+/// where their last build left them while zigsaw, the build's tools and
+/// the recipe's modules up to them are the same:
+///
+/// - One that stopped in its commands, failed or interrupted, goes on at
+///   the command that didn't finish, in its directory as that command left
+///   it. The commands before it aren't run again: a patch doesn't apply
+///   twice, and ninja goes on from what it compiled.
+/// - A project's module, whose files changed, is given them in its
+///   directory and runs every command, as make is run again. Each file
+///   whose contents differ from its source's is written again, changed by
+///   the project or edited by the last build, so a `sed -i` doesn't apply
+///   twice. So is a module after it.
+///
+/// Otherwise a module starts in a new directory, as a vendor step's always
+/// does.
+///
+/// The kept build is in the store's cache\work\<key>, keyed by the recipe's
+/// path and the app's id, so two checkouts don't share one.
+const Resume = struct {
+    kept: checkpoint.Kept,
+    keys: []const checkpoint.Keys,
+    plan: checkpoint.Plan,
+    /// The kept build's record couldn't be written: the rest of this build
+    /// leaves it as it is, and the next goes back to what it says.
+    broken: bool = false,
 
-    const state_header = "zigsaw work 1 ";
-
-    /// Whether the recipe has a module that keeps one.
-    fn wanted(r: recipe.Recipe, projects: *const project.Snapshots) bool {
-        for (r.modules) |m| if (keeps(m, projects)) return true;
-        return false;
-    }
-
-    /// Whether the module keeps one: it builds, in B:\src\<module>, from
-    /// sources that include a project's own files.
-    fn keeps(m: recipe.Module, projects: *const project.Snapshots) bool {
-        if (m.build.len == 0 or m.vendor != null) return false;
-        for (m.sources, 0..) |_, i| if (projects.get(m.name, i) != null) return true;
-        return false;
-    }
-
-    fn init(ctx: *Context, r: recipe.Recipe, bytes: []const u8, recipe_path: []const u8, source: []const u8, projects: *const project.Snapshots) !Work {
+    /// Takes the recipe's kept build, and brings it to where this build
+    /// starts. Null if another build has it.
+    fn init(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: []const u8, projects: *const project.Snapshots, tools: []const Tool, opts: Options) !?*Resume {
         const arena = ctx.arena;
         var h: std.crypto.hash.sha2.Sha256 = .init(.{});
         h.update(try std.ascii.allocLowerString(arena, source));
         h.update("\n");
         h.update(try std.ascii.allocLowerString(arena, r.id));
         const key = std.fmt.bytesToHex(h.finalResult(), .lower);
-        const taken = try arena.create(std.ArrayList([]const u8));
-        taken.* = .empty;
-        return .{
-            .dir = try ctx.store.path(arena, &.{ "cache", "work", key[0..16] }),
-            .stamp = try inputHash(ctx, r, bytes, recipe_path, projects, .without_projects),
-            .taken = taken,
+        const dir = try ctx.store.path(arena, &.{ "cache", "work", key[0..16] });
+        var kept = try checkpoint.Kept.open(ctx.io, arena, dir) orelse {
+            note("{s}: another build is going on in its kept build; this one builds every module, in a directory of its own", .{r.id});
+            return null;
         };
+        errdefer kept.release();
+        if (opts.clean and kept.found) {
+            kept.reset(arena) catch |err| return fail("deleting {s}'s kept build, {s}: {t}", .{ r.id, dir, err });
+            kept.found = false;
+            if (ctx.verbose) note("{s}: deleted its kept build", .{r.id});
+        }
+
+        const keys = try moduleKeys(ctx, r, recipe_path, projects, tools);
+        const names = try arena.alloc([]const u8, r.modules.len);
+        for (names, r.modules) |*name, m| name.* = m.name;
+        const afresh = if (opts.clean_from) |name| moduleIndex(r, name).? else r.modules.len;
+        var plan = try kept.plan(arena, names, keys, afresh);
+        const continues = try arena.dupe(bool, plan.continues);
+        for (r.modules, continues) |m, *c| {
+            if (m.vendor != null or m.build.len == 0) c.* = false;
+        }
+        plan.continues = continues;
+        // A project's module is given its files as they are now, and runs
+        // every command on them, as make is run again.
+        if (plan.step) |s| {
+            const m = r.modules[plan.done];
+            if (!continues[plan.done] or hasProject(m, projects) or s.commands > m.build.len or
+                !try Store.exists(ctx.io, try std.fs.path.join(arena, &.{ kept.root, "src", m.name })))
+                plan.step = null;
+        }
+
+        var why: ?[]const u8 = null;
+        if (plan.resumes()) {
+            why = try vendorToRun(ctx, r, plan.done);
+            if (why == null) why = kept.goBack(arena, plan, names) catch |err|
+                @as(?[]const u8, try std.fmt.allocPrint(arena, "its files couldn't be put back as they were ({t})", .{err}));
+        }
+        if (why != null or !plan.resumes()) {
+            if (why) |w| {
+                note("{s}: building every module again: {s}", .{ r.id, w });
+            } else if (kept.found and ctx.verbose) {
+                note("{s}: nothing of its last build is taken: zigsaw, its tools or its first module changed", .{r.id});
+            }
+            kept.reset(arena) catch |err| return fail("deleting {s}'s kept build, {s}: {t}", .{ r.id, dir, err });
+            const none = try arena.alloc(bool, r.modules.len);
+            @memset(none, false);
+            plan = .{ .done = 0, .continues = none };
+        } else if (plan.done == r.modules.len) {
+            note("{s}: every module is as its last build left it", .{r.id});
+        } else {
+            const m = r.modules[plan.done];
+            const at = if (plan.step) |s|
+                if (s.commands < m.build.len) try std.fmt.allocPrint(arena, ", command {d} of {d}", .{ s.commands + 1, m.build.len }) else ", whose commands all ran"
+            else
+                "";
+            if (plan.done > 0 or plan.step != null)
+                note("{s}: {d} of {d} modules are as its last build left them; going on at {s}{s}", .{ r.id, plan.done, r.modules.len, m.name, at });
+        }
+
+        const res = try arena.create(Resume);
+        res.* = .{ .kept = kept, .keys = keys, .plan = plan };
+        return res;
     }
 
-    /// Deletes them, for `--clean`.
-    fn drop(w: Work, ctx: *Context) !void {
-        if (!try Store.exists(ctx.io, w.dir)) return;
-        Store.deleteTree(ctx.io, ctx.arena, w.dir) catch |err|
-            return fail("deleting the project's work directories, {s}: {t}", .{ w.dir, err });
-        if (ctx.verbose) note("deleted the project's work directories", .{});
+    /// Why the build can't go on from module `from`: a vendor step whose
+    /// commands have to run. They run before anything is built, and the
+    /// tools' folders start again after them, as only a first build's can.
+    fn vendorToRun(ctx: *Context, r: recipe.Recipe, from: usize) !?[]const u8 {
+        const arena = ctx.arena;
+        for (r.modules[from..]) |m| if (m.vendor) |v| {
+            const cached = if (v.sha256) |hash| try Store.exists(ctx.io, try ctx.store.path(arena, &.{ "cache", "downloads", hash })) else false;
+            if (!cached) return try std.fmt.allocPrint(arena, "module {s}'s vendor commands have to run", .{m.name});
+        };
+        return null;
     }
 
-    /// Moves the module's work directory into the build root, if it has one
-    /// that's still good, and brings its sources up to date in it; else
-    /// writes them into a new one.
-    fn take(w: Work, ctx: *Context, root: []const u8, tree: *const Tree, m: recipe.Module) !void {
+    fn started(res: *Resume, ctx: *Context, i: usize, m: recipe.Module) void {
+        if (res.broken) return;
+        res.kept.started(ctx.arena, i, m.name, res.keys[i]) catch |err| res.giveUp(err);
+    }
+
+    /// Records what's in the prefix after the module's command `commands`,
+    /// for the build that goes on from there; or after its sources, for a
+    /// module without commands.
+    fn stepped(res: *Resume, ctx: *Context, i: usize, m: recipe.Module, commands: usize) void {
+        if (res.broken) return;
+        const start = ctx.now();
+        res.kept.stepped(ctx.arena, i, m.name, res.keys[i], commands) catch |err| return res.giveUp(err);
+        ctx.timed(start, "record what's in the prefix", .{});
+    }
+
+    fn finished(res: *Resume, ctx: *Context, i: usize, m: recipe.Module) void {
+        if (res.broken) return;
+        res.kept.finished(ctx.arena, i, m.name, res.keys[i], m.build.len) catch |err| res.giveUp(err);
+    }
+
+    fn giveUp(res: *Resume, err: anyerror) void {
+        res.broken = true;
+        note("warning: couldn't record how far the build is ({t}); the next one may build more again", .{err});
+    }
+
+    /// Puts the module's sources in `dest`: brought up to date in the
+    /// directory its last build left, if the build goes on in it, which it
+    /// returns; written into a new one otherwise.
+    fn bringSources(res: *Resume, ctx: *Context, i: usize, m: recipe.Module, tree: *const Tree, dest: []const u8, projects: *const project.Snapshots) !bool {
         const io = ctx.io;
         const arena = ctx.arena;
-        const kept = try std.fs.path.join(arena, &.{ w.dir, m.name });
-        const state_path = try std.fmt.allocPrint(arena, "{s}.state", .{kept});
-        const dest = try std.fs.path.join(arena, &.{ root, "src", m.name });
-        var previous: std.ArrayList([]const u8) = .empty;
-        const afresh: ?[]const u8 = why: {
-            if (!try Store.exists(io, kept)) break :why "no work directory kept";
-            const state = Io.Dir.cwd().readFileAlloc(io, state_path, arena, .limited(64 << 20)) catch break :why "no record of its files";
-            var lines = std.mem.splitScalar(u8, state, '\n');
-            const first = lines.first();
-            if (!std.mem.startsWith(u8, first, state_header) or !std.mem.eql(u8, first[state_header.len..], &w.stamp))
-                break :why "zigsaw, the recipe or its local files changed";
-            while (lines.next()) |line| if (line.len > 0) try previous.append(arena, line);
-            Store.renameRetrying(io, kept, dest, BuildRoot.cache_move_wait_ms) catch |err|
-                break :why try std.fmt.allocPrint(arena, "couldn't move it ({t})", .{err});
-            break :why null;
-        };
-        if (afresh) |why| {
-            previous.clearRetainingCapacity();
-            if (try Store.exists(io, kept)) Store.deleteTree(io, arena, kept) catch {};
-            if (ctx.verbose) note("module {s}: a new work directory: {s}", .{ m.name, why });
+        // What a project had the last time, to delete what it lost since.
+        const lists = m.build.len > 0 and hasProject(m, projects);
+        if (res.plan.continues[i] and try Store.exists(io, dest)) {
+            const previous: []const []const u8 = if (lists) try res.kept.files(arena, m.name) else &.{};
+            const start = ctx.now();
+            const synced = tree.syncFiles(io, arena, dest, previous) catch |err| switch (err) {
+                error.OutOfMemory => |e| return e,
+                else => return fail("module {s}: bringing its sources up to date in {s}: {t}", .{ m.name, dest, err }),
+            };
+            ctx.timed(start, "bring {d} files up to date", .{synced.files.len});
+            if (ctx.verbose)
+                note("module {s}: goes on in the directory its last build left, {d} file(s) rewritten, {d} removed", .{ m.name, synced.written, synced.removed });
+            if (lists) try res.kept.setFiles(arena, m.name, synced.files);
+            return true;
         }
-        // Put back afterwards, whatever happens from here.
-        try w.taken.append(arena, m.name);
-        try Io.Dir.cwd().createDirPath(io, dest);
-        const start = ctx.now();
-        const synced = tree.syncFiles(io, arena, dest, previous.items) catch |err| switch (err) {
-            error.OutOfMemory => |e| return e,
-            else => return fail("module {s}: bringing its sources up to date in {s}: {t}", .{ m.name, dest, err }),
-        };
-        ctx.timed(start, "bring {d} files up to date", .{synced.files.len});
-        if (afresh == null and ctx.verbose)
-            note("module {s}: its work directory from the last build, {d} file(s) rewritten, {d} removed", .{ m.name, synced.written, synced.removed });
-
-        var out: Io.Writer.Allocating = .init(arena);
-        try out.writer.print("{s}{s}\n", .{ state_header, w.stamp });
-        for (synced.files) |f| try out.writer.print("{s}\n", .{f});
-        try Io.Dir.cwd().createDirPath(io, w.dir);
-        try Io.Dir.cwd().writeFile(io, .{ .sub_path = state_path, .data = out.written() });
+        try writeSources(io, arena, tree, m, dest);
+        if (lists) {
+            var files: std.ArrayList([]const u8) = .empty;
+            for (tree.nodes.values()) |node| if (node.content != .dir) try files.append(arena, node.path);
+            try res.kept.setFiles(arena, m.name, files.items);
+        }
+        return false;
     }
 
-    /// Moves a module's work directory back into the store. If the store
-    /// has one again, put back by a build in another logon session, this
-    /// one goes with the build root.
-    fn put(w: Work, ctx: *Context, root: []const u8, module: []const u8) !void {
-        const arena = ctx.arena;
-        const here = try std.fs.path.join(arena, &.{ root, "src", module });
-        const kept = try std.fs.path.join(arena, &.{ w.dir, module });
-        try Store.renameRetrying(ctx.io, here, kept, BuildRoot.cache_move_wait_ms);
+    fn hasProject(m: recipe.Module, projects: *const project.Snapshots) bool {
+        for (m.sources, 0..) |_, i| if (projects.get(m.name, i) != null) return true;
+        return false;
     }
 };
+
+/// The keys of the recipe's modules (see checkpoint.zig): what each one's
+/// build depends on, chained. The recipe's other fields shape the image's
+/// config and layer, not what the modules build.
+fn moduleKeys(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, projects: *const project.Snapshots, tools: []const Tool) ![]checkpoint.Keys {
+    const io = ctx.io;
+    const arena = ctx.arena;
+    var h: std.crypto.hash.sha2.Sha256 = .init(.{});
+    h.update("zigsaw kept build\n");
+    h.update(&(try Store.sha256File(io, try win32.selfExePath(arena))).hex);
+    h.update("\n");
+    h.update(try std.ascii.allocLowerString(arena, r.id));
+    for (tools) |t| {
+        h.update("\n");
+        h.update(t.image);
+    }
+    const base = std.fmt.bytesToHex(h.finalResult(), .lower);
+
+    const base_dir = std.fs.path.dirname(recipe_path) orelse ".";
+    const inputs = try arena.alloc(checkpoint.Inputs, r.modules.len);
+    for (r.modules, inputs) |m, *in| {
+        var local: std.ArrayList([]const u8) = .empty;
+        var own: std.ArrayList([]const u8) = .empty;
+        for (m.sources, 0..) |src, i| {
+            const p = src.path orelse continue;
+            if (projects.get(m.name, i)) |s| {
+                try own.append(arena, s.hash);
+                continue;
+            }
+            const full = if (std.fs.path.isAbsolute(p)) p else try std.fs.path.join(arena, &.{ base_dir, p });
+            const file_hash = Store.sha256File(io, full) catch |err|
+                return fail("module {s}: reading {s}: {t}", .{ m.name, full, err });
+            try local.append(arena, try arena.dupe(u8, &file_hash.hex));
+        }
+        in.* = .{ .definition = try oci.toJson(arena, m), .local = local.items, .projects = own.items };
+    }
+    return checkpoint.chain(arena, &base, inputs);
+}
 
 /// Creates a module's indexed sources in `dest`.
 fn writeSources(io: Io, arena: Allocator, tree: *const Tree, m: recipe.Module, dest: []const u8) !void {

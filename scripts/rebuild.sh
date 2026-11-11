@@ -176,7 +176,9 @@ for recipe in "${order[@]}"; do
     # as nothing a build does should land among the recipes.
     file=$recipes_dir/$recipe.json
     if command -v cygpath >/dev/null; then file=$(cygpath -w "$file"); fi
-    if ! (cd "$logs" && "$zigsaw" build "$file") >"$log" 2>&1; then
+    # Every module of it, whatever an earlier build of the recipe left: what's
+    # pinned and published here mustn't rest on that.
+    if ! (cd "$logs" && "$zigsaw" build --no-resume "$file") >"$log" 2>&1; then
         echo "$recipe FAILED after $((SECONDS - start))s, in $log:"
         tail -15 "$log"
         exit 1

@@ -592,9 +592,25 @@
   (commands and `INFO` sections miniredis hasn't).
 - A project's incremental builds are only as right as its tools'
   incremental state: one that misses a change makes what a `--clean` build
-  wouldn't. The recipe changing starts afresh; a change to an SDK's image
-  does only through the recipe's pin. A project moved to another directory
-  starts afresh, its work directories being keyed by the recipe's path.
+  wouldn't. The module changing in the recipe starts it afresh; a change to
+  an SDK's image does only through the recipe's pin. A project moved to
+  another directory starts afresh, its kept build being keyed by the
+  recipe's path.
+- A build that goes on from the recipe's last one (0.88) puts back the
+  prefix, and nothing else. What a command wrote into another module's
+  `B:\src`, or into `B:\home` or `B:\data`, is still there when a module is
+  built again, where a build of every module would start without it.
+  `zigsaw build --clean` is the way out; what's published is built with
+  `--no-resume`.
+- A file in the prefix that a later command wrote into, rather than
+  replaced, can't be put back, so every module is built again: Python's
+  `shutil.copy` and CMake's `file(INSTALL)` over an existing file do. The
+  build says which file it was.
+- A command that stopped is run again in its directory as it left it. One
+  that can't be, a `patch` half applied or a `mkdir` without `-p`, fails
+  again; `--clean=<module>` starts the module afresh.
+- A kept build is a whole build root for each recipe built, until `zigsaw
+  prune --downloads`.
 - Each `zigsaw build` of a project reads all of its files to hash them,
   even when it then takes the image built before: quick for a source tree,
   slower for one with large assets that aren't ignored or skipped.

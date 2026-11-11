@@ -36,7 +36,7 @@ export MSYS_NO_PATHCONV=1
 # sections took on a runner in iteration 33, without the setup every group
 # has (BusyBox's image), and with zig's image where a group builds with it.
 groups=(
-    "base: runtimes images extensions aliases projects prettier msvc sevenzip" # 2
+    "base: runtimes images extensions aliases projects resume prettier msvc sevenzip" # 2
     "zig: commands sqlite"                                                     # 7
     "cmake-meson: cmake llvm meson make"                                       # 7
     "langs: rust go dotnet java php"                                           # 9
@@ -51,7 +51,10 @@ problems=$({ printf '%s\n' $sections $grouped | sort | uniq -u; printf '%s\n' $g
 [ -z "$problems" ] || { echo "sections in no group, in two, or not in this file: $problems"; exit 1; }
 [ -z "${GROUP:-}" ] || printf '%s\n' "${groups[@]%%:*}" | grep -qx "$GROUP" || { echo "no group $GROUP"; exit 1; }
 # section <name>: whether this run checks that section: all do without GROUP.
+# The builds that the sections before it left to go on from (cache\work) are
+# deleted first: no section builds on another's, and a runner's disk is small.
 section() {
+    [ -z "${ZIGSAW_HOME:-}" ] || rm -rf "$(cygpath -u "$ZIGSAW_HOME")/cache/work"
     if [ -n "${SECTIONS:-}" ]; then
         [[ " $SECTIONS " == *" $1 "* ]]
         return
@@ -556,11 +559,12 @@ check "a link in a project fails the build, naming it" sh -c "\"\$0\" build '$wo
 linked_recipe ', "skip": ["/to-src"]'
 check "skipped, the project builds" z build "$work\\linked"
 
-# Built again, a project's module starts in the work directory its last
-# build left, its sources brought up to date there: make remakes only what a
-# changed file makes. make.log, which make's rules add to, stays in the work
-# directory (cache\work\<key>\incmake in the store); the image holds what
-# they made, and note.txt, which a build command edits in place.
+# Built again, a project's module goes on in the directory its last build
+# left, its sources brought up to date there: make remakes only what a
+# changed file makes. make.log, which make's rules add to, stays in that
+# directory (src\incmake in the kept build, cache\work\<key>\zigsaw-build-root
+# in the store); the image holds what they made, and note.txt, which a build
+# command edits in place.
 INC=test.project.incremental
 inc="$work\\inc"
 mkdir -p "$inc" && (
@@ -575,7 +579,7 @@ inc_recipe() {
 }
 inc_recipe 1
 inc_before=$(cd "$(cygpath -u "$inc")" && find . | LC_ALL=C sort)
-inc_log() { cat "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/incmake/make.log 2>/dev/null | tr -d '\r' | tr '\n' ' '; }
+inc_log() { cat "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/zigsaw-build-root/src/incmake/make.log 2>/dev/null | tr -d '\r' | tr '\n' ' '; }
 want_log() { [ "$(inc_log)" = "$1" ] || { echo "make.log: '$(inc_log)', want '$1'"; return 1; }; }
 inc_first() { z build "$inc" >/dev/null && want_log "a b "; }
 check "a project's first build makes everything" inc_first
@@ -588,14 +592,118 @@ inc_again() {
 check "built again after a change, make remakes only what it makes, and a file the build edits starts afresh" inc_again
 inc_clean() { [ "$(z build --clean "$inc" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2)" = "$(cat "$work\\inc-digest")" ] && want_log "a b "; }
 check "with --clean, it makes everything again, and the same image" inc_clean
-inc_removed() { rm "$inc\\c.in" && z build "$inc" >/dev/null && ! ls "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/incmake/c.in >/dev/null 2>&1; }
-check "a file the project no longer has is gone from the work directory" inc_removed
-inc_recipe_changed() { inc_recipe 2 && z build "$inc" >/dev/null && want_log "a b "; }
-check "the recipe changed, it starts afresh" inc_recipe_changed
+inc_removed() { rm "$inc\\c.in" && z build "$inc" >/dev/null && ! ls "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/zigsaw-build-root/src/incmake/c.in >/dev/null 2>&1; }
+check "a file the project no longer has is gone from the module's directory" inc_removed
+# Only the version. The recipe is one of the project's files, so the module
+# is built again, where it was built: make has nothing to remake.
+inc_recipe_changed() { inc_recipe 2 && z -v build "$inc" 2>&1 | grep -q 'module incmake: goes on in the directory its last build left' && want_log "a b "; }
+check "a field that isn't the module's changed: it goes on in its directory" inc_recipe_changed
+# With a.in changed too: going on would remake only a.txt.
+inc_module_changed() { echo a3 >"$inc\\a.in" && sed -i 's/"make", /"make", "true", /' "$(cygpath -u "$inc")/zigsaw.json" && z build "$inc" >/dev/null && want_log "a b "; }
+check "the module's commands changed: it starts afresh" inc_module_changed
 inc_untouched() { [ "$(cd "$(cygpath -u "$inc")" && find . | LC_ALL=C sort | grep -v -e '^\./c\.in$')" = "$(grep -v -e '^\./c\.in$' <<<"$inc_before")" ]; }
 check "the project's directory has no build output" inc_untouched
-inc_prune_note() { z prune --dry-run 2>&1 | grep -q 'kept the work directories of [0-9]* project(s)'; }
-check "prune keeps work directories, unless --downloads" inc_prune_note
+inc_prune_note() { z prune --dry-run 2>&1 | grep -q 'kept the builds of [0-9]* recipe(s)'; }
+check "prune keeps kept builds, unless --downloads" inc_prune_note
+fi
+
+# --- going on from the last build ----------------------------------------------------
+
+# A recipe's build goes on from its last one, kept in the store
+# (cache\work\<key>): modules whose inputs are the same aren't built again,
+# and the prefix goes back to how the last of them left it. Three modules,
+# each a BusyBox command or two; a build's log says whose commands ran.
+if section resume; then
+RES=test.resume
+res="$work\\res"
+mkdir -p "$res"
+# res_recipe <b's commands> <c's commands> [more fields]
+res_recipe() {
+    printf '{ "id": "%s", "version": "1", "command": "a.txt", "exports": {}, "sdk": { "busybox": "%s@%s" },%s\n  "modules": [\n    { "name": "a", "build": ["mkdir -p \\"$PREFIX/etc\\" && echo a >\\"$PREFIX/a.txt\\" && echo one >\\"$PREFIX/etc/conf\\""] },\n    { "name": "b", "build": [%s] },\n    { "name": "c", "build": [%s] } ] }\n' \
+        $RES $BB "$bb_digest" "${3:-}" "$1" "$2" >"$res\\res.json"
+}
+B_PLAIN='"echo b >\"$PREFIX/b.txt\""'
+# Its second command fails the first time it runs in a directory, having left
+# a file in the prefix; its first says each time it runs.
+B_ONCE='"echo b1 >\"$PREFIX/b1.txt\" && echo ran >>ran.log", "[ -f tried ] || { touch tried; echo half >\"$PREFIX/half.txt\"; exit 1; }", "echo b >\"$PREFIX/b.txt\""'
+c_says() { printf '"echo %s >\\"$PREFIX/c.txt\\""' "$1"; }
+# Replaces a's file with a new one, as sed -i does.
+c_seds() { printf '"sed -i s/one/%s/ \\"$PREFIX/etc/conf\\""' "$1"; }
+# Writes into a's file.
+c_appends() { printf '"echo %s >>\\"$PREFIX/etc/conf\\""' "$1"; }
+# res_build [options]: builds it; $res_out is what the build said, $res_ran
+# the modules whose commands ran.
+res_build() {
+    local rc=0
+    res_out=$(z -v build "$@" "$res\\res.json" 2>&1) || rc=$?
+    res_ran=$(grep -o '^\[[a-z]* 1/' <<<"$res_out" | tr -d '[' | cut -d' ' -f1 | tr '\n' ' ')
+    return $rc
+}
+want_ran() { [ "$res_ran" = "$1" ] || { echo "ran '$res_ran', want '$1'"; return 1; }; }
+res_said() { grep -q "$1" <<<"$res_out" || { echo "didn't say: $1"; return 1; }; }
+res_file() { tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer $RES)\\$1" 2>/dev/null | tr '\n' ' '; }
+res_lacks() { [ ! -e "$ZIGSAW_HOME\\deploy\\$(own_layer $RES)\\$1" ] || { echo "the image has $1"; return 1; }; }
+res_kept() { ls -d "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/ | while read -r d; do [ -e "$d/zigsaw-build-root/prefix/a.txt" ] && echo "${d%/}"; done | head -1; }
+# The image is what a build of every module makes of the recipe as it is.
+same_as_full() {
+    local resumed full
+    resumed=$(grep -o 'manifest sha256:[0-9a-f]*' <<<"$res_out" | cut -d' ' -f2)
+    full=$(rebuilt_manifest "$res\\res.json")
+    [ -n "$resumed" ] && [ "$resumed" = "$full" ] || { echo "resumed $resumed, full $full"; return 1; }
+}
+
+res_recipe "$B_PLAIN" "$(c_says 1)"
+res_first() { res_build && want_ran "a b c "; }
+check "a recipe's first build builds every module" res_first
+res_recipe "$B_PLAIN" "$(c_says 2)"
+res_last() { res_build && want_ran "c " && res_said '2 of 3 modules are as its last build left them; going on at c' && [ "$(res_file c.txt)" = "2 " ] && same_as_full; }
+check "the last module changed: only it is built, to a full build's image" res_last
+res_recipe "$B_PLAIN" "$(c_says 2)" ' "cleanup": ["/b.txt"],'
+res_layer() { res_build && want_ran "" && res_said 'every module is as its last build left it' && res_lacks b.txt && same_as_full; }
+check "only what shapes the layer changed: no module is built" res_layer
+
+res_recipe "$B_ONCE" "$(c_says 2)"
+res_fails() { ! res_build && want_ran "b "; }
+check "a module fails: those before it weren't built again" res_fails
+res_goes_on() {
+    res_build && want_ran "c " && res_said '1 of 3 modules are as its last build left them; going on at b, command 2 of 3' || return 1
+    [ "$(res_file b1.txt)" = "b1 " ] && [ "$(res_file b.txt)" = "b " ] && res_lacks half.txt || { echo "the image isn't what its commands make"; return 1; }
+    [ "$(wc -l <"$(res_kept)/zigsaw-build-root/src/b/ran.log")" -eq 1 ] || { echo "its first command ran again"; return 1; }
+}
+check "built again, it goes on at the command that failed, without what that had left in the prefix" res_goes_on
+
+res_recipe "$B_PLAIN" "$(c_seds two)"
+z build "$res\\res.json" >/dev/null 2>&1
+res_recipe "$B_PLAIN" "$(c_seds three)"
+res_replaced() { res_build && want_ran "c " && [ "$(res_file etc/conf)" = "three " ] && same_as_full; }
+check "a file a later module replaced comes back for that module's next build" res_replaced
+res_recipe "$B_PLAIN" "$(c_appends more)"
+z build "$res\\res.json" >/dev/null 2>&1
+res_recipe "$B_PLAIN" "$(c_appends other)"
+res_written() { res_build && want_ran "a b c " && res_said 'building every module again: a later module wrote into etc/conf in the prefix' && [ "$(res_file etc/conf)" = "one other " ] && same_as_full; }
+check "one a later module wrote into can't: every module is built again" res_written
+
+res_recipe "$B_PLAIN" "$(c_says 4)"
+z build "$res\\res.json" >/dev/null 2>&1
+res_from() { res_build --clean=b && want_ran "b c "; }
+check "--clean=<module> starts that module and those after it afresh" res_from
+check "--clean=<module> wants a module of the recipe's" sh -c "\"\$0\" build --clean=nope '$res\\res.json' 2>&1 | grep -q 'has no module nope'" "$zigsaw"
+res_no_resume() {
+    res_build --no-resume && want_ran "a b c " && [ -n "$(res_kept)" ] && no_build_root || return 1
+    res_build --no-resume && want_ran "" && res_said 'built before from the same inputs'
+}
+check "--no-resume builds every module rather than take that build's image, once" res_no_resume
+sed -i '/"name": "b"/d' "$(cygpath -u "$res")/res.json"
+res_removed() { res_build && want_ran "c " && [ ! -e "$(res_kept)/zigsaw-build-root/src/b" ] && res_lacks b.txt && same_as_full; }
+check "a module the recipe lost: its directory and its files are gone" res_removed
+res_recipe "$B_PLAIN" "$(c_says 5)"
+res_unreadable() {
+    local kept
+    kept=$(res_kept)
+    [ -n "$kept" ] && echo 'zigsaw work 1 old' >"$kept/state" && mkdir "$kept/old" || return 1
+    res_build && want_ran "a b c " && [ ! -e "$kept/old" ] && [ -e "$kept/state" ]
+}
+check "a kept build this zigsaw can't read is replaced" res_unreadable
 fi
 
 # --- prettier on node --------------------------------------------------------------

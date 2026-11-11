@@ -114,7 +114,9 @@ published=()
 for recipe in "${todo[@]}"; do
     id=$(grep -o '"id": *"[^"]*"' "$recipe" | cut -d'"' -f4)
     echo "== $id"
-    "$zigsaw" build "$recipe"
+    # An image that a build of every module made, not one that went on from
+    # the recipe's last build.
+    "$zigsaw" build --no-resume "$recipe"
     "$zigsaw" push --sources "$id"
     "$zigsaw" push "$id" "$id:latest"
     version=$("$zigsaw" list | awk -v id="$id" '$1 == id { print $2 }')

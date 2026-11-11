@@ -41,12 +41,17 @@ const usage =
     \\usage: zigsaw [-v|--verbose] <command> [options]
     \\
     \\commands:
-    \\  build [--rebuild] [--clean] [--keep-build-dir] [<recipe.json> | <dir>]
-    \\                                  build an app from a recipe, or from the zigsaw.json of a
+    \\  build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir]
+    \\        [<recipe.json> | <dir>]   build an app from a recipe, or from the zigsaw.json of a
     \\                                  project's directory (by default the current one), and
-    \\                                  install it and its commands; --rebuild builds even if an
-    \\                                  earlier build had the same inputs, and --clean also starts
-    \\                                  a project's modules without their kept work directories
+    \\                                  install it and its commands. A build goes on from the
+    \\                                  recipe's last one: modules whose inputs are the same are
+    \\                                  skipped, and one that stopped goes on at its command.
+    \\                                  --clean deletes what that build left first, and
+    \\                                  --clean=<module> starts that module and those after it
+    \\                                  afresh; --rebuild builds every module in a new directory,
+    \\                                  even if an earlier build had the same inputs; --no-resume
+    \\                                  does too, unless such a build made the image already
     \\  search [<words>...]             find apps in the default registry's catalog
     \\  info <image>                    show what an app in a registry is, needs and may reach
     \\  ls <image>                      list the files of an app in a registry without pulling
@@ -292,6 +297,10 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
                 opts.rebuild = true;
             } else if (isFlag(arg, "clean")) {
                 opts.clean = true;
+            } else if (std.mem.startsWith(u8, arg, "--clean=") and arg.len > "--clean=".len) {
+                opts.clean_from = arg["--clean=".len..];
+            } else if (isFlag(arg, "no-resume")) {
+                opts.no_resume = true;
             } else if (recipe_path == null and !std.mem.startsWith(u8, arg, "-")) {
                 recipe_path = arg;
             } else return usageError();
@@ -1034,6 +1043,7 @@ test {
     _ = @import("associations.zig");
     _ = @import("BlobReader.zig");
     _ = @import("builder.zig");
+    _ = @import("checkpoint.zig");
     _ = @import("catalog.zig");
     _ = @import("cloudfiles.zig");
     _ = @import("credentials.zig");

@@ -26,7 +26,7 @@ log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 
 build() {
-    "$zigsaw" build "$root\\recipes\\$1.json" >"$log" 2>&1 || { cat "$log"; echo "building $1 failed"; exit 1; }
+    "$zigsaw" build --no-resume "$root\\recipes\\$1.json" >"$log" 2>&1 || { cat "$log"; echo "building $1 failed"; exit 1; }
 }
 
 mode=pull

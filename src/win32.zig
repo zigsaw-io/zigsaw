@@ -477,6 +477,8 @@ pub extern "advapi32" fn GetSidSubAuthority(sid: PSID, index: DWORD) callconv(.w
 pub extern "advapi32" fn ConvertStringSidToSidW(string_sid: LPCWSTR, sid: *?PSID) callconv(.winapi) BOOL;
 pub extern "advapi32" fn ConvertSidToStringSidW(sid: PSID, string_sid: *?[*:0]u16) callconv(.winapi) BOOL;
 pub extern "kernel32" fn MoveFileExW(existing: LPCWSTR, new: LPCWSTR, flags: DWORD) callconv(.winapi) BOOL;
+/// Gives the file `existing` another name, `new`, on the same volume.
+pub extern "kernel32" fn CreateHardLinkW(new: LPCWSTR, existing: LPCWSTR, security: ?*anyopaque) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GetSystemDirectoryW(buffer: [*]u16, size: c_uint) callconv(.winapi) c_uint;
 pub extern "advapi32" fn GetAce(acl: *ACL, index: DWORD, ace: *?*anyopaque) callconv(.winapi) BOOL;
 pub extern "advapi32" fn GetNamedSecurityInfoW(

@@ -267,7 +267,8 @@ for name in $published_recipes; do
     ids+=("$id")
     names[$id]=$(grep -o '^  "name": *"[^"]*"' "$recipe" | cut -d'"' -f4)
     started=$SECONDS
-    if ! zb build "$recipe" >"$logs\\$id.build.log" 2>&1; then
+    # Every module, and no build root kept: a runner's disk is small.
+    if ! zb build --no-resume "$recipe" >"$logs\\$id.build.log" 2>&1; then
         fail "$id: builds" "$(last_line "$logs\\$id.build.log")"
         continue
     fi

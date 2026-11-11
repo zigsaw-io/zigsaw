@@ -54,7 +54,7 @@ cache\downloads\<hex>  fetched sources, by sha256 (and decompressed tars)
 cache\images\<hex>     marks images that builds use as runtimes or SDKs, kept like downloads
 cache\builds\<hex>     the image of an earlier build, by a hash of its inputs
 cache\tools\<id>\      the cache of a build tool whose image uses ${cache}
-cache\work\<key>\       a project's modules' work directories, kept between its builds
+cache\work\<key>\       a recipe's last build root and the record of it, which its next build goes on from
 tmp\                   staging area, and the data of --ephemeral runs
 lock, *.lock           lock files that let zigsaw commands run side by side
 ```

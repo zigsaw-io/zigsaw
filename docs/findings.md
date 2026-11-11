@@ -2757,6 +2757,46 @@ Zig 0.17's std ECDSA verifies P-384 with a SHA-256 digest, padding it on the lef
 **Stock cosign** said "Verified OK" to both v2 bundles with `--use-signed-timestamps`, and
 zigsaw 0.83.0 takes both against the root built in (`src/testdata/sigstore/real/v2/`).
 
+## Builds that go on from the last one (iteration 88)
+
+Found while making a recipe's build pick up where its last one stopped
+([recipes.md](recipes.md#going-on-from-the-last-build)), on PostgreSQL's SDK:
+eleven modules, the ninth stopped in the middle of its compile.
+
+- **Going on in a module's directory isn't going on at its command.** The
+  first design ran the stopped module's commands again from the first, with
+  its sources brought back to what the recipe gives, as a project's module
+  has been built since iteration 35. PostgreSQL's module starts with five
+  `patch` commands. They applied again, to fresh copies, so `meson.build`
+  was newer than the build Meson had set up, and `meson install` set out to
+  configure again, without the `PATH` that the recipe gives `meson setup`
+  alone: `Program 'flex win_flex' not found`. Now the commands that ran to
+  their end aren't run again, and the sources aren't touched.
+- **Meson notes the programs it found, by their real paths.** With that
+  fixed, ninja still regenerated: `output build.ninja older than most recent
+  input E:/zs/i88/p/cache/work/…/zigsaw-build-root/bin/strip.exe`. The build
+  had written its alias shims again, as every build did into a new root. A
+  shim that's the same bytes is now left as it is, with its time. The path
+  is the root's real one, not `B:\bin`: a root that moved between builds
+  would have gone stale the same way, which is one more reason it stays
+  where it is.
+- **A file's other name keeps its old bytes only if the file was replaced.**
+  `sed -i` in BusyBox and GLib's `g_file_set_contents` write a new file and
+  rename it over the old one, so the hard link zigsaw made still names the
+  old file. A program that opens the file and writes (`>>`, Python's
+  `shutil.copy`, `CreateFile` with `CREATE_ALWAYS`) changes what both names
+  show. The link's size or time then differ from what was recorded, which is
+  how zigsaw tells, and builds every module again.
+- **Hard links work on a Dev Drive** (ReFS), where the proof ran, as on NTFS.
+- **Zig 0.17's `Io.Dir.hardLink` is `error.OperationUnsupported` on
+  Windows.** zigsaw calls `CreateHardLinkW`, with `\\?\` paths.
+- **A project's `zigsaw.json` is one of the project's files.** So any change
+  to it, the version alone, changes the module's inputs: the module is built
+  again, where it was, rather than skipped.
+- **`zig build test` doesn't compile what no test reaches.** A call in
+  `builder.zig` that didn't compile passed the unit tests and failed
+  `zig build`.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

@@ -101,11 +101,15 @@ So the Release workflow scans the programs before publishing them, and
 ## Commands
 
 ```
-zigsaw build [--rebuild] [--clean] [--keep-build-dir] [<recipe.json> | <dir>]
+zigsaw build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir] [<recipe.json> | <dir>]
                                        build an app from a recipe, or from the zigsaw.json of a
                                        project's directory (the current one by default), install
-                                       it and its commands; --clean starts a project's modules
-                                       without the work directories its last build left
+                                       it and its commands. It goes on from the recipe's last
+                                       build: modules whose inputs are the same are skipped, and
+                                       one that stopped goes on at its command. --clean deletes
+                                       what that build left; --clean=<module> starts that module
+                                       and those after it afresh; --rebuild and --no-resume build
+                                       every module in a new directory
 zigsaw search [<words>...]             find apps in the default registry's catalog
 zigsaw info <image>                    show what an app in a registry is, needs and may reach
 zigsaw ls <image>                      list the files of an app in a registry without pulling
@@ -278,8 +282,8 @@ recipe's own:
 - **A changed one builds incrementally.** Its module keeps `B:\src\<module>`
   between builds, with what the build left there (`.zig-cache`, `build`,
   `target`), and only the files that changed are written again, so make,
-  ninja, cargo and zig redo only what those affect. It starts afresh when the
-  recipe changes, and with `zigsaw build --clean`. See
+  ninja, cargo and zig redo only what those affect. It starts afresh when its
+  module changes in the recipe, and with `zigsaw build --clean`. See
   [incremental builds](docs/recipes.md#incremental-builds).
 - `zigsaw update <app-id>` builds it again from the directory as it is then.
 
@@ -778,8 +782,10 @@ running, and whatever an interrupted build left in `tmp\`. It keeps the blobs
 of each app's previous version, and the copy of the app's data as that version
 left it, for [`rollback`](#going-back-and-holding), and
 says how much they take; `--previous` deletes them too. `--dry-run` shows
-what it would delete. Cached downloads, the runtimes that builds used, and
-build tools' caches are kept for rebuilds unless you add `--downloads`. The
+what it would delete. Cached downloads, the runtimes that builds used,
+build tools' caches and the [builds kept for the next one to go on
+from](docs/recipes.md#going-on-from-the-last-build) stay unless you add
+`--downloads`. The
 [volumes](#volumes) nothing mounts, the data of uninstalled apps among them, are kept
 unless you add `--volumes`; `prune` names them.
 
@@ -1383,7 +1389,7 @@ bash tests/shims.sh     # command shims end to end, also for commands installed 
 bash tests/store.sh     # update, prune, and what they keep while apps run, and for rollback
 bash tests/upstream.sh  # scripts/check-upstream.sh with made-up recipes, pages, repositories and OSV answers, and that scripts/upstream.txt covers every recipe's sources (no network; runs on Linux too)
 bash tests/rebuild.sh   # scripts/rebuild.sh with made-up recipes and a stand-in zigsaw: its order, pins, stopping and going on (no network; runs on Linux too)
-bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
+bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, builds that go on from the last one, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
 GROUP=langs bash tests/build.sh # only one group of its sections (tests/build.sh --groups lists them), as a CI job does
 SECTIONS=php bash tests/build.sh # only these sections
 bash tests/standard-user.sh account.txt # zigsaw as a real standard user, in an account of its own you've made: the Quick start, your real folders (safe there), a guard's refusal, a store deleted by hand, and the suites that need no app's image

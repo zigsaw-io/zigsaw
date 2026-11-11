@@ -736,19 +736,33 @@ fn buildCachePath(s: Store, arena: Allocator, inputs_hex: []const u8) ![]u8 {
     return s.path(arena, &.{ "cache", "builds", inputs_hex });
 }
 
-/// The manifest digest of an earlier build with these inputs, if any.
-pub fn readBuildCache(s: Store, arena: Allocator, inputs_hex: []const u8) !?[]const u8 {
+pub const EarlierBuild = struct {
+    /// Its image's manifest digest.
+    digest: []const u8,
+    /// Whether it took modules from the build before it (see
+    /// checkpoint.zig), rather than building each one.
+    resumed: bool,
+};
+
+/// An earlier build with these inputs, if any. The file is its digest, and
+/// for a resumed one a second line saying so, which a zigsaw before 0.88
+/// doesn't take for a digest: it builds.
+pub fn readBuildCache(s: Store, arena: Allocator, inputs_hex: []const u8) !?EarlierBuild {
     const bytes = Io.Dir.cwd().readFileAlloc(s.io, try s.buildCachePath(arena, inputs_hex), arena, .limited(1024)) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => |e| return e,
     };
-    const digest = std.mem.trim(u8, bytes, " \r\n");
-    return if (oci.digestHex(digest) != null) digest else null;
+    var lines = std.mem.tokenizeAny(u8, bytes, " \r\n");
+    const digest = lines.next() orelse return null;
+    if (oci.digestHex(digest) == null) return null;
+    const mark = lines.next();
+    return .{ .digest = digest, .resumed = mark != null and std.mem.eql(u8, mark.?, "resumed") };
 }
 
-pub fn writeBuildCache(s: Store, arena: Allocator, inputs_hex: []const u8, manifest_digest: []const u8) !void {
+pub fn writeBuildCache(s: Store, arena: Allocator, inputs_hex: []const u8, manifest_digest: []const u8, resumed: bool) !void {
     const tmp = try s.tmpPath(arena, "build-cache");
-    try Io.Dir.cwd().writeFile(s.io, .{ .sub_path = tmp, .data = manifest_digest });
+    const data = if (resumed) try std.fmt.allocPrint(arena, "{s}\nresumed\n", .{manifest_digest}) else manifest_digest;
+    try Io.Dir.cwd().writeFile(s.io, .{ .sub_path = tmp, .data = data });
     try Io.Dir.rename(.cwd(), tmp, .cwd(), try s.buildCachePath(arena, inputs_hex), s.io);
 }
 

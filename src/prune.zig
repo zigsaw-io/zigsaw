@@ -2,7 +2,7 @@
 //! deployments of versions that were replaced or removed, and leftovers in
 //! tmp\. Each app's previous version keeps its blobs, for `rollback`, though
 //! not its deployments, and the copy of the app's data as it left it. On request, also cached downloads, build tools'
-//! caches, projects' kept work directories, the data of apps that are no
+//! caches, recipes' kept builds, the data of apps that are no
 //! longer installed, and those previous versions. Anything a running app uses
 //! is kept.
 
@@ -184,21 +184,27 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         tool_caches.add(try treeSize(io, arena, p));
         if (opts.downloads and !opts.dry_run) try Store.deleteTree(io, arena, p);
     }
-    // Projects' work directories too (see builder.zig): a build without one
-    // starts afresh.
+    // Kept builds too (see checkpoint.zig): a recipe without one builds
+    // every module. No build holds one while prune has the store.
     var work: Tally = .{};
     const work_dir = try store.path(arena, &.{ "cache", "work" });
     for (try listDir(io, arena, work_dir)) |entry| {
+        if (std.mem.endsWith(u8, entry.name, ".lock")) continue;
         const p = try std.fs.path.join(arena, &.{ work_dir, entry.name });
-        work.add(try treeSize(io, arena, p));
+        // Its saved\ holds other names of the prefix's files, which take no
+        // room of their own while the prefix has them.
+        const saved = try std.fs.path.join(arena, &.{ p, "saved" });
+        const links = if (entry.kind == .directory and try Store.exists(io, saved)) try treeSize(io, arena, saved) else 0;
+        work.add(try treeSize(io, arena, p) -| links);
         if (opts.downloads and !opts.dry_run) try Store.deleteTree(io, arena, p);
     }
+    if (!opts.dry_run) try deleteStaleLocks(io, arena, work_dir);
     // Builds remembered by their inputs: those whose image is gone now, and
     // with --downloads, all of them. (Tiny files, so not reported.)
     const builds_dir = try store.path(arena, &.{ "cache", "builds" });
     if (!opts.dry_run) for (try listDir(io, arena, builds_dir)) |entry| {
-        const digest = try store.readBuildCache(arena, entry.name);
-        const gone = if (digest) |d| !try Store.exists(io, try store.blobPath(arena, oci.digestHex(d).?)) else true;
+        const earlier = try store.readBuildCache(arena, entry.name);
+        const gone = if (earlier) |e| !try Store.exists(io, try store.blobPath(arena, oci.digestHex(e.digest).?)) else true;
         if (opts.downloads or gone) try Io.Dir.cwd().deleteFile(io, try std.fs.path.join(arena, &.{ builds_dir, entry.name }));
     };
 
@@ -260,7 +266,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         .{ tmp, true, "temporary item", "temporary items" },
         .{ downloads, opts.downloads, "cached download", "cached downloads" },
         .{ tool_caches, opts.downloads, "build tool cache", "build tool caches" },
-        .{ work, opts.downloads, "project's work directories", "projects' work directories" },
+        .{ work, opts.downloads, "kept build", "kept builds" },
         .{ unmounted, opts.volumes, "volume", "volumes" },
         .{ kept_data, true, "copy of an app's data", "copies of apps' data" },
     };
@@ -287,7 +293,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     if (!opts.downloads and tool_caches.count > 0)
         note("kept the caches of {d} build tool(s) ({Bi:.1}) for faster builds; --downloads deletes them", .{ tool_caches.count, tool_caches.bytes });
     if (!opts.downloads and work.count > 0)
-        note("kept the work directories of {d} project(s) ({Bi:.1}) for incremental builds; --downloads deletes them", .{ work.count, work.bytes });
+        note("kept the builds of {d} recipe(s) ({Bi:.1}), which their next builds go on from; --downloads deletes them", .{ work.count, work.bytes });
     if (!opts.downloads and build_only > 0)
         note("kept {d} image(s) that builds use as runtimes or SDKs; --downloads deletes them", .{build_only});
     if (kept_previous and previous_only.count > 0)

@@ -12,7 +12,7 @@
 # Zig 0.17.0 (without PACKAGE_DIR) and network access, for zig's image
 # (91 MB from ghcr.io). Uses a temporary store, and deletes it afterwards.
 # Then builds a copy of the checkout's files three times: once, after a
-# change in the work directory the first build left, and with --clean.
+# change in the directory the first build left, and with --clean.
 # About 6 minutes.
 
 set -u
@@ -78,25 +78,26 @@ for program in zigsaw.exe zigsaw-shim.exe zigsaw-shimw.exe zigsaw-relay.exe zigs
 done
 check "it runs, as an app" sh -c "\"\$0\" run $APP version | tr -d '\r' | grep -qx 'zigsaw $version'" "$zigsaw"
 
-# Built again after a change, the module starts in the work directory the
-# last build left, with zig's .zig-cache in it. This is done on a copy of the
+# Built again after a change, the module goes on in the directory its last
+# build left, with zig's .zig-cache in it. This is done on a copy of the
 # checkout's files (which a build of the checkout would have reused), where
 # one of zigsaw's messages then changes. The result should be what a --clean
 # build of the copy makes, and a `zig build -Dstrip` of it.
 copy="$work\\copy"
 mkdir -p "$copy" && (cd "$root" && git ls-files -co --exclude-standard -z | tar --null -T - -cf - | tar -xf - -C "$(cygpath -u "$copy")") ||
     { echo "copying the checkout failed"; exit 1; }
-# --rebuild, as its files are the checkout's, whose image it would take.
-copy_builds() { (cd "$copy" && z build --rebuild); }
+# --clean, as its files are the checkout's, whose image it would take; and
+# not --rebuild, which leaves nothing for the next build to go on from.
+copy_builds() { (cd "$copy" && z build --clean); }
 start=$SECONDS
-check "a copy of it builds, with a work directory of its own" copy_builds
+check "a copy of it builds, with a kept build of its own" copy_builds
 printf '      (%d s)\n' $((SECONDS - start))
 # A POSIX path, so sed writes its temporary file beside it, not in the
 # working directory (which may be on another volume than TMP).
 sed -i 's/find apps in the default registry'"'"'s catalog/find apps in the catalog of the default registry/' "$(cygpath -u "$copy\\src\\main.zig")"
 start=$SECONDS
-incremental() { (cd "$copy" && z -v build 2>&1) | grep -q "module zigsaw: its work directory from the last build, 1 file(s) rewritten"; }
-check "changed, it builds again in the work directory the last build left" incremental
+incremental() { (cd "$copy" && z -v build 2>&1) | grep -q "module zigsaw: goes on in the directory its last build left, 1 file(s) rewritten"; }
+check "changed, it builds again in the directory its last build left" incremental
 printf '      (%d s)\n' $((SECONDS - start))
 own_bin() {
     local m l

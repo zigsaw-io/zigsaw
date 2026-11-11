@@ -494,7 +494,9 @@ hash of its inputs: the recipe, its local sources, and zigsaw itself (URL
 sources and images are pinned in the recipe). Building an unchanged recipe
 again, or `zigsaw update` of an app built from one, takes the image of the
 earlier build instead of building it again, since the result would be the
-same. `-v` says so; `zigsaw build --rebuild` builds anyway.
+same. `-v` says so; `zigsaw build --rebuild` builds anyway. A build that
+isn't reused still [goes on from the recipe's last
+one](#going-on-from-the-last-build), module by module.
 
 **Tool caches are kept.** An SDK or runtime image can point a tool's cache
 at `${cache}`, as zig's does:
@@ -513,8 +515,9 @@ still fresh in each build.
 
 The objects zig compiles are **not** kept between builds: each module's
 `ZIG_LOCAL_CACHE_DIR` is its own `B:\src\<module>\.zig-cache`, as `zig build`
-has by default, so it's fresh for each build unless the module keeps its work
-directory (see [incremental builds](#incremental-builds)). Until iteration
+has by default, so it's as fresh as the module's directory, which only the
+same module's next build goes on in (see [going on from the last
+build](#going-on-from-the-last-build)). Until iteration
 36 they were kept, in `${cache}`, and that wasn't safe: a cached object
 comes back without the warnings clang gave when it compiled it, so a
 build script that checks a flag compiles without any warning (cc-rs's
@@ -613,6 +616,62 @@ directory, such as `cargo vendor`, `go mod vendor` or `pip download`
 fetching the same files every time, which a lockfile gives; the pinned hash
 catches it if not.
 
+## Going on from the last build
+
+A recipe's build root is kept in the store when its build ends, a failed or
+interrupted one's too, and the recipe's next build happens in it. So a build
+picks up where the last one stopped:
+
+- **A module whose inputs are the same isn't built again.** Its inputs are
+  zigsaw, the SDK and runtime images, the module as the recipe has it
+  (sources, commands, variables), its local files, and the modules before
+  it. Change the tenth module of twelve, and nine are skipped. What only
+  shapes the image (`cleanup`, `exports`, `permissions`, the version) is no
+  module's input: the layer is written again, and nothing is built.
+- **A module that stopped goes on at the command that didn't finish**, in
+  `B:\src\<module>` as that command left it, so ninja and make go on from
+  what they compiled. The commands before it aren't run again: a patch
+  doesn't apply twice.
+- **The prefix is put back first**, to how the last command that counts
+  left it. After every command, zigsaw records each file's size and time
+  there, and gives it another name outside `B:`, a hard link. A file a
+  later command added is deleted. One it replaced, as `sed -i` and Meson's
+  post-install tools do by writing a new file, comes back from that link.
+  One it wrote into can't, as the link has the new bytes too: every module
+  is then built again, and the build says which file it was.
+- **Anything else starts the module afresh**, and those after it: a change
+  to the module, to one before it, to an SDK, or to zigsaw. A
+  [vendor step's](#vendor-steps) module always starts afresh, and if its
+  commands have to run, every module does.
+
+```
+zigsaw build --clean recipe.json           # delete what the last build left, and build every module
+zigsaw build --clean=<module> recipe.json  # that module and those after it afresh
+zigsaw build --rebuild recipe.json         # every module, in a new directory; the kept build stays as it is
+zigsaw build --no-resume recipe.json       # as --rebuild, unless a build of every module made the image already
+```
+
+The image should be the one a build of every module makes, and
+[`tests/build.sh`](../tests/build.sh) checks it is in each of these cases.
+What isn't tracked is what a command writes outside the prefix and its own
+module's directory: another module's `B:\src`, `B:\home`, `B:\data`. Those
+are as the last build left them. `--clean` is the way out, and what's
+published is never built this way: `scripts/rebuild.sh`,
+`scripts/publish.sh` and CI build with `--no-resume`, which also reuses an
+image only if a build of every module made it.
+
+A command that failed is run again as it is, so one that can't be run twice
+in the same directory fails again for that reason, and the build says the
+module went on from what its last build left: `--clean=<module>` starts it
+afresh.
+
+A kept build is a whole build root, gigabytes for a large recipe. `zigsaw
+prune` says how much they take, and `zigsaw prune --downloads` deletes them.
+They're in the store's `cache\work\<key>`, keyed by the recipe's path and
+the app's id, so two checkouts don't share one. A build with a host
+toolchain (`"host": ["msvc"]`) keeps none, and neither does
+`--keep-build-dir`.
+
 ## Rebuilding what pins what
 
 A recipe pins its SDKs, runtimes and image sources by digest, so a new Go means a new image
@@ -628,6 +687,9 @@ ZIGSAW_HOME=path\to\store ZIGSAW=path\to\zigsaw.exe scripts/rebuild.sh go.json z
 It builds the recipes named and everything that pins them, each after what it pins, and points
 their pins at what was just built, version included. It stops at the first failure, with the
 end of that build's log; fix it and run the same command, as what's done is a cache hit. It
+builds with `--no-resume`, so each image is a build of every module: to work on a recipe that
+fails, `zigsaw build` it by hand, which [goes on from the last
+build](#going-on-from-the-last-build), then run the script again. It
 ends with the `scripts/publish.sh` line to run. Publish before pushing: CI compares its builds
 with the registry.
 
@@ -712,10 +774,11 @@ and contents.
 
 ### Incremental builds
 
-A module whose sources include a project's own files keeps its work
-directory, `B:\src\<module>`, between builds, as makepkg keeps `src/`. So
-whatever its build leaves there is still there the next time: zig's
-`.zig-cache`, CMake's or Meson's build directory, cargo's `target`.
+A module whose sources include a project's own files is built again
+whenever they change, and it's built where it was: `B:\src\<module>` is in
+the recipe's [kept build](#going-on-from-the-last-build), as makepkg keeps
+`src/`. So whatever its build left there is still there: zig's `.zig-cache`,
+CMake's or Meson's build directory, cargo's `target`.
 
 - **Its sources are brought up to date in it.** A file whose contents
   differ from the source's is written again, whether the project changed it
@@ -723,19 +786,17 @@ whatever its build leaves there is still there the next time: zig's
   copy, as in a first build). A file the project no longer has is deleted.
   The other files are left as they are, timestamps and all, so make, ninja
   and cargo see only what changed as new.
-- **It starts afresh** when zigsaw, the recipe, or the recipe's other local
-  files change, as their builds' state may no longer hold, and with
-  `zigsaw build --clean`, which also builds when nothing changed.
-- **The rest of the build is as fresh as ever**: `B:\prefix`, `B:\home` and
-  `B:\data` are new in each build, and a [vendor step's](#vendor-steps)
-  module, one without build commands, and a recipe's modules with only
-  pinned sources, as every published recipe's, never keep one.
-- **It's kept in the store**, under `cache\work\<key>\<module>`, keyed by
-  the recipe's path and the app's id, so two checkouts don't share one. It
-  moves into the build root for the build, and back afterwards, a failed
-  build's too, as make leaves what it made. `--keep-build-dir` leaves it in
-  the kept build root, and the next build starts afresh. `zigsaw prune
-  --downloads` deletes them.
+- **Every command runs**, as make is run again, not only those from the one
+  that failed.
+- **It starts afresh** when zigsaw, the module in the recipe, a module
+  before it or the recipe's other local files change, as its build's state
+  may no longer hold, and with `zigsaw build --clean`, which also builds
+  when nothing changed. A change elsewhere in the recipe, its version say,
+  doesn't start it afresh, as it did before 0.88.
+- **The modules before it are skipped**, a project's dependencies built from
+  pinned sources, say: `B:\prefix`, `B:\home` and `B:\data` are as they left
+  them. A module after it is built again where it was, too.
+- **A [vendor step's](#vendor-steps) module starts afresh** each time.
 
 An incremental build should make the image a `--clean` build of the same
 files makes, as `${cache}` should; how far it does is up to the project's
