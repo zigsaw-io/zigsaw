@@ -21,6 +21,11 @@
 //!
 //! and cache\work\<key>.lock is held by the build that uses it.
 //!
+//! The record is written once the first module has its sources; a build
+//! that stops before that, at a vendor step say, deletes the root it made.
+//! One whose zigsaw was killed then is deleted by the recipe's next build,
+//! or by `prune`.
+//!
 //! Each module has two keys, both chained on the module before:
 //!
 //! - its work key: zigsaw, the build's tools, and the module as the recipe
@@ -379,8 +384,14 @@ pub const Kept = struct {
         return k;
     }
 
-    pub fn release(k: Kept) void {
-        k.lock.release(k.io);
+    /// Lets another build have it. A root with nothing recorded beside it
+    /// goes first: one a build left that stopped before its first module
+    /// started (at a vendor step, or with B: taken), which nothing can go on
+    /// from, as `open` would find. The lock goes either way.
+    pub fn release(k: Kept, arena: Allocator) !void {
+        defer k.lock.release(k.io);
+        if (!try Store.exists(k.io, k.dir) and try Store.exists(k.io, k.root))
+            try Store.deleteTree(k.io, arena, k.root);
     }
 
     /// Records whose kept build it is, for `enforceCap`'s message.
@@ -891,9 +902,9 @@ test "a kept build's state: what's skipped, what's continued" {
             try k.finished(arena, i, name, key, 1);
         } else try k.stepped(arena, i, name, key, 1);
     }
-    k.release();
+    try k.release(arena);
     k = try testKept(io, arena, tmp);
-    defer k.release();
+    defer k.release(arena) catch {};
     try std.testing.expect(k.found);
     try std.testing.expectEqual(3, k.records.len);
     p = try k.plan(arena, names, keys, names.len);
@@ -938,7 +949,7 @@ test "a kept build's state: what's skipped, what's continued" {
 
     // State a zigsaw can't read, as an old layout's: gone.
     try Io.Dir.cwd().writeFile(io, .{ .sub_path = try k.path(arena, "state"), .data = "zigsaw work 1 abc\n" });
-    k.release();
+    try k.release(arena);
     k = try testKept(io, arena, tmp);
     try std.testing.expect(!k.found);
     try std.testing.expect(!try Store.exists(io, k.dir));
@@ -947,16 +958,29 @@ test "a kept build's state: what's skipped, what's continued" {
     // nothing is taken, and the record goes too.
     try k.started(arena, 0, "a", keys[0]);
     try k.finished(arena, 0, "a", keys[0], 0);
-    k.release();
+    try k.release(arena);
     try Store.deleteTree(io, arena, k.root);
     k = try testKept(io, arena, tmp);
     try std.testing.expect(!k.found);
     try std.testing.expectEqual(0, k.records.len);
 
-    // A root with no record, as one whose record was deleted: gone.
+    // A build that stopped before its first module started, at a vendor
+    // step say, recorded nothing: its root goes as it lets go.
     const orphan = try std.fs.path.join(arena, &.{ k.root, "prefix", "x.txt" });
     try Io.Dir.cwd().writeFile(io, .{ .sub_path = orphan, .data = "x" });
-    k.release();
+    try std.testing.expect(!try Store.exists(io, k.dir));
+    try k.release(arena);
+    try std.testing.expect(!try Store.exists(io, k.root));
+
+    // Once a module started, the root stays, with its record.
+    k = try testKept(io, arena, tmp);
+    try k.started(arena, 0, "a", keys[0]);
+    try k.release(arena);
+    try std.testing.expect(try Store.exists(io, k.root));
+
+    // A root with no record, as one whose record was deleted, or a killed
+    // zigsaw's: gone.
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = orphan, .data = "x" });
     try Store.deleteTree(io, arena, k.dir);
     k = (try Kept.open(io, arena, k.dir, k.root)).?;
     try std.testing.expect(!try Store.exists(io, orphan));
@@ -989,7 +1013,7 @@ test "the prefix goes back to how a module left it" {
     const names: []const []const u8 = &.{ "a", "b", "c" };
     const keys: []const Keys = &.{ testKeys("1", "a"), testKeys("2", "b"), testKeys("3", "c") };
     var k = try testKept(io, arena, tmp);
-    defer k.release();
+    defer k.release(arena) catch {};
 
     // a: two files and an empty directory.
     try testWrite(io, arena, k, "bin/a.exe", "a's program");
@@ -1071,7 +1095,7 @@ test "a module goes on at the command that stopped" {
     const names: []const []const u8 = &.{ "a", "b" };
     const keys: []const Keys = &.{ testKeys("1", "a"), testKeys("2", "b") };
     var k = try testKept(io, arena, tmp);
-    defer k.release();
+    defer k.release(arena) catch {};
     try testWrite(io, arena, k, "bin/a.exe", "a's program");
     try k.started(arena, 0, "a", keys[0]);
     try k.stepped(arena, 0, "a", keys[0], 1);
@@ -1126,7 +1150,7 @@ test "a file written into can't come back" {
     const names: []const []const u8 = &.{ "a", "b" };
     const keys: []const Keys = &.{ testKeys("1", "a"), testKeys("2", "b") };
     var k = try testKept(io, arena, tmp);
-    defer k.release();
+    defer k.release(arena) catch {};
     try testWrite(io, arena, k, "etc/config", "a");
     try k.started(arena, 0, "a", keys[0]);
     try k.stepped(arena, 0, "a", keys[0], 1);

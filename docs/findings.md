@@ -2843,6 +2843,24 @@ and measuring builds that go on from the last one on long chains.
   the recipe as its second argument**, which `build --no-resume <recipe>`
   isn't. It takes the last one now, and checks that `--no-resume` is there.
 
+## A kept root with no record (iteration 90)
+
+Iteration 89's Reproduce run (43092858003) failed in `build (zig)` only.
+
+- **A kept build's root and its record are made at different times.** The
+  root, `tmp\zigsaw-build-<key>`, is made when the build root is; the
+  record, `cache\work\<key>`, once the first module has its sources. A build
+  that failed in between left a root that nothing would go on from: a
+  vendor step that failed (two of `tests/build.sh`'s rows do, on purpose), or
+  `B:` taken on a recipe's first build. While the root was inside the record
+  (iteration 88), deleting nothing left nothing; in `tmp\` it stays, until
+  the recipe's next build or `prune`. Now a build that lets go of its kept
+  build deletes a root with no record beside it.
+- **GitHub's artifact service failed for ten minutes**, answering with a
+  web page, and the published jobs upload their logs on every run: 15 jobs
+  whose images all reproduced, and were signed, failed on that step alone.
+  A failed upload no longer fails a job.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

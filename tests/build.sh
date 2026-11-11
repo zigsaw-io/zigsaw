@@ -124,13 +124,15 @@ own_layer() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifes
 config_of() { cat "$ZIGSAW_HOME\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of "$1" | cut -d: -f2)" | head -1 | cut -d: -f2)"; }
 drive_free() { ! subst | grep -q '^B:'; }
 # No build root is left in tmp\ but kept builds' (whose records are in
-# cache\work).
+# cache\work); if one is, says which.
 no_build_root() {
-    local d
+    local d left=
     for d in $(ls "$ZIGSAW_HOME\\tmp" | grep '^zigsaw-build-'); do
-        [ -d "$ZIGSAW_HOME\\cache\\work\\${d#zigsaw-build-}" ] || return 1
+        [ -d "$ZIGSAW_HOME\\cache\\work\\${d#zigsaw-build-}" ] || left="$left $d"
     done
-    return 0
+    [ -z "$left" ] && return 0
+    echo "left in tmp, with no record in cache\\work:$left"
+    return 1
 }
 free_afterwards() { drive_free && no_build_root; }
 # Builds a recipe again, even if nothing changed, and prints its digest.
@@ -1040,6 +1042,9 @@ vendored() {
 check "pinned, it builds offline from what the step fetched, and the config records it" vendored
 vendor_recipe ", \"sha256\": \"$(printf '0%.0s' $(seq 64))\"" >"$work\\misvendored.json"
 check "a vendor step that makes something else fails, naming both hashes" sh -c "\"\$0\" build '$work\\misvendored.json' 2>&1 | grep -A2 'sha256 mismatch for what module m.s vendor commands made in deps' | grep -q 'got      $vendor_hash'" "$zigsaw"
+# Neither of those two builds got to its first module, so nothing of theirs
+# was recorded for the next to go on from: their roots go with them.
+check "a build that stops before its first module leaves no build root" free_afterwards
 kill $httpd 2>/dev/null
 vendored_from_cache() {
     local out
@@ -1055,7 +1060,13 @@ check "sh modules without busybox in the SDK fail, saying so" sh -c "\"\$0\" bui
 # B:, in use by something else, and left behind by a build that crashed.
 mkdir -p "$work\\other" "$work\\tmp\\zigsaw-build-stale"
 subst B: "$work\\other"
-check "a B: zigsaw didn't map fails the build" sh -c "\"\$0\" build '$work\\broken.json' 2>&1 | grep -q 'B: is in use'" "$zigsaw"
+# A recipe built for the first time, so that it has no kept build yet.
+sh_recipe test.build.busy '"true"' >"$work\\busy.json"
+busy() {
+    z build "$work\\busy.json" 2>&1 | grep -q 'B: is in use' || return 1
+    no_build_root
+}
+check "a B: zigsaw didn't map fails the build, and leaves no build root" busy
 subst B: /D
 subst B: "$work\\tmp\\zigsaw-build-stale"
 sh_recipe test.build.ok '"echo ok > \"$PREFIX/x.txt\""' >"$work\\ok.json"
@@ -1088,7 +1099,7 @@ refused_link() {
     out=$(z build "$work\\link.json" 2>&1)
     grep -q 'can only be files and directories' <<<"$out" || { echo "$out"; return 1; }
     drive_free || { echo "B: is still mapped: $(subst)"; return 1; }
-    no_build_root || { echo "left in tmp: $(ls "$ZIGSAW_HOME\\tmp" | tr '\n' ' ')"; return 1; }
+    no_build_root
 }
 check "a link left in the prefix fails the build" refused_link
 fi

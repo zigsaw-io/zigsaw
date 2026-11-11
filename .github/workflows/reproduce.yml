@@ -179,9 +179,14 @@ jobs:
 
       # On every run, not only a failed one: each build log says how long
       # each of its commands took. Also when the job times out (iteration
-      # 48's apps job did, and left nothing to read).
+      # 48's apps job did, and left nothing to read). Logs that can't be
+      # uploaded don't make a job red: in run 43092858003 GitHub's artifact
+      # service answered with a web page for ten minutes, and 15 jobs whose
+      # images had all reproduced failed on this step alone. The same goes
+      # for every job's upload below.
       - name: Upload the logs
         if: ${{ always() }}
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-published-${{ matrix.group }}
@@ -193,7 +198,7 @@ jobs:
     runs-on: windows-2025
     # The suites took 6 minutes after iteration 32, in the job that had built
     # their apps.
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -417,6 +422,7 @@ jobs:
 
       - name: Upload the logs
         if: ${{ failure() || cancelled() }}
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-suites
@@ -458,6 +464,7 @@ jobs:
 
       - name: Upload the logs
         if: ${{ failure() || cancelled() }}
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-standard-user
@@ -511,6 +518,7 @@ jobs:
 
       - name: Upload the logs
         if: ${{ failure() || cancelled() }}
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-gtk-suites
@@ -560,6 +568,7 @@ jobs:
 
       - name: Upload the logs
         if: ${{ failure() || cancelled() }}
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-qt-suites
@@ -622,6 +631,7 @@ jobs:
 
       - name: Upload the logs
         if: ${{ failure() || cancelled() }}
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: logs-build-${{ matrix.group }}

@@ -499,7 +499,7 @@ const BuildRoot = struct {
     fn init(ctx: *Context, r: recipe.Recipe, tools: []const Tool, from_last: ?*Resume) !BuildRoot {
         const io = ctx.io;
         const arena = ctx.arena;
-        errdefer if (from_last) |res| res.kept.release();
+        errdefer if (from_last) |res| releaseKept(ctx, res.kept);
         const path = if (from_last) |res| res.kept.root else try ctx.store.makeTmpDir(arena, drive.dir_prefix[0 .. drive.dir_prefix.len - 1]);
         errdefer if (from_last == null) Io.Dir.cwd().deleteTree(io, path) catch {};
         for ([_][]const u8{ "src", "prefix", "cache" }) |sub| try Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ path, sub }));
@@ -622,7 +622,7 @@ const BuildRoot = struct {
         if (b.from_last) |res| {
             // While this build still has its own, which stays.
             keepWithinCap(ctx, b.id, res.kept);
-            res.kept.release();
+            releaseKept(ctx, res.kept);
         } else if (keep) {
             note("kept the build directory: {s}", .{b.path});
         } else {
@@ -898,6 +898,14 @@ const BuildRoot = struct {
     }
 };
 
+/// Lets go of a recipe's kept build, whose root goes if nothing was recorded
+/// (see checkpoint.Kept.release). Not deleting it fails nothing: `prune`
+/// deletes such a root, as does the recipe's next build.
+fn releaseKept(ctx: *Context, kept: checkpoint.Kept) void {
+    kept.release(ctx.arena) catch |err|
+        note("warning: couldn't delete all of {s} ({t}); `zigsaw prune` will retry", .{ kept.root, err });
+}
+
 /// What a build takes from the recipe's kept build (see checkpoint.zig): the
 /// modules it skips, and the directories it builds in again.
 ///
@@ -945,7 +953,7 @@ const Resume = struct {
             note("{s}: another build is going on in its kept build; this one builds every module, in a directory of its own", .{r.id});
             return null;
         };
-        errdefer kept.release();
+        errdefer releaseKept(ctx, kept);
         if (opts.clean and kept.found) {
             kept.reset(arena) catch |err| return fail("deleting {s}'s kept build, {s}: {t}", .{ r.id, dir, err });
             kept.found = false;
