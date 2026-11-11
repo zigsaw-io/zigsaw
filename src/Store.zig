@@ -1055,6 +1055,23 @@ pub fn renameRetrying(io: Io, from: []const u8, to: []const u8, max_wait_ms: u32
     }
 }
 
+/// The bytes of the files at `p`, or under it. A file with several names
+/// counts once for each.
+pub fn treeSize(io: Io, arena: Allocator, p: []const u8) !u64 {
+    const stat = try Io.Dir.cwd().statFile(io, p, .{});
+    if (stat.kind != .directory) return stat.size;
+    var dir = try Io.Dir.cwd().openDir(io, p, .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walk(arena);
+    defer walker.deinit();
+    var total: u64 = 0;
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        total += (try entry.dir.statFile(io, entry.basename, .{})).size;
+    }
+    return total;
+}
+
 /// Deletes a directory tree that apps or build tools have written to. Unlike
 /// Zig 0.16's deleteTree, it copes with the directory links Windows
 /// components leave in a profile, such as WinINet's

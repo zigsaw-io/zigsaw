@@ -58,6 +58,7 @@ pub fn main(init: std.process.Init) !void {
         .work = args[3],
         .self = try win32.selfExePath(arena),
         .node = try installedNode(init.io, arena, args[2]),
+        .build_recipe = init.environ_map.get("CTRLC_BUILD_RECIPE"),
     };
     // Batch files run "node", which zigsaw puts on the app's PATH. Run
     // alone, they find it on ours.
@@ -115,6 +116,9 @@ const Tester = struct {
     self: []const u8,
     /// node.exe in the app's deployment, to run it without zigsaw.
     node: []const u8,
+    /// A recipe whose build prints "stop-now" in a command, and waits there
+    /// (see ctrlc.sh), for the build's checks.
+    build_recipe: ?[]const u8 = null,
     failures: usize = 0,
 
     fn runAll(t: *Tester) !void {
@@ -163,6 +167,39 @@ const Tester = struct {
         t.check("batch via zigsaw run: the same prompt, after node's handler ran", batch.prompted and batch.has("got-SIGINT"), try batch.describe(t.arena));
         t.checkf("batch via zigsaw run: answering Y stops it, with the same exit code as alone ({?x})", .{batch_alone.code}, !batch.has("after-node") and batch.code != null and batch.code == batch_alone.code, try batch.describe(t.arena));
         t.check("batch via zigsaw run: the run ends node's detached child", batch.child_ended, try batch.describe(t.arena));
+
+        if (t.build_recipe) |recipe_path| try t.buildStopped(recipe_path);
+    }
+
+    /// A build stopped by Ctrl+C in a command goes on at that command the
+    /// next time, with the prefix as the commands before it left it, which
+    /// the command checks itself (see ctrlc.sh).
+    fn buildStopped(t: *Tester, recipe_path: []const u8) !void {
+        var line: std.ArrayList(u8) = .empty;
+        try appendArg(t.arena, &line, t.zigsaw);
+        try line.appendSlice(t.arena, " build ");
+        try appendArg(t.arena, &line, recipe_path);
+        {
+            var console = try Console.start(t.arena, line.items);
+            defer console.deinit();
+            if (console.waitFor("stop-now", 120_000) == null) {
+                _ = TerminateProcess(console.process, 1);
+                t.check("a build: Ctrl+C stops it in a command", false, try std.fmt.allocPrint(t.arena, "it never got there: {s}", .{printable(t.arena, console.text.get())}));
+                return;
+            }
+            try console.pressCtrlC();
+            const code = console.exitCode(30_000);
+            if (code == null) _ = TerminateProcess(console.process, 1);
+            const stopped: Result = .{ .code = code, .output = console.text.get() };
+            t.check("a build: Ctrl+C stops it in a command", code != null and code.? != 0, try stopped.describe(t.arena));
+        }
+        var console = try Console.start(t.arena, line.items);
+        defer console.deinit();
+        const done = console.waitFor("manifest sha256:", 120_000) != null;
+        const code = console.exitCode(30_000);
+        if (code == null) _ = TerminateProcess(console.process, 1);
+        const again: Result = .{ .code = code, .output = console.text.get() };
+        t.check("  built again, it goes on at that command, the prefix as the command before left it", done and code == 0 and again.has("going on at b, command 2 of 3"), try again.describe(t.arena));
     }
 
     /// A batch file in the work directory that runs node with `code`, then

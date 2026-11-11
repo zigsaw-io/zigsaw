@@ -2,10 +2,16 @@
 //! so that the next one picks up where it stopped, at the first module that
 //! changed or failed, instead of at the first.
 //!
-//! In the store, cache\work\<key>\ (the key is of the recipe's path and the
-//! app's id, so two checkouts don't share one) holds:
+//! The build root itself is tmp\zigsaw-build-<key> in the store (the key is
+//! of the recipe's path and the app's id, so two checkouts don't share one),
+//! mapped to B: where it is. That's where a build that keeps nothing builds
+//! too, under a random name of the same length: tools that see through B: to
+//! the real path (rustc does) then see one of the same shape, and GNU ld,
+//! which orders a DLL's imports by the names of the files they came from,
+//! orders them as in any other build of the recipe.
 //!
-//!   zigsaw-build-root\  the build root, mapped to B: where it is
+//! Beside it, cache\work\<key>\ holds:
+//!
 //!   state               the modules built there, with which inputs, and how
 //!                       many commands of the one that stopped ran
 //!   prefix.journal      what each step did to B:\prefix: a step is a command
@@ -143,9 +149,193 @@ pub const Plan = struct {
     }
 };
 
-pub const root_name = drive.dir_prefix ++ "root";
+/// The kept build's root for the kept build `cache\work\<key>` of the store
+/// whose tmp\ is `tmp_dir`.
+pub fn rootFor(arena: Allocator, tmp_dir: []const u8, key: []const u8) ![]u8 {
+    return std.fs.path.join(arena, &.{ tmp_dir, try std.fmt.allocPrint(arena, "{s}{s}", .{ drive.dir_prefix, key }) });
+}
 
-const state_header = "zigsaw kept build 1";
+/// Whether `name`, in the store's tmp\, is the root of a kept build that
+/// `work_dir` (cache\work) has: `prune` takes it for part of that build.
+pub fn isKeptRoot(io: Io, arena: Allocator, work_dir: []const u8, name: []const u8) !bool {
+    if (!std.mem.startsWith(u8, name, drive.dir_prefix)) return false;
+    return Store.exists(io, try std.fs.path.join(arena, &.{ work_dir, name[drive.dir_prefix.len..] }));
+}
+
+// ---------------------------------------------------------------------------
+// How much room kept builds take
+
+/// The variable that sets how much room the store's kept builds may take
+/// together: bytes, or with K, M, G or T (1024-based, a B after them or
+/// not). 0 keeps only the build that just ended.
+pub const cap_var = "ZIGSAW_KEPT_BUILDS_SIZE";
+pub const default_cap: u64 = 10 << 30;
+
+/// Reads a size as `cap_var` takes it.
+pub fn parseSize(text: []const u8) error{InvalidSize}!u64 {
+    const t = std.mem.trim(u8, text, " \t");
+    var end: usize = 0;
+    while (end < t.len and std.ascii.isDigit(t[end])) end += 1;
+    if (end == 0) return error.InvalidSize;
+    const n = std.fmt.parseInt(u64, t[0..end], 10) catch return error.InvalidSize;
+    var unit = std.mem.trim(u8, t[end..], " \t");
+    if (unit.len > 1 and std.ascii.toUpper(unit[unit.len - 1]) == 'B') unit = unit[0 .. unit.len - 1];
+    const shift: u6 = if (unit.len == 0 or std.ascii.eqlIgnoreCase(unit, "B")) 0 else if (unit.len == 1) switch (std.ascii.toUpper(unit[0])) {
+        'K' => 10,
+        'M' => 20,
+        'G' => 30,
+        'T' => 40,
+        else => return error.InvalidSize,
+    } else return error.InvalidSize;
+    return std.math.shlExact(u64, n, shift) catch error.InvalidSize;
+}
+
+test parseSize {
+    try std.testing.expectEqual(0, try parseSize("0"));
+    try std.testing.expectEqual(1234, try parseSize("1234"));
+    try std.testing.expectEqual(10 << 30, try parseSize("10GB"));
+    try std.testing.expectEqual(10 << 30, try parseSize("10 g"));
+    try std.testing.expectEqual(512 << 20, try parseSize("512M"));
+    try std.testing.expectEqual(7, try parseSize("7B"));
+    try std.testing.expectError(error.InvalidSize, parseSize("GB"));
+    try std.testing.expectError(error.InvalidSize, parseSize("10 GiB"));
+    try std.testing.expectError(error.InvalidSize, parseSize("-1"));
+    try std.testing.expectError(error.InvalidSize, parseSize("99999999999T"));
+}
+
+test enforceCap {
+    const io = std.testing.io;
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const base = try tmp.dir.realPathFileAlloc(io, ".", arena);
+    const work = try std.fs.path.join(arena, &.{ base, "work" });
+    const tmp_dir = try std.fs.path.join(arena, &.{ base, "tmp" });
+
+    // Four kept builds of 100 bytes each, used in this order: a d's record
+    // is of 0.88, with no size or about.
+    const keys = [_][]const u8{ "aaaa", "bbbb", "cccc", "dddd" };
+    for (keys) |key| {
+        const dir = try std.fs.path.join(arena, &.{ work, key });
+        const root = try rootFor(arena, tmp_dir, key);
+        try Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ root, "prefix" }));
+        try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ root, "prefix", "f" }), .data = &@as([90]u8, @splat('x')) });
+        try Io.Dir.cwd().createDirPath(io, dir);
+        try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ dir, "state" }), .data = &@as([10]u8, @splat('y')) });
+        if (!std.mem.eql(u8, key, "dddd")) {
+            try std.testing.expectEqual(100, try writeSize(io, arena, dir, root));
+            try Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ dir, "about" }), .data = try std.fmt.allocPrint(arena, "app.{s}\n", .{key}) });
+        }
+        win32.Sleep(30);
+    }
+    // b is in use by another build.
+    const b_lock = (try Store.tryLock(io, try Store.lockPathFor(arena, try std.fs.path.join(arena, &.{ work, "bbbb" })), .exclusive)).?;
+
+    // Under the cap: nothing goes.
+    try std.testing.expectEqual(0, (try enforceCap(io, arena, work, tmp_dir, "cccc", 400)).len);
+    // Room for two: a goes first, b is held, so d does, though c's the
+    // oldest after them: c is this build's.
+    const gone = try enforceCap(io, arena, work, tmp_dir, "cccc", 200);
+    try std.testing.expectEqual(2, gone.len);
+    try std.testing.expectEqualStrings("app.aaaa", gone[0].id);
+    try std.testing.expectEqualStrings("dddd", gone[1].id);
+    try std.testing.expectEqual(100, gone[1].bytes);
+    try std.testing.expect(!try Store.exists(io, try rootFor(arena, tmp_dir, "aaaa")));
+    try std.testing.expect(try Store.exists(io, try rootFor(arena, tmp_dir, "bbbb")));
+    try std.testing.expect(try Store.exists(io, try std.fs.path.join(arena, &.{ work, "cccc" })));
+    // 0: all but this build's, once b is free.
+    b_lock.release(io);
+    try std.testing.expectEqual(1, (try enforceCap(io, arena, work, tmp_dir, "cccc", 0)).len);
+    var left: std.ArrayList([]const u8) = .empty;
+    for (try listNames(io, arena, work)) |name| if (!std.mem.endsWith(u8, name, ".lock")) try left.append(arena, name);
+    try std.testing.expectEqual(1, left.items.len);
+    try std.testing.expectEqualStrings("cccc", left.items[0]);
+}
+
+/// The room a kept build takes: its root, and its record but for saved\,
+/// whose files are other names of the root's while its prefix has them.
+pub fn sizeOf(io: Io, arena: Allocator, dir: []const u8, root: []const u8) !u64 {
+    var total: u64 = 0;
+    if (try Store.exists(io, root)) total += try Store.treeSize(io, arena, root);
+    if (try Store.exists(io, dir)) {
+        total += try Store.treeSize(io, arena, dir);
+        const saved = try std.fs.path.join(arena, &.{ dir, "saved" });
+        if (try Store.exists(io, saved)) total -|= try Store.treeSize(io, arena, saved);
+    }
+    return total;
+}
+
+/// A kept build that `enforceCap` deleted.
+pub const Deleted = struct {
+    /// The app's id, as its build recorded it, or the key.
+    id: []const u8,
+    bytes: u64,
+};
+
+/// Deletes the least recently used of the kept builds in `work_dir`, whose
+/// roots are in `tmp_dir`, until they take no more than `cap` together. The
+/// one of key `keep` stays, and so do those another build holds. The size of
+/// each is in its `size` file, written when its build ended, or measured
+/// now and written, for one of 0.88's.
+pub fn enforceCap(io: Io, arena: Allocator, work_dir: []const u8, tmp_dir: []const u8, keep: []const u8, cap: u64) ![]Deleted {
+    const Candidate = struct { key: []const u8, dir: []const u8, root: []const u8, bytes: u64, used: i96 };
+    var entries: std.ArrayList(Candidate) = .empty;
+    var total: u64 = 0;
+    for (try listNames(io, arena, work_dir)) |key| {
+        if (std.mem.endsWith(u8, key, ".lock")) continue;
+        const dir = try std.fs.path.join(arena, &.{ work_dir, key });
+        const root = try rootFor(arena, tmp_dir, key);
+        const bytes = try readSize(io, arena, dir) orelse try writeSize(io, arena, dir, root);
+        total += bytes;
+        if (std.ascii.eqlIgnoreCase(key, keep)) continue;
+        const state = try std.fs.path.join(arena, &.{ dir, "state" });
+        const stat = Io.Dir.cwd().statFile(io, if (try Store.exists(io, state)) state else dir, .{}) catch continue;
+        try entries.append(arena, .{ .key = key, .dir = dir, .root = root, .bytes = bytes, .used = stat.mtime.nanoseconds });
+    }
+    std.mem.sort(Candidate, entries.items, {}, struct {
+        fn lessThan(_: void, a: Candidate, b: Candidate) bool {
+            return a.used < b.used;
+        }
+    }.lessThan);
+    var deleted: std.ArrayList(Deleted) = .empty;
+    for (entries.items) |e| {
+        if (total <= cap) break;
+        // Not one another build has.
+        const lock = try Store.tryLock(io, try Store.lockPathFor(arena, e.dir), .exclusive) orelse continue;
+        defer lock.release(io);
+        const id = readAbout(io, arena, e.dir) orelse e.key;
+        try Store.deleteTree(io, arena, e.dir);
+        if (try Store.exists(io, e.root)) try Store.deleteTree(io, arena, e.root);
+        total -|= e.bytes;
+        try deleted.append(arena, .{ .id = id, .bytes = e.bytes });
+    }
+    return deleted.items;
+}
+
+fn readSize(io: Io, arena: Allocator, dir: []const u8) !?u64 {
+    const text = Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ dir, "size" }), arena, .limited(64)) catch return null;
+    return std.fmt.parseInt(u64, std.mem.trim(u8, text, " \r\n"), 10) catch null;
+}
+
+/// Measures the kept build at `dir` and writes its `size` file.
+pub fn writeSize(io: Io, arena: Allocator, dir: []const u8, root: []const u8) !u64 {
+    const bytes = try sizeOf(io, arena, dir, root);
+    if (try Store.exists(io, dir))
+        try replaceFile(io, arena, try std.fs.path.join(arena, &.{ dir, "size" }), try std.fmt.allocPrint(arena, "{d}\n", .{bytes}));
+    return bytes;
+}
+
+fn readAbout(io: Io, arena: Allocator, dir: []const u8) ?[]const u8 {
+    const text = Io.Dir.cwd().readFileAlloc(io, std.fs.path.join(arena, &.{ dir, "about" }) catch return null, arena, .limited(4096)) catch return null;
+    const line = std.mem.trim(u8, text[0 .. std.mem.indexOfScalar(u8, text, '\n') orelse text.len], " \r");
+    return if (line.len > 0) line else null;
+}
+
+/// 2: the root moved from cache\work\<key>\zigsaw-build-root to tmp\. A
+/// kept build of 0.88's is deleted, as one that can't be read.
+const state_header = "zigsaw kept build 2";
 const journal_header = "zigsaw prefix journal 1";
 
 pub const Kept = struct {
@@ -163,17 +353,26 @@ pub const Kept = struct {
     /// Whether there was anything of an earlier build's when it was opened.
     found: bool = false,
 
-    /// Takes the kept build at `dir` for this build, or returns null if
-    /// another build has it. One whose state can't be read, as one a zigsaw
-    /// before 0.88 left, is deleted.
-    pub fn open(io: Io, arena: Allocator, dir: []const u8) !?Kept {
+    /// Takes the kept build at `dir`, whose root is `root` (see rootFor), for
+    /// this build, or returns null if another build has it. One whose state
+    /// can't be read, as one a zigsaw before 0.89 left, or whose root is
+    /// gone, is deleted.
+    pub fn open(io: Io, arena: Allocator, dir: []const u8, root: []const u8) !?Kept {
         try Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(dir).?);
         const lock = try Store.tryLock(io, try Store.lockPathFor(arena, dir), .exclusive) orelse return null;
         errdefer lock.release(io);
-        var k: Kept = .{ .io = io, .dir = dir, .root = try std.fs.path.join(arena, &.{ dir, root_name }), .lock = lock };
-        if (!try Store.exists(io, dir)) return k;
+        var k: Kept = .{ .io = io, .dir = dir, .root = root, .lock = lock };
+        if (!try Store.exists(io, dir)) {
+            // A root without its record is no use.
+            if (try Store.exists(io, root)) try k.reset(arena);
+            return k;
+        }
         const state = Io.Dir.cwd().readFileAlloc(io, try k.path(arena, "state"), arena, .limited(1 << 24)) catch "";
         if (parseState(arena, state)) |records| {
+            if (records.len > 0 and !try Store.exists(io, root)) {
+                try k.reset(arena);
+                return k;
+            }
             k.records = records;
             k.found = true;
         } else |_| try k.reset(arena);
@@ -184,9 +383,16 @@ pub const Kept = struct {
         k.lock.release(k.io);
     }
 
+    /// Records whose kept build it is, for `enforceCap`'s message.
+    pub fn setAbout(k: Kept, arena: Allocator, id: []const u8) !void {
+        try Io.Dir.cwd().createDirPath(k.io, k.dir);
+        try replaceFile(k.io, arena, try k.path(arena, "about"), try std.fmt.allocPrint(arena, "{s}\n", .{id}));
+    }
+
     /// Deletes everything kept, so the build starts afresh.
     pub fn reset(k: *Kept, arena: Allocator) !void {
         if (try Store.exists(k.io, k.dir)) try Store.deleteTree(k.io, arena, k.dir);
+        if (try Store.exists(k.io, k.root)) try Store.deleteTree(k.io, arena, k.root);
         k.records = &.{};
         k.steps = 0;
     }
@@ -650,8 +856,12 @@ test "module keys: chained, and a project's files only change the done key" {
 }
 
 fn testKept(io: Io, arena: Allocator, tmp: std.testing.TmpDir) !Kept {
-    const dir = try std.fs.path.join(arena, &.{ try tmp.dir.realPathFileAlloc(io, ".", arena), "work", "0123456789abcdef" });
-    return (try Kept.open(io, arena, dir)).?;
+    const base = try tmp.dir.realPathFileAlloc(io, ".", arena);
+    const dir = try std.fs.path.join(arena, &.{ base, "work", "0123456789abcdef" });
+    const k = (try Kept.open(io, arena, dir, try rootFor(arena, try std.fs.path.join(arena, &.{ base, "tmp" }), "0123456789abcdef"))).?;
+    // As the build makes it.
+    try Io.Dir.cwd().createDirPath(io, try std.fs.path.join(arena, &.{ k.root, "prefix" }));
+    return k;
 }
 
 test "a kept build's state: what's skipped, what's continued" {
@@ -667,7 +877,7 @@ test "a kept build's state: what's skipped, what's continued" {
     var k = try testKept(io, arena, tmp);
     try std.testing.expect(!k.found);
     // Another build can't have it meanwhile.
-    try std.testing.expect((try Kept.open(io, arena, k.dir)) == null);
+    try std.testing.expect((try Kept.open(io, arena, k.dir, k.root)) == null);
 
     // Nothing kept: nothing taken.
     var p = try k.plan(arena, names, keys, names.len);
@@ -732,6 +942,24 @@ test "a kept build's state: what's skipped, what's continued" {
     k = try testKept(io, arena, tmp);
     try std.testing.expect(!k.found);
     try std.testing.expect(!try Store.exists(io, k.dir));
+
+    // A record whose root is gone, as `prune` or a person may delete tmp\:
+    // nothing is taken, and the record goes too.
+    try k.started(arena, 0, "a", keys[0]);
+    try k.finished(arena, 0, "a", keys[0], 0);
+    k.release();
+    try Store.deleteTree(io, arena, k.root);
+    k = try testKept(io, arena, tmp);
+    try std.testing.expect(!k.found);
+    try std.testing.expectEqual(0, k.records.len);
+
+    // A root with no record, as one whose record was deleted: gone.
+    const orphan = try std.fs.path.join(arena, &.{ k.root, "prefix", "x.txt" });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = orphan, .data = "x" });
+    k.release();
+    try Store.deleteTree(io, arena, k.dir);
+    k = (try Kept.open(io, arena, k.dir, k.root)).?;
+    try std.testing.expect(!try Store.exists(io, orphan));
 }
 
 fn testWrite(io: Io, arena: Allocator, k: Kept, rel: []const u8, data: []const u8) !void {

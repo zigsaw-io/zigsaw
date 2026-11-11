@@ -2797,6 +2797,52 @@ eleven modules, the ninth stopped in the middle of its compile.
   `builder.zig` that didn't compile passed the unit tests and failed
   `zig build`.
 
+## Kept builds, round 2 (iteration 89)
+
+Found while fixing what iteration 88's Reproduce run (43056285992) failed,
+and measuring builds that go on from the last one on long chains.
+
+- **The build root's real path reaches GNU ld, which orders a DLL's imports
+  by it.** A Rust program with C, its crates vendored, built in 88's kept
+  root (`cache\work\<key>\zigsaw-build-root`), was another image than the
+  same recipe built in a new root under `tmp\`; each kind agreed with
+  itself, in every store, and only `hello.exe`'s import table differed:
+  where kernel32's `GetTickCount64` sat. The link commands differed only in
+  the real path of windows-sys's rlib. rustc resolves `B:\` to the folder
+  behind it, and ld seems to order the raw-dylib import entries it takes from
+  that rlib, and from Rust's own libraries in the image's `deploy\` folder,
+  by those files' names: `…\cache\…` sorts before `…\deploy\…`, `…\tmp\…`
+  after it. The kept root is now `tmp\zigsaw-build-<key>`, the shape and
+  length of a new root's `tmp\zigsaw-build-<random>`, and the two builds
+  give the same image. Nothing else that was built showed it: PostgreSQL's
+  SDK, the C, CMake, Meson and Go fixtures.
+- **GNU dlltool puts the temporary folder's name into its symbols**
+  (`_head_B__src_hello_target_release_deps_rustcxhXHcx_…`). rustc's folder
+  has a random name, and the image didn't change with it in six builds: the
+  names don't decide the order, the files' paths do.
+- **zig cc puts a random name of its own into an object's debug
+  information**: `.zig-cache/tmp/<16 hex>-greet.obj`. Gone from what is
+  linked, as debug information is stripped, so it's no help in finding why
+  two programs differ.
+- **frippery.org refuses BusyBox's download to GitHub's runners too**, it
+  seems: `tests/shims.sh` builds BusyBox's recipe under another id, which
+  has no sources next to an image of its own to fall back to, and as the
+  standard user, whose suites have no downloads seeded, it failed. It had
+  passed in 87's run, so frippery.org stopped answering the runners between
+  the two. The CI logs kept only the rows' summaries, so this is from the
+  same build here: `HTTP 403, and the sources next to
+  ghcr.io/zigsaw-io/test.shims.other don't have it`. A copy of a recipe
+  under another id falls back to its own id's sources only (gaps.md).
+- **GTK's and Qt's SDK chains never wrote into a file another module had
+  installed**, stopped in the middle (harfbuzz, qtbase) or with a late
+  module changed (gtk, qtshadertools): both went on, to the published images.
+  CMake's `file(INSTALL)` and Meson's install replace a file that's there,
+  it seems, as 88 hoped. Qt's ninja went on with the 910 steps of 1870 it
+  had left, and CMake didn't configure again.
+- **`scripts/rebuild.sh`'s test stood in for zigsaw with a script that took
+  the recipe as its second argument**, which `build --no-resume <recipe>`
+  isn't. It takes the last one now, and checks that `--no-resume` is there.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

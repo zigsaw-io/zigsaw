@@ -63,7 +63,14 @@ via_cmd() {
 # Low runs label the working directories of apps with cwd: not the
 # repository's.
 cd "$work" || exit 1
-"$zigsaw" build "$root/recipes/node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
+# set_up <what> <command...>: runs it, and if it fails, says so with the end of
+# what it said, and stops.
+set_up() {
+    local what=$1 out
+    shift
+    out=$("$@" 2>&1) || { echo "$what failed:"; tail -4 <<<"$out"; exit 1; }
+}
+set_up "building node" "$zigsaw" build "$root/recipes/node.json"
 
 check "node, npm and npx shims exist" \
     test -f "$bin\\node.exe" -a -f "$bin\\npm.exe" -a -f "$bin\\npx.exe" -a -f "$bin\\node.shim"
@@ -83,11 +90,24 @@ check "npm runs npm-cli.js through node" via_cmd "npm --version"
 check "npx runs" via_cmd "npx --version"
 check "caller's ZIGSAW_HOME doesn't matter" other_home
 
-# A second app that also exports "node" (plus "other-tool").
+# A second app that also exports "node" (plus "other-tool"): BusyBox's recipe
+# under another id. frippery.org refuses BusyBox's download (since 2026-10), and
+# there are no sources next to an image of that id to fall back to, so it comes
+# from the store's downloads, where building BusyBox's own recipe puts it (from
+# the sources next to BusyBox's image). Removed again, so that its shims don't
+# count below.
+set_up "building busybox" "$zigsaw" build "$root/recipes/busybox.json"
+set_up "removing busybox" "$zigsaw" rm net.frippery.busybox
 sed -e "s/\"net.frippery.busybox\"/\"$OTHER\"/" \
     -e 's/"command": "busybox.exe",/"command": "busybox.exe", "exports": { "node": { "command": "busybox.exe" }, "other-tool": { "command": "busybox.exe" } },/' \
     "$root/recipes/busybox.json" >"$work\\other.json"
-check "a taken name is skipped with a warning" sh -c "\"\$0\" build '$work\\other.json' 2>&1 | grep -q 'not exporting node: $NODE already provides it'" "$zigsaw"
+taken_skipped() {
+    local out
+    # check shows the last line: the build's error, if it failed.
+    out=$("$zigsaw" build "$work\\other.json" 2>&1) || { echo "the build failed: $(grep -i error <<<"$out" | tail -1)"; return 1; }
+    grep -q "not exporting node: $NODE already provides it" <<<"$out" || { echo "no warning in: $(tail -1 <<<"$out")"; return 1; }
+}
+check "a taken name is skipped with a warning" taken_skipped
 check "the taken name keeps its owner" grep -q "app = $NODE" "$bin\\node.shim"
 check "the free name is exported" test -f "$bin\\other-tool.exe"
 

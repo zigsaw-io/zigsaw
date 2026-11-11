@@ -11,6 +11,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const checkpoint = @import("checkpoint.zig");
 const lazy = @import("lazy.zig");
 const oci = @import("oci.zig");
 const roots = @import("roots.zig");
@@ -104,7 +105,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
                 if (others.contains(h) or counted.contains(h)) continue;
                 try counted.put(arena, h, {});
                 const bp = try store.blobPath(arena, h);
-                if (try Store.exists(io, bp)) previous_only.bytes += try treeSize(io, arena, bp);
+                if (try Store.exists(io, bp)) previous_only.bytes += try Store.treeSize(io, arena, bp);
             }
         }
     } else if (!opts.dry_run) {
@@ -118,7 +119,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     for (try listDir(io, arena, blob_dir)) |entry| {
         if (blobs_used.contains(entry.name)) continue;
         const p = try std.fs.path.join(arena, &.{ blob_dir, entry.name });
-        blobs.add(try treeSize(io, arena, p));
+        blobs.add(try Store.treeSize(io, arena, p));
         if (!opts.dry_run) try Io.Dir.cwd().deleteFile(io, p);
     }
 
@@ -132,7 +133,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
         // which lists as a reparse point (see lazy.zig).
         if (entry.kind == .file or !oci.isSha256Hex(entry.name) or deployments_used.contains(entry.name)) continue;
         const digest = try std.fmt.allocPrint(arena, "sha256:{s}", .{entry.name});
-        const size = try treeSize(io, arena, try std.fs.path.join(arena, &.{ deploy_dir, entry.name }));
+        const size = try Store.treeSize(io, arena, try std.fs.path.join(arena, &.{ deploy_dir, entry.name }));
         const in_use = if (opts.dry_run)
             try store.deploymentInUse(arena, digest)
         else
@@ -154,14 +155,17 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     var tmp: Tally = .{};
     var tmp_in_use: usize = 0;
     const tmp_dir = try store.path(arena, &.{"tmp"});
+    const work_dir = try store.path(arena, &.{ "cache", "work" });
     for (try listDir(io, arena, tmp_dir)) |entry| {
         if (std.mem.endsWith(u8, entry.name, ".lock")) continue;
+        // A kept build's root, counted with it below.
+        if (try checkpoint.isKeptRoot(io, arena, work_dir, entry.name)) continue;
         const p = try std.fs.path.join(arena, &.{ tmp_dir, entry.name });
         if (try Store.isLocked(io, try Store.lockPathFor(arena, p))) {
             tmp_in_use += 1;
             continue;
         }
-        tmp.add(try treeSize(io, arena, p));
+        tmp.add(try Store.treeSize(io, arena, p));
         if (!opts.dry_run) try Store.deleteTree(io, arena, p);
     }
     if (!opts.dry_run) try deleteStaleLocks(io, arena, tmp_dir);
@@ -172,7 +176,7 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     const downloads_dir = try store.path(arena, &.{ "cache", "downloads" });
     for (try listDir(io, arena, downloads_dir)) |entry| {
         const p = try std.fs.path.join(arena, &.{ downloads_dir, entry.name });
-        downloads.add(try treeSize(io, arena, p));
+        downloads.add(try Store.treeSize(io, arena, p));
         if (opts.downloads and !opts.dry_run) try Io.Dir.cwd().deleteTree(io, p);
     }
     // Build tools' caches go like downloads: keeping them only makes builds
@@ -181,22 +185,26 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     const tools_dir = try store.path(arena, &.{ "cache", "tools" });
     for (try listDir(io, arena, tools_dir)) |entry| {
         const p = try std.fs.path.join(arena, &.{ tools_dir, entry.name });
-        tool_caches.add(try treeSize(io, arena, p));
+        tool_caches.add(try Store.treeSize(io, arena, p));
         if (opts.downloads and !opts.dry_run) try Store.deleteTree(io, arena, p);
     }
     // Kept builds too (see checkpoint.zig): a recipe without one builds
     // every module. No build holds one while prune has the store.
     var work: Tally = .{};
-    const work_dir = try store.path(arena, &.{ "cache", "work" });
     for (try listDir(io, arena, work_dir)) |entry| {
         if (std.mem.endsWith(u8, entry.name, ".lock")) continue;
         const p = try std.fs.path.join(arena, &.{ work_dir, entry.name });
+        const root = try checkpoint.rootFor(arena, tmp_dir, entry.name);
+        const has_root = try Store.exists(io, root);
         // Its saved\ holds other names of the prefix's files, which take no
         // room of their own while the prefix has them.
         const saved = try std.fs.path.join(arena, &.{ p, "saved" });
-        const links = if (entry.kind == .directory and try Store.exists(io, saved)) try treeSize(io, arena, saved) else 0;
-        work.add(try treeSize(io, arena, p) -| links);
-        if (opts.downloads and !opts.dry_run) try Store.deleteTree(io, arena, p);
+        const links = if (entry.kind == .directory and try Store.exists(io, saved)) try Store.treeSize(io, arena, saved) else 0;
+        work.add((try Store.treeSize(io, arena, p) -| links) + if (has_root) try Store.treeSize(io, arena, root) else 0);
+        if (opts.downloads and !opts.dry_run) {
+            try Store.deleteTree(io, arena, p);
+            if (has_root) try Store.deleteTree(io, arena, root);
+        }
     }
     if (!opts.dry_run) try deleteStaleLocks(io, arena, work_dir);
     // Builds remembered by their inputs: those whose image is gone now, and
@@ -341,21 +349,6 @@ fn deleteStaleLocks(io: Io, arena: Allocator, dir: []const u8) !void {
 }
 
 /// The size of a file, or of all files below a directory.
-fn treeSize(io: Io, arena: Allocator, p: []const u8) !u64 {
-    const stat = try Io.Dir.cwd().statFile(io, p, .{});
-    if (stat.kind != .directory) return stat.size;
-    var dir = try Io.Dir.cwd().openDir(io, p, .{ .iterate = true });
-    defer dir.close(io);
-    var walker = try dir.walk(arena);
-    defer walker.deinit();
-    var total: u64 = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        total += (try entry.dir.statFile(io, entry.basename, .{})).size;
-    }
-    return total;
-}
-
 fn isInstalled(refs: []const Store.Ref, id: []const u8) bool {
     for (refs) |ref| if (std.ascii.eqlIgnoreCase(ref.id, id)) return true;
     return false;

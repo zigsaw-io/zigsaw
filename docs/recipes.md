@@ -665,11 +665,21 @@ in the same directory fails again for that reason, and the build says the
 module went on from what its last build left: `--clean=<module>` starts it
 afresh.
 
-A kept build is a whole build root, gigabytes for a large recipe. `zigsaw
-prune` says how much they take, and `zigsaw prune --downloads` deletes them.
-They're in the store's `cache\work\<key>`, keyed by the recipe's path and
-the app's id, so two checkouts don't share one. A build with a host
-toolchain (`"host": ["msvc"]`) keeps none, and neither does
+A kept build is a whole build root, gigabytes for a large recipe. All of a
+store's together may take 10 GB: when a build ends, it records how much its
+own takes, and if they take more, it deletes the others that no build has
+used for longest, and says which. `ZIGSAW_KEPT_BUILDS_SIZE` changes that
+room (`20GB`, `500MB`, a number of bytes; `0` keeps only the build that
+just ended). A build that's going on keeps its own. `zigsaw prune` says how
+much they take, and `zigsaw prune --downloads` deletes them all.
+
+The root is the store's `tmp\zigsaw-build-<key>`, where a build that keeps
+nothing has its root too, under a random name as long: some tools see
+through `B:` to that path (rustc does, and GNU ld orders a program's
+imports by it), so a kept build makes the image a new one does. What
+zigsaw notes about it is in `cache\work\<key>`. The key is of the recipe's
+path and the app's id, so two checkouts don't share one. A build with a
+host toolchain (`"host": ["msvc"]`) keeps none, and neither does
 `--keep-build-dir`.
 
 ## Rebuilding what pins what

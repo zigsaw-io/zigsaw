@@ -109,7 +109,9 @@ zigsaw build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir] [
                                        one that stopped goes on at its command. --clean deletes
                                        what that build left; --clean=<module> starts that module
                                        and those after it afresh; --rebuild and --no-resume build
-                                       every module in a new directory
+                                       every module in a new directory. Kept builds may take
+                                       10 GB together (ZIGSAW_KEPT_BUILDS_SIZE); a build deletes
+                                       the least recently used others past that, and says so
 zigsaw search [<words>...]             find apps in the default registry's catalog
 zigsaw info <image>                    show what an app in a registry is, needs and may reach
 zigsaw ls <image>                      list the files of an app in a registry without pulling

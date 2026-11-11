@@ -51,7 +51,9 @@ const usage =
     \\                                  --clean=<module> starts that module and those after it
     \\                                  afresh; --rebuild builds every module in a new directory,
     \\                                  even if an earlier build had the same inputs; --no-resume
-    \\                                  does too, unless such a build made the image already
+    \\                                  does too, unless such a build made the image already.
+    \\                                  The builds kept may take 10 GB together; set
+    \\                                  ZIGSAW_KEPT_BUILDS_SIZE (20GB, 500MB, 0) to change that
     \\  search [<words>...]             find apps in the default registry's catalog
     \\  info <image>                    show what an app in a registry is, needs and may reach
     \\  ls <image>                      list the files of an app in a registry without pulling

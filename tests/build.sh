@@ -51,10 +51,11 @@ problems=$({ printf '%s\n' $sections $grouped | sort | uniq -u; printf '%s\n' $g
 [ -z "$problems" ] || { echo "sections in no group, in two, or not in this file: $problems"; exit 1; }
 [ -z "${GROUP:-}" ] || printf '%s\n' "${groups[@]%%:*}" | grep -qx "$GROUP" || { echo "no group $GROUP"; exit 1; }
 # section <name>: whether this run checks that section: all do without GROUP.
-# The builds that the sections before it left to go on from (cache\work) are
-# deleted first: no section builds on another's, and a runner's disk is small.
+# The builds that the sections before it left to go on from (cache\work, and
+# their roots in tmp\) are deleted first: no section builds on another's, and
+# a runner's disk is small.
 section() {
-    [ -z "${ZIGSAW_HOME:-}" ] || rm -rf "$(cygpath -u "$ZIGSAW_HOME")/cache/work"
+    [ -z "${ZIGSAW_HOME:-}" ] || rm -rf "$(cygpath -u "$ZIGSAW_HOME")/cache/work" "$(cygpath -u "$ZIGSAW_HOME")"/tmp/zigsaw-build-*
     if [ -n "${SECTIONS:-}" ]; then
         [[ " $SECTIONS " == *" $1 "* ]]
         return
@@ -122,10 +123,28 @@ same_image() { [ "$(built_manifest "$1")" = "$2" ]; }
 own_layer() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of "$1" | cut -d: -f2)" | tail -1 | cut -d: -f2; }
 config_of() { cat "$ZIGSAW_HOME\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of "$1" | cut -d: -f2)" | head -1 | cut -d: -f2)"; }
 drive_free() { ! subst | grep -q '^B:'; }
-no_build_root() { ! ls "$ZIGSAW_HOME\\tmp" | grep -q '^zigsaw-build-'; }
+# No build root is left in tmp\ but kept builds' (whose records are in
+# cache\work).
+no_build_root() {
+    local d
+    for d in $(ls "$ZIGSAW_HOME\\tmp" | grep '^zigsaw-build-'); do
+        [ -d "$ZIGSAW_HOME\\cache\\work\\${d#zigsaw-build-}" ] || return 1
+    done
+    return 0
+}
 free_afterwards() { drive_free && no_build_root; }
 # Builds a recipe again, even if nothing changed, and prints its digest.
-rebuilt_manifest() { z build --rebuild "$1" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2; }
+rebuilt_manifest() { z build --rebuild "$1" 2>&1 | tee "$work\\rebuilt.txt" | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2; }
+# same_rebuilt <recipe> <digest>: built again in full, it's that image; if not,
+# says what it got, and how the build ended.
+same_rebuilt() {
+    local got
+    got=$(rebuilt_manifest "$1")
+    [ "$got" = "$2" ] && return 0
+    echo "got ${got:-no image}, not $2; the build ended:"
+    tail -15 "$work\\rebuilt.txt"
+    return 1
+}
 # need_zig: builds zig's image, once, for the sections that build with it.
 zig_digest=
 need_zig() {
@@ -135,7 +154,7 @@ need_zig() {
 }
 
 # Every section but a few builds with BusyBox's image, or runs it.
-z build "$root\\recipes\\busybox.json" >/dev/null 2>&1 || { echo "building busybox failed"; exit 1; }
+bb_out=$(z build "$root\\recipes\\busybox.json" 2>&1) || { echo "building busybox failed:"; tail -4 <<<"$bb_out"; exit 1; }
 bb_digest=$(manifest_of $BB)
 
 # --- runtimes ---------------------------------------------------------------------
@@ -562,7 +581,7 @@ check "skipped, the project builds" z build "$work\\linked"
 # Built again, a project's module goes on in the directory its last build
 # left, its sources brought up to date there: make remakes only what a
 # changed file makes. make.log, which make's rules add to, stays in that
-# directory (src\incmake in the kept build, cache\work\<key>\zigsaw-build-root
+# directory (src\incmake in the kept build, tmp\zigsaw-build-<key>
 # in the store); the image holds what they made, and note.txt, which a build
 # command edits in place.
 INC=test.project.incremental
@@ -579,7 +598,7 @@ inc_recipe() {
 }
 inc_recipe 1
 inc_before=$(cd "$(cygpath -u "$inc")" && find . | LC_ALL=C sort)
-inc_log() { cat "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/zigsaw-build-root/src/incmake/make.log 2>/dev/null | tr -d '\r' | tr '\n' ' '; }
+inc_log() { cat "$(cygpath -u "$ZIGSAW_HOME")"/tmp/zigsaw-build-*/src/incmake/make.log 2>/dev/null | tr -d '\r' | tr '\n' ' '; }
 want_log() { [ "$(inc_log)" = "$1" ] || { echo "make.log: '$(inc_log)', want '$1'"; return 1; }; }
 inc_first() { z build "$inc" >/dev/null && want_log "a b "; }
 check "a project's first build makes everything" inc_first
@@ -592,7 +611,7 @@ inc_again() {
 check "built again after a change, make remakes only what it makes, and a file the build edits starts afresh" inc_again
 inc_clean() { [ "$(z build --clean "$inc" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2)" = "$(cat "$work\\inc-digest")" ] && want_log "a b "; }
 check "with --clean, it makes everything again, and the same image" inc_clean
-inc_removed() { rm "$inc\\c.in" && z build "$inc" >/dev/null && ! ls "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/zigsaw-build-root/src/incmake/c.in >/dev/null 2>&1; }
+inc_removed() { rm "$inc\\c.in" && z build "$inc" >/dev/null && ! ls "$(cygpath -u "$ZIGSAW_HOME")"/tmp/zigsaw-build-*/src/incmake/c.in >/dev/null 2>&1; }
 check "a file the project no longer has is gone from the module's directory" inc_removed
 # Only the version. The recipe is one of the project's files, so the module
 # is built again, where it was built: make has nothing to remake.
@@ -643,7 +662,16 @@ want_ran() { [ "$res_ran" = "$1" ] || { echo "ran '$res_ran', want '$1'"; return
 res_said() { grep -q "$1" <<<"$res_out" || { echo "didn't say: $1"; return 1; }; }
 res_file() { tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer $RES)\\$1" 2>/dev/null | tr '\n' ' '; }
 res_lacks() { [ ! -e "$ZIGSAW_HOME\\deploy\\$(own_layer $RES)\\$1" ] || { echo "the image has $1"; return 1; }; }
-res_kept() { ls -d "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/ | while read -r d; do [ -e "$d/zigsaw-build-root/prefix/a.txt" ] && echo "${d%/}"; done | head -1; }
+# res_root: the kept build's root, in tmp\ where any build's is; res_kept: its
+# record, in cache\work.
+res_root() {
+    local d s
+    s=$(cygpath -u "$ZIGSAW_HOME")
+    for d in "$s"/tmp/zigsaw-build-*/; do
+        [ -e "$d/prefix/a.txt" ] && [ -d "$s/cache/work/$(basename "$d" | sed 's/^zigsaw-build-//')" ] && echo "${d%/}"
+    done | head -1
+}
+res_kept() { local r; r=$(res_root); [ -n "$r" ] && echo "$(cygpath -u "$ZIGSAW_HOME")/cache/work/${r##*/zigsaw-build-}"; }
 # The image is what a build of every module makes of the recipe as it is.
 same_as_full() {
     local resumed full
@@ -668,7 +696,7 @@ check "a module fails: those before it weren't built again" res_fails
 res_goes_on() {
     res_build && want_ran "c " && res_said '1 of 3 modules are as its last build left them; going on at b, command 2 of 3' || return 1
     [ "$(res_file b1.txt)" = "b1 " ] && [ "$(res_file b.txt)" = "b " ] && res_lacks half.txt || { echo "the image isn't what its commands make"; return 1; }
-    [ "$(wc -l <"$(res_kept)/zigsaw-build-root/src/b/ran.log")" -eq 1 ] || { echo "its first command ran again"; return 1; }
+    [ "$(wc -l <"$(res_root)/src/b/ran.log")" -eq 1 ] || { echo "its first command ran again"; return 1; }
 }
 check "built again, it goes on at the command that failed, without what that had left in the prefix" res_goes_on
 
@@ -694,7 +722,7 @@ res_no_resume() {
 }
 check "--no-resume builds every module rather than take that build's image, once" res_no_resume
 sed -i '/"name": "b"/d' "$(cygpath -u "$res")/res.json"
-res_removed() { res_build && want_ran "c " && [ ! -e "$(res_kept)/zigsaw-build-root/src/b" ] && res_lacks b.txt && same_as_full; }
+res_removed() { res_build && want_ran "c " && [ ! -e "$(res_root)/src/b" ] && res_lacks b.txt && same_as_full; }
 check "a module the recipe lost: its directory and its files are gone" res_removed
 res_recipe "$B_PLAIN" "$(c_says 5)"
 res_unreadable() {
@@ -704,6 +732,107 @@ res_unreadable() {
     res_build && want_ran "a b c " && [ ! -e "$kept/old" ] && [ -e "$kept/state" ]
 }
 check "a kept build this zigsaw can't read is replaced" res_unreadable
+
+# Where the kept build's root is: where a new build's is, under a name as long,
+# as some tools see through B: to it (docs/findings.md, iteration 89).
+res_where() { [[ "$(res_root)" =~ /tmp/zigsaw-build-[0-9a-f]{16}$ ]] || { echo "at '$(res_root)'"; return 1; }; }
+check "a kept build's root is where a new build's is, by a name as long" res_where
+
+# A module with a vendor step, after two without: what the step made comes
+# from the cache, so the modules before it are skipped; when its commands have
+# to run, which is before any module is built, every module is built again.
+VEN=test.resume.vendor
+# ven_recipe <the vendor step's sha256 field, or nothing> <what c says>
+ven_recipe() {
+    printf '{ "id": "%s", "version": "1", "command": "a.txt", "exports": {}, "sdk": { "busybox": "%s@%s" },\n  "modules": [\n    { "name": "a", "build": ["echo a >\\"$PREFIX/a.txt\\""] },\n    { "name": "b", "build": ["echo b >\\"$PREFIX/b.txt\\""] },\n    { "name": "c", "vendor": { "commands": ["mkdir -p vend && echo x >vend/f"], "dir": "vend"%s },\n      "build": ["cp vend/f \\"$PREFIX/v.txt\\" && echo %s >\\"$PREFIX/c.txt\\""] } ] }\n' \
+        $VEN $BB "$bb_digest" "$1" "$2" >"$res\\ven.json"
+}
+ven_build() {
+    local rc=0
+    res_out=$(z -v build "$@" "$res\\ven.json" 2>&1) || rc=$?
+    res_ran=$(grep -o '^\[[a-z]* 1/' <<<"$res_out" | tr -d '[' | cut -d' ' -f1 | tr '\n' ' ')
+    return $rc
+}
+ven_recipe "" 1
+ven_hash=$(z build "$res\\ven.json" 2>&1 | grep -o '"sha256": "[0-9a-f]*"' | grep -o '[0-9a-f]\{64\}')
+ven_recipe ", \"sha256\": \"$ven_hash\"" 1
+ven_first() { [ -n "$ven_hash" ] || { echo "no hash to pin"; return 1; }; ven_build && want_ran "a b c "; }
+check "a module with a vendor step: a first build" ven_first
+ven_recipe ", \"sha256\": \"$ven_hash\"" 2
+ven_later() {
+    ven_build && want_ran "c " && res_said "going on at c" || return 1
+    [ "$(tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer $VEN)\\v.txt")" = x ] || { echo "no vendored file in the image"; return 1; }
+}
+check "  changed: built from the vendored files in the cache, after the modules before it" ven_later
+ven_recipe ", \"sha256\": \"$ven_hash\"" 3
+ven_again() {
+    rm -f "$ZIGSAW_HOME\\cache\\downloads\\$ven_hash"
+    ven_build && want_ran "a b c " && res_said "building every module again: module c's vendor commands have to run"
+}
+check "  changed with them gone from the cache: its commands run, and every module is built" ven_again
+
+# Two builds of one recipe at once: the second can't have the kept build, so it
+# builds every module in a root of its own, once the first is done with B:.
+# The first waits in b until the second has said so.
+go="$(cygpath -m "$res")/go"
+res_recipe "\"while [ ! -f $go ]; do sleep 1; done && echo b >\\\"\$PREFIX/b.txt\\\"\"" "$(c_says 6)"
+res_together() {
+    rm -f "$res\\go"
+    z -v build "$res\\res.json" >"$work\\first.txt" 2>&1 &
+    local first=$! n=0
+    until grep -q '^\[b 1/' "$work\\first.txt"; do
+        n=$((n + 1))
+        [ $n -lt 120 ] || { echo "the first build didn't get to b: $(tail -2 "$work\\first.txt")"; touch "$res\\go"; wait; return 1; }
+        sleep 1
+    done
+    z -v build "$res\\res.json" >"$work\\second.txt" 2>&1 &
+    local second=$!
+    n=0
+    until grep -q 'another build is going on in its kept build' "$work\\second.txt"; do
+        n=$((n + 1))
+        [ $n -lt 60 ] || { echo "the second build didn't say so: $(tail -2 "$work\\second.txt")"; touch "$res\\go"; wait; return 1; }
+        sleep 1
+    done
+    touch "$res\\go"
+    wait $first || { echo "the first failed: $(tail -3 "$work\\first.txt")"; return 1; }
+    wait $second || { echo "the second failed: $(tail -3 "$work\\second.txt")"; return 1; }
+    local d1 d2
+    d1=$(grep -o 'manifest sha256:[0-9a-f]*' "$work\\first.txt")
+    d2=$(grep -o 'manifest sha256:[0-9a-f]*' "$work\\second.txt")
+    [ -n "$d1" ] && [ "$d1" = "$d2" ] || { echo "first $d1, second $d2"; return 1; }
+    grep -q '^\[a 1/' "$work\\second.txt" || { echo "the second didn't build a"; return 1; }
+    [ -n "$(res_root)" ] && drive_free && no_build_root
+}
+check "two builds at once: the second builds every module in a root of its own, to the same image" res_together
+
+# How much room kept builds may take together: ZIGSAW_KEPT_BUILDS_SIZE. Each
+# build records its own's size, and deletes the least recently used others
+# while all of them take more.
+res_recipe "$B_PLAIN" "$(c_says 1)"
+# cap_build <n> <room>: builds the recipe as test.cap.<n>.
+cap_build() { sed "s/\"$RES\"/\"test.cap.$1\"/" "$res\\res.json" >"$res\\cap$1.json" && ZIGSAW_KEPT_BUILDS_SIZE=$2 z build "$res\\cap$1.json" 2>&1; }
+kept_ids() { cat "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/about 2>/dev/null | tr -d '\r' | sort | tr '\n' ' '; }
+cap_room() {
+    rm -rf "$(cygpath -u "$ZIGSAW_HOME")/cache/work" "$(cygpath -u "$ZIGSAW_HOME")"/tmp/zigsaw-build-*
+    cap_build 1 10GB >/dev/null && cap_build 2 10GB >/dev/null || return 1
+    [ "$(kept_ids)" = "test.cap.1 test.cap.2 " ] || { echo "kept: $(kept_ids)"; return 1; }
+    [ "$(cat "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/size | grep -c '^[1-9][0-9]*$')" = 2 ] || { echo "sizes: $(cat "$(cygpath -u "$ZIGSAW_HOME")"/cache/work/*/size)"; return 1; }
+}
+check "kept builds within their room all stay, each with its size recorded" cap_room
+cap_over() {
+    local out
+    out=$(cap_build 3 0) || { echo "$out" | tail -3; return 1; }
+    grep -q 'deleted the kept build of test.cap.1 (' <<<"$out" && grep -q 'deleted the kept build of test.cap.2 (' <<<"$out" || { echo "$out" | tail -3; return 1; }
+    [ "$(kept_ids)" = "test.cap.3 " ] || { echo "kept: $(kept_ids)"; return 1; }
+    no_build_root
+}
+check "  over it, the others go, and the build says which; 0 keeps only the last build's" cap_over
+cap_bad() {
+    local out
+    out=$(cap_build 4 lots) && grep -q 'ZIGSAW_KEPT_BUILDS_SIZE is "lots", not a size' <<<"$out" || { echo "$out" | tail -3; return 1; }
+    [ "$(kept_ids)" = "test.cap.3 test.cap.4 " ] || { echo "kept: $(kept_ids)"; return 1; }
+}
+check "  a value that isn't a size: a warning, and 10 GB" cap_bad
 fi
 
 # --- prettier on node --------------------------------------------------------------
@@ -778,7 +907,7 @@ check "the build drive is free afterwards, and the build root gone" free_afterwa
 # doesn't build zig's C runtime again, and makes the same image.
 warm_hello() {
     [ -d "$ZIGSAW_HOME\\cache\\tools\\org.ziglang.zig" ] || { echo "no cache\\tools\\org.ziglang.zig"; return 1; }
-    [ "$(rebuilt_manifest "$work\\c\\hello.json")" = "$hello_digest" ]
+    same_rebuilt "$work\\c\\hello.json" "$hello_digest"
 }
 start=$SECONDS
 check "a rebuild with zig's kept cache makes the same image" warm_hello
@@ -991,7 +1120,7 @@ a string from its resources" ] || { echo "got: $out"; return 1; }
 }
 check "it runs, as cmake --install installed it" cmake_runs
 start=$SECONDS
-cmake_again() { [ "$(rebuilt_manifest "$work\\cmake\\hello.json")" = "$cmake_app_digest" ]; }
+cmake_again() { same_rebuilt "$work\\cmake\\hello.json" "$cmake_app_digest"; }
 check "built again, it's the same image" cmake_again
 printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$cmake_time"
 # CMake's image finds nothing the machine has installed: no Program Files
@@ -1041,7 +1170,7 @@ a string from its resources" ] || { echo "got: $out"; return 1; }
     [ -f "$ZIGSAW_HOME\\deploy\\$(own_layer $LLVMAPP)\\lib\\libgreet.a" ] || { echo "the image has no libgreet.a"; return 1; }
 }
 check "it runs, with libc++ linked in" llvm_runs
-llvm_again() { [ "$(rebuilt_manifest "$work\\cmake-llvm\\hello.json")" = "$llvm_app_digest" ]; }
+llvm_again() { same_rebuilt "$work\\cmake-llvm\\hello.json" "$llvm_app_digest"; }
 check "built again a moment later, it's the same image" llvm_again
 
 # C++ across two DLLs and a program, each with its own copy of libc++,
@@ -1091,7 +1220,7 @@ a string from its resources" ] || { echo "got: $out"; return 1; }
 }
 check "it runs, with the DLL next to it" meson_runs
 start=$SECONDS
-meson_again() { [ "$(rebuilt_manifest "$work\\meson\\hello.json")" = "$meson_app_digest" ]; }
+meson_again() { same_rebuilt "$work\\meson\\hello.json" "$meson_app_digest"; }
 check "built again, it's the same image" meson_again
 printf '      (%d s; the first build took %d s)\n' $((SECONDS - start)) "$meson_time"
 fi
@@ -1206,7 +1335,7 @@ rust_bound() { "$imports" "$ZIGSAW_HOME\\deploy\\$(own_layer $RUST)\\hello.exe";
 check "the loader binds all its imports" rust_bound
 # Each build root has a new random name, so a real path or a time in the
 # executable would show.
-rust_again() { [ "$(rebuilt_manifest "$work\\rust\\hello.json")" = "$rust_app_digest" ]; }
+rust_again() { same_rebuilt "$work\\rust\\hello.json" "$rust_app_digest"; }
 check "built again, from the vendored crates in the cache, it's the same image" rust_again
 # The same program with llvm-mingw's image instead of zig's, as GTK's SDK
 # has it: GNU dlltool assembles with llvm-mingw's as alias, the cc crate
@@ -1266,7 +1395,7 @@ built from zigsaw.test/hello/main.go
 Windows is up: true" ] || { echo "got: $out"; return 1; }
 }
 check "it runs, with its paths trimmed, and calls Windows" go_runs
-go_again() { [ "$(rebuilt_manifest "$work\\go\\hello.json")" = "$go_app_digest" ]; }
+go_again() { same_rebuilt "$work\\go\\hello.json" "$go_app_digest"; }
 check "built again, with Go's kept cache, it's the same image" go_again
 # A Go program with C, built with zig's image too, whose variables make zig's
 # cc Go's C compiler, so cgo is on, and its links reproducible. The recipe
@@ -1287,7 +1416,7 @@ built from zigsaw.test/cgo/main.go
 C sees this process: true" ] || { echo "got: $out"; return 1; }
 }
 check "it runs, calling its C, which calls Windows" cgo_runs
-cgo_again() { [ "$(rebuilt_manifest "$work\\cgo\\hello.json")" = "$cgo_app_digest" ]; }
+cgo_again() { same_rebuilt "$work\\cgo\\hello.json" "$cgo_app_digest"; }
 check "built again, it's the same image" cgo_again
 fi
 
@@ -1345,7 +1474,7 @@ runs on $ZIGSAW_HOME\\deploy\\$(own_layer com.microsoft.dotnet)\\shared\\Microso
     done
 }
 check "it runs on the runtime image, under soft, low and appcontainer" dotnet_runs
-dotnet_again() { [ "$(rebuilt_manifest "$work\\dotnet\\hello.json")" = "$dotnet_app_digest" ]; }
+dotnet_again() { same_rebuilt "$work\\dotnet\\hello.json" "$dotnet_app_digest"; }
 check "built again, from the vendored packages in the cache, it's the same image" dotnet_again
 # Windows Forms and WPF, which the runtime's Windows Desktop framework has: a
 # form and a window that close themselves once they're up.
@@ -1364,7 +1493,7 @@ WPF: a window came up and drew its content" ] || { echo "$sb, got: $out"; return
     done
 }
 check "its form and its window come up, under soft, low and appcontainer" desktop_runs
-desktop_again() { [ "$(rebuilt_manifest "$work\\dotnetdesktop\\desktop.json")" = "$desktop_digest" ]; }
+desktop_again() { same_rebuilt "$work\\dotnetdesktop\\desktop.json" "$desktop_digest"; }
 check "built again, it's the same image" desktop_again
 fi
 
@@ -1422,7 +1551,7 @@ swing_runs() {
     done
 }
 check "it runs on the JRE image, and its window draws its text, under soft, low and appcontainer" swing_runs
-swing_again() { [ "$(rebuilt_manifest "$work\\swing\\swing.json")" = "$swing_digest" ]; }
+swing_again() { same_rebuilt "$work\\swing\\swing.json" "$swing_digest"; }
 check "built again, it's the same image" swing_again
 # java_app_runs <id> <how it says it was built>: the fixture's program, from a
 # vendored package, on the JRE, with its home in its data, in each sandbox.
@@ -1448,7 +1577,7 @@ java_fixture maven pom.xml Hello.java
 check "a Maven project builds, its dependencies and plugins vendored and the build offline" z build "$work\\maven\\hello.json"
 maven_digest=$(manifest_of $MAVENAPP)
 check "it runs on the JRE image, under soft, low and appcontainer" java_app_runs $MAVENAPP ""
-maven_again() { [ "$(rebuilt_manifest "$work\\maven\\hello.json")" = "$maven_digest" ]; }
+maven_again() { same_rebuilt "$work\\maven\\hello.json" "$maven_digest"; }
 check "built again, from the vendored repository in the cache, it's the same image" maven_again
 # Gradle, on the JDK: its vendor step builds with a Gradle home of its own,
 # and gradle-vendor makes the files Gradle downloaded a Maven repository; the
@@ -1462,7 +1591,7 @@ java_fixture gradle settings.gradle build.gradle Hello.java
 check "a Gradle project builds, its plugin and dependencies vendored and the build offline" z build "$work\\gradle\\hello.json"
 gradle_digest=$(manifest_of $GRADLEAPP)
 check "it runs on the JRE image, under soft, low and appcontainer" java_app_runs $GRADLEAPP ", built by Gradle"
-gradle_again() { [ "$(rebuilt_manifest "$work\\gradle\\hello.json")" = "$gradle_digest" ]; }
+gradle_again() { same_rebuilt "$work\\gradle\\hello.json" "$gradle_digest"; }
 check "built again, from the vendored repository in the cache, it's the same image" gradle_again
 fi
 
@@ -1496,7 +1625,7 @@ php_ext_runs() {
     done
 }
 check "PHP loads it, and its 27 checks pass, under soft, low and appcontainer" php_ext_runs
-phpext_again() { [ "$(rebuilt_manifest "$work\\php\\zprobe.json")" = "$phpext_digest" ]; }
+phpext_again() { same_rebuilt "$work\\php\\zprobe.json" "$phpext_digest"; }
 check "built again, the extension's image is the same" phpext_again
 # Installed, it extends PHP's runtime: PHP loads it without listing it.
 zprobe_joins() {

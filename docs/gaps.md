@@ -605,12 +605,16 @@
 - A file in the prefix that a later command wrote into, rather than
   replaced, can't be put back, so every module is built again: Python's
   `shutil.copy` and CMake's `file(INSTALL)` over an existing file do. The
-  build says which file it was.
+  build says which file it was. GTK's and Qt's SDK chains, stopped in the
+  middle and with a late module changed, never did (iteration 89).
 - A command that stopped is run again in its directory as it left it. One
   that can't be, a `patch` half applied or a `mkdir` without `-p`, fails
   again; `--clean=<module>` starts the module afresh.
-- A kept build is a whole build root for each recipe built, until `zigsaw
-  prune --downloads`.
+- A kept build is a whole build root for each recipe built. Together they
+  get `ZIGSAW_KEPT_BUILDS_SIZE` (10 GB), which a build enforces only when it
+  ends, by the sizes recorded then: one recipe's that's larger stays until
+  another build ends, and a build that keeps nothing (`--no-resume`, MSVC)
+  deletes none. The least recently used go first, not the largest.
 - Each `zigsaw build` of a project reads all of its files to hash them,
   even when it then takes the image built before: quick for a source tree,
   slower for one with large assets that aren't ignored or skipped.
@@ -619,6 +623,11 @@
   in a project fails its build, which git would commit as a link.
 - `push --sources` doesn't push a project's files, as they're local, like
   a recipe's local files.
+- A source whose pinned URL fails is fetched from the sources next to the
+  image of the recipe's own id. A recipe copied under another id has none,
+  so it builds only while the URL answers or the store has the file: copied
+  from BusyBox's, whose site refuses everyone, it needs BusyBox's own recipe
+  built in that store first.
 - A GTK 3 app lists two runtimes, GTK's and GTK 3's, and two SDKs: GTK 3's
   images have only GTK 3 and ATK, and runtimes can't have runtimes of their
   own. GTK 3's runtime is built against one GTK runtime, pinned by its

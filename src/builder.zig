@@ -620,6 +620,8 @@ const BuildRoot = struct {
             if (ctx.verbose) note("couldn't keep {s}'s cache ({t}); the next build starts without it", .{ id, err });
         };
         if (b.from_last) |res| {
+            // While this build still has its own, which stays.
+            keepWithinCap(ctx, b.id, res.kept);
             res.kept.release();
         } else if (keep) {
             note("kept the build directory: {s}", .{b.path});
@@ -627,6 +629,31 @@ const BuildRoot = struct {
             Store.deleteTree(ctx.io, ctx.arena, b.path) catch |err|
                 note("warning: couldn't delete all of {s} ({t}); `zigsaw prune` will retry", .{ b.path, err });
         }
+    }
+
+    /// Records how much room the kept build of the build that's ending
+    /// takes, and deletes the least recently used others while all of them
+    /// take more than ZIGSAW_KEPT_BUILDS_SIZE lets them. Nothing here fails
+    /// the build.
+    fn keepWithinCap(ctx: *Context, id: []const u8, kept: checkpoint.Kept) void {
+        keepWithinCapOrFail(ctx, id, kept) catch |err|
+            note("warning: couldn't keep the store's kept builds within their room ({t})", .{err});
+    }
+
+    fn keepWithinCapOrFail(ctx: *Context, id: []const u8, kept: checkpoint.Kept) !void {
+        const io = ctx.io;
+        const arena = ctx.arena;
+        const cap = if (ctx.env.get(checkpoint.cap_var)) |text| checkpoint.parseSize(text) catch blk: {
+            note("warning: {s} is \"{s}\", not a size such as 10GB; taking {Bi:.0}", .{ checkpoint.cap_var, text, checkpoint.default_cap });
+            break :blk checkpoint.default_cap;
+        } else checkpoint.default_cap;
+        // Nothing was kept: a record that couldn't be written.
+        if (!try Store.exists(io, kept.dir)) return;
+        try kept.setAbout(arena, id);
+        _ = try checkpoint.writeSize(io, arena, kept.dir, kept.root);
+        const deleted = try checkpoint.enforceCap(io, arena, std.fs.path.dirname(kept.dir).?, std.fs.path.dirname(kept.root).?, std.fs.path.basename(kept.dir), cap);
+        for (deleted) |d|
+            note("deleted the kept build of {s} ({Bi:.1}): kept builds may take {Bi:.1} together ({s})", .{ d.id, d.bytes, cap, checkpoint.cap_var });
     }
 
     /// Moves a tool's cache back into the store. If the store has one again,
@@ -893,7 +920,8 @@ const BuildRoot = struct {
 /// does.
 ///
 /// The kept build is in the store's cache\work\<key>, keyed by the recipe's
-/// path and the app's id, so two checkouts don't share one.
+/// path and the app's id, so two checkouts don't share one; its root is
+/// tmp\zigsaw-build-<key>, where any build's is (see checkpoint.zig).
 const Resume = struct {
     kept: checkpoint.Kept,
     keys: []const checkpoint.Keys,
@@ -912,7 +940,8 @@ const Resume = struct {
         h.update(try std.ascii.allocLowerString(arena, r.id));
         const key = std.fmt.bytesToHex(h.finalResult(), .lower);
         const dir = try ctx.store.path(arena, &.{ "cache", "work", key[0..16] });
-        var kept = try checkpoint.Kept.open(ctx.io, arena, dir) orelse {
+        const root = try checkpoint.rootFor(arena, try ctx.store.path(arena, &.{"tmp"}), key[0..16]);
+        var kept = try checkpoint.Kept.open(ctx.io, arena, dir, root) orelse {
             note("{s}: another build is going on in its kept build; this one builds every module, in a directory of its own", .{r.id});
             return null;
         };
