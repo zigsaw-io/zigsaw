@@ -396,8 +396,9 @@ zigsaw list                                # org.tug.texlive ...  (downloading 3
 ```
 
 It's for layers in eStargz (`"layer": "estargz"` in a recipe) of 32 MiB or
-more: of the published images, VSCodium's, TeX Live's, Qt's runtime and SDKs,
-and llvm-mingw, and Perl's and MinGit's, which TeX Live and VSCodium run on.
+more: of the published images, VSCodium's, Electron's runtime, TeX Live's,
+Qt's runtime and SDKs, and llvm-mingw, and Perl's and MinGit's, which TeX Live
+and VSCodium run on.
 An app's other layers download first, as without `--lazy`.
 `zigsaw update --lazy` does the same for a new version, and, as a plain
 `update` does, takes what the version before has from the store rather
@@ -426,7 +427,7 @@ An image can say what its first run reads (a recipe's
 [`prefetch`](docs/recipes.md#recipes)): those files come first in its
 layer, and the helper asks for them all at once and puts them on disk before
 the run gets to them, rather than as it asks, one after another. Qt's runtime
-and SDK, TeX Live, Perl and VSCodium have such lists.
+and SDK, TeX Live, Perl, VSCodium and Electron's runtime have such lists.
 
 The layer's deployment starts as Windows' Cloud Files placeholders, as
 OneDrive's files are: listed, with their sizes, and empty. A helper process,
@@ -1286,10 +1287,13 @@ and their updaters: zigsaw updates them. VLC's turns off its first-run
 privacy question and its update check with arguments.
 
 Chromium's and Electron's programs bring a sandbox of their own, which Windows
-doesn't let start at low integrity or in an AppContainer: VSCodium and
-ungoogled-chromium ask for `soft`, and exit at once under the others
+doesn't let start at low integrity or in an AppContainer: VSCodium,
+ungoogled-chromium and draw.io ask for `soft`, and exit at once under the others
 ([what's needed](docs/recipes.md#chromium-and-electron),
-[what was found](docs/findings.md#chromium-and-electron)).
+[what was found](docs/findings.md#chromium-and-electron)). draw.io runs on
+Electron's runtime, a 158 MB image that apps made with Electron can share, as
+other apps share Node's or Java's
+([apps on it](docs/recipes.md#apps-on-electrons-runtime)).
 
 ### Start menu shortcuts
 
@@ -1317,6 +1321,14 @@ and leaves any other file of the same name alone, with a warning.
 An app started from its shortcut counts as started from it, as a program
 Explorer starts from one does, though zigsaw's shim and zigsaw are in
 between: the shortcut's path is in its start-up information.
+
+Each shortcut also names the app's taskbar button (its AppUserModelID),
+`Zigsaw.<app id>`. Windows of a program that names the same button are the
+shortcut's, however the program was started, and pinning one to the taskbar
+pins the shortcut, which runs the app through zigsaw. Apps on
+[Electron's runtime](docs/recipes.md#apps-on-electrons-runtime) name it; an app
+that names a button of its own, as VSCodium does, keeps its own. Shortcuts made
+before 0.92 get the name from `zigsaw repair`, which an upgrade runs.
 
 ### File associations
 
@@ -1452,7 +1464,7 @@ bash tests/certs.sh     # which apps trust a root CA added to Windows: a test CA
 bash tests/qt.sh        # a Qt Widgets app built against Qt's SDK with CMake, on its runtime, in each sandbox: plugins found from the runtime, image formats, Schannel, translations; a Qt Quick window drawn with Direct3D 11 in each sandbox; the SDK's cmake without a recipe; the qml tool; Designer's and Linguist's windows, shims and shortcuts; Flameshot in each sandbox, and its full command saving a screenshot; Notes in each sandbox, its QML and database (needs QT_HOME or BUILD_HOME; opens windows)
 bash tests/files.sh     # Files (C#, WinUI 3, on .NET) without a package: its layout, shim and shortcut, starting up, opening a folder, settings kept with its data (needs FILES_HOME or BUILD_HOME; opens windows; local only)
 bash tests/guiapps.sh   # 7-Zip, Notepad++, SumatraPDF and VLC in each sandbox: opening a file, where their settings go, shims, shortcuts and file types (opens windows; local only)
-bash tests/chromium.sh # ungoogled-chromium and VSCodium in each sandbox, with Windows' word on how their processes are confined: pages, WebGL, H.264, a second launch, downloads, a task in VSCodium's terminal with your apps' commands and zigsaw-host, an extension saving a file; links through the shims and through Windows; shims, shortcuts and what they leave outside, the keys of HKCU's Classes, RegisteredApplications, Clients and Run included
+bash tests/chromium.sh # ungoogled-chromium, VSCodium and draw.io (on Electron's runtime, with a test app beside it) in each sandbox, with Windows' word on how their processes are confined: pages, WebGL, H.264, a second launch, downloads, a task in VSCodium's terminal with your apps' commands and zigsaw-host, an extension saving a file, a diagram exported from the console, packaged mode, a taskbar button per app, one deployment of the runtime for both; links through the shims and through Windows; shims, shortcuts and what they leave outside, the keys of HKCU's Classes, RegisteredApplications, Clients and Run included
 bash tests/zls.sh       # ZLS's language server sessions over stdio in each sandbox: the standard library's documentation, a module a project's build.zig declares, a syntax error; its shim (needs ZLS_HOME or BUILD_HOME, or builds it)
 bash tests/php.sh       # PHP's runtime in each sandbox, HTTPS; seven extensions built with php-ext (yaml and zstd with libraries their recipes build) join PHP's runs once installed, and pass their test suites (ssh2 and redis against servers built with Go); an app with two as runtimes, and Xdebug's step debugger; Composer offline; Kanboard's pages and API, in an AppContainer through its service too (needs PHP_HOME or BUILD_HOME; local only)
 bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 installing, upgrading and removing zigsaw (in a scratch directory and registry key); `zigsaw upgrade` from a later release of the same code, a running program moved aside and every way of refusing; the daily check in a scratch default store (about 2 min)

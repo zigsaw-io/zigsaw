@@ -272,6 +272,28 @@ shortcut_written() {
 }
 check "a declared shortcut runs the export's shim, from the app's home, with its icon" shortcut_written
 check "list shows it" sh -c "\"\$0\" list | grep '^$GUI ' | grep -q '(shortcut \"Zigsaw GUI Test\")'" "$zigsaw"
+# lnk_aumid <file>: the AppUserModelID it names, the taskbar button its
+# windows go under; empty if none.
+lnk_aumid() {
+    powershell -NoProfile -Command "\$f = Get-Item -LiteralPath '$1'; (New-Object -ComObject Shell.Application).NameSpace(\$f.DirectoryName).ParseName(\$f.Name).ExtendedProperty('System.AppUserModel.ID')" | tr -d '\r'
+}
+names_button() {
+    local got
+    got=$(lnk_aumid "$lnk")
+    [ "$got" = "Zigsaw.$GUI" ] || { echo "got: $got"; return 1; }
+}
+check "it names the app's taskbar button, Zigsaw.<id>" names_button
+# As a zigsaw before 0.92 made it: the same shortcut, without the name. A new
+# file: CreateShortcut on one that's there keeps what it has.
+older_shortcut_repaired() {
+    rm -f "$lnk"
+    powershell -NoProfile -Command "\$l = (New-Object -ComObject WScript.Shell).CreateShortcut('$lnk'); \$l.TargetPath = '$bin\\gui-app.exe'; \$l.Save()" || return 1
+    [ -z "$(lnk_aumid "$lnk")" ] || { echo "the older shortcut has one: $(lnk_aumid "$lnk")"; return 1; }
+    "$zigsaw" repair >/dev/null 2>&1 || return 1
+    [ "$(lnk_aumid "$lnk")" = "Zigsaw.$GUI" ] || { echo "after repair: $(lnk_aumid "$lnk")"; return 1; }
+    shortcut_written
+}
+check "repair names it in a shortcut an older zigsaw made" older_shortcut_repaired
 from_shortcut() {
     rm -f "$ZIGSAW_HOME\\volumes\\$GUI\\home\\gui-record.txt"
     powershell -NoProfile -Command "Start-Process -FilePath '$lnk' -Wait" || return 1

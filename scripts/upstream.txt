@@ -340,6 +340,11 @@ mingit git https://github.com/git-for-windows/git v{version} ver=[0-9]+\.[0-9]+\
   https://github.com/git-for-windows/git/releases/download/v{version}/MinGit-*-64-bit.zip
 vscodium git https://github.com/VSCodium/vscodium {version}
   https://github.com/VSCodium/vscodium/releases/download/{version}/VSCodium-win32-x64-*.zip
+electron git https://github.com/electron/electron v{version} series=1 osv=npm:electron
+  https://github.com/electron/electron/releases/download/v{version}/*-win32-x64.zip
+drawio git https://github.com/jgraph/drawio-desktop v{version} series=1
+  https://github.com/jgraph/drawio-desktop/releases/download/v{version}/draw.io-*-windows.zip
+  https://raw.githubusercontent.com/jgraph/drawio-desktop/v{version}/build/icon.ico
 ungoogled-chromium git https://github.com/ungoogled-software/ungoogled-chromium-windows {version} series=1
   https://github.com/ungoogled-software/ungoogled-chromium-windows/releases/download/{version}/ungoogled-chromium_*_windows_x64.zip
 notepad-plus-plus git https://github.com/notepad-plus-plus/notepad-plus-plus v{version}

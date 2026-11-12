@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Chromium and Electron through the three sandboxes: ungoogled-chromium and
-# VSCodium, as their recipes package them from upstream's zips. They bring a
-# sandbox of their own, which Windows doesn't let start at low integrity or in
-# an AppContainer (docs/findings.md), so both images ask for soft: each row
-# says so, and tests/procprobe.zig checks with Windows that their renderers
-# are confined. Each opens a file given with --file, hands a second one to the
-# running instance, and is closed as its close button would. Their settings
-# must be in their data directory, not the real AppData or registry.
+# VSCodium, as their recipes package them from upstream's zips, and draw.io on
+# Electron's runtime (recipes/electron.json), with a small test app of its own
+# on the same runtime (tests/chromium/hello). They bring a sandbox of their
+# own, which Windows doesn't let start at low integrity or in an AppContainer
+# (docs/findings.md), so their images ask for soft: each row says so, and
+# tests/procprobe.zig checks with Windows that their renderers are confined.
+# Each opens a file given with --file, hands a second one to the running
+# instance, and is closed as its close button would. Their settings must be in
+# their data directory, not the real AppData or registry.
 #
 #   tests/chromium.sh [path\to\zigsaw.exe]
 #
@@ -20,7 +22,7 @@
 # Needs Git Bash and git; opens windows on the desktop for a moment; not run
 # in CI. Uses the store in CHROMIUM_HOME, or BUILD_HOME as tests/published.sh
 # leaves it, and builds the apps that store lacks; without either, a temporary
-# store, which downloads about 420 MB unless SEED_DOWNLOADS has the files. Apps
+# store, which downloads about 760 MB unless SEED_DOWNLOADS has the files. Apps
 # it installed are removed again.
 
 set -u
@@ -50,6 +52,9 @@ export ZIGSAW_USER_FOLDERS="$folders"
 
 CHROMIUM=io.github.ungoogled_software.ungoogled_chromium
 CODIUM=com.vscodium.codium
+ELECTRON=org.electronjs.Electron
+DRAWIO=com.jgraph.drawio.desktop
+HELLO=test.electron.hello
 
 . "$(dirname "$0")/acprobe.sh"
 
@@ -58,11 +63,17 @@ winwait="$root\\zig-out\\test\\zigsaw-winwait.exe"
 procprobe="$root\\zig-out\\test\\zigsaw-procprobe.exe"
 
 installed=()
-for recipe in recipes\\no-publish\\ungoogled-chromium recipes\\vscodium; do
+for recipe in recipes\\no-publish\\ungoogled-chromium recipes\\vscodium recipes\\electron recipes\\drawio; do
     id=$(grep -o '"id": *"[^"]*"' "$root\\$recipe.json" | cut -d'"' -f4)
     [ -f "$ZIGSAW_HOME\\refs\\$id.json" ] || installed+=("$id")
     "$zigsaw" build "$root\\$recipe.json" >"$work\\build.log" 2>&1 || { echo "building $recipe failed: $(tail -1 "$work\\build.log")"; exit 1; }
 done
+manifest_of() { grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$1.json" | head -1; }
+# The test app, on the runtime just built: the repo pins no digest of it.
+cp -r "$root\\tests\\chromium\\hello" "$work\\hello"
+printf '{ "id": "%s", "version": "1", "command": "${electron}\\\\electron.exe",\n  "args": ["-r", "${electron}\\\\zigsaw\\\\app.js", "${app}"],\n  "permissions": { "sandbox": "soft" },\n  "runtimes": { "electron": "%s:%s@%s" },\n  "exports": { "hello": { "command": "${electron}\\\\electron.exe", "args": ["-r", "${electron}\\\\zigsaw\\\\app.js", "${app}"] } },\n  "shortcuts": { "Zigsaw Hello": { "command": "hello" } },\n  "modules": [{ "name": "hello", "sources": [{ "path": "hello" }] }] }\n' \
+    $HELLO $ELECTRON "$(grep -o '"version": *"[^"]*"' "$root\\recipes\\electron.json" | head -1 | cut -d'"' -f4)" "$(manifest_of $ELECTRON)" >"$work\\hello.json"
+"$zigsaw" build "$work\\hello.json" >"$work\\build.log" 2>&1 || { echo "building the test app failed: $(tail -1 "$work\\build.log")"; exit 1; }
 # Another app's command, for VSCodium's terminal.
 (cd "$root" && zig build hostprobe) || { echo "building the host probe failed"; exit 1; }
 "$zigsaw" build "$root\\tests\\reach\\tool.json" >"$work\\build.log" 2>&1 || { echo "building the test tool failed: $(tail -1 "$work\\build.log")"; exit 1; }
@@ -107,7 +118,8 @@ row() {
 
 # Where these apps would keep things outside zigsaw. Only what isn't there
 # before the suite counts, and only that is removed afterwards.
-real_dirs=("$LOCALAPPDATA\\Chromium" "$APPDATA\\VSCodium" "$USERPROFILE\\.vscode-oss" "$USERPROFILE\\AppData\\LocalLow\\Chromium")
+real_dirs=("$LOCALAPPDATA\\Chromium" "$APPDATA\\VSCodium" "$USERPROFILE\\.vscode-oss" "$USERPROFILE\\AppData\\LocalLow\\Chromium"
+    "$APPDATA\\draw.io" "$APPDATA\\Zigsaw Hello" "$APPDATA\\Electron")
 absent_before=()
 for d in "${real_dirs[@]}"; do [ -e "$d" ] || absent_before+=("$d"); done
 had_chromium_key=false
@@ -490,6 +502,127 @@ says_why() {
 }
 check "A run under a sandbox it can't use says why" says_why
 
+# draw.io, on Electron's runtime: its image has draw.io's own files only, and
+# runs the runtime's electron.exe with them.
+diagram_file() { printf '<mxfile><diagram id="%s" name="Page-1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="2" value="%s" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1"><mxGeometry x="40" y="40" width="120" height="60" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>\n' "$1" "$1" >"$work\\$1.drawio"; }
+diagram_file zigsaw-diagram
+diagram_file zigsaw-second
+diagram="$work\\zigsaw-diagram.drawio"
+row "draw.io, on Electron's runtime, opens a diagram given with --file" ok fails fails \
+    opens $DRAWIO drawio "$diagram" 'zigsaw-diagram.drawio - draw.io' 40 --
+check "draw.io's renderers are confined under its image's sandbox" confined $DRAWIO drawio "$diagram" 'zigsaw-diagram.drawio - ' soft
+# A second run's diagram opens in a window of the first. It's sent once draw.io
+# has settled: one sent at once, as its first window shows, opened nothing.
+hands_over_window() {
+    local other i result=0
+    start $DRAWIO drawio soft "$diagram"
+    window 'zigsaw-diagram.drawio - ' 40 || return 1
+    sleep 5
+    "$zigsaw" run --sandbox=soft --command=drawio --file="$work\\zigsaw-second.drawio" $DRAWIO >"$work\\second.log" 2>&1 &
+    other=$!
+    for i in $(seq 75); do
+        kill -0 $other 2>/dev/null || break
+        sleep 0.2
+    done
+    if kill -0 $other 2>/dev/null; then
+        taskkill /PID "$(cat /proc/$other/winpid)" /T /F >/dev/null 2>&1
+        echo "the second run didn't end"
+        result=1
+    elif ! wait $other; then
+        echo "the second run failed: $(tail -1 "$work\\second.log")"
+        result=1
+    elif ! "$winwait" "$winpid" 'zigsaw-second.drawio - ' 20 >/dev/null; then
+        echo "no window for the second diagram"
+        result=1
+    fi
+    "$winwait" "$winpid" 'zigsaw-second.drawio - ' 5 --dismiss >/dev/null 2>&1
+    sleep 1
+    finish 'zigsaw-diagram.drawio - ' || result=1
+    return $result
+}
+check "draw.io's second run opens its diagram in a window of the first, and ends" hands_over_window
+# The command people type, from a console: it renders the diagram without a
+# window, and its run ends with draw.io's exit code.
+exports_png() {
+    local out
+    rm -f "$work\\zigsaw-diagram.png"
+    out=$(cd "$work" && "$zigsaw" run --sandbox=$1 --command=drawio $DRAWIO -x -f png -o zigsaw-diagram.png zigsaw-diagram.drawio 2>&1 </dev/null) ||
+        { echo "$(grep -v -i cache <<<"$out" | grep . | tail -1)"; return 1; }
+    od -An -tx1 -N4 "$work\\zigsaw-diagram.png" 2>/dev/null | grep -q '89 50 4e 47' || { echo "no PNG: $out"; return 1; }
+}
+row "draw.io exports a diagram to PNG from the console" ok fails fails exports_png
+exports_by_shim() {
+    rm -f "$work\\zigsaw-diagram.png"
+    (cd "$work" && "$ZIGSAW_HOME\\bin\\drawio.exe" -x -f png -o zigsaw-diagram.png zigsaw-diagram.drawio </dev/null >"$work\\export.log" 2>&1) ||
+        { echo "drawio failed: $(tail -1 "$work\\export.log")"; return 1; }
+    od -An -tx1 -N4 "$work\\zigsaw-diagram.png" 2>/dev/null | grep -q '89 50 4e 47' || { echo "no PNG: $(tail -1 "$work\\export.log")"; return 1; }
+}
+check "  and through its drawio command, which waits for it" exports_by_shim
+# Its image says nothing of sandboxes; the runtime's reasons are its.
+says_why_from_runtime() {
+    local out sb
+    for sb in low appcontainer; do
+        out=$("$zigsaw" run --sandbox=$sb --command=drawio $DRAWIO --version 2>&1 </dev/null)
+        grep -q "can't run under the $sb sandbox: Windows refuses Chromium's sandbox a window station.*so says its runtime $ELECTRON" <<<"$out" || { echo "$sb: $out"; return 1; }
+    done
+}
+check "A run of an app on Electron's runtime, under a sandbox the runtime can't use, says why" says_why_from_runtime
+# lnk_aumid <file>: the AppUserModelID a shortcut names.
+lnk_aumid() {
+    powershell -NoProfile -Command "\$f = Get-Item -LiteralPath '$1'; (New-Object -ComObject Shell.Application).NameSpace(\$f.DirectoryName).ParseName(\$f.Name).ExtendedProperty('System.AppUserModel.ID')" | tr -d '\r'
+}
+# button <title>: the AppUserModelID of the run's window with that title.
+button() { "$winwait" "$winpid" "$1" 5 --aumid | tr -d '\r' | tail -1; }
+# Each app on the runtime has a taskbar button of its own, the one its
+# shortcut names, so a window pinned there is the shortcut, which runs zigsaw.
+own_button() {
+    local got lnk_id
+    start $DRAWIO drawio soft "$diagram"
+    window 'zigsaw-diagram.drawio - ' 40 || return 1
+    got=$(button 'zigsaw-diagram.drawio - ')
+    finish 'zigsaw-diagram.drawio - ' || return 1
+    [ "$got" = "Zigsaw.$DRAWIO" ] || { echo "its window's: $got"; return 1; }
+    lnk_id=$(lnk_aumid "$ZIGSAW_SHORTCUTS_DIR\\draw.io.lnk")
+    [ "$lnk_id" = "Zigsaw.$DRAWIO" ] || { echo "its shortcut's: $lnk_id"; return 1; }
+}
+check "draw.io's window has the taskbar button its shortcut names, Zigsaw.<id>" own_button
+# The test app: what an app on the runtime is told about itself.
+packaged() {
+    local report="$work\\hello-report.json" got r argc
+    rm -f "$report"
+    "$zigsaw" run --env="ZIGSAW_HELLO_REPORT=$report" --command=hello $HELLO one >"$work\\run.log" 2>&1 &
+    runner=$!
+    winpid=$(cat /proc/$runner/winpid)
+    window zigsaw-hello 30 || return 1
+    got=$(button zigsaw-hello)
+    finish zigsaw-hello || return 1
+    [ "$got" = "Zigsaw.$HELLO" ] || { echo "its window's taskbar button: $got"; return 1; }
+    r=$(tr -d '\r' <"$report" 2>/dev/null) || { echo "no report"; return 1; }
+    grep -q '"isPackaged": true' <<<"$r" || { echo "not packaged: $r"; return 1; }
+    grep -q '"defaultApp": true' <<<"$r" || { echo "not started as electron <app>: $r"; return 1; }
+    # electron.exe, the app, and its own argument: nothing of the loader.
+    argc=$(awk '/"argv"/ { f = 1; next } f && /\]/ { print n + 0; exit } f { n++ }' <<<"$r")
+    [ "$argc" = 3 ] && ! grep -qF 'app.js' <<<"$r" && grep -q '"one"' <<<"$r" || { echo "its arguments: $(tr '\n' ' ' <<<"$r" | grep -o '"argv": \[[^]]*\]')"; return 1; }
+    grep -qF "volumes\\\\$HELLO\\\\home\\\\AppData\\\\Roaming\\\\Zigsaw Hello" <<<"$r" || { echo "its data isn't in its volume: $(grep userData <<<"$r")"; return 1; }
+}
+check "An app on the runtime runs as packaged, gets its arguments as \`electron <app>\` gives them, keeps its data in its volume, and has a taskbar button of its own" packaged
+# One deployment of the runtime for both, which stays while either has it.
+shared() {
+    local layer
+    # Its one layer's digest: an eStargz layer's annotations name another, its
+    # table of contents', after it.
+    layer=$(grep -o '"digest": *"sha256:[0-9a-f]*"' "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $ELECTRON | cut -d: -f2)" | tail -1 | grep -o 'sha256:[0-9a-f]*')
+    grep -q "$layer" "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $DRAWIO | cut -d: -f2)" || { echo "draw.io's image hasn't the runtime's layer"; return 1; }
+    grep -q "$layer" "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $HELLO | cut -d: -f2)" || { echo "the test app's image hasn't the runtime's layer"; return 1; }
+    [ -f "$ZIGSAW_HOME\\deploy\\${layer#sha256:}\\electron.exe" ] || { echo "no deployment of the runtime's layer"; return 1; }
+    "$zigsaw" rm --delete-data $HELLO >/dev/null 2>&1 || { echo "rm failed"; return 1; }
+    [ -f "$ZIGSAW_HOME\\deploy\\${layer#sha256:}\\electron.exe" ] || { echo "rm took the runtime from draw.io"; return 1; }
+    exports_png soft
+}
+check "draw.io and the test app run one deployment of the runtime, which rm of one leaves for the other" shared
+electron_version="$(grep -o '"version": *"[^"]*"' "$root\\recipes\\electron.json" | head -1 | cut -d'"' -f4)"
+check "Electron's runtime, run as an app, says its version" sh -c "\"\$0\" run $ELECTRON --version </dev/null 2>/dev/null | tr -d '\r' | grep -qx 'v$electron_version'" "$zigsaw"
+
 untouched() {
     local d now
     for d in "${absent_before[@]}"; do [ ! -e "$d" ] || { echo "$d appeared"; return 1; }; done
@@ -513,6 +646,7 @@ gui_installed() {
 }
 check "Chromium gets the windowless shim, a shortcut, and .html, .htm, .pdf, .svg" gui_installed $CHROMIUM chromium ungoogled-chromium .html .htm .pdf .svg
 check "VSCodium gets the windowless shim, a shortcut, and .json, .js, .ts, .py, .zig, .md" gui_installed $CODIUM codium VSCodium .json .js .ts .py .zig .md
+check "draw.io gets the windowless shim, a shortcut, and .drawio, .vsdx, .mmd, .mermaid" gui_installed $DRAWIO drawio draw.io .drawio .vsdx .mmd .mermaid
 check "codium-cli, its command-line program, gets the console shim" cmp -s "$ZIGSAW_HOME\\bin\\codium-cli.exe" "$shim_dir\\zigsaw-shim.exe"
 offered() {
     local caps="HKCU\\$classes\\Apps\\$CHROMIUM\\Capabilities\\URLAssociations"
@@ -563,11 +697,17 @@ cd "$root" || exit 1
 acprobe_rm "$zigsaw"
 for id in "${installed[@]}"; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
 "$zigsaw" rm --delete-data test.reach.tool >/dev/null 2>&1
+"$zigsaw" rm --delete-data $HELLO >/dev/null 2>&1
 $had_chromium_key || reg delete 'HKCU\Software\Chromium' /f >/dev/null 2>&1
 for d in "${absent_before[@]}"; do rm -rf "$d"; done
 reg delete "HKCU\\$classes" /f >/dev/null 2>&1
 reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1
 $own_store && rm -rf "$ZIGSAW_HOME"
+# Under soft, Windows' shell adds the files and folders the apps open to your
+# real Recent folder, for them (docs/findings.md#electron-as-a-runtime): those
+# that point into this suite's folder go. Explorer's list of them in
+# HKCU\...\Explorer\RecentDocs keeps the names, as it does for files deleted.
+powershell -NoProfile -Command "\$s = New-Object -ComObject WScript.Shell; Get-ChildItem -LiteralPath (Join-Path \$env:APPDATA 'Microsoft\\Windows\\Recent') -Filter '*.lnk' | Where-Object { \$s.CreateShortcut(\$_.FullName).TargetPath -like '$work*' } | Remove-Item" >/dev/null 2>&1
 rm -rf "$work"
 echo
 echo "$failures check(s) failed; $gaps known gap(s)."

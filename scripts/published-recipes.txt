@@ -80,3 +80,5 @@ postgresql-pg-cron.json
 postgresql-postgis.json
 osm2pgsql.json
 vscodium.json
+electron.json
+drawio.json

@@ -87,6 +87,8 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | PostGIS, extending PostgreSQL (built from source, on GDAL's SDK; with rasters) | `org.postgresql.PostgreSQL.PostGIS` | 3.6.4 | |
 | osm2pgsql, which imports OpenStreetMap data into PostGIS (built from source with Clang, on PostgreSQL's and GDAL's SDKs) | `org.osm2pgsql.osm2pgsql` | 2.3.1 | `osm2pgsql`, `osm2pgsql-expire` |
 | VSCodium, a code editor: Visual Studio Code's source without Microsoft's branding and telemetry (on Electron, with MinGit) | `com.vscodium.codium` | 1.143.17232 | `codium`, `codium-cli` |
+| Electron, the runtime of apps made with it: Chromium and Node.js in one program | `org.electronjs.Electron` | 44.11.2 | `electron` |
+| draw.io, a diagram editor (on Electron's runtime) | `com.jgraph.drawio.desktop` | 32.6.10 | `drawio` |
 
 Prettier runs on Node as a [runtime](#runtimes): its image brings Node's
 files along, without installing Node as an app. SQLite, ripgrep, bat, fzf,
@@ -211,6 +213,15 @@ a program you installed the usual way is `zigsaw-host <program>` in its
 terminal. It opens `vscodium://` links, and asks before one opens a local file.
 To confine what its extensions and terminal write instead, at the cost of its
 renderer's sandbox: `zigsaw run --sandbox=low com.vscodium.codium --no-sandbox`.
+[draw.io](recipes.md#apps-on-electrons-runtime) is upstream's app on
+[Electron's runtime](recipes.md#apps-on-electrons-runtime): its image has only
+draw.io's own 64 MB `app.asar` (27 MB to download), and Electron's 158 MB layer
+is shared with any other app that pins the same runtime. Like VSCodium, it asks
+for `soft`. `drawio` opens it, a diagram, or a Visio or Mermaid file, and
+exports from the console: `drawio -x -f png -o out.png diagram.drawio` (from
+PowerShell, pipe it, `| Out-Host`, to wait for it, as PowerShell doesn't for a
+program with windows). Its updater is off; zigsaw updates it. The runtime's
+`ffmpeg.dll` is Electron's build without H.264 and AAC.
 
 Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 88 MB for zig's 378 MB of files, 179 MB for Rust's 649 MB.

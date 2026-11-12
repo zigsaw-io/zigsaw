@@ -621,6 +621,51 @@ pub const IPersistFile = extern struct {
     },
 };
 
+pub const IID_IPropertyStore: GUID = .{ .Data1 = 0x886D8EEB, .Data2 = 0x8CF2, .Data3 = 0x4446, .Data4 = .{ 0x8D, 0x02, 0xCD, 0xBA, 0x1D, 0xBD, 0xCF, 0x99 } };
+
+pub const PROPERTYKEY = extern struct {
+    fmtid: GUID,
+    pid: DWORD,
+};
+
+/// System.AppUserModel.ID: the taskbar button a shortcut's windows go under,
+/// and what a window pinned there runs again.
+pub const PKEY_AppUserModel_ID: PROPERTYKEY = .{
+    .fmtid = .{ .Data1 = 0x9F4C2855, .Data2 = 0x9F79, .Data3 = 0x4B39, .Data4 = .{ 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } },
+    .pid = 5,
+};
+
+pub const VT_EMPTY: u16 = 0;
+pub const VT_LPWSTR: u16 = 31;
+
+/// A PROPVARIANT, typed only for the string zigsaw reads and writes; the
+/// union is as large as the largest of the real one's members.
+pub const PROPVARIANT = extern struct {
+    vt: u16 = VT_EMPTY,
+    reserved1: u16 = 0,
+    reserved2: u16 = 0,
+    reserved3: u16 = 0,
+    value: extern union {
+        pwszVal: ?[*:0]u16,
+        padding: [2]usize,
+    } = .{ .padding = .{ 0, 0 } },
+};
+
+/// IPropertyStore's methods, in vtable order.
+pub const IPropertyStore = extern struct {
+    vtable: *const extern struct {
+        QueryInterface: *const anyopaque,
+        AddRef: *const anyopaque,
+        Release: *const fn (*IPropertyStore) callconv(.winapi) u32,
+        GetCount: *const anyopaque,
+        GetAt: *const anyopaque,
+        GetValue: *const fn (*IPropertyStore, *const PROPERTYKEY, *PROPVARIANT) callconv(.winapi) HRESULT,
+        SetValue: *const fn (*IPropertyStore, *const PROPERTYKEY, *const PROPVARIANT) callconv(.winapi) HRESULT,
+        Commit: *const fn (*IPropertyStore) callconv(.winapi) HRESULT,
+    },
+};
+
+pub extern "ole32" fn PropVariantClear(value: *PROPVARIANT) callconv(.winapi) HRESULT;
 pub extern "ole32" fn CoInitializeEx(reserved: ?*anyopaque, flags: DWORD) callconv(.winapi) HRESULT;
 pub extern "ole32" fn CoUninitialize() callconv(.winapi) void;
 pub extern "ole32" fn CoCreateInstance(clsid: *const GUID, outer: ?*anyopaque, context: DWORD, iid: *const GUID, object: *?*anyopaque) callconv(.winapi) HRESULT;

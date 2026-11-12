@@ -420,7 +420,27 @@ pub const Runtime = struct {
     /// The ports the runtime uses (its `permissions.uses`), which runs of the
     /// app reach too. Absent unless it has some.
     uses: ?[]const Use = null,
+    /// The sandboxes the runtime can't work under (its
+    /// `permissions.unsupported`), which the app can't either: a run of the
+    /// app told to use one warns. Absent unless it has some.
+    unsupported: ?Unsupported = null,
 };
+
+/// Why an app can't work under a sandbox, and whose reason it is.
+pub const UnsupportedReason = struct {
+    why: []const u8,
+    /// The runtime that can't, or null when it's the app's own reason.
+    runtime: ?[]const u8 = null,
+};
+
+/// Why the app can't work under `sandbox`: its own reason, or else that of
+/// the first of its runtimes that can't, as Electron's can't at low.
+pub fn unsupportedUnder(c: AppConfig, sandbox: Sandbox) ?UnsupportedReason {
+    if (c.permissions.unsupported) |u| if (u.of(sandbox)) |why| return .{ .why = why };
+    for (c.runtimes.map.values()) |r| if (r.unsupported) |u| if (u.of(sandbox)) |why|
+        return .{ .why = why, .runtime = r.id };
+    return null;
+}
 
 /// Where images that extend an app or runtime plug in, like a Flatpak
 /// runtime's extension points (see extensions.zig): an image whose `extends`
@@ -655,6 +675,10 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
         if (u.of(c.permissions.sandbox orelse .low) != null)
             return fail("{s}: it asks for the {t} sandbox and says it can't run under it", .{ what, c.permissions.sandbox orelse .low });
     }
+    // Nor under one its runtime can't run under: an app on Electron's has to
+    // ask for soft.
+    for (c.runtimes.map.values()) |r| if (r.unsupported) |u| if (u.of(c.permissions.sandbox orelse .low)) |why|
+        return fail("{s}: it asks for the {t} sandbox, which its runtime {s} can't run under ({s}); ask for another in its permissions", .{ what, c.permissions.sandbox orelse .low, r.id, why });
     var it = c.exports.map.iterator();
     while (it.next()) |e| {
         if (!isValidExportName(e.key_ptr.*))
@@ -1182,6 +1206,35 @@ test "unsupported sandboxes and schemes are checked" {
     try schemes.map.put(arena, "file", .{ .command = "open" });
     c.schemes = schemes;
     try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
+}
+
+test "a runtime's unsupported sandboxes are the app's too" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const digest = "sha256:" ++ repeat("e", 64);
+    var c: AppConfig = .{ .id = "app", .version = "1", .command = "${electron}\\electron.exe" };
+    try c.runtimes.map.put(arena, "electron", .{ .id = "org.electronjs.Electron", .version = "1", .image = digest, .layer = digest, .unsupported = .{ .low = "no window station", .appcontainer = "none there either" } });
+    // An app that asks for low, as one asking for nothing does, can't be
+    // built on it.
+    try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{"electron"}));
+    c.permissions.sandbox = .soft;
+    try validateEntryPoints("x", c, &.{"electron"});
+    const reason = unsupportedUnder(c, .low).?;
+    try std.testing.expectEqualStrings("no window station", reason.why);
+    try std.testing.expectEqualStrings("org.electronjs.Electron", reason.runtime.?);
+    try std.testing.expect(unsupportedUnder(c, .soft) == null);
+    // The app's own reason comes first.
+    c.permissions.unsupported = .{ .appcontainer = "its own" };
+    try std.testing.expectEqualStrings("its own", unsupportedUnder(c, .appcontainer).?.why);
+    try std.testing.expect(unsupportedUnder(c, .appcontainer).?.runtime == null);
+    // Written into the app's config, and read back; absent when a runtime
+    // has none, so images on other runtimes keep their digests.
+    const json = try toJson(arena, c);
+    const back = try std.json.parseFromSliceLeaky(AppConfig, arena, json, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqualStrings("no window station", back.runtimes.map.get("electron").?.unsupported.?.low.?);
+    const plain = try toJson(arena, Runtime{ .id = "x", .version = "1", .image = digest, .layer = digest });
+    try std.testing.expect(std.mem.indexOf(u8, plain, "unsupported") == null);
 }
 
 test "commands and host count as access, and only when added" {

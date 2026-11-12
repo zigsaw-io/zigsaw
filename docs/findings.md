@@ -485,6 +485,71 @@ toolchains' images do, which ask for `soft` too. So zigsaw gives these two
 separate data, pinned installs and clean removal, but no confinement of its
 own, and `pull` says so: "whatever you can write".
 
+### Electron as a runtime
+
+Iteration 92, 2026-11-12, Windows 11 26300. draw.io 32.6.10, upstream's
+portable zip, on Electron 44.11.2's own build for Windows, in a store of their
+own, under `soft`.
+
+- **What an app brings, and what it shares**: draw.io's zip holds 450 MB, of
+  which its own is `resources\app.asar`, 64.6 MB (4,067 files, no native
+  module); the rest is its copy of Electron, 44.10.2, with the same Chromium,
+  152.0.7977.169, as 44.11.2. As images, the runtime's layer is 158 MB
+  (eStargz) and draw.io's own 27 MB: 15% of what pulling draw.io downloads is
+  draw.io's.
+- **How Electron tells a packaged app**: by its program's name.
+  `app.isPackaged` is false for `electron.exe`, unless
+  `ELECTRON_FORCE_IS_PACKAGED` is set (Electron reads it each time; set by a
+  module loaded first, it takes effect).
+- **`electron.exe <app>`**: Electron's `default_app` loads the app, sets
+  `process.defaultApp`, and the app's name and version from its
+  `package.json`; the app's data goes in `%APPDATA%\<its name>`, in its
+  volume. Its arguments are `[electron.exe, <app>, ...]`, as in development,
+  which draw.io handles.
+- **A module given with `-r`** runs before the app, but shows in its
+  arguments: `[electron.exe, -r, <module>, <app>, ...]`, where draw.io's own
+  `-r` means `--recursive`. In a second start's, which the first gets,
+  Chromium puts its switches between the two:
+  `[electron.exe, -r, --allow-file-access-from-files, --source-app-id, <module>, <app>, <file>]`.
+  zigsaw's module takes itself and that `-r` out of both, which leaves what
+  `electron <app>` gives.
+- **The taskbar**: Electron names its button `electron.app.<product name of
+  its program>` the first time it needs one (a recent document, a
+  notification, a jump list), and that's `Electron` for `electron.exe`: every
+  app on the runtime would share one. With zigsaw's module, draw.io's windows
+  carry `Zigsaw.com.jgraph.drawio.desktop`, as its shortcut does.
+- **Recent documents go to the real profile.** `app.addRecentDocument`, run by
+  the test app under `soft`, added its file and folder to the real
+  `%APPDATA%\Microsoft\Windows\Recent`, a jump list for its taskbar button in
+  `AutomaticDestinations`, and the file to Quick access; nothing to the run's
+  own profile. Explorer's shell does that for the program, so it does for any
+  app under `soft` that adds recent documents; draw.io doesn't. Other apps do:
+  the real Recent folder here had the files and work folders VSCodium opened
+  and the file Chromium downloaded in each `tests/chromium.sh` run since
+  iteration 67, and files SumatraPDF and VLC opened in the probes of
+  iterations 17 and 19, along with their names in Explorer's `RecentDocs` list
+  in HKCU, which the suite's check of the registry didn't look at. From now on
+  the suite removes the shortcuts there that point into its own folder.
+- **Everything else was where draw.io worked**: a diagram given with `--file`
+  opens; a second run's opens in a window of the first and the run ends with 0,
+  once draw.io has settled (sent at once, as its first window showed, it
+  opened nothing, and the window ignored a close for a while); closing its
+  windows ends the run with 0; `-x -f png` exports in 2 s, with its line and
+  exit code through `zigsaw run` and through the windowless shim. Its renderer
+  runs at untrusted integrity, restricted, its GPU process restricted. The
+  real profile and HKCU had nothing new.
+- **Under the other sandboxes** it stops with code 3, as VSCodium does; told
+  `--no-sandbox`, it exports at low, and in an AppContainer exits 1 with no
+  message.
+- **Codecs**: Electron's `ffmpeg.dll` is built with `proprietary_codecs=true`
+  and `ffmpeg_branding="Chrome"`; each release also has one without (1.7 MB
+  against 3.1 MB). VSCodium's published image has Electron 43.7.7's own:
+  byte for byte the one with H.264 and AAC.
+- **Fuses**: draw.io's own build turns `RunAsNode`, `NODE_OPTIONS` and
+  `--inspect` off, cookie encryption on, and loads its app only from an asar
+  (`build/fuses.mjs`). Electron's program in the runtime has them as Electron
+  ships them, and is unsigned, as Electron's zip has it.
+
 ## The user's folders
 
 Iteration 18, 2026-10-14, Windows 11 26300. Before giving an app the

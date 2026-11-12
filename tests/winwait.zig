@@ -4,10 +4,12 @@
 //! their settings as they close. Built by `zig build winwait` for
 //! tests/guiapps.sh.
 //!
-//!   zigsaw-winwait <pid> <text> <seconds> [--close|--dismiss]
+//!   zigsaw-winwait <pid> <text> <seconds> [--close|--dismiss|--aumid]
 //!
 //! --dismiss closes the window and doesn't wait for anything: for a dialog,
-//! whose program carries on.
+//! whose program carries on. --aumid prints, after the title, the
+//! AppUserModelID the window carries ("none" if it carries none): which
+//! taskbar button it goes under, and which shortcut it counts as.
 //!
 //! <pid> is the `zigsaw run` that started the app: windows of other programs
 //! never count, whatever their titles (a browser showing the app's web page
@@ -40,6 +42,44 @@ extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
 extern "kernel32" fn CreateToolhelp32Snapshot(flags: DWORD, pid: DWORD) callconv(.winapi) HANDLE;
 extern "kernel32" fn Process32FirstW(snapshot: HANDLE, entry: *PROCESSENTRY32W) callconv(.winapi) BOOL;
 extern "kernel32" fn Process32NextW(snapshot: HANDLE, entry: *PROCESSENTRY32W) callconv(.winapi) BOOL;
+
+const GUID = extern struct { Data1: u32, Data2: u16, Data3: u16, Data4: [8]u8 };
+const PROPERTYKEY = extern struct { fmtid: GUID, pid: DWORD };
+const PROPVARIANT = extern struct {
+    vt: u16 = 0,
+    reserved: [3]u16 = .{ 0, 0, 0 },
+    value: extern union { pwszVal: ?[*:0]u16, padding: [2]usize } = .{ .padding = .{ 0, 0 } },
+};
+const IPropertyStore = extern struct {
+    vtable: *const extern struct {
+        QueryInterface: *const anyopaque,
+        AddRef: *const anyopaque,
+        Release: *const fn (*IPropertyStore) callconv(.winapi) u32,
+        GetCount: *const anyopaque,
+        GetAt: *const anyopaque,
+        GetValue: *const fn (*IPropertyStore, *const PROPERTYKEY, *PROPVARIANT) callconv(.winapi) i32,
+    },
+};
+const IID_IPropertyStore: GUID = .{ .Data1 = 0x886D8EEB, .Data2 = 0x8CF2, .Data3 = 0x4446, .Data4 = .{ 0x8D, 0x02, 0xCD, 0xBA, 0x1D, 0xBD, 0xCF, 0x99 } };
+const PKEY_AppUserModel_ID: PROPERTYKEY = .{ .fmtid = .{ .Data1 = 0x9F4C2855, .Data2 = 0x9F79, .Data3 = 0x4B39, .Data4 = .{ 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3 } }, .pid = 5 };
+const VT_LPWSTR: u16 = 31;
+extern "shell32" fn SHGetPropertyStoreForWindow(window: HWND, iid: *const GUID, store: *?*IPropertyStore) callconv(.winapi) i32;
+extern "ole32" fn PropVariantClear(value: *PROPVARIANT) callconv(.winapi) i32;
+
+/// The AppUserModelID a window carries, written to `buf`, or "none".
+fn appUserModelId(window: HWND, buf: []u8) []const u8 {
+    var store: ?*IPropertyStore = null;
+    if (SHGetPropertyStoreForWindow(window, &IID_IPropertyStore, &store) < 0 or store == null) return "none";
+    defer _ = store.?.vtable.Release(store.?);
+    var value: PROPVARIANT = .{};
+    if (store.?.vtable.GetValue(store.?, &PKEY_AppUserModel_ID, &value) < 0) return "none";
+    defer _ = PropVariantClear(&value);
+    if (value.vt != VT_LPWSTR) return "none";
+    const s = value.value.pwszVal orelse return "none";
+    const wide = std.mem.span(s);
+    if (wide.len * 3 > buf.len) return "none";
+    return buf[0..std.unicode.wtf16LeToWtf8(buf, wide)];
+}
 
 const WM_CLOSE: u32 = 0x0010;
 const SYNCHRONIZE: DWORD = 0x00100000;
@@ -146,7 +186,7 @@ fn visit(window: HWND, param: LPARAM) callconv(.winapi) BOOL {
 pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 4) {
-        std.debug.print("usage: zigsaw-winwait <pid> <text> <seconds> [--close|--dismiss]\n", .{});
+        std.debug.print("usage: zigsaw-winwait <pid> <text> <seconds> [--close|--dismiss|--aumid]\n", .{});
         return 1;
     }
     const root = try std.fmt.parseInt(DWORD, args[1], 10);
@@ -168,6 +208,10 @@ pub fn main(init: std.process.Init) !u8 {
     var buf: [1024]u8 = undefined;
     var stdout = std.Io.File.stdout().writerStreaming(init.io, &buf);
     try stdout.interface.print("{s}\n", .{search.title[0..search.title_len]});
+    if (args.len > 4 and std.mem.eql(u8, args[4], "--aumid")) {
+        var id: [1024]u8 = undefined;
+        try stdout.interface.print("{s}\n", .{appUserModelId(search.found.?, &id)});
+    }
     try stdout.interface.flush();
     if (args.len > 4 and std.mem.eql(u8, args[4], "--dismiss")) {
         _ = PostMessageW(search.found.?, WM_CLOSE, 0, 0);

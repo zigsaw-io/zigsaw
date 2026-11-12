@@ -364,13 +364,17 @@ fn lazyLayersOf(ctx: *Context, id: []const u8) ![]const oci.Descriptor {
     return found.items;
 }
 
-/// Says so when the app's image says it can't work under `sandbox`. A warning
-/// and not a refusal: a program's own switch may get it past that, as
-/// `--no-sandbox` does Chromium's. Through a GUI shim, it reaches the message
-/// box a failed run shows.
+/// Says so when the app's image says it can't work under `sandbox`, or one of
+/// its runtimes' does. A warning and not a refusal: a program's own switch may
+/// get it past that, as `--no-sandbox` does Chromium's. Through a GUI shim, it
+/// reaches the message box a failed run shows.
 pub fn warnUnsupported(cfg: oci.AppConfig, sandbox: oci.Sandbox) void {
-    const why = (cfg.permissions.unsupported orelse return).of(sandbox) orelse return;
-    note("warning: {s} can't run under the {t} sandbox: {s}; its image asks for --sandbox={t}", .{ cfg.id, sandbox, why, cfg.permissions.sandbox orelse .low });
+    const reason = oci.unsupportedUnder(cfg, sandbox) orelse return;
+    const asks = cfg.permissions.sandbox orelse .low;
+    if (reason.runtime) |runtime_id|
+        note("warning: {s} can't run under the {t} sandbox: {s}; so says its runtime {s}, and its image asks for --sandbox={t}", .{ cfg.id, sandbox, reason.why, runtime_id, asks })
+    else
+        note("warning: {s} can't run under the {t} sandbox: {s}; its image asks for --sandbox={t}", .{ cfg.id, sandbox, reason.why, asks });
 }
 
 /// The directories a run has on its PATH after the system's, for what it may

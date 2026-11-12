@@ -1,0 +1,55 @@
+{
+  "id": "com.jgraph.drawio.desktop",
+  "version": "32.6.10",
+  "name": "draw.io",
+  "summary": "Diagram editor: flowcharts, UML, network diagrams and more",
+  "homepage": "https://www.drawio.com/",
+  "license": "GPL-3.0-only",
+  "command": "${electron}\\electron.exe",
+  "args": ["-r", "${electron}\\zigsaw\\app.js", "${app}\\resources\\app.asar"],
+  "env": { "DRAWIO_DISABLE_UPDATE": "true" },
+  "permissions": {
+    "sandbox": "soft",
+    "network": true,
+    "filesystem": ["cwd", "desktop", "documents", "downloads"]
+  },
+  "runtimes": { "electron": "org.electronjs.Electron:44.11.2@sha256:b427ce53d6f9cac8eef3aeabf60a6baa3e64bacd593431d49c51b6dd0b6ffd51" },
+  "sdk": {
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
+  },
+  "exports": {
+    "drawio": { "command": "${electron}\\electron.exe", "args": ["-r", "${electron}\\zigsaw\\app.js", "${app}\\resources\\app.asar"] }
+  },
+  "shortcuts": {
+    "draw.io": { "command": "drawio", "description": "Draw diagrams", "icon": "${app}\\draw.io.ico" }
+  },
+  "associations": {
+    ".drawio": { "command": "drawio", "description": "draw.io diagram", "icon": "${app}\\draw.io.ico" },
+    ".vsdx": { "command": "drawio", "description": "Visio drawing" },
+    ".mmd": { "command": "drawio", "description": "Mermaid diagram" },
+    ".mermaid": { "command": "drawio", "description": "Mermaid diagram" }
+  },
+  "modules": [
+    {
+      "name": "drawio",
+      "sources": [
+        {
+          "url": "https://github.com/jgraph/drawio-desktop/releases/download/v32.6.10/draw.io-32.6.10-windows.zip",
+          "sha256": "ca01af1ebcb8a9cc7383c1c5d6f11ea90ee030e563063b611978584ff70fb4d6",
+          "dest": "zip"
+        },
+        {
+          "url": "https://raw.githubusercontent.com/jgraph/drawio-desktop/v32.6.10/build/icon.ico",
+          "sha256": "ebb8c88dac4c3c1544935d1b0cf0b26dc6d31f7726c04b3a0093dbe5ce4a6f86",
+          "type": "file"
+        }
+      ],
+      "build": [
+        "! test -e zip/resources/app.asar.unpacked",
+        "mkdir -p \"$PREFIX/resources\"",
+        "cp zip/resources/app.asar \"$PREFIX/resources/\"",
+        "cp icon.ico \"$PREFIX/draw.io.ico\""
+      ]
+    }
+  ]
+}

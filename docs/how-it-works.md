@@ -74,7 +74,10 @@ reads the subsystem from the executable's PE header when it writes the
 shim. Start menu shortcuts are `.lnk` files that
 run these shims. A shim that a shortcut started says so (Windows puts the
 shortcut's path in its `STARTUPINFO`, with `STARTF_TITLEISLINKNAME`), and
-zigsaw starts the app with the same.
+zigsaw starts the app with the same. Each shortcut's property store has
+`System.AppUserModel.ID` = `Zigsaw.<app id>`, which a program can name as its
+own (`SetCurrentProcessExplicitAppUserModelID`); Electron's runtime has each
+app on it do so, as zigsaw can't from outside.
 
 **File associations** are keys in `HKCU\Software\Classes`: one of zigsaw's
 per app and extension, with the command, and its name in the extension's

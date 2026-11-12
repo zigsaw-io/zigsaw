@@ -7,6 +7,13 @@
 //! ZIGSAW_SHORTCUTS_DIR names another folder, for any store. A shortcut
 //! whose target is a shim in this store's bin belongs to the app that shim's
 //! sidecar names; zigsaw leaves every other .lnk in the folder alone.
+//!
+//! Each shortcut names its app's taskbar button, `Zigsaw.<app id>` (its
+//! AppUserModelID): windows of a program that says the same are the
+//! shortcut's, and pinning one pins the shortcut, which runs the app through
+//! zigsaw. Electron's runtime says so for each app on it (recipes/electron/
+//! zigsaw-app.js); other programs' windows count as the shortcut's when it
+//! started them (see shim.zig).
 
 const std = @import("std");
 const Io = std.Io;
@@ -16,6 +23,7 @@ const Sidecar = @import("Sidecar.zig");
 const environment = @import("environment.zig");
 const oci = @import("oci.zig");
 const win32 = @import("win32.zig");
+const repeat = @import("testing.zig").repeat;
 const note = Context.note;
 
 pub const extension = ".lnk";
@@ -63,6 +71,45 @@ test choose {
     try std.testing.expectEqual(Choice.none, choose(null, null, "C:\\Users\\me\\AppData\\Local\\zigsaw"));
     try std.testing.expectEqual(Choice.none, choose("", local, "C:\\Temp\\store"));
     try std.testing.expectEqualStrings("D:\\links", choose("D:\\links", local, "C:\\Temp\\store").override);
+}
+
+/// The AppUserModelID of an app's shortcuts, or null for an id too long for
+/// one (Windows takes 128 characters). Electron's runtime makes the same of
+/// ZIGSAW_ID.
+pub fn appUserModelId(arena: Allocator, app: []const u8) !?[]const u8 {
+    const id = try std.fmt.allocPrint(arena, "Zigsaw.{s}", .{app});
+    return if (id.len <= 128) id else null;
+}
+
+test appUserModelId {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try std.testing.expectEqualStrings("Zigsaw.com.jgraph.drawio.desktop", (try appUserModelId(arena, "com.jgraph.drawio.desktop")).?);
+    try std.testing.expect(try appUserModelId(arena, repeat("a", 121)) != null);
+    try std.testing.expect(try appUserModelId(arena, repeat("a", 122)) == null);
+}
+
+test "a shortcut keeps the AppUserModelID it's written with" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", arena);
+    var com: Com = try .init();
+    defer com.deinit();
+    const with = try std.fs.path.join(arena, &.{ dir_path, "with.lnk" });
+    const without = try std.fs.path.join(arena, &.{ dir_path, "without.lnk" });
+    const link: Com.Link = .{ .target = "C:\\Windows\\notepad.exe", .working_dir = dir_path, .description = "", .icon = "C:\\Windows\\notepad.exe" };
+    var named = link;
+    named.app_user_model_id = "Zigsaw.test.app";
+    try com.write(arena, with, named);
+    try com.write(arena, without, link);
+    try std.testing.expectEqualStrings("Zigsaw.test.app", (try com.appUserModelIdOf(arena, with)).?);
+    try std.testing.expect(try com.appUserModelIdOf(arena, without) == null);
+    try std.testing.expectEqualStrings("C:\\Windows\\notepad.exe", try com.target(arena, with));
 }
 
 /// A shortcut in the folder that belongs to this store.
@@ -170,6 +217,7 @@ pub fn sync(ctx: *Context, config: oci.AppConfig, placeholders: oci.Placeholders
             .working_dir = home,
             .description = shortcut.description orelse "",
             .icon = icon,
+            .app_user_model_id = try appUserModelId(arena, config.id),
         });
         try written.append(arena, name);
     }
@@ -258,6 +306,7 @@ const Com = struct {
         working_dir: []const u8,
         description: []const u8,
         icon: []const u8,
+        app_user_model_id: ?[]const u8 = null,
     };
 
     fn create() !struct { link: *win32.IShellLinkW, file: *win32.IPersistFile } {
@@ -278,7 +327,36 @@ const Com = struct {
         try check(o.link.vtable.SetWorkingDirectory(o.link, try win32.wide(arena, l.working_dir)));
         try check(o.link.vtable.SetDescription(o.link, try win32.wide(arena, l.description)));
         try check(o.link.vtable.SetIconLocation(o.link, try win32.wide(arena, l.icon), 0));
+        if (l.app_user_model_id) |id| {
+            const store = try propertyStore(o.link);
+            defer _ = store.vtable.Release(store);
+            const value: win32.PROPVARIANT = .{ .vt = win32.VT_LPWSTR, .value = .{ .pwszVal = try win32.wide(arena, id) } };
+            try check(store.vtable.SetValue(store, &win32.PKEY_AppUserModel_ID, &value));
+            try check(store.vtable.Commit(store));
+        }
         try check(o.file.vtable.Save(o.file, try win32.wide(arena, path), win32.TRUE));
+    }
+
+    fn propertyStore(link: *win32.IShellLinkW) !*win32.IPropertyStore {
+        var obj: ?*anyopaque = null;
+        try check(link.vtable.QueryInterface(link, &win32.IID_IPropertyStore, &obj));
+        return @ptrCast(@alignCast(obj.?));
+    }
+
+    /// The AppUserModelID a shortcut names, if any.
+    fn appUserModelIdOf(_: *Com, arena: Allocator, path: []const u8) !?[]const u8 {
+        const o = try create();
+        defer _ = o.link.vtable.Release(o.link);
+        defer _ = o.file.vtable.Release(o.file);
+        try check(o.file.vtable.Load(o.file, try win32.wide(arena, path), win32.STGM_READ));
+        const store = try propertyStore(o.link);
+        defer _ = store.vtable.Release(store);
+        var value: win32.PROPVARIANT = .{};
+        try check(store.vtable.GetValue(store, &win32.PKEY_AppUserModel_ID, &value));
+        defer _ = win32.PropVariantClear(&value);
+        if (value.vt != win32.VT_LPWSTR) return null;
+        const s = value.value.pwszVal orelse return null;
+        return try std.unicode.wtf16LeToWtf8Alloc(arena, std.mem.span(s));
     }
 
     /// The path a shortcut runs.

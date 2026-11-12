@@ -34,8 +34,10 @@ apps: php-sdk.json php.json php-apcu.json php-xdebug.json php-igbinary.json php-
 java: java-sdk.json java.json maven.json gradle.json pdfbox.json plantuml.json logisim-evolution.json scenebuilder.json
 
 # VSCodium, packaged from upstream's zip (about a minute: sed, a copy, and an
-# eStargz layer of 3,500 files), pulling BusyBox's and MinGit's images
-electron: vscodium.json
+# eStargz layer of 3,500 files), pulling BusyBox's and MinGit's images; then
+# Electron's runtime (half a minute, an eStargz layer of 74 files) and draw.io
+# on it (a copy of its app.asar)
+electron: vscodium.json electron.json drawio.json
 
 # What GTK's SDK builds with: Perl (prebuilt) and cargo-c (13); gettext
 # alone (25 here with llvm-mingw; 39 on a runner before iteration 38

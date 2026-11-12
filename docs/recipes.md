@@ -318,7 +318,11 @@ MinGit's `env`, and nothing is copied into Meld's image:
 }
 ```
 
-A runtime's permissions don't carry over: the app's own apply.
+A runtime's permissions don't carry over: the app's own apply. What a runtime
+says it can't run under does: an app can't run where its runtime can't, so a
+recipe that asks for such a sandbox doesn't build, and a run told to use one
+warns with the runtime's reason, as `zigsaw info` shows it.
+[Electron's runtime](#apps-on-electrons-runtime) is one.
 
 ## Extension points
 
@@ -3409,6 +3413,59 @@ are. What such a recipe needs, from
 - **`"layer": "estargz"`, if its upgrades share files**: VSCodium's recovery
   release copies 83.5% of the old layer, and its monthly one 24.6%
   ([layer formats](layer-formats.md#updating)).
+
+### Apps on Electron's runtime
+
+Electron's runtime ([`recipes/electron.json`](../recipes/electron.json),
+`org.electronjs.Electron`) is Electron's own build for Windows, which the apps
+on it share: its 158 MB layer is pulled and unpacked once for all of them. An
+app's image then has only its own files, `resources\app.asar` for one
+electron-builder packaged, and runs the runtime's program with them, as
+[draw.io's](../recipes/drawio.json) does:
+
+```json
+"command": "${electron}\\electron.exe",
+"args": ["-r", "${electron}\\zigsaw\\app.js", "${app}\\resources\\app.asar"],
+"permissions": { "sandbox": "soft" },
+"runtimes": { "electron": "org.electronjs.Electron:44.11.2@sha256:..." }
+```
+
+- **`electron.exe <app>`** is how Electron runs an app it doesn't have inside
+  it: its `default_app` loads the app's package and names the app after it,
+  and the app sees `process.defaultApp`, with its arguments after its own path,
+  as `electron .` gives them to its developers.
+- **`-r ${electron}\zigsaw\app.js`** loads
+  [zigsaw's own module](../recipes/electron/zigsaw-app.js) first. It makes the
+  app a packaged one (`app.isPackaged`, which Electron otherwise takes from its
+  program's name, `electron.exe` for every app here; and `ELECTRON_IS_DEV=0`),
+  gives it a taskbar button of its own, `Zigsaw.<app id>`, the one its
+  [shortcuts](../README.md#start-menu-shortcuts) name, and takes itself out of
+  the app's arguments, and out of a second start's, where Chromium puts its
+  own switches in between. Without it, every app on the runtime gets the same
+  button, `electron.app.Electron`, from the first time one adds a recent
+  document or shows a notification.
+- **`"sandbox": "soft"`**, for the reasons above: the runtime's `unsupported`
+  is the app's too, so a recipe that asks for another sandbox doesn't build,
+  and a run told to use one says why.
+- **The runtime of the Electron it was made for**, by major version: an app's
+  JavaScript and native modules are made for one. draw.io 32.6.10 comes with
+  Electron 44.10.2 and runs on the runtime's 44.11.2. An `app.asar.unpacked`
+  has native modules, built for that major version's ABI; draw.io's recipe
+  stops if it ever has one.
+- **What differs from the app's own build:**
+  - `process.resourcesPath` is the runtime's `resources`: an app that keeps
+    files there (electron-builder's `extraResources`, its updater's
+    `app-update.yml`) doesn't find them.
+  - Electron's fuses are as Electron ships them: an app whose own build turns
+    off `RunAsNode`, `NODE_OPTIONS` or `--inspect`, as draw.io's does, has
+    them on here ([gaps](gaps.md)).
+  - `ffmpeg.dll` is Electron's own build without H.264 and AAC, so that the
+    runtime can be published: such videos don't play.
+- **Its updater off**, as for any app: draw.io's recipe sets
+  `DRAWIO_DISABLE_UPDATE`.
+- **A new Electron** is a new image of the runtime, and a re-pin of the apps
+  on it, as for any [runtime](#runtimes). Apps that pin the same image share
+  one copy on disk; one that pins another brings its own.
 
 ## MSVC
 

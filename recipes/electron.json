@@ -1,0 +1,53 @@
+{
+  "id": "org.electronjs.Electron",
+  "version": "44.11.2",
+  "name": "Electron",
+  "summary": "Runtime for apps made with Electron: Chromium and Node.js in one program",
+  "homepage": "https://www.electronjs.org/",
+  "license": "MIT",
+  "command": "electron.exe",
+  "layer": "estargz",
+  "prefetch": [
+    "electron.exe",
+    "icudtl.dat",
+    "v8_context_snapshot.bin",
+    "resources/default_app.asar",
+    "zigsaw/app.js",
+    "chrome_100_percent.pak",
+    "chrome_200_percent.pak",
+    "locales/en-US.pak",
+    "resources.pak",
+    "ffmpeg.dll",
+    "d3dcompiler_47.dll",
+    "vk_swiftshader.dll",
+    "dxil.dll",
+    "dxcompiler.dll"
+  ],
+  "permissions": {
+    "sandbox": "soft",
+    "filesystem": ["cwd"],
+    "unsupported": {
+      "low": "Windows refuses Chromium's sandbox a window station there, so it exits with code 3; --no-sandbox gets past that, and takes its sandbox from every process",
+      "appcontainer": "Windows refuses Chromium's sandbox a window station there, so it exits with code 3; even with --no-sandbox, Node can't resolve paths from a container"
+    }
+  },
+  "exports": {
+    "electron": { "command": "electron.exe" }
+  },
+  "modules": [
+    {
+      "name": "electron",
+      "sources": [
+        {
+          "url": "https://github.com/electron/electron/releases/download/v44.11.2/electron-v44.11.2-win32-x64.zip",
+          "sha256": "6658bff9d0124b663073b4fe53b42a1aecf7a3f36af9865f19b780986078b8e0"
+        },
+        {
+          "url": "https://github.com/electron/electron/releases/download/v44.11.2/ffmpeg-v44.11.2-win32-x64.zip",
+          "sha256": "9e216235043c7d9915a90f0b3eab5d73f1dcc493c41e433f8f0b823f50797e38"
+        },
+        { "path": "electron/zigsaw-app.js", "dest": "zigsaw/app.js" }
+      ]
+    }
+  ]
+}

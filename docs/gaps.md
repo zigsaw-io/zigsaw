@@ -460,10 +460,15 @@
 - A shortcut or a kind of file shows the icon of an `.ico`, or of an
   executable that has one: a recipe whose app has only an SVG has to make
   the `.ico`, as GTK's and Text Editor's do with the SDK's `rsvg-convert`.
-- zigsaw sets no AppUserModelID. An app started from its shortcut counts
-  as started from it; whether pinning its window to the taskbar then pins
-  the shortcut, and not the app's executable in the store, hasn't been
-  checked: it takes pinning one by hand.
+- zigsaw names each app's taskbar button in its shortcuts (`Zigsaw.<app id>`),
+  but can't set it on a program from outside: only apps on Electron's runtime
+  carry it themselves. Another app started from its shortcut counts as started
+  from it, and one started otherwise (a file, a console) doesn't, so its window
+  may get a button of its own beside a pinned shortcut. Whether pinning a
+  window pins the shortcut, and not the app's executable in the store, hasn't
+  been checked: it takes pinning one by hand. An app that names its own button,
+  as VSCodium does, keeps it, and a pin of its window may then run its program
+  in the store without zigsaw (not checked either).
 - zigsaw offers an app for a kind of file or link, and can't make it the default:
   Windows keeps that choice to the user. Only extensions and URL schemes are
   registered: no MIME types, no "New" menu entries, and no command other than
@@ -784,9 +789,10 @@
   Credential Manager.
 - Chromium's and Electron's sandboxes can't start at low integrity or in an
   AppContainer: Windows refuses them a window station
-  ([findings](findings.md#chromium-and-electron)). So VSCodium's and
-  ungoogled-chromium's images ask for `soft`, and each can write whatever you
-  can; zigsaw keeps their data apart, and doesn't confine them. Run with
+  ([findings](findings.md#chromium-and-electron)). So VSCodium's,
+  ungoogled-chromium's and Electron's runtime's images ask for `soft`, as do
+  the apps on that runtime, and each can write whatever you can; zigsaw keeps
+  their data apart, and doesn't confine them. Run with
   `--sandbox=low` or `--sandbox=appcontainer` regardless, or with an override
   that says so, they exit with code 3 and no window, after a warning from
   zigsaw that says why (in a message box, from a shortcut). Their
@@ -799,6 +805,26 @@
   then, nor does its `codium-cli`: Node's `realpath` walks up from a drive root
   the container can't read, and Electron refuses most of `NODE_OPTIONS`, which
   Node's image gets past it with.
+- Apps on [Electron's runtime](recipes.md#apps-on-electrons-runtime) run on
+  Electron's own program, not their own build of it. Its fuses are as Electron
+  ships them, so an app whose build turns off `RunAsNode`, `NODE_OPTIONS` or
+  `--inspect`, as draw.io's does, has them on: a program that can start the
+  app's `electron.exe` with those can run code as it. zigsaw's runs don't pass
+  your variables to it, and under `soft` that code could do no more than
+  you, but it isn't what the app's makers shipped. `process.resourcesPath` is
+  the runtime's, so an app that keeps files there needs a patch, and its
+  `ffmpeg.dll` plays no H.264 or AAC. Pinning a window of one to the taskbar
+  pins its shortcut, by the name both carry; that hasn't been checked by hand
+  yet, nor whether its notifications show.
+- Recent documents an app adds under `soft` (Electron's
+  `app.addRecentDocument`, VSCodium's, SumatraPDF's, VLC's) go to your
+  real Recent folder, Explorer's `RecentDocs` list, its jump list and Quick
+  access, as for a program installed the usual way: Explorer writes them for
+  it, outside the app's profile ([findings](findings.md#electron-as-a-runtime)).
+  `zigsaw rm` doesn't take them out.
+- From PowerShell, `drawio -x ...` returns before the export is done, as
+  PowerShell doesn't wait for a program with windows unless its output is
+  piped (`| Out-Host`); cmd, Git Bash and `zigsaw run` wait.
 - A command that starts a program and ends takes the program with it, as its
   run's job ends what's left. VSCodium's `codium-cli <folder>` does that
   when no instance is running, and works when one is: `codium` is the command

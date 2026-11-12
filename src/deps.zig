@@ -43,6 +43,7 @@ pub const Dependency = struct {
             .aliases = if (d.config.aliases) |a| (if (a.map.count() > 0) a else null) else null,
             .extensions = if (d.config.extensions) |e| (if (e.map.count() > 0) e else null) else null,
             .uses = d.config.permissions.uses,
+            .unsupported = d.config.permissions.unsupported,
         };
     }
 };

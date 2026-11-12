@@ -122,6 +122,10 @@ fetch_release() {
 shortcut_dir() {
     powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).CreateShortcut('$1').WorkingDirectory" | tr -d '\r'
 }
+# shortcut_aumid <lnk>: the AppUserModelID it names (since 0.92), or nothing.
+shortcut_aumid() {
+    powershell -NoProfile -Command "\$f = Get-Item -LiteralPath '$1'; (New-Object -ComObject Shell.Application).NameSpace(\$f.DirectoryName).ParseName(\$f.Name).ExtendedProperty('System.AppUserModel.ID')" | tr -d '\r'
+}
 
 # from_release <version>: the rows for an upgrade from that release.
 from_release() {
@@ -161,6 +165,7 @@ from_release() {
         [ -f "$bin\\upgrade-tool.exe" ] || { echo "no command for upgrade-tool"; return 1; }
         [ -f "$lnk" ] || { echo "no shortcut"; return 1; }
         shortcut_dir "$lnk" | grep -qF "\\data\\$APP" || { echo "the shortcut starts in $(shortcut_dir "$lnk")"; return 1; }
+        [ -z "$(shortcut_aumid "$lnk")" ] || { echo "the shortcut already names a taskbar button: $(shortcut_aumid "$lnk")"; return 1; }
     }
     check "  it installs an app with data, a command a run added, a shortcut and a named volume" old_store || return
     # A run that doesn't end: its keys stay in HKCU, with that zigsaw's record.
@@ -201,6 +206,12 @@ from_release() {
         shortcut_dir "$lnk" | grep -qF "\\volumes\\$APP" || { echo "the shortcut starts in $(shortcut_dir "$lnk")"; return 1; }
     }
     check "  no shim names data\\, and the shortcut starts in the app's volume (repair)" no_old_paths
+    names_button() {
+        local got
+        got=$(shortcut_aumid "$lnk")
+        [ "$got" = "Zigsaw.$APP" ] || { echo "got: $got"; return 1; }
+    }
+    check "  the shortcut names the app's taskbar button now (repair)" names_button
     check "  the named volume is still mounted" sh -c "[ \"\$(\"\$0\" run $APP sh -c 'cat \"\$USERPROFILE/../state/named.txt\"' </dev/null | tr -d '\r')\" = named ]" "$bin\\zigsaw.exe"
     check "  volume ls lists both" sh -c "\"\$0\" volume ls </dev/null | grep -q '^$APP ' && \"\$0\" volume ls </dev/null | grep -q '^keep '" "$bin\\zigsaw.exe"
 
