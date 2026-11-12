@@ -101,7 +101,8 @@ So the Release workflow scans the programs before publishing them, and
 ## Commands
 
 ```
-zigsaw build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir] [<recipe.json> | <dir>]
+zigsaw build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir]
+             [--memory=<size>] [--cpus=<n>] [<recipe.json> | <dir>]
                                        build an app from a recipe, or from the zigsaw.json of a
                                        project's directory (the current one by default), install
                                        it and its commands. It goes on from the recipe's last
@@ -111,7 +112,9 @@ zigsaw build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir] [
                                        and those after it afresh; --rebuild and --no-resume build
                                        every module in a new directory. Kept builds may take
                                        10 GB together (ZIGSAW_KEPT_BUILDS_SIZE); a build deletes
-                                       the least recently used others past that, and says so
+                                       the least recently used others past that, and says so.
+                                       --memory and --cpus hold each of its commands to that
+                                       much memory and that many processors (see Limits)
 zigsaw search [<words>...]             find apps in the default registry's catalog
 zigsaw info <image>                    show what an app in a registry is, needs and may reach
 zigsaw ls <image>                      list the files of an app in a registry without pulling
@@ -824,7 +827,9 @@ to finish.
 | `--volume=<source>:<path>[:ro]` | Mount a [volume](#volumes), by its name, or a folder of yours, by its absolute path, at a path in the app's data directory; at `.`, as all of its data |
 | `--novolume=<path>` | Take away the mount an override has at that path |
 | `--ephemeral` | Use a fresh data directory, deleted after the run; the volumes mounted in it stay |
-| `-v`, `--verbose` | Print the resolved command, environment and grants |
+| `--memory=<size>` | Let the app and all it starts have no more memory than this together (`2GB`, `512MB`); `none` takes away what an override has ([limits](#limits)) |
+| `--cpus=<n>` | Run the app and all it starts on n processors; `all` takes away what an override has ([limits](#limits)) |
+| `-v`, `--verbose` | Print the resolved command, environment and grants, and afterwards the most memory the run had |
 
 ### Sandboxes
 
@@ -1173,6 +1178,44 @@ zigsaw volume export pgdata - | ssh other zigsaw volume import pgdata -        #
   and leaves them; if it left only empty folders, from 0.86 on the new one deletes
   them without a word.
 
+### Limits
+
+A run, and each command of a build, can be held to an amount of memory and a number
+of processors. Both hold the whole process tree: the app, everything it starts, and
+what those start. Neither needs administrator rights, and neither is ever set by an
+image or a recipe: they are yours, per machine.
+
+```
+zigsaw run --memory=2GB --cpus=4 org.example.App       # this run
+zigsaw override --memory=4GB org.example.App           # every run of the app, its shims' too
+zigsaw override --global --cpus=8                      # every app of the store
+zigsaw run --memory=none --cpus=all org.example.App    # this run, without what's saved
+zigsaw build --memory=8GB --cpus=8 recipes/rnote.json  # each of the build's commands
+```
+
+- **`--memory=<size>`** takes bytes, or a number with `K`, `M`, `G` or `T` (1024-based,
+  `2GB`, `512M`). It counts memory the processes have committed, together. Past it
+  Windows refuses a process more, exactly as it does when the page file is full, so
+  the program fails the way it does then: most say "out of memory" or "The paging
+  file is too small" and exit. zigsaw then says which limit was reached, after the
+  run, or after the build's command.
+- **`--cpus=<n>`** gives the tree n of your processors, one of each core before a
+  second of any, the faster cores first on a machine with two kinds. Programs that
+  ask Windows which processors they have count n: Go, Node and BusyBox's `nproc` do.
+  The tree is also capped at n processors' worth of the machine's processor time,
+  which costs nothing more and is what Ninja counts by. For programs that count the
+  machine's processors whatever they are given, `NUMBER_OF_PROCESSORS` and
+  `CARGO_BUILD_JOBS` are set to n, unless the app, the recipe's module or `--env`
+  sets them: cargo then starts n compilers. With as many processors as zigsaw itself
+  has, or more, `--cpus` limits nothing and sets nothing.
+- `zigsaw -v run` prints the most memory the run had at once, and `zigsaw -v build`
+  the same for each command that takes a second or more: a number to pick a limit
+  from.
+- A limited run inside another (an app that runs your other apps' commands) gets the
+  tighter of the two. What `zigsaw-host` starts counts toward the run that started it.
+
+What limits don't do is in [gaps.md](docs/gaps.md).
+
 ### Batch files
 
 An app's command, an export, or a `--command` can be a batch file (`.cmd` or
@@ -1445,6 +1488,7 @@ bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash,
 bash tests/sandbox.sh   # which sandbox a run gets (low by default, the image's, store-wide and app overrides); what the low and appcontainer sandboxes change on the host, how long it lasts, and rm undoes; a working directory low won't label, read-only; --file; your folders (fake ones); registry keys kept with an app
 bash tests/network.sh   # an app's service reached from the host in each sandbox, on its port, one --port or an override moves it to, and not after the run; in an AppContainer, an internal port the app's runs agree on and reach each other on without the network, and a port another program holds; an AppContainer run with the network exempt from loopback isolation while it goes (not without the network, nor with ZIGSAW_LOOPBACK_EXEMPTION=0), a killed run's exemption taken back by repair, one you made kept; a port the app uses reached directly, or through zigsaw's forward when not exempt, and --port moving it; proxy variables passed to runs with the network; eight first AppContainer runs at once; the probe's report of what Windows lets AppContainers do on the loopback and over AF_UNIX (tests/netprobe.zig)
 bash tests/reach.sh     # what a run may reach of the rest of the machine: the store's commands on its PATH, each running as its own app; zigsaw-host, your real environment with the run's rights; an image saying it can't run under a sandbox; URL schemes and Default apps in a scratch key, and one private scheme followed through Windows, which rm removes (30 s; opens a console for a moment)
+bash tests/limits.sh    # --memory and --cpus on runs, in each sandbox, saved as overrides, through a shim, and on builds; what zigsaw says when a limit is reached
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run, and for rollback
 bash tests/upstream.sh  # scripts/check-upstream.sh with made-up recipes, pages, repositories and OSV answers, and that scripts/upstream.txt covers every recipe's sources (no network; runs on Linux too)

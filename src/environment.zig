@@ -248,6 +248,14 @@ test join {
     try std.testing.expectEqualStrings("D:\\x", env.items[1].value);
 }
 
+/// Whether `env` has the variable, whatever the case of its name.
+pub fn has(env: []const Var, name: []const u8) bool {
+    for (env) |kv| {
+        if (std.os.windows.eqlIgnoreCaseWtf8(kv.name, name)) return true;
+    }
+    return false;
+}
+
 /// Sets a variable, replacing any existing one whose name matches
 /// case-insensitively, as Windows treats them.
 pub fn set(arena: Allocator, env: *std.ArrayList(Var), name: []const u8, value: []const u8) !void {

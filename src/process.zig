@@ -141,6 +141,8 @@ pub const SpawnSpec = struct {
     creation_flags: win32.DWORD = 0,
     /// Let the child start processes outside its job (see `newJobAllowing`).
     breakaway_ok: bool = false,
+    /// What the child and everything it starts may use together.
+    limits: Limits = .{},
     /// The child's stdin, stdout and stderr; null hands it ours.
     stdio: ?[3]?win32.HANDLE = null,
     /// Handles the child inherits besides those, such as the relay's
@@ -199,23 +201,114 @@ pub fn spawn(arena: Allocator, spec: SpawnSpec) !u32 {
     return child.wait();
 }
 
+/// What the processes of a job may use together. Windows asks no privilege
+/// for either, and a job inside another gets the tighter of the two.
+pub const Limits = struct {
+    /// Bytes of memory they may commit. Past it, Windows refuses a process
+    /// more, as it does when the page file is full ("The paging file is too
+    /// small", error 1455), and the program does what it does then.
+    memory: ?u64 = null,
+    /// How many processors they run on (see `chooseProcessors`). As many as
+    /// zigsaw has, or more, is no limit.
+    cpus: ?u32 = null,
+
+    /// The processors a job with these gets, if fewer than zigsaw has: for
+    /// the variables that tell programs which don't ask Windows, or ask it
+    /// for the machine's (see `job_count_vars`).
+    pub fn fewerCpus(l: Limits) ?u32 {
+        const n = l.cpus orelse return null;
+        const own = ownCpus();
+        return if (own != 0 and n < own) n else null;
+    }
+};
+
+/// How many processors zigsaw itself may run on, which is the most a job of
+/// its own can have; 0 if Windows doesn't say.
+pub fn ownCpus() u32 {
+    var own: usize = 0;
+    var system: usize = 0;
+    if (win32.GetProcessAffinityMask(win32.GetCurrentProcess(), &own, &system) == 0) return 0;
+    return @popCount(own);
+}
+
+/// The variables a run or a build with fewer processors gets their number
+/// in, unless it has them set already. Measured under a job with 4 of 16:
+/// Go, Node and BusyBox's nproc count 4 by the affinity, and Ninja by the
+/// CPU rate; Rust's `available_parallelism`, so cargo, zig, CMake and
+/// Python count 16 whatever the job says.
+pub const job_count_vars = [_][]const u8{ "NUMBER_OF_PROCESSORS", "CARGO_BUILD_JOBS" };
+
+/// A job object, and the port that hears of its memory limit, if it has one.
+pub const Job = struct {
+    handle: win32.HANDLE,
+    port: ?win32.HANDLE = null,
+    memory_limit: ?u64 = null,
+};
+
+/// How a job's process tree ended.
+pub const Report = struct {
+    code: u32,
+    /// The most memory its processes had committed together, in bytes; what
+    /// one was refused counts, so a tree that reached its limit shows more.
+    peak_memory: u64 = 0,
+    /// The limit its processes asked for memory past, if they did.
+    memory_limit_reached: ?u64 = null,
+};
+
 /// A process `start` started, in its job object.
 pub const Child = struct {
     job: win32.HANDLE,
     process: win32.HANDLE,
+    /// As `Job`'s.
+    port: ?win32.HANDLE = null,
+    memory_limit: ?u64 = null,
+
+    pub fn in(job: Job, process: win32.HANDLE) Child {
+        return .{ .job = job.handle, .process = process, .port = job.port, .memory_limit = job.memory_limit };
+    }
 
     /// Waits for the process to exit, ends what's left of its tree, and
     /// returns its exit code.
     pub fn wait(child: Child) !u32 {
+        return (try child.waitReport()).code;
+    }
+
+    /// As `wait`, also saying what the tree used.
+    pub fn waitReport(child: Child) !Report {
         defer _ = win32.CloseHandle(child.job);
         defer _ = win32.CloseHandle(child.process);
-        if (win32.WaitForSingleObject(child.process, win32.INFINITE) != win32.WAIT_OBJECT_0)
+        defer if (child.port) |p| {
+            _ = win32.CloseHandle(p);
+        };
+        var told = false;
+        if (child.port) |port| {
+            // The job also tells its port of every process that starts and
+            // ends, which a long build has many of: taken off as they come.
+            while (true) {
+                const waited = win32.WaitForSingleObject(child.process, 250);
+                if (drain(port)) told = true;
+                if (waited == win32.WAIT_OBJECT_0) break;
+                if (waited != win32.WAIT_TIMEOUT) return win32.lastErrorFail("WaitForSingleObject");
+            }
+        } else if (win32.WaitForSingleObject(child.process, win32.INFINITE) != win32.WAIT_OBJECT_0)
             return win32.lastErrorFail("WaitForSingleObject");
         var code: win32.DWORD = 0;
         if (win32.GetExitCodeProcess(child.process, &code) == 0)
             return win32.lastErrorFail("GetExitCodeProcess");
         endJob(child.job);
-        return code;
+        if (child.port) |port| {
+            if (drain(port)) told = true;
+        }
+        var report: Report = .{ .code = code };
+        var info: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
+        if (win32.QueryInformationJobObject(child.job, win32.JobObjectExtendedLimitInformation, &info, @sizeOf(@TypeOf(info)), null) != 0)
+            report.peak_memory = info.PeakJobMemoryUsed;
+        // Windows doesn't promise the port every message; the peak, which
+        // counts what was refused, says it too.
+        if (child.memory_limit) |limit| {
+            if (told or report.peak_memory >= limit) report.memory_limit_reached = limit;
+        }
+        return report;
     }
 
     /// As `wait`, for at most `ms`: then ends the process tree, and
@@ -227,12 +320,26 @@ pub const Child = struct {
                 endJob(child.job);
                 _ = win32.CloseHandle(child.job);
                 _ = win32.CloseHandle(child.process);
+                if (child.port) |p| _ = win32.CloseHandle(p);
                 return null;
             },
             else => return win32.lastErrorFail("WaitForSingleObject"),
         }
     }
 };
+
+/// Takes what a job told its port off it, without waiting. Whether it said
+/// that its memory limit was reached.
+fn drain(port: win32.HANDLE) bool {
+    var reached = false;
+    while (true) {
+        var message: win32.DWORD = 0;
+        var key: usize = 0;
+        var overlapped: ?*win32.OVERLAPPED = null;
+        if (win32.GetQueuedCompletionStatus(port, &message, &key, &overlapped, 0) == 0) return reached;
+        if (message == win32.JOB_OBJECT_MSG_JOB_MEMORY_LIMIT) reached = true;
+    }
+}
 
 pub const Output = struct {
     code: u32,
@@ -288,31 +395,190 @@ pub fn output(arena: Allocator, spec: SpawnSpec, input: []const u8, ms: win32.DW
 
 /// Starts a process as `spawn` does, without waiting for it.
 pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
-    const job = try newJobAllowing(spec.breakaway_ok);
-    errdefer _ = win32.CloseHandle(job);
-    return .{ .job = job, .process = try startIn(arena, job, spec) };
+    const job = try newJobAllowing(arena, spec.breakaway_ok, spec.limits);
+    errdefer _ = win32.CloseHandle(job.handle);
+    return .in(job, try startIn(arena, job.handle, spec));
 }
 
-/// A job object whose processes end when it's closed, as when we end. For
-/// `startIn`, when another process has to be in the job before the one a
-/// `Child` waits for.
-pub fn newJob() !win32.HANDLE {
-    return newJobAllowing(false);
+/// A job object whose processes end when it's closed, as when we end, and
+/// use no more than `limits` together. For `startIn`, when another process
+/// has to be in the job before the one a `Child` waits for.
+pub fn newJob(arena: Allocator, limits: Limits) !Job {
+    return newJobAllowing(arena, false, limits);
 }
 
 /// The same, letting its processes start one outside it if they ask
 /// (CREATE_BREAKAWAY_FROM_JOB): a shim's job, whose zigsaw may start a lazy
 /// pull's helper that must outlive it (see lazy.zig). An app's job never
 /// does, so nothing an app starts gets out of it.
-pub fn newJobAllowing(breakaway: bool) !win32.HANDLE {
-    const job = win32.CreateJobObjectW(null, null) orelse return win32.lastErrorFail("CreateJobObjectW");
-    errdefer _ = win32.CloseHandle(job);
-    var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
-    limits.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+fn newJobAllowing(arena: Allocator, breakaway: bool, limits: Limits) !Job {
+    const handle = win32.CreateJobObjectW(null, null) orelse return win32.lastErrorFail("CreateJobObjectW");
+    errdefer _ = win32.CloseHandle(handle);
+    var job: Job = .{ .handle = handle };
+    var info: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
+    info.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
         (if (breakaway) win32.JOB_OBJECT_LIMIT_BREAKAWAY_OK else 0);
-    if (win32.SetInformationJobObject(job, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits))) == 0)
+    if (limits.memory) |bytes| {
+        info.BasicLimitInformation.LimitFlags |= win32.JOB_OBJECT_LIMIT_JOB_MEMORY;
+        info.JobMemoryLimit = std.math.cast(usize, bytes) orelse std.math.maxInt(usize);
+        job.memory_limit = bytes;
+    }
+    const processors: ?Processors = if (limits.cpus) |n| try ownProcessors(arena, n) else null;
+    if (processors) |p| {
+        info.BasicLimitInformation.LimitFlags |= win32.JOB_OBJECT_LIMIT_AFFINITY;
+        info.BasicLimitInformation.Affinity = p.mask;
+    }
+    if (win32.SetInformationJobObject(handle, win32.JobObjectExtendedLimitInformation, &info, @sizeOf(@TypeOf(info))) == 0)
         return win32.lastErrorFail("SetInformationJobObject");
+    if (processors) |p| {
+        // The same share of the machine as a cap on processor time, which
+        // the affinity keeps the job from reaching anyway: some programs
+        // count their processors by it (Ninja does), and none of those
+        // tried counts by the affinity alone. Only a hint, so one Windows
+        // refuses, as inside a job that has its own, is left out.
+        const rate: win32.JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = .{
+            .ControlFlags = win32.JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | win32.JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+            .CpuRate = cpuRate(p.count, win32.GetActiveProcessorCount(win32.ALL_PROCESSOR_GROUPS)),
+        };
+        _ = win32.SetInformationJobObject(handle, win32.JobObjectCpuRateControlInformation, &rate, @sizeOf(@TypeOf(rate)));
+    }
+    if (job.memory_limit != null) {
+        const port = win32.CreateIoCompletionPort(win32.INVALID_HANDLE_VALUE, null, 0, 1) orelse return win32.lastErrorFail("CreateIoCompletionPort");
+        errdefer _ = win32.CloseHandle(port);
+        const of_job: win32.JOBOBJECT_ASSOCIATE_COMPLETION_PORT = .{ .CompletionPort = port };
+        if (win32.SetInformationJobObject(handle, win32.JobObjectAssociateCompletionPortInformation, &of_job, @sizeOf(@TypeOf(of_job))) == 0)
+            return win32.lastErrorFail("SetInformationJobObject");
+        job.port = port;
+    }
     return job;
+}
+
+/// `n` processors as a job's CPU rate: hundredths of a percent of `all`,
+/// rounded up, so that a program which multiplies it back gets `n`.
+fn cpuRate(n: u32, all: u32) u32 {
+    const total: u64 = @max(all, 1);
+    return @intCast(@min(10000, @max(1, (@as(u64, n) * 10000 + total - 1) / total)));
+}
+
+/// A core's logical processors, as bits of the group's mask, and its
+/// efficiency class: higher is faster, on a machine with two kinds.
+const Core = struct { mask: usize, class: u8 = 0 };
+
+const Processors = struct { mask: usize, count: u32 };
+
+/// `n` of the processors zigsaw itself may run on, for a job's affinity,
+/// which must be among them; null if that's all of them, or more.
+fn ownProcessors(arena: Allocator, n: u32) !?Processors {
+    var own: usize = 0;
+    var system: usize = 0;
+    if (win32.GetProcessAffinityMask(win32.GetCurrentProcess(), &own, &system) == 0)
+        return win32.lastErrorFail("GetProcessAffinityMask");
+    if (n >= @popCount(own)) return null;
+    const mask = chooseProcessors(own, coresOfOwnGroup(arena) catch &.{}, n);
+    return .{ .mask = mask, .count = @popCount(mask) };
+}
+
+/// The cores of the processor group zigsaw's in: a machine has more than
+/// one group only with more than 64 processors, and a job's affinity is
+/// within one.
+fn coresOfOwnGroup(arena: Allocator) ![]const Core {
+    var group: win32.GROUP_AFFINITY = .{};
+    if (win32.GetThreadGroupAffinity(win32.GetCurrentThread(), &group) == 0) return error.Unknown;
+    var len: win32.DWORD = 0;
+    _ = win32.GetLogicalProcessorInformationEx(win32.RelationProcessorCore, null, &len);
+    if (len == 0) return error.Unknown;
+    const buf = try arena.alignedAlloc(u8, .of(usize), len);
+    if (win32.GetLogicalProcessorInformationEx(win32.RelationProcessorCore, buf.ptr, &len) == 0) return error.Unknown;
+    // Each record: Relationship and Size (4 bytes each), then for a core its
+    // Flags, EfficiencyClass, 20 reserved bytes, GroupCount (2 bytes), and
+    // GROUP_AFFINITY entries, of which a core has one.
+    var cores: std.ArrayList(Core) = .empty;
+    var at: usize = 0;
+    while (at + 8 <= len) {
+        const size = std.mem.readInt(u32, buf[at + 4 ..][0..4], .little);
+        if (size < 48 or at + size > len) break;
+        const entry = buf[at + 32 ..][0..@sizeOf(win32.GROUP_AFFINITY)];
+        const of_group = std.mem.readInt(u16, entry[@sizeOf(usize)..][0..2], .little);
+        if (of_group == group.Group) try cores.append(arena, .{
+            .mask = std.mem.readInt(usize, entry[0..@sizeOf(usize)], .little),
+            .class = buf[at + 9],
+        });
+        at += size;
+    }
+    return cores.items;
+}
+
+/// `n` of the processors in `own`: one of each core before a second of any,
+/// as two on one core do less than two cores, and the faster cores first.
+/// Every job gets the same ones, so two limited trees share them. Without
+/// `cores`, the lowest.
+fn chooseProcessors(own: usize, cores: []const Core, n: u32) usize {
+    var chosen: usize = 0;
+    var left = n;
+    var class: u16 = 256;
+    // Classes from the fastest down; within one, a round per processor of a
+    // core.
+    while (left > 0) {
+        var next: ?u8 = null;
+        for (cores) |c| {
+            if (c.class < class and (next == null or c.class > next.?)) next = c.class;
+        }
+        class = next orelse break;
+        while (left > 0) {
+            var took = false;
+            for (cores) |c| {
+                if (c.class != class or left == 0) continue;
+                const free = c.mask & own & ~chosen;
+                if (free == 0) continue;
+                chosen |= free & (~free +% 1);
+                left -= 1;
+                took = true;
+            }
+            if (!took) break;
+        }
+    }
+    // What no core accounted for.
+    while (left > 0) : (left -= 1) {
+        const free = own & ~chosen;
+        if (free == 0) break;
+        chosen |= free & (~free +% 1);
+    }
+    return chosen;
+}
+
+test chooseProcessors {
+    // Eight processors, two to a core: one of each core first.
+    const smt = [_]Core{ .{ .mask = 0b11 }, .{ .mask = 0b1100 }, .{ .mask = 0b110000 }, .{ .mask = 0b11000000 } };
+    try std.testing.expectEqual(0b00000001, chooseProcessors(0xff, &smt, 1));
+    try std.testing.expectEqual(0b01010101, chooseProcessors(0xff, &smt, 4));
+    try std.testing.expectEqual(0b01010111, chooseProcessors(0xff, &smt, 5));
+    try std.testing.expectEqual(0xff, chooseProcessors(0xff, &smt, 8));
+    try std.testing.expectEqual(0xff, chooseProcessors(0xff, &smt, 99));
+    // Only among zigsaw's own, as inside a job that has fewer.
+    try std.testing.expectEqual(0b00110000, chooseProcessors(0b00111100 & ~@as(usize, 0b1100), &smt, 2));
+    try std.testing.expectEqual(0b00010100, chooseProcessors(0b00111100, &smt, 2));
+    try std.testing.expectEqual(0b00011100, chooseProcessors(0b00111100, &smt, 3));
+    // Two fast cores of two processors, then four slower ones: the fast
+    // cores' second processors before any slow core.
+    const hybrid = [_]Core{
+        .{ .mask = 0b1 << 4, .class = 0 }, .{ .mask = 0b1 << 5, .class = 0 }, .{ .mask = 0b1 << 6, .class = 0 }, .{ .mask = 0b1 << 7, .class = 0 },
+        .{ .mask = 0b0011, .class = 1 },   .{ .mask = 0b1100, .class = 1 },
+    };
+    try std.testing.expectEqual(0b00000101, chooseProcessors(0xff, &hybrid, 2));
+    try std.testing.expectEqual(0b00001111, chooseProcessors(0xff, &hybrid, 4));
+    try std.testing.expectEqual(0b00111111, chooseProcessors(0xff, &hybrid, 6));
+    // Nothing known of the cores: the lowest.
+    try std.testing.expectEqual(0b0111, chooseProcessors(0xff, &.{}, 3));
+    try std.testing.expectEqual(0b101010, chooseProcessors(0b101010, &.{}, 5));
+}
+
+test cpuRate {
+    try std.testing.expectEqual(2500, cpuRate(4, 16));
+    // Rounded up: 12 * 4167 / 10000 is 5, and 12 * 4166 / 10000 is 4.
+    try std.testing.expectEqual(4167, cpuRate(5, 12));
+    try std.testing.expectEqual(10000, cpuRate(8, 8));
+    try std.testing.expectEqual(10000, cpuRate(9, 8));
+    try std.testing.expectEqual(79, cpuRate(1, 128));
 }
 
 /// A process started by `startDetached`.

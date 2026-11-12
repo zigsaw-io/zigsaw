@@ -219,6 +219,49 @@ pub const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x00002000;
 /// A process in the job may start one outside it, with CREATE_BREAKAWAY_FROM_JOB.
 pub const JOB_OBJECT_LIMIT_BREAKAWAY_OK: DWORD = 0x00000800;
 pub const CREATE_BREAKAWAY_FROM_JOB: DWORD = 0x01000000;
+/// The job's processes run on the processors of `Affinity` only.
+pub const JOB_OBJECT_LIMIT_AFFINITY: DWORD = 0x00000010;
+/// The job's processes commit no more than `JobMemoryLimit` together.
+pub const JOB_OBJECT_LIMIT_JOB_MEMORY: DWORD = 0x00000200;
+
+/// A share of the machine's processor time that the job's processes don't
+/// get past: `CpuRate` is in hundredths of a percent of all processors.
+pub const JobObjectCpuRateControlInformation: c_int = 15;
+pub const JOB_OBJECT_CPU_RATE_CONTROL_ENABLE: DWORD = 0x1;
+pub const JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP: DWORD = 0x4;
+pub const JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = extern struct {
+    ControlFlags: DWORD = 0,
+    CpuRate: DWORD = 0,
+};
+
+/// The port a job tells what happens in it: each message comes as a
+/// completion's byte count (see GetQueuedCompletionStatus).
+pub const JobObjectAssociateCompletionPortInformation: c_int = 7;
+pub const JOBOBJECT_ASSOCIATE_COMPLETION_PORT = extern struct {
+    CompletionKey: ?*anyopaque = null,
+    CompletionPort: HANDLE,
+};
+/// A process of the job asked for memory past the job's limit.
+pub const JOB_OBJECT_MSG_JOB_MEMORY_LIMIT: DWORD = 10;
+
+// ---------------------------------------------------------------------------
+// Processors
+
+pub const ALL_PROCESSOR_GROUPS: u16 = 0xffff;
+pub const RelationProcessorCore: c_int = 0;
+pub const GROUP_AFFINITY = extern struct {
+    Mask: usize = 0,
+    Group: u16 = 0,
+    Reserved: [3]u16 = @splat(0),
+};
+/// The processors this process may run on, and the system's, of its group.
+pub extern "kernel32" fn GetProcessAffinityMask(process: HANDLE, own: *usize, system: *usize) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetActiveProcessorCount(group: u16) callconv(.winapi) DWORD;
+pub extern "kernel32" fn GetCurrentThread() callconv(.winapi) HANDLE;
+pub extern "kernel32" fn GetThreadGroupAffinity(thread: HANDLE, affinity: *GROUP_AFFINITY) callconv(.winapi) BOOL;
+/// Fills `buffer` with SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX records, each
+/// as long as its own Size says.
+pub extern "kernel32" fn GetLogicalProcessorInformationEx(relationship: c_int, buffer: ?[*]u8, length: *DWORD) callconv(.winapi) BOOL;
 
 // ---------------------------------------------------------------------------
 // Events and other processes

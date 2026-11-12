@@ -42,6 +42,7 @@ const usage =
     \\
     \\commands:
     \\  build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir]
+    \\        [--memory=<size>] [--cpus=<n>]
     \\        [<recipe.json> | <dir>]   build an app from a recipe, or from the zigsaw.json of a
     \\                                  project's directory (by default the current one), and
     \\                                  install it and its commands. A build goes on from the
@@ -53,7 +54,10 @@ const usage =
     \\                                  even if an earlier build had the same inputs; --no-resume
     \\                                  does too, unless such a build made the image already.
     \\                                  The builds kept may take 10 GB together; set
-    \\                                  ZIGSAW_KEPT_BUILDS_SIZE (20GB, 500MB, 0) to change that
+    \\                                  ZIGSAW_KEPT_BUILDS_SIZE (20GB, 500MB, 0) to change that.
+    \\                                  --memory and --cpus hold each of the build's commands,
+    \\                                  with all it starts, to that much memory and that many
+    \\                                  processors, as they do a run (see below)
     \\  search [<words>...]             find apps in the default registry's catalog
     \\  info <image>                    show what an app in a registry is, needs and may reach
     \\  ls <image>                      list the files of an app in a registry without pulling
@@ -206,6 +210,14 @@ const usage =
     \\  --novolume=<path>               take away the mount an override has there
     \\  --ephemeral                     use a fresh data directory, deleted afterwards; the
     \\                                  volumes mounted in it stay
+    \\  --memory=<size>                 let the app and all it starts have no more memory than
+    \\                                  this together (2GB, 512MB): past it Windows refuses them
+    \\                                  more, and zigsaw says so afterwards; none takes away
+    \\                                  what an override has
+    \\  --cpus=<n>                      run the app and all it starts on n processors, which
+    \\                                  programs that ask Windows then count; NUMBER_OF_PROCESSORS
+    \\                                  and CARGO_BUILD_JOBS say so to those that don't, unless
+    \\                                  set already; all takes away what an override has
     \\
     \\What the low and appcontainer sandboxes grant on host paths stays while the app's
     \\permissions and overrides give it; what a command line adds goes when the app's
@@ -311,6 +323,14 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
                 opts.clean_from = arg["--clean=".len..];
             } else if (isFlag(arg, "no-resume")) {
                 opts.no_resume = true;
+            } else if (std.mem.startsWith(u8, arg, "--memory=")) {
+                const value = arg["--memory=".len..];
+                const bytes = override.parseMemory(value) orelse return fail(memory_expects, .{value});
+                opts.limits.memory = if (bytes == 0) null else bytes;
+            } else if (std.mem.startsWith(u8, arg, "--cpus=")) {
+                const value = arg["--cpus=".len..];
+                const n = override.parseCpus(value) orelse return fail(cpus_expects, .{value});
+                opts.limits.cpus = if (n == 0) null else n;
             } else if (recipe_path == null and !std.mem.startsWith(u8, arg, "-")) {
                 recipe_path = arg;
             } else return usageError();
@@ -737,6 +757,9 @@ const Option = struct {
     }
 };
 
+const memory_expects = "--memory expects a size, such as 2GB or 512MB, or none; got \"{s}\"";
+const cpus_expects = "--cpus expects a number of processors, from 1, or all; got \"{s}\"";
+
 /// Collects the run options that `run` and `override` share.
 const SettingsParser = struct {
     settings: override.Settings = .{},
@@ -804,6 +827,10 @@ const SettingsParser = struct {
                 .ok => |t| try p.novolume.append(arena, t),
                 .invalid => |why| return fail("--novolume={s}: {s}", .{ value, why }),
             }
+        } else if (std.mem.eql(u8, name, "memory")) {
+            p.settings.memory = override.parseMemory(value) orelse return fail(memory_expects, .{value});
+        } else if (std.mem.eql(u8, name, "cpus")) {
+            p.settings.cpus = override.parseCpus(value) orelse return fail(cpus_expects, .{value});
         } else return false;
         return true;
     }

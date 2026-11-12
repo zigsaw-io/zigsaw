@@ -112,6 +112,35 @@ object ends the whole process tree when the run ends. Deployed files deny
 writes and deletes to the user, so no run, and nothing else running as you,
 can change an installed app or runtime.
 
+**Limits** are that job's (`process.Limits`), for a run and for each command
+of a build, which has a job of its own. Windows asks no privilege for them,
+and a job inside another gets the tighter of the two.
+
+- `--memory` is `JOB_OBJECT_LIMIT_JOB_MEMORY`: the commit of all the job's
+  processes together. Windows refuses what goes past it with the error a full
+  page file gives (1455). The job has an I/O completion port, which hears
+  `JOB_OBJECT_MSG_JOB_MEMORY_LIMIT`; zigsaw takes messages off it four times
+  a second while it waits for the app, as the job also tells the port of
+  every process that starts and ends. Windows doesn't promise every message,
+  so the job's peak commit says it too: what was refused counts in it, so a
+  job that reached its limit shows a peak at or over it. Without `--memory`
+  there is no port, and zigsaw waits as before. `-v` prints the peak
+  (`PeakJobMemoryUsed`), which a job keeps with or without a limit.
+- `--cpus=N` is `JOB_OBJECT_LIMIT_AFFINITY`, a mask of N of the processors
+  zigsaw itself may run on (so it is within an outer job's), chosen from
+  `GetLogicalProcessorInformationEx`: one of each core before a second of any,
+  the cores of the highest efficiency class first. The first 4 logical
+  processors of this machine are 2 cores, and 4 busy processes took 9.2 s on
+  them against 4.9 s on 4 cores. The job also gets a CPU rate hard cap of
+  N/all, rounded up (`JobObjectCpuRateControlInformation`): the affinity keeps
+  the job from reaching it, so it throttles nothing, and it is how Ninja
+  counts processors. If Windows refuses the cap, the job goes without.
+  `NUMBER_OF_PROCESSORS` and `CARGO_BUILD_JOBS` are set to N before the app's
+  or the module's own variables, which win. N at or over what zigsaw has sets
+  none of this.
+- Every limited job gets the same processors: two `--cpus=4` builds at once
+  share four.
+
 **An app's data directory is its own volume**, `volumes\<id>\`: one of the store's
 volumes, named by the app's id, which only that app mounts. It's listed, inspected,
 removed and pruned as the others are; what tells them apart is who mounts what. An

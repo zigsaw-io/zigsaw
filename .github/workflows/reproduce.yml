@@ -253,6 +253,11 @@ jobs:
           SECOND_DRIVE: C:\zigsaw-second-drive
         run: bash tests/volumes.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/volumes.txt"
 
+      - name: tests/limits.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/limits.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/limits.txt"
+
       - name: tests/batch.sh
         if: ${{ !cancelled() }}
         shell: bash

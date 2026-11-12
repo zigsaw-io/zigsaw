@@ -12,6 +12,8 @@ const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const oci = @import("oci.zig");
 const volumes = @import("volumes.zig");
+const checkpoint = @import("checkpoint.zig");
+const process = @import("process.zig");
 const fail = Context.fail;
 
 pub const Sandbox = oci.Sandbox;
@@ -59,12 +61,27 @@ pub const Settings = struct {
     /// its data, for `rollback`, which it otherwise does (see snapshot.zig).
     /// No run option: saved only.
     snapshot: ?bool = null,
+    /// Bytes of memory the run's processes may commit together (see
+    /// process.Limits). 0 is none, said over a layer below that has one.
+    memory: ?u64 = null,
+    /// How many processors the run's processes run on. 0 is all of them,
+    /// said over a layer below that has fewer.
+    cpus: ?u32 = null,
 
     pub fn isEmpty(s: Settings) bool {
         return s.sandbox == null and s.network == null and s.commands == null and s.host == null and s.ephemeral == null and
             s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.env.len == 0 and
             s.noextension.len == 0 and s.extension.len == 0 and s.ports.len == 0 and
-            s.volumes.len == 0 and s.novolume.len == 0 and s.real_folders == null and s.snapshot == null;
+            s.volumes.len == 0 and s.novolume.len == 0 and s.real_folders == null and s.snapshot == null and
+            s.memory == null and s.cpus == null;
+    }
+
+    /// What the run's job is held to.
+    pub fn limits(s: Settings) process.Limits {
+        return .{
+            .memory = if ((s.memory orelse 0) == 0) null else s.memory,
+            .cpus = if ((s.cpus orelse 0) == 0) null else s.cpus,
+        };
     }
 
     /// `upper` over `lower`. For the lists, an entry of `upper` replaces
@@ -86,6 +103,8 @@ pub const Settings = struct {
             .novolume = try mergeList(arena, try without(arena, lower.novolume, upper.volumes, itself, volumes.targetOf), upper.novolume, itself),
             .real_folders = upper.real_folders orelse lower.real_folders,
             .snapshot = upper.snapshot orelse lower.snapshot,
+            .memory = upper.memory orelse lower.memory,
+            .cpus = upper.cpus orelse lower.cpus,
         };
     }
 
@@ -180,6 +199,45 @@ pub const Settings = struct {
             try w.print("{s}--{s}snapshot", .{ sep, if (on) "" else "no" });
             sep = " ";
         }
+        if (s.memory) |bytes| {
+            if (bytes == 0) try w.print("{s}--memory=none", .{sep}) else try w.print("{s}--memory={f}", .{ sep, Size{ .bytes = bytes } });
+            sep = " ";
+        }
+        if (s.cpus) |n| {
+            if (n == 0) try w.print("{s}--cpus=all", .{sep}) else try w.print("{s}--cpus={d}", .{ sep, n });
+            sep = " ";
+        }
+    }
+};
+
+/// A --memory value: a size as `checkpoint.parseSize` reads one, or "none";
+/// null if it's neither.
+pub fn parseMemory(value: []const u8) ?u64 {
+    if (std.mem.eql(u8, value, "none")) return 0;
+    const bytes = checkpoint.parseSize(value) catch return null;
+    return if (bytes == 0) null else bytes;
+}
+
+/// A --cpus value: a whole number from 1, or "all"; null if it's neither.
+pub fn parseCpus(value: []const u8) ?u32 {
+    if (std.mem.eql(u8, value, "all")) return 0;
+    const n = std.fmt.parseInt(u32, value, 10) catch return null;
+    return if (n == 0) null else n;
+}
+
+/// A number of bytes as `checkpoint.parseSize` reads the same number back:
+/// in the largest of its units that takes no fraction.
+pub const Size = struct {
+    bytes: u64,
+
+    pub fn format(s: Size, w: *Io.Writer) Io.Writer.Error!void {
+        const units = [_]struct { shift: u6, name: []const u8 }{
+            .{ .shift = 40, .name = "TB" }, .{ .shift = 30, .name = "GB" }, .{ .shift = 20, .name = "MB" }, .{ .shift = 10, .name = "KB" },
+        };
+        for (units) |u| {
+            if (s.bytes != 0 and s.bytes & ((@as(u64, 1) << u.shift) - 1) == 0) return w.print("{d}{s}", .{ s.bytes >> u.shift, u.name });
+        }
+        try w.print("{d}", .{s.bytes});
     }
 };
 
@@ -408,6 +466,46 @@ test "Settings.merge: --volume replaces a lower layer's at the same place, and -
     const json = try oci.toJson(arena, Settings{ .network = true });
     try std.testing.expect(std.mem.indexOf(u8, json, "volume") == null);
     try std.testing.expectEqualDeep(s, try std.json.parseFromSliceLeaky(Settings, arena, try oci.toJson(arena, s), .{}));
+}
+
+test "Settings.merge: --memory and --cpus, and none and all over a layer that has them" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const global: Settings = .{ .cpus = 8 };
+    const app: Settings = .{ .memory = 4 << 30 };
+    const saved = try Settings.merge(arena, global, app);
+    try std.testing.expectEqualDeep(process.Limits{ .memory = 4 << 30, .cpus = 8 }, saved.limits());
+    // The command line takes one away, and tightens the other.
+    const cli = try Settings.merge(arena, saved, .{ .memory = parseMemory("none"), .cpus = parseCpus("2") });
+    try std.testing.expectEqualDeep(process.Limits{ .cpus = 2 }, cli.limits());
+    try std.testing.expectEqualDeep(process.Limits{}, (try Settings.merge(arena, saved, .{ .memory = 0, .cpus = parseCpus("all") })).limits());
+    try std.testing.expect(!(Settings{ .memory = 0 }).isEmpty());
+    try std.testing.expect(!(Settings{ .cpus = 1 }).isEmpty());
+
+    var buf: [256]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    try saved.format(&w);
+    try std.testing.expectEqualStrings("--memory=4GB --cpus=8", w.buffered());
+    w = .fixed(&buf);
+    try (Settings{ .memory = 0, .cpus = 0 }).format(&w);
+    try std.testing.expectEqualStrings("--memory=none --cpus=all", w.buffered());
+
+    // Sizes print as they parse back.
+    for ([_][]const u8{ "1536MB", "2GB", "512KB", "1TB", "1000" }) |text| {
+        w = .fixed(&buf);
+        try w.print("{f}", .{Size{ .bytes = parseMemory(text).? }});
+        try std.testing.expectEqualStrings(text, w.buffered());
+    }
+    try std.testing.expectEqual(3 << 29, parseMemory("1536M").?);
+    for ([_][]const u8{ "0", "", "lots", "-1", "2 GiB" }) |bad| try std.testing.expectEqual(null, parseMemory(bad));
+    for ([_][]const u8{ "0", "", "1.5", "-1", "none" }) |bad| try std.testing.expectEqual(null, parseCpus(bad));
+
+    // A zigsaw from before limits reads settings without them, and this
+    // one reads them back.
+    const json = try oci.toJson(arena, Settings{ .network = true });
+    try std.testing.expect(std.mem.indexOf(u8, json, "memory") == null and std.mem.indexOf(u8, json, "cpus") == null);
+    try std.testing.expectEqualDeep(saved, try std.json.parseFromSliceLeaky(Settings, arena, try oci.toJson(arena, saved), .{}));
 }
 
 test sandboxOf {

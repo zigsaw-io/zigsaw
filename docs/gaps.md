@@ -1077,3 +1077,28 @@
 - A zigsaw before 0.78 doesn't know a 0.78 helper's `blob.sparse`: one that serves a layer
   a 0.78 helper started fetches from the registry what that one had, and downloads it all
   again.
+- `--memory` limits commit, not what a program has in RAM: a program that
+  reserves and commits far more than it touches reaches the limit early, and
+  one refused memory fails however it fails when a machine runs out, not
+  with a message of zigsaw's until the run or the build's command is over.
+  Nothing is ended at the limit: a program that goes on without the memory
+  goes on.
+- `--cpus` tells cargo through `CARGO_BUILD_JOBS` and others through
+  `NUMBER_OF_PROCESSORS`; a program that counts the machine's processors
+  itself and reads neither still starts as many jobs as the machine has
+  processors, on the N it was given: zig (`zig build` takes `-j`), CMake's
+  `NUMBER_OF_LOGICAL_CORES`, Python's `os.cpu_count()`. The table is in
+  [findings.md](findings.md#limits-through-the-job-object-iteration-93).
+  A recipe that sets `CARGO_BUILD_JOBS` keeps its own number.
+- Every limited run and build gets the same N processors, so two at once
+  share them while the others idle. On a machine with more than 64
+  processors, they are of the processor group zigsaw is in.
+- A run started inside a limited run (`--share=commands`) is held to the
+  outer one's limits, but hears less of them: with no `--cpus` of its own it
+  keeps the outer one's processors, while its own job shows no CPU rate cap,
+  so Ninja in it counts every processor of the machine, and zigsaw sets it no
+  variables; and when the outer memory limit is reached in it, only the
+  outer zigsaw says so, at its end. (Measured with a job inside a job; no
+  app was run inside another's run.)
+- Limits are per run and per build command, not per app: two runs of an app
+  held to 2 GB may have 4 GB together.

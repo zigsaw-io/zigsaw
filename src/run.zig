@@ -207,6 +207,13 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // those the extension points join add up instead.
     const joined = try extensions.joined(arena, found.points);
     var app_env: std.ArrayList(environment.Var) = .empty;
+    // A run on fewer processors is told how many, where a program that
+    // doesn't ask Windows looks; before the app's own variables, which win.
+    const limits = settings.limits();
+    if (limits.fewerCpus()) |n| {
+        const count = try std.fmt.allocPrint(arena, "{d}", .{n});
+        for (process.job_count_vars) |name| try environment.set(arena, &app_env, name, count);
+    }
     for (runtimes.own, cfg.runtimes.map.values()) |p, r| try environment.expand(arena, &app_env, p, r.env, joined);
     for (ext_own, found.loaded) |p, e| try environment.expand(arena, &app_env, p, e.config.env, joined);
     try environment.expand(arena, &app_env, placeholders, cfg.env, joined);
@@ -233,6 +240,13 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         if (app_aliases) |a| note("aliases  {s} ({s})", .{ a.names, a.dir });
         if (!saved.isEmpty()) note("override {f}", .{saved});
         note("sandbox  {t}, network {s}", .{ sandbox, if (network) "on" else "off" });
+        if (limits.memory) |bytes| note("memory   {f} at most, for the app and all it starts", .{override.Size{ .bytes = bytes }});
+        if (limits.cpus) |n| {
+            if (limits.fewerCpus() != null)
+                note("cpus     {d}", .{n})
+            else
+                note("cpus     all {d} that zigsaw has: --cpus={d} asks for no fewer", .{ process.ownCpus(), n });
+        }
         switch (reach) {
             .open => {},
             .exempt => note("loopback exempt while the app's runs go: it reaches other programs on this machine", .{}),
@@ -320,23 +334,30 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const env_block = try environment.encodeBlock(arena, env.items);
     // The relay starts first, in the app's job: the app may connect to the
     // ports it forwards at once.
-    const job = try process.newJob();
-    if (relay_exe) |r| startRelay(ctx, cfg.id, job, r, published, forwards, security.?, env_block);
+    // The job is what holds the run to its limits: the relay counts, and so
+    // does all the app starts, zigsaw-host's programs and other apps' runs
+    // among them.
+    const job = try process.newJob(arena, limits);
+    if (relay_exe) |r| startRelay(ctx, cfg.id, job.handle, r, published, forwards, security.?, env_block);
     const watcher = written.Watcher.start(arena, ctx.io, try watchedDirs(arena, sandbox, host_grants.items, host_cwd, data_dir, data_root, ctx.env.get("USERPROFILE"), own));
-    const child: process.Child = .{
-        .job = job,
-        .process = try process.startIn(arena, job, .{
-            .exe = exe,
-            .command_line = command_line,
-            .env_block = env_block,
-            .cwd = cwd,
-            .security = if (security) |*s| s else null,
-            .token = token,
-            // Set by a shim that a shortcut started (see shim.zig).
-            .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
-        }),
-    };
-    const code = try child.wait();
+    const child: process.Child = .in(job, try process.startIn(arena, job.handle, .{
+        .exe = exe,
+        .command_line = command_line,
+        .env_block = env_block,
+        .cwd = cwd,
+        .security = if (security) |*s| s else null,
+        .token = token,
+        // Set by a shim that a shortcut started (see shim.zig).
+        .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
+    }));
+    const report = try child.waitReport();
+    const code = report.code;
+    // A program refused memory says what Windows told it, that the paging
+    // file is too small, or nothing. Through a GUI shim, this reaches the
+    // box a failed run shows.
+    if (report.memory_limit_reached) |bytes|
+        note("zigsaw: {s} reached its memory limit of {f}, and was refused more: --memory, or `zigsaw override`, sets another, and none takes it away", .{ cfg.id, override.Size{ .bytes = bytes } });
+    if (ctx.verbose) note("peak     {d} MB of memory, the app and all it started together", .{(report.peak_memory + (1 << 20) - 1) >> 20});
     // An app whose files couldn't be fetched says only something like
     // BAD_EXE_FORMAT: say what the helper knows. Through a GUI shim, this
     // reaches the box a failed run shows.

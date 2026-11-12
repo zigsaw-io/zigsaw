@@ -47,6 +47,7 @@ const Fetcher = @import("fetch.zig");
 const msvc_host = @import("msvc.zig");
 const oci = @import("oci.zig");
 const process = @import("process.zig");
+const override = @import("override.zig");
 const project = @import("project.zig");
 const recipe = @import("recipe.zig");
 const roots = @import("roots.zig");
@@ -73,6 +74,9 @@ pub const Options = struct {
     /// only if it built every module: for what is published, or compared
     /// with what is.
     no_resume: bool = false,
+    /// What each of the build's commands, with all it starts, may use (see
+    /// process.Limits). No input of the build: what it makes is the same.
+    limits: process.Limits = .{},
 };
 
 /// The fixed time builds see as SOURCE_DATE_EPOCH: 1980-01-01, the earliest
@@ -223,6 +227,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
             null;
         if (from_last) |res| resumed.* = res.plan.resumes();
         root = try .init(ctx, r, tools.list.items, from_last);
+        root.?.limits = opts.limits;
         if (root.?.msvc) |tc| {
             try build_info.host.map.put(arena, "msvc", tc.tools_version);
             try build_info.host.map.put(arena, "windows-sdk", tc.sdk_version);
@@ -493,6 +498,8 @@ const BuildRoot = struct {
     caches: []const []const u8,
     /// The kept build this one happens in, and what it takes from it.
     from_last: ?*Resume = null,
+    /// What each command, with all it starts, may use.
+    limits: process.Limits = .{},
 
     const letter = drive.letter;
 
@@ -834,6 +841,15 @@ const BuildRoot = struct {
         // parallel `zig cc` hung a build run from a terminal. A
         // ZIG_PROGRESS zig can't parse as a handle makes it skip the line.
         try environment.set(arena, &vars, "ZIG_PROGRESS", "off");
+        // A build on fewer processors is told how many, where a tool that
+        // doesn't ask Windows looks (cargo); a tool's image or the module
+        // that says otherwise wins.
+        if (b.limits.fewerCpus()) |n| {
+            const count = try std.fmt.allocPrint(arena, "{d}", .{n});
+            for (process.job_count_vars) |name| {
+                if (!environment.has(vars.items, name)) try environment.set(arena, &vars, name, count);
+            }
+        }
         if (step == .build and !m.network) {
             // Discouraged, not prevented: tools that honor proxy variables
             // fail to connect, and nothing else is stopped.
@@ -858,15 +874,27 @@ const BuildRoot = struct {
             if (n <= how.from) continue;
             note("[{s}{s} {d}/{d}] {s}", .{ m.name, label, n, commands.len, command });
             const start = ctx.now();
-            const code = try process.spawn(arena, .{
+            const child = try process.start(arena, .{
                 .exe = shell.exe,
                 .command_line = try shell.commandLine(arena, command),
                 .env_block = block,
                 .cwd = cwd,
+                .limits = b.limits,
             });
-            // So a log shows where a build's time goes.
+            const report = try child.waitReport();
+            const code = report.code;
+            // So a log shows where a build's time goes, and its memory.
             const took = ctx.since(start);
-            if (took.ms >= 1000) note("[{s}{s} {d}/{d}] took {f}", .{ m.name, label, n, commands.len, took });
+            if (took.ms >= 1000) {
+                if (ctx.verbose)
+                    note("[{s}{s} {d}/{d}] took {f}, and {d} MB at most at once", .{ m.name, label, n, commands.len, took, (report.peak_memory + (1 << 20) - 1) >> 20 })
+                else
+                    note("[{s}{s} {d}/{d}] took {f}", .{ m.name, label, n, commands.len, took });
+            }
+            // A tool refused memory says what Windows told it, that the
+            // paging file is too small, and may go on and fail later, or not.
+            if (report.memory_limit_reached) |bytes|
+                note("[{s}{s} {d}/{d}] reached the build's memory limit of {f} (--memory), and was refused more", .{ m.name, label, n, commands.len, override.Size{ .bytes = bytes } });
             if (code != 0) switch (on_failure) {
                 .fail => {
                     if (how.continued) note("module {s} went on from what its last build left; if that's what's wrong, `zigsaw build --clean={s}` starts it afresh", .{ m.name, m.name });

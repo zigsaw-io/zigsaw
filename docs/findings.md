@@ -2966,6 +2966,72 @@ took 19 to 23 s here, on NTFS and on a Dev Drive alike, where Windows'
   its two empty blocks is one cut short, and one with no entries is refused
   unless it says it's zigsaw's export of an empty volume.
 
+## Limits through the job object (iteration 93)
+
+Probed with `tests/jobprobe.zig` (`injob --memory= --cpus= --rate= --report`,
+`cpus`, `alloc`) on Windows 11 26300, 16 logical processors on 8 cores, from
+a session that isn't elevated (the account is in the Administrators group).
+
+- **Nothing here needs a privilege**: a memory limit, an affinity, a CPU
+  rate hard cap and a completion port all set on a new job, nested or not,
+  and hold for a low-integrity process and for one in an AppContainer (the
+  job is zigsaw's; the app is only put in it).
+- **A job's memory limit is on commit, and refusing is all it does.** The
+  allocation that would pass it fails with error 1455,
+  `ERROR_COMMITMENT_LIMIT`, whose text is "The paging file is too small for
+  this operation to complete": what LLVM and rustc printed when this machine
+  really ran out (iterations 60 and 63). Nothing is ended. A process starts
+  under a limit of 1 MiB, and fails at its first allocation.
+- **The port hears of it** (`JOB_OBJECT_MSG_JOB_MEMORY_LIMIT`, 10), once per
+  refusal, among a message for every process that starts (6) and ends (7)
+  and one when none are left (4). Windows documents that messages may be
+  lost.
+- **`PeakJobMemoryUsed` is kept without a limit, and counts what was
+  refused**: 100 MiB allocated shows 100; a job limited to 200 MiB whose
+  process asked for 16 MiB more at 192 shows 209. So a peak at or over the
+  limit also says the limit was reached.
+- **What counts processors how**, under a job with 4 of 16 by affinity, by
+  rate cap (2500/10000), and by both:
+
+  | Program | Affinity | Rate cap | Both |
+  |---|---|---|---|
+  | Go 1.26.7 `runtime.NumCPU`, `GOMAXPROCS` | 4 | 16 | 4 |
+  | Node 26.1 `os.availableParallelism()` (`os.cpus().length` stays 16) | 4 | 16 | 4 |
+  | BusyBox `nproc` | 4 | 16 | 4 |
+  | Ninja 1.13.2's default `-j` (processors + 2) | 18 | 6 | 6 |
+  | Rust 1.99.1 `available_parallelism`, so cargo | 16 | 16 | 16 |
+  | Zig 0.17 `std.Thread.getCpuCount` | 16 | 16 | 16 |
+  | CMake's `NUMBER_OF_LOGICAL_CORES` | 16 | 16 | 16 |
+  | Python 3.14 `os.cpu_count`, `os.process_cpu_count` (MSYS2's) | 16 | 16 | 16 |
+  | Windows PowerShell 5.1 `[Environment]::ProcessorCount` | 16 | 16 | |
+
+  Nothing counted by the affinity alone that the rate cap would have misled,
+  so a job gets both. cargo and zig heed neither: cargo takes
+  `CARGO_BUILD_JOBS`, zig only a `-j` on its command line.
+- **The rate cap on top of the affinity costs nothing measurable.** Four
+  busy BusyBox loops: 8.2 to 9.4 s with the affinity alone, 8.4 to 9.2 s
+  with both (three runs each).
+- **The first four logical processors are two cores.** The same loops under
+  the rate cap alone, free to use any processor, took 5.5 to 5.8 s. With one
+  processor of each core chosen (`GetLogicalProcessorInformationEx`), the
+  affinity gives 4.9 s. Windows numbers a core's two processors next to
+  each other, so the lowest N bits of a mask are N/2 cores.
+- **Ninja's formula decides the rounding**: it multiplies its processor
+  count by the rate and divides by 10000, dropping the fraction, so 5 of 12
+  as 4166 would count 4. The rate is rounded up (4167).
+- **cargo takes the variable**: the Rust fixture's build script, which
+  cargo tells its job count (`NUM_JOBS`), saw 16 without a limit and 4 under
+  `--cpus=4`, while `available_parallelism` said 16 both times.
+- **rustc refused memory reports something else.** Under `--memory=300MB`
+  the same build failed with 33 errors such as ``cannot find value `result`
+  in this scope`` in windows-sys, which compiles, and never the word
+  memory: the same family as the broken `.rmeta` of iteration 60.
+- **In an AppContainer, a program that is the last command of BusyBox's
+  `sh -c` does nothing** (a gap [gaps.md](gaps.md) has: sh takes itself for
+  an orphan and doesn't wait for it, and the run ends it). The suite's first
+  version lost six rows to it, with exit code 0 and no output; its scripts
+  now end in `exit $?`. zigsaw 0.92 does the same: it isn't the limits'.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.
