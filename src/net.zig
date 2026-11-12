@@ -29,6 +29,25 @@ pub const Address = union(Family) {
         };
     }
 
+    /// An address of either family, with its port: what GetAddrInfoW gave.
+    pub fn of(raw: *const anyopaque, port: u16) ?Address {
+        const family: *const u16 = @ptrCast(@alignCast(raw));
+        const p = std.mem.nativeToBig(u16, port);
+        switch (family.*) {
+            win32.AF_INET => {
+                var in: win32.sockaddr_in = @as(*const win32.sockaddr_in, @ptrCast(@alignCast(raw))).*;
+                in.port = p;
+                return .{ .ipv4 = in };
+            },
+            win32.AF_INET6 => {
+                var in6: win32.sockaddr_in6 = @as(*const win32.sockaddr_in6, @ptrCast(@alignCast(raw))).*;
+                in6.port = p;
+                return .{ .ipv6 = in6 };
+            },
+            else => return null,
+        }
+    }
+
     fn ptr(a: *const Address) *const anyopaque {
         return switch (a.*) {
             .ipv4 => |*in| in,
@@ -121,6 +140,26 @@ pub fn connect(address: Address, timeout_ms: u32) Result {
     return .{ .socket = s };
 }
 
+/// The addresses `name` resolves to, with `port`, as many as fit in `out`;
+/// or GetAddrInfoW's error. Names of either family, IPv4 first, as Windows
+/// orders them.
+pub fn resolve(name: [*:0]const u16, port: u16, out: []Address) union(enum) { found: usize, failed: c_int } {
+    const hints: win32.ADDRINFOW = .{ .family = win32.AF_UNSPEC, .socktype = win32.SOCK_STREAM, .protocol = win32.IPPROTO_TCP };
+    var list: ?*win32.ADDRINFOW = null;
+    const code = win32.GetAddrInfoW(name, null, &hints, &list);
+    if (code != 0) return .{ .failed = code };
+    defer if (list) |l| win32.FreeAddrInfoW(l);
+    var n: usize = 0;
+    var it = list;
+    while (it) |info| : (it = info.next) {
+        if (n == out.len) break;
+        const raw = info.addr orelse continue;
+        out[n] = Address.of(raw, port) orelse continue;
+        n += 1;
+    }
+    return .{ .found = n };
+}
+
 /// The port a socket is bound to.
 pub fn localPort(s: SOCKET) ?u16 {
     // Big enough for either family; the port is at the same offset in both.
@@ -150,3 +189,23 @@ test "Address.loopback" {
     try std.testing.expectEqual(@as(u8, 0), b.ipv6.addr[0]);
     try std.testing.expectEqual(@as(c_int, 28), b.len());
 }
+
+// ---------------------------------------------------------------------------
+// The proxy of a run with an allow list (relay.zig, forward.zig, proxy.zig)
+
+/// What the relay writes on a channel to ask zigsaw for a host, in place of
+/// a forward's index: then the host's length (a byte), the host, and the
+/// port (two bytes, little-endian).
+pub const proxy_request: u8 = 0xFF;
+
+/// zigsaw's answer to a proxy request, a byte; after `connected`, the
+/// connection, as a forward's.
+pub const ProxyStatus = enum(u8) {
+    connected = 0,
+    failed = 1,
+    /// The allow list doesn't name the host, or its name is this machine's.
+    refused = 2,
+    timed_out = 3,
+    unresolved = 4,
+    _,
+};

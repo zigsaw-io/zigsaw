@@ -62,6 +62,10 @@ pub const Spec = struct {
     extra: []const []const u8 = &.{},
     /// Whether the host's proxy variables pass through (see `proxies`).
     proxies: bool = false,
+    /// The proxy of a run with an allow list (see proxy.zig): set in its
+    /// proxy variables instead of the host's, with NO_PROXY naming this
+    /// machine, for the ports it uses.
+    proxy: ?[]const u8 = null,
 };
 
 pub fn build(arena: Allocator, host: *const std.process.Environ.Map, spec: Spec) !std.ArrayList(Var) {
@@ -72,6 +76,10 @@ pub fn build(arena: Allocator, host: *const std.process.Environ.Map, spec: Spec)
     if (spec.proxies) for (proxies) |name| {
         if (host.get(name)) |value| try set(arena, &env, name, value);
     };
+    if (spec.proxy) |url| {
+        for (proxies[0..3]) |name| try set(arena, &env, name, url);
+        try set(arena, &env, "NO_PROXY", "localhost,127.0.0.1,::1");
+    }
 
     var path: std.ArrayList(u8) = .empty;
     for (spec.path) |dir| try path.print(arena, "{s};", .{dir});

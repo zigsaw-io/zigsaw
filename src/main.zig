@@ -11,6 +11,7 @@ const environment = @import("environment.zig");
 const exports = @import("exports.zig");
 const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
+const hosts = @import("hosts.zig");
 const info = @import("info.zig");
 const peek = @import("peek.zig");
 const install = @import("install.zig");
@@ -191,6 +192,12 @@ const usage =
     \\                                  music, pictures, videos
     \\  --nofilesystem=<location>       take away access the app or an override grants
     \\  --share=network                 allow network access, and pass on your proxy variables
+    \\  --allow-host=<host>[:<port>]    let it reach this host, through zigsaw's proxy, when it
+    \\                                  hasn't the network: a name, *.<domain> for the names
+    \\                                  under it, an IPv4 address or an [IPv6] one; without a
+    \\                                  port, 443 and 80. --unshare=network --allow-host=...
+    \\                                  narrows an app that has the network to those
+    \\  --noallow-host=<host>[:<port>]  take away a host the app or an override allows
     \\  --share=commands                put your zigsaw apps' commands on its PATH, after the
     \\                                  system's; each runs as its own app (soft sandbox only)
     \\  --share=host                    put zigsaw-host on its PATH, which runs your own programs
@@ -230,6 +237,10 @@ const usage =
     \\Under appcontainer, a run of an app with the network has its container exempt from
     \\loopback isolation while the app's runs go, so that it reaches other programs on this
     \\machine; with ZIGSAW_LOOPBACK_EXEMPTION=0, zigsaw never exempts one.
+    \\
+    \\A run with a list of hosts holds no network capability: under appcontainer, it reaches
+    \\those hosts only through the proxy that HTTP_PROXY and HTTPS_PROXY name, and programs
+    \\that don't use them reach nothing. Under soft and low, the list isn't enforced.
     \\
     \\Data lives in %ZIGSAW_HOME%, or %LOCALAPPDATA%\zigsaw when that isn't set. Apps of a
     \\store elsewhere don't get your real folders until `override --global --real-folders`.
@@ -765,6 +776,8 @@ const SettingsParser = struct {
     settings: override.Settings = .{},
     filesystem: std.ArrayList([]const u8) = .empty,
     nofilesystem: std.ArrayList([]const u8) = .empty,
+    hosts: std.ArrayList([]const u8) = .empty,
+    nohosts: std.ArrayList([]const u8) = .empty,
     env: std.ArrayList([]const u8) = .empty,
     noextension: std.ArrayList([]const u8) = .empty,
     extension: std.ArrayList([]const u8) = .empty,
@@ -806,6 +819,9 @@ const SettingsParser = struct {
             } else if (std.mem.eql(u8, value, "host")) {
                 p.settings.host = on;
             } else return fail("--{s} takes network, commands or host; got \"{s}\"", .{ name, value });
+        } else if (std.mem.eql(u8, name, "allow-host") or std.mem.eql(u8, name, "noallow-host")) {
+            if (hosts.parse(value) == null) return fail("--{s}={s}: a host {s}", .{ name, value, hosts.invalid_message });
+            try (if (name[0] == 'n') &p.nohosts else &p.hosts).append(arena, value);
         } else if (std.mem.eql(u8, name, "env")) {
             if (std.mem.indexOfScalar(u8, value, '=') == null) return fail("--env expects NAME=VALUE, got \"{s}\"", .{value});
             try p.env.append(arena, value);
@@ -839,6 +855,8 @@ const SettingsParser = struct {
         var s = p.settings;
         s.filesystem = p.filesystem.items;
         s.nofilesystem = p.nofilesystem.items;
+        s.hosts = p.hosts.items;
+        s.nohosts = p.nohosts.items;
         s.env = p.env.items;
         s.noextension = p.noextension.items;
         s.extension = p.extension.items;
@@ -1113,6 +1131,8 @@ test {
     _ = @import("gitignore.zig");
     _ = @import("grants.zig");
     _ = @import("hkcu.zig");
+    _ = @import("hosts.zig");
+    _ = @import("proxy.zig");
     _ = @import("info.zig");
     _ = @import("junction.zig");
     _ = @import("msvc.zig");

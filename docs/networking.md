@@ -5,7 +5,9 @@ Slices 0 to 2 were built in [iteration 50](iteration-50.md) (zigsaw
 0.50.0): the profile race, proxies, and services. Slice 3, reaching this
 machine from a container, in [iteration 51](iteration-51.md) (0.51.0).
 Slice 4, in [iteration 52](iteration-52.md): what AF_UNIX does, from the
-probe, and [certificate trust](#certificate-trust).
+probe, and [certificate trust](#certificate-trust). [Allow lists](#allow-lists),
+an app reaching only the hosts it names, in [iteration 94](iteration-94.md)
+(0.94.0).
 The facts below are from a probe run unelevated on Windows 11 26300, now
 [`tests/netprobe.zig`](../tests/netprobe.zig), whose report
 [`tests/network.sh`](../tests/network.sh) prints, on Server 2025 in CI too.
@@ -58,13 +60,18 @@ passed only if a message went there and back.
 | an exempt container with no network capability, to the host | connects: the exemption doesn't need `internetClient` or `privateNetworkClientServer` |
 | the host to an exempt container | dropped |
 | `CreateAppContainerProfile` of one new name, from 8 threads at once | some calls fail with `0x8007000a` or `0x8000ffff`, not "already exists". On the runner it was `0x80070003` |
+| a container with no network capability, to a host on the internet (iteration 94) | refused at once (`10013`), where one with the `network` permission's capabilities connects |
+| a connection the host made to a host on the internet, handed to a container with no network capability | the container talks on it |
+| resolving a name in a container with no network capability | fails (`11001`, host not found): such a run can't even look a name up |
 
 Not tried yet:
 
 - two exempt containers talking to each other;
 - `-is`, the exemption's inbound mode.
 
-The probe's report has the exemption's rows since iteration 51
+The probe's report has the internet's rows since iteration 94 (`remote-...`,
+against example.com on port 80, or `ZIGSAW_NETPROBE_REMOTE`), the
+exemption's since iteration 51
 (`exempt-set`, `exempt-to-host`, `exempt-no-caps`, `exempt-inbound`,
 `exempt-unset`), on a container of its own that it exempts and takes back,
 and AF_UNIX's since iteration 52 (`unix-...`), in directories under `TEMP`
@@ -319,6 +326,102 @@ The others (GDAL, TeX Live, ripgrep and the rest) make no TLS connections.
   Adding it takes an administrator, so the trusted rows run on CI's
   runners, which are elevated.
 
+### Allow lists
+
+Built in iteration 94. An app may reach a few hosts and nothing else:
+
+```json
+"permissions": { "hosts": ["api.github.com", "*.npmjs.org", "192.0.2.7:5432"] }
+```
+
+- **A pattern** is a name; `*.<domain>`, for the names under it (not the domain
+  itself); an IPv4 address; or an `[IPv6]` one. Each takes an optional
+  `:<port>`, without which it means 443 and 80. Names are ASCII (an IDN in its
+  `xn--` form) and compared without regard to case or a trailing dot. There
+  are no address ranges.
+- **A run with a list holds no network capability.** Its relay, which every
+  sandbox starts for it, is an HTTP proxy inside its container, and
+  `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` name it
+  (`http://127.0.0.1:<port>`, a port picked for the run). `NO_PROXY` names
+  this machine, for the ports it uses, which are forwarded beside it as
+  before.
+- **zigsaw decides, not the relay.** The app can open the relay, as any
+  process in its container, and so ask zigsaw for anything itself. For each
+  CONNECT, or request for an `http://` URL, the relay asks zigsaw over a
+  channel. zigsaw checks the list, resolves the name, connects outside the
+  container and hands in the connected socket, as forwards do. A run has
+  eight channels, so a slow host doesn't hold up the others.
+- **A request for an `http://` URL** goes on with the URL's path only, without
+  the headers meant for a proxy, and with `Connection: close`: one request per
+  connection.
+- **A name that resolves to this machine is refused**, even if listed:
+  loopback, an unspecified or a link-local address. A run with a list reaches
+  this machine only at an address its list names, or on the ports it uses,
+  so DNS can't point a listed name here.
+- **What was refused, the run says when it ends**, as a download that failed
+  might not: `zigsaw: <id> was refused example.org:443: its allow list
+  doesn't name it; --allow-host=<host> lets a run reach one`. The app itself
+  gets `403 Forbidden`, with the same reason in the body. `-v` prints a line
+  for each connection.
+- **Only `appcontainer` enforces it.** Under `soft` and `low`, the proxy is
+  there and a note says the list isn't enforced: a program that uses the proxy
+  keeps to it, and one that doesn't reaches anything.
+- **Under `appcontainer`, a program that doesn't use the proxy reaches
+  nothing.** It fails closed: it can't even resolve a name (probe row
+  `remote-dns-no-caps`). That's the price of not needing an administrator.
+  Windows filters by host only with one (WFP filters, firewall rules).
+
+**Setting it.** `--allow-host=<pattern>` adds a host to the app's list, and
+`--noallow-host=<pattern>` takes one away, on `run` and `override`, also with
+`--global`. They layer as `--filesystem` and `--nofilesystem` do.
+
+- `--share=network` gives the run all of the network, list or not.
+- `--unshare=network` takes the network away, the app's own list too.
+- So `--unshare=network --allow-host=github.com` narrows an app that has the
+  network to one host.
+- A list with nothing left is no network.
+
+`info` and the install question say "the network, only to …". A host an
+update adds, one the old list doesn't cover, is access that it asks about.
+So is going from a list to the whole network. A recipe can't have both
+`network` and `hosts`. A zigsaw before 0.94 ignores `hosts`, and gives the
+app no network at all.
+
+**Your proxy.** If you set `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY`, as
+zigsaw's own requests honour, zigsaw reaches a list's hosts through it:
+
+- It sends a CONNECT, for an `http://` URL too, since a tunnel keeps the
+  credentials out of the relay, which the app can read.
+- `NO_PROXY` names hosts it connects to directly: `*`, a host, or a domain,
+  with or without a leading dot or `*.`.
+- Only Basic authentication, from the URL's user and password. A proxy that
+  wants NTLM or Kerberos, or that refuses CONNECT to port 80, doesn't work
+  here.
+- An `https://` or `socks5://` proxy gets a note, and zigsaw connects
+  directly.
+- Through your proxy, the proxy resolves the name, so zigsaw's check of
+  names that resolve to this machine doesn't apply.
+
+**Edge.** While a run of the same app with the whole network goes, its
+container is exempt from loopback isolation, and so a run with a list
+reaches this machine's servers too. A run without the network has the same
+edge.
+
+**Who uses the proxy.** What a run with a list needs is a program that reads
+`HTTP_PROXY` and `HTTPS_PROXY`:
+
+| image | uses the proxy |
+|---|---|
+| curl-based (git's MinGit, cargo, CMake), Go (zot, fzf), Python (`urllib`, pip), .NET | yes, by the variables |
+| Node | `fetch` only with `NODE_USE_ENV_PROXY=1` (Node 24 and later); npm by its own `proxy` setting, which reads them |
+| Java | no: it wants `-Dhttps.proxyHost` and `-Dhttps.proxyPort` |
+| Qt, Chromium and Electron, and other programs that read Windows' proxy settings | no |
+
+That table is from what each program documents. Iteration 94 checked only the
+probe and the suites' fixtures, and left the published images to a later
+round, which would set what Node and Java need in their images (republishing
+them).
+
 ### Builds
 
 Unchanged. Enforcing no network would mean running build steps in an
@@ -328,8 +431,10 @@ initdb's `NUL` on Server 2025, and kpathsea's long names, among others.
 ### Not in this design
 
 - Serving other machines.
-- Per-host rules (only `example.org`).
 - DNS.
+- Allow lists for builds and vendor steps, which don't run in a container,
+  and for protocols other than HTTP's (SOCKS, a raw connection to a remote
+  host's port).
 
 ## Slices
 
@@ -349,6 +454,8 @@ initdb's `NUL` on Server 2025, and kpathsea's long names, among others.
    their own trusting Windows' too.
 5. **The programs that take a file of roots** (built in iteration 53):
    `${roots}` for PHP's curl, Composer, Perl and libpq.
+6. **Allow lists** (built in iteration 94): `permissions.hosts`,
+   `--allow-host`, the relay as a proxy, your proxy chained.
 
 ## Decisions
 
@@ -369,3 +476,14 @@ Taken for iteration 51, the same day:
 6. **The exemption lasts only while the app's runs go**, rather than while
    its overrides give it the network: the probe found that an exempt
    container reaches this machine without any network capability.
+
+Taken for iteration 94, 2026-11-12:
+
+7. **Allow lists come from recipes and from you**: `permissions.hosts`, and
+   `--allow-host`/`--noallow-host` on runs and overrides.
+8. **Under `soft` and `low`, the same proxy, and a note** that the list isn't
+   enforced there.
+9. **The proxy carries CONNECT and requests for `http://` URLs**, one per
+   connection. No SOCKS.
+10. **zigsaw goes through your proxy** for a list's hosts, honouring NO_PROXY,
+    with Basic authentication.

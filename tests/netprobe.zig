@@ -8,6 +8,25 @@
 //!   zigsaw-netprobe env <name>... prints `<name>=<value>` for each one set
 //!   zigsaw-netprobe wait <ms>     exits after <ms> milliseconds
 //!
+//! And for allow lists (tests/hosts.sh):
+//!
+//!   zigsaw-netprobe serve-http <port>
+//!       answers each HTTP request on 127.0.0.1:<port> with 200 and, as its
+//!       body, the request's first line and whether it said
+//!       "Connection: close"
+//!   zigsaw-netprobe fetch <host> <port>
+//!       with HTTPS_PROXY set, asks that proxy for a CONNECT to host:port and
+//!       then pings through it; without, pings host:port itself (an IPv4
+//!       address). Prints `pong`, the proxy's status and body, or
+//!       `error <code>`; exits 0 only for a pong
+//!   zigsaw-netprobe fetch-http <host> <port> <path>
+//!       asks HTTP_PROXY for http://host:port<path>; prints the answer's
+//!       status and body; exits 0 for a 200
+//!   zigsaw-netprobe fake-proxy <port> <user:password> <log>
+//!       an HTTP proxy for CONNECT only on 127.0.0.1:<port>, which wants
+//!       Basic authentication as <user:password> (407 otherwise), and
+//!       appends each request's target to <log>
+//!
 //! The report's endpoints are processes of its own, on the host or in two
 //! AppContainer profiles it makes and deletes (zigsaw.test.netprobe.a and
 //! .b), so its executable must be readable to ALL APPLICATION PACKAGES.
@@ -29,6 +48,21 @@
 //!   handed-unconnected      a socket the host made but didn't connect,
 //!                           handed in: the container connects it to the
 //!                           host, which is why zigsaw never hands one in
+//!
+//! Then the internet, for allow lists: a host on it (ZIGSAW_NETPROBE_REMOTE,
+//! by default example.com) on port 80, where an HTTP HEAD gets an answer:
+//!
+//!   remote-from-host        the host itself; if this fails, the rows after
+//!                           say nothing
+//!   remote-caps             a container with the `network` permission's
+//!                           capabilities connects to it
+//!   remote-no-caps          one with no network capability: what a run with
+//!                           an allow list holds, so this must not connect
+//!   remote-handed           a connection the host made to it, handed to a
+//!                           container with no network capability: how
+//!                           zigsaw's proxy gives a run a host on its list
+//!   remote-dns-no-caps      whether a container with no network capability
+//!                           resolves its name (`resolves` or `error <code>`)
 //!
 //! Then AF_UNIX, each check in a directory of its own under TEMP, which
 //! gives containers nothing but what the check grants them (Modify, on the
@@ -96,7 +130,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     if (std.mem.eql(u8, mode, "report")) {
         const temp = init.environ_map.get("TEMP") orelse return error.NoTemp;
-        try report(arena, init.io, temp, out);
+        try report(arena, init.io, temp, init.environ_map.get("ZIGSAW_NETPROBE_REMOTE") orelse "example.com", out);
         return 0;
     }
     if (std.mem.eql(u8, mode, "serve") and args.len == 3) return serve(out, try port(args[2]));
@@ -109,6 +143,10 @@ pub fn main(init: std.process.Init) !u8 {
         for (args[2..]) |name| if (init.environ_map.get(name)) |value| try out.print("{s}={s}\n", .{ name, value });
         return 0;
     }
+    if (std.mem.eql(u8, mode, "serve-http") and args.len == 3) return serveHttp(out, try port(args[2]));
+    if (std.mem.eql(u8, mode, "fetch") and args.len == 4) return fetch(arena, out, if (init.environ_map.get("HTTPS_PROXY")) |v| (if (v.len == 0) null else v) else null, args[2], try port(args[3]));
+    if (std.mem.eql(u8, mode, "fetch-http") and args.len == 5) return fetchHttp(out, init.environ_map.get("HTTP_PROXY") orelse return 2, args[2], try port(args[3]), args[4]);
+    if (std.mem.eql(u8, mode, "fake-proxy") and args.len == 5) return fakeProxy(arena, init.io, out, try port(args[2]), args[3], args[4]);
     if (std.mem.eql(u8, mode, "wait") and args.len == 3) {
         win32.Sleep(try std.fmt.parseInt(DWORD, args[2], 10));
         return 0;
@@ -120,6 +158,9 @@ pub fn main(init: std.process.Init) !u8 {
     if (args.len == 3 and std.mem.eql(u8, mode, "_accept")) return exitCode(acceptAndPong(try socket(args[2]), 2 * timeout_ms));
     if (args.len == 3 and std.mem.eql(u8, mode, "_ping")) return exitCode(ping(try socket(args[2])));
     if (args.len == 4 and std.mem.eql(u8, mode, "_connect-socket")) return exitCode(connectSocket(try socket(args[2]), try port(args[3])));
+    if (args.len == 4 and std.mem.eql(u8, mode, "_http")) return exitCode(httpAt(args[2], try port(args[3])));
+    if (args.len == 4 and std.mem.eql(u8, mode, "_http-socket")) return exitCode(head(try socket(args[2]), args[3]));
+    if (args.len == 3 and std.mem.eql(u8, mode, "_resolve")) return exitCode(resolveName(arena, args[2]));
     if (args.len == 3 and std.mem.eql(u8, mode, "_unix-listen")) return exitCode(unixListenAndPong(args[2]));
     if (args.len == 3 and std.mem.eql(u8, mode, "_unix-connect")) return exitCode(unixConnectAndPing(args[2]));
     return usage();
@@ -174,6 +215,225 @@ fn serve(out: *std.Io.Writer, p: u16) !u8 {
         if (c == win32.INVALID_SOCKET) continue;
         _ = pong(c);
         _ = win32.closesocket(c);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Allow lists
+
+fn serveHttp(out: *std.Io.Writer, p: u16) !u8 {
+    const listener = switch (net.listen(.loopback(.ipv4, p))) {
+        .socket => |s| s,
+        .failed => |code| {
+            try out.print("can't listen on 127.0.0.1:{d}: error {d}\n", .{ p, code });
+            return 1;
+        },
+    };
+    try out.print("listening on 127.0.0.1:{d}\n", .{p});
+    try out.flush();
+    while (true) {
+        const c = win32.accept(listener, null, null);
+        if (c == win32.INVALID_SOCKET) continue;
+        defer _ = win32.closesocket(c);
+        var buf: [8192]u8 = undefined;
+        const req_head = readHead(c, &buf) orelse continue;
+        const first = req_head[0 .. std.mem.indexOf(u8, req_head, "\r\n") orelse req_head.len];
+        const close = std.ascii.findIgnoreCase(req_head, "\r\nConnection: close\r\n") != null;
+        var body_buf: [1024]u8 = undefined;
+        const body = std.fmt.bufPrint(&body_buf, "{s}|{s}", .{ first, if (close) "close" else "keep" }) catch continue;
+        var res: [1200]u8 = undefined;
+        const msg = std.fmt.bufPrint(&res, "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body }) catch continue;
+        _ = net.sendAll(c, msg);
+        _ = win32.shutdown(c, win32.SD_SEND);
+    }
+}
+
+/// A request's req_head, from `s`: up to its blank line.
+fn readHead(s: SOCKET, buf: []u8) ?[]const u8 {
+    const t: DWORD = timeout_ms;
+    _ = win32.setsockopt(s, win32.SOL_SOCKET, win32.SO_RCVTIMEO, &t, @sizeOf(DWORD));
+    var len: usize = 0;
+    while (len < buf.len) {
+        const n = win32.recv(s, buf[len..].ptr, 1, 0);
+        if (n <= 0) return null;
+        len += 1;
+        if (len >= 4 and std.mem.eql(u8, buf[len - 4 .. len], "\r\n\r\n")) return buf[0..len];
+    }
+    return null;
+}
+
+/// All `s` sends until it ends, at most `buf`'s size.
+fn readToEnd(s: SOCKET, buf: []u8) []const u8 {
+    const t: DWORD = 2 * timeout_ms;
+    _ = win32.setsockopt(s, win32.SOL_SOCKET, win32.SO_RCVTIMEO, &t, @sizeOf(DWORD));
+    var len: usize = 0;
+    while (len < buf.len) {
+        const n = win32.recv(s, buf[len..].ptr, @intCast(buf.len - len), 0);
+        if (n <= 0) break;
+        len += @intCast(n);
+    }
+    return buf[0..len];
+}
+
+/// The address of a proxy URL as zigsaw writes it: http://127.0.0.1:<port>.
+fn proxyAddress(url: []const u8) ?net.Address {
+    const rest = if (std.mem.startsWith(u8, url, "http://")) url["http://".len..] else url;
+    const hostport = std.mem.trimEnd(u8, rest, "/");
+    const colon = std.mem.lastIndexOfScalar(u8, hostport, ':') orelse return null;
+    const p = std.fmt.parseInt(u16, hostport[colon + 1 ..], 10) catch return null;
+    const ip = std.Io.net.Ip4Address.parse(hostport[0..colon], p) catch return null;
+    return .{ .ipv4 = .{ .port = std.mem.nativeToBig(u16, p), .addr = ip.bytes } };
+}
+
+fn fetch(arena: std.mem.Allocator, out: *std.Io.Writer, proxy: ?[]const u8, host: []const u8, p: u16) !u8 {
+    _ = arena;
+    const url = proxy orelse {
+        const ip = std.Io.net.Ip4Address.parse(host, p) catch {
+            try out.print("error {d}\n", .{win32.WSAEINVAL});
+            return 1;
+        };
+        const code = connectAndPing(.{ .ipv4 = .{ .port = std.mem.nativeToBig(u16, p), .addr = ip.bytes } });
+        if (code == 0) try out.writeAll("pong\n") else try out.print("error {d}\n", .{code});
+        return if (code == 0) 0 else 1;
+    };
+    const address = proxyAddress(url) orelse {
+        try out.print("bad proxy {s}\n", .{url});
+        return 2;
+    };
+    const s = switch (net.connect(address, timeout_ms)) {
+        .socket => |s| s,
+        .failed => |code| {
+            try out.print("error {d}\n", .{code});
+            return 1;
+        },
+    };
+    defer _ = win32.closesocket(s);
+    var req: [512]u8 = undefined;
+    if (!net.sendAll(s, try std.fmt.bufPrint(&req, "CONNECT {s}:{d} HTTP/1.1\r\nHost: {s}:{d}\r\n\r\n", .{ host, p, host, p }))) {
+        try out.print("error {d}\n", .{win32.WSAGetLastError()});
+        return 1;
+    }
+    var buf: [8192]u8 = undefined;
+    const req_head = readHead(s, &buf) orelse {
+        try out.writeAll("no answer\n");
+        return 1;
+    };
+    if (!std.mem.startsWith(u8, req_head, "HTTP/1.1 200 ")) {
+        var rest: [2048]u8 = undefined;
+        const body = readToEnd(s, &rest);
+        try out.print("{s} {s}\n", .{ req_head[9..12], std.mem.trimEnd(u8, body, "\r\n") });
+        return 1;
+    }
+    const code = ping(s);
+    if (code == 0) try out.writeAll("pong\n") else try out.print("error {d}\n", .{code});
+    return if (code == 0) 0 else 1;
+}
+
+fn fetchHttp(out: *std.Io.Writer, url: []const u8, host: []const u8, p: u16, path: []const u8) !u8 {
+    const address = proxyAddress(url) orelse {
+        try out.print("bad proxy {s}\n", .{url});
+        return 2;
+    };
+    const s = switch (net.connect(address, timeout_ms)) {
+        .socket => |s| s,
+        .failed => |code| {
+            try out.print("error {d}\n", .{code});
+            return 1;
+        },
+    };
+    defer _ = win32.closesocket(s);
+    var req: [1024]u8 = undefined;
+    if (!net.sendAll(s, try std.fmt.bufPrint(&req, "GET http://{s}:{d}{s} HTTP/1.1\r\nHost: {s}:{d}\r\nProxy-Connection: keep-alive\r\nConnection: keep-alive\r\n\r\n", .{ host, p, path, host, p }))) {
+        try out.print("error {d}\n", .{win32.WSAGetLastError()});
+        return 1;
+    }
+    var buf: [8192]u8 = undefined;
+    const all = readToEnd(s, &buf);
+    const end = std.mem.indexOf(u8, all, "\r\n\r\n") orelse {
+        try out.writeAll("no answer\n");
+        return 1;
+    };
+    if (all.len < 12) return 1;
+    try out.print("{s} {s}\n", .{ all[9..12], std.mem.trimEnd(u8, all[end + 4 ..], "\r\n") });
+    return if (std.mem.eql(u8, all[9..12], "200")) 0 else 1;
+}
+
+fn fakeProxy(arena: std.mem.Allocator, io: std.Io, out: *std.Io.Writer, p: u16, credentials: []const u8, log_path: []const u8) !u8 {
+    const listener = switch (net.listen(.loopback(.ipv4, p))) {
+        .socket => |s| s,
+        .failed => |code| {
+            try out.print("can't listen on 127.0.0.1:{d}: error {d}\n", .{ p, code });
+            return 1;
+        },
+    };
+    const enc = std.base64.standard.Encoder;
+    const want = try std.fmt.allocPrint(arena, "\r\nProxy-Authorization: Basic {s}\r\n", .{enc.encode(try arena.alloc(u8, enc.calcSize(credentials.len)), credentials)});
+    try out.print("listening on 127.0.0.1:{d}\n", .{p});
+    try out.flush();
+    while (true) {
+        const c = win32.accept(listener, null, null);
+        if (c == win32.INVALID_SOCKET) continue;
+        var buf: [8192]u8 = undefined;
+        const req_head = readHead(c, &buf) orelse {
+            _ = win32.closesocket(c);
+            continue;
+        };
+        const first = req_head[0 .. std.mem.indexOf(u8, req_head, "\r\n") orelse req_head.len];
+        var parts = std.mem.splitScalar(u8, first, ' ');
+        _ = parts.next();
+        const target = parts.next() orelse "";
+        appendLine(io, log_path, target);
+        if (std.mem.indexOf(u8, req_head, want) == null) {
+            _ = net.sendAll(c, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n");
+            _ = win32.closesocket(c);
+            continue;
+        }
+        // Only to 127.0.0.1: the targets are the suite's servers.
+        const colon = std.mem.lastIndexOfScalar(u8, target, ':') orelse {
+            _ = win32.closesocket(c);
+            continue;
+        };
+        const tp = std.fmt.parseInt(u16, target[colon + 1 ..], 10) catch 0;
+        const upstream = switch (net.connect(.loopback(.ipv4, tp), timeout_ms)) {
+            .socket => |s| s,
+            .failed => {
+                _ = net.sendAll(c, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+                _ = win32.closesocket(c);
+                continue;
+            },
+        };
+        _ = net.sendAll(c, "HTTP/1.1 200 Connection established\r\n\r\n");
+        const t = try std.Thread.spawn(.{}, tunnel, .{ c, upstream });
+        t.detach();
+    }
+}
+
+fn appendLine(io: std.Io, path: []const u8, line: []const u8) void {
+    const f = std.Io.Dir.cwd().createFile(io, path, .{ .truncate = false }) catch return;
+    defer f.close(io);
+    const end = f.length(io) catch return;
+    var buf: [512]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{s}\n", .{line}) catch return;
+    f.writePositionalAll(io, text, end) catch {};
+}
+
+fn tunnel(a: SOCKET, b: SOCKET) void {
+    defer _ = win32.closesocket(a);
+    defer _ = win32.closesocket(b);
+    const back = std.Thread.spawn(.{}, copy, .{ b, a }) catch return;
+    copy(a, b);
+    back.join();
+}
+
+fn copy(from: SOCKET, to: SOCKET) void {
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        const n = win32.recv(from, &buf, buf.len, 0);
+        if (n <= 0) {
+            _ = win32.shutdown(to, win32.SD_SEND);
+            return;
+        }
+        if (!net.sendAll(to, buf[0..@intCast(n)])) return;
     }
 }
 
@@ -284,7 +544,7 @@ const Where = union(enum) {
     container: struct { profile: usize, network: bool },
 };
 
-fn report(arena: std.mem.Allocator, io: std.Io, temp: []const u8, out: *std.Io.Writer) !void {
+fn report(arena: std.mem.Allocator, io: std.Io, temp: []const u8, remote: []const u8, out: *std.Io.Writer) !void {
     var sids: [profiles.len]win32.PSID = undefined;
     for (&sids, profiles) |*sid, name| sid.* = try profile(arena, name);
     defer for (profiles) |name| {
@@ -310,6 +570,8 @@ fn report(arena: std.mem.Allocator, io: std.Io, temp: []const u8, out: *std.Io.W
     try out.print("handed-connected {f}\n", .{try ctx.handedConnected(a)});
     try out.print("handed-unconnected {f}\n", .{try ctx.handedUnconnected(a)});
     try out.flush();
+    remoteRows(ctx, remote, out) catch |err| try out.print("remote rows stopped: {t}\n", .{err});
+    try out.flush();
     // A directory it couldn't make or grant leaves out the rows after, not
     // the report's others.
     unixRows(ctx, io, temp, out) catch |err| try out.print("unix rows stopped: {t}\n", .{err});
@@ -317,6 +579,84 @@ fn report(arena: std.mem.Allocator, io: std.Io, temp: []const u8, out: *std.Io.W
     try exemptRows(ctx, io, out);
     try out.flush();
     try profileRace(arena, out);
+}
+
+/// The internet rows, against `remote` on port 80.
+fn remoteRows(s: Spawner, remote: []const u8, out: *std.Io.Writer) !void {
+    var found: [8]net.Address = undefined;
+    const n = switch (net.resolve(try win32.wide(s.arena, remote), 80, &found)) {
+        .found => |n| n,
+        .failed => |code| {
+            try out.print("remote-from-host {s} doesn't resolve: error {d}\n", .{ remote, code });
+            return;
+        },
+    };
+    // IPv4, which every runner has a route for.
+    const ip = for (found[0..n]) |a| switch (a) {
+        .ipv4 => |in| break in.addr,
+        .ipv6 => {},
+    } else {
+        try out.print("remote-from-host {s} has no IPv4 address\n", .{remote});
+        return;
+    };
+    const dotted = try std.fmt.allocPrint(s.arena, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] });
+    const host_code = httpAt(dotted, 80);
+    try out.print("remote-from-host {f} ({s}, {s})\n", .{ Outcome{ .code = host_code }, remote, dotted });
+    if (host_code != 0) return;
+    const caps: Where = .{ .container = .{ .profile = 0, .network = true } };
+    const no_caps: Where = .{ .container = .{ .profile = 0, .network = false } };
+    try out.print("remote-caps {f}\n", .{Outcome{ .code = finish(try s.spawn(caps, null, try std.fmt.allocPrint(s.arena, "_http {s} 80", .{dotted})), 3 * timeout_ms) }});
+    try out.print("remote-no-caps {f}\n", .{Outcome{ .code = finish(try s.spawn(no_caps, null, try std.fmt.allocPrint(s.arena, "_http {s} 80", .{dotted})), 3 * timeout_ms) }});
+    try out.flush();
+    const handed: Outcome = handed: {
+        const conn = switch (net.connect(.{ .ipv4 = .{ .port = std.mem.nativeToBig(u16, 80), .addr = ip } }, timeout_ms)) {
+            .socket => |c| c,
+            .failed => |code| break :handed .{ .code = code },
+        };
+        defer _ = win32.closesocket(conn);
+        break :handed .{ .code = finish(try s.spawn(no_caps, conn, try std.fmt.allocPrint(s.arena, "_http-socket {d} {s}", .{ conn, remote })), 3 * timeout_ms) };
+    };
+    try out.print("remote-handed {f}\n", .{handed});
+    const dns = finish(try s.spawn(no_caps, null, try std.fmt.allocPrint(s.arena, "_resolve {s}", .{remote})), 3 * timeout_ms);
+    if (dns == 0) try out.print("remote-dns-no-caps resolves\n", .{}) else try out.print("remote-dns-no-caps {f}\n", .{Outcome{ .code = dns }});
+}
+
+/// An HTTP HEAD to `ip` (dotted IPv4) on `p`: 0 if an HTTP answer came.
+fn httpAt(ip: []const u8, p: u16) c_int {
+    const addr = std.Io.net.Ip4Address.parse(ip, p) catch return win32.WSAEINVAL;
+    const s = switch (net.connect(.{ .ipv4 = .{ .port = std.mem.nativeToBig(u16, p), .addr = addr.bytes } }, timeout_ms)) {
+        .socket => |s| s,
+        .failed => |code| return code,
+    };
+    defer _ = win32.closesocket(s);
+    return head(s, ip);
+}
+
+/// Sends a HEAD for `host` on `s`, connected: 0 if "HTTP/" comes back.
+fn head(s: SOCKET, host: []const u8) c_int {
+    var req: [256]u8 = undefined;
+    const line = std.fmt.bufPrint(&req, "HEAD / HTTP/1.0\r\nHost: {s}\r\n\r\n", .{host}) catch return win32.WSAEINVAL;
+    if (!net.sendAll(s, line)) return win32.WSAGetLastError();
+    var buf: [5]u8 = undefined;
+    const t: DWORD = timeout_ms;
+    _ = win32.setsockopt(s, win32.SOL_SOCKET, win32.SO_RCVTIMEO, &t, @sizeOf(DWORD));
+    var got: usize = 0;
+    while (got < buf.len) {
+        const r = win32.recv(s, buf[got..].ptr, @intCast(buf.len - got), 0);
+        if (r < 0) return win32.WSAGetLastError();
+        if (r == 0) return win32.WSAECONNREFUSED;
+        got += @intCast(r);
+    }
+    return if (std.mem.eql(u8, &buf, "HTTP/")) 0 else win32.WSAECONNREFUSED;
+}
+
+/// 0 if `name` resolves here, or GetAddrInfoW's error.
+fn resolveName(arena: std.mem.Allocator, name: []const u8) c_int {
+    var found: [1]net.Address = undefined;
+    return switch (net.resolve(win32.wide(arena, name) catch return win32.WSAEINVAL, 80, &found)) {
+        .found => 0,
+        .failed => |code| code,
+    };
 }
 
 /// The AF_UNIX rows, in directories under `temp` that it deletes after.

@@ -952,6 +952,22 @@ pub extern "ws2_32" fn getsockopt(s: SOCKET, level: c_int, name: c_int, value: *
 pub extern "ws2_32" fn ioctlsocket(s: SOCKET, cmd: c_long, arg: *u32) callconv(.winapi) c_int;
 pub extern "ws2_32" fn select(nfds: c_int, read: ?*fd_set, write: ?*fd_set, except: ?*fd_set, timeout: ?*const timeval) callconv(.winapi) c_int;
 
+/// ws2def.h's ADDRINFOW, for resolving the hosts of an allow list (proxy.zig).
+pub const ADDRINFOW = extern struct {
+    flags: c_int = 0,
+    family: c_int = 0,
+    socktype: c_int = 0,
+    protocol: c_int = 0,
+    addrlen: usize = 0,
+    canonname: ?[*:0]u16 = null,
+    addr: ?*anyopaque = null,
+    next: ?*ADDRINFOW = null,
+};
+pub const AF_UNSPEC: c_int = 0;
+
+pub extern "ws2_32" fn GetAddrInfoW(name: [*:0]const u16, service: ?[*:0]const u16, hints: ?*const ADDRINFOW, result: *?*ADDRINFOW) callconv(.winapi) c_int;
+pub extern "ws2_32" fn FreeAddrInfoW(info: *ADDRINFOW) callconv(.winapi) void;
+
 /// What another process needs to open a socket of ours (WSADuplicateSocketW,
 /// then WSASocketW with FROM_PROTOCOL_INFO): only passed along, so its
 /// fields are left opaque.
@@ -967,6 +983,7 @@ pub extern "kernel32" fn GetProcessId(process: HANDLE) callconv(.winapi) DWORD;
 pub const SRWLOCK = extern struct { ptr: ?*anyopaque = null };
 pub extern "kernel32" fn AcquireSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) void;
 pub extern "kernel32" fn ReleaseSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) void;
+pub extern "kernel32" fn TryAcquireSRWLockExclusive(lock: *SRWLOCK) callconv(.winapi) u8;
 pub extern "kernel32" fn AcquireSRWLockShared(lock: *SRWLOCK) callconv(.winapi) void;
 pub extern "kernel32" fn ReleaseSRWLockShared(lock: *SRWLOCK) callconv(.winapi) void;
 /// What threads holding an SRWLOCK wait on: zero is ready.

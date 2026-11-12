@@ -42,6 +42,7 @@ const junction = @import("junction.zig");
 const lazy = @import("lazy.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
+const proxy = @import("proxy.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
 const snapshot = @import("snapshot.zig");
@@ -89,7 +90,15 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const settings = try override.Settings.merge(arena, saved, opts.settings);
     const sandbox = override.sandboxOf(settings, cfg.permissions);
     warnUnsupported(cfg, sandbox);
-    const network = settings.network orelse cfg.permissions.network;
+    // The network: all of it, none, or the hosts of an allow list, which
+    // the run reaches through its relay, a proxy (see proxy.zig), with no
+    // network capability of its own.
+    const network_of = try override.networkOf(arena, settings, cfg.permissions);
+    const network = network_of == .all;
+    const allow_list: ?[]const []const u8 = switch (network_of) {
+        .list => |l| l,
+        else => null,
+    };
     var host_grants: std.ArrayList(HostGrant) = .empty;
     var folder_grants: std.ArrayList(folders.Grant) = .empty;
     var cwd_granted = false;
@@ -169,6 +178,9 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const reach: Loopback = if (sandbox == .appcontainer) try exemptLoopback(ctx, cfg.id, network, targets.len > 0) else .open;
     const forwarding = reach == .isolated and targets.len > 0;
     if (forwarding) try services.forwardThrough(ctx, targets, service_ports);
+    // Where the relay listens as the proxy of a run with an allow list.
+    const proxy_port: ?u16 = if (allow_list != null) try services.proxyPort(ctx, targets, service_ports) else null;
+    const proxy_url = if (proxy_port) |port| try std.fmt.allocPrint(arena, "http://127.0.0.1:{d}", .{port}) else null;
     const uses = try services.usePlaceholders(arena, targets);
     const runtimes = try runtimeDirs(arena, cfg, image.runtime_dirs, data_dir, cache_dir, roots_file, uses);
     const placeholders: oci.Placeholders = .{
@@ -227,6 +239,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .vars = app_env.items,
         .extra = settings.env,
         .proxies = network,
+        .proxy = proxy_url,
     });
     // The user's folders, where the app's environment says it looks for them.
     for (try folders.apply(ctx, data_dir, env.items, folder_grants.items)) |f|
@@ -239,7 +252,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         for (found.loaded) |e| note("extension {s} {s} ({s})", .{ e.id, e.version, e.dir });
         if (app_aliases) |a| note("aliases  {s} ({s})", .{ a.names, a.dir });
         if (!saved.isEmpty()) note("override {f}", .{saved});
-        note("sandbox  {t}, network {s}", .{ sandbox, if (network) "on" else "off" });
+        if (allow_list) |list|
+            note("sandbox  {t}, network only to {s}, through zigsaw's proxy at {s}", .{ sandbox, try oci.joinAnd(arena, list), proxy_url.? })
+        else
+            note("sandbox  {t}, network {s}", .{ sandbox, if (network) "on" else "off" });
         if (limits.memory) |bytes| note("memory   {f} at most, for the app and all it starts", .{override.Size{ .bytes = bytes }});
         if (limits.cpus) |n| {
             if (limits.fewerCpus() != null)
@@ -276,8 +292,19 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // when the run ends, and so the ports are free again.
     const published = if (sandbox == .appcontainer) try services.publish(ctx, cfg, service_ports, opts.command) else null;
     defer if (published) |p| p.close();
-    // The relay also forwards the ports the run uses, if it has to.
-    const forwards: ?forward.Forwards = if (forwarding) try forwardsOf(arena, targets) else null;
+    // The relay also forwards the ports the run uses, if it has to, and is
+    // the proxy of a run with an allow list.
+    const allowed: ?*proxy.Proxy = if (allow_list) |list| allowed: {
+        const p = try arena.create(proxy.Proxy);
+        p.* = .{ .id = cfg.id, .list = list, .verbose = ctx.verbose, .upstream = try proxy.Upstream.fromEnv(arena, ctx.env) };
+        break :allowed p;
+    } else null;
+    if (allow_list != null and sandbox != .appcontainer)
+        note("note: {s}'s allow list isn't enforced under the {t} sandbox: only programs that use HTTP_PROXY and HTTPS_PROXY keep to it; --sandbox=appcontainer enforces it", .{ cfg.id, sandbox });
+    const forwards: ?forward.Forwards = if (forwarding or allowed != null)
+        try forwardsOf(arena, if (forwarding) targets else &.{}, allowed, proxy_port orelse 0)
+    else
+        null;
     const relay_exe = if (published != null or forwards != null) try services.relayExe(ctx) else null;
 
     // Windows starts a program whose file is labelled low at low integrity,
@@ -338,7 +365,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // does all the app starts, zigsaw-host's programs and other apps' runs
     // among them.
     const job = try process.newJob(arena, limits);
-    if (relay_exe) |r| startRelay(ctx, cfg.id, job.handle, r, published, forwards, security.?, env_block);
+    if (relay_exe) |r| startRelay(ctx, cfg.id, job.handle, r, published, forwards, security, token, env_block);
     const watcher = written.Watcher.start(arena, ctx.io, try watchedDirs(arena, sandbox, host_grants.items, host_cwd, data_dir, data_root, ctx.env.get("USERPROFILE"), own));
     const child: process.Child = .in(job, try process.startIn(arena, job.handle, .{
         .exe = exe,
@@ -358,6 +385,9 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     if (report.memory_limit_reached) |bytes|
         note("zigsaw: {s} reached its memory limit of {f}, and was refused more: --memory, or `zigsaw override`, sets another, and none takes it away", .{ cfg.id, override.Size{ .bytes = bytes } });
     if (ctx.verbose) note("peak     {d} MB of memory, the app and all it started together", .{(report.peak_memory + (1 << 20) - 1) >> 20});
+    // What the allow list kept the run from, which it may have said only as
+    // a failed download.
+    if (allowed) |p| p.report(arena);
     // An app whose files couldn't be fetched says only something like
     // BAD_EXE_FORMAT: say what the helper knows. Through a GUI shim, this
     // reaches the box a failed run shows.
@@ -443,12 +473,13 @@ fn hostDir(ctx: *Context) ![]const u8 {
     return dir;
 }
 
-/// Starts the relay in the app's container and job, with the sockets of the
-/// services the run publishes (see services.zig), and the pipes of the
-/// ports it forwards (see forward.zig), which it listens on before this
-/// returns. It holds only the app's own capability: runs in one container
-/// reach each other without a network one. If it can't start, the app runs
-/// on, without them.
+/// Starts the relay in the app's job, and its container under appcontainer,
+/// with the sockets of the services the run publishes (see services.zig),
+/// and the channels of the ports it forwards and of its proxy (see
+/// forward.zig), on which it listens before this returns. In a container, it
+/// holds only the app's own capability: runs in one container reach each
+/// other without a network one. At low integrity, it gets the run's token. If
+/// it can't start, the app runs on, without them.
 fn startRelay(
     ctx: *Context,
     id: []const u8,
@@ -456,12 +487,13 @@ fn startRelay(
     exe: []const u8,
     published: ?services.Published,
     forwards: ?forward.Forwards,
-    app: win32.SECURITY_CAPABILITIES,
+    app: ?win32.SECURITY_CAPABILITIES,
+    token: ?win32.HANDLE,
     env_block: []const u16,
 ) void {
     const arena = ctx.arena;
     var own = app;
-    own.CapabilityCount = 1;
+    if (own) |*o| o.CapabilityCount = 1;
     var handles: std.ArrayList(win32.HANDLE) = .empty;
     var args: std.ArrayList([]const u8) = .empty;
     if (published) |p| {
@@ -469,7 +501,7 @@ fn startRelay(
         args.appendSlice(arena, p.args) catch return;
     }
     if (forwards) |f| {
-        handles.appendSlice(arena, &.{ f.relay_in, f.relay_out }) catch return;
+        handles.appendSlice(arena, f.relayHandles(arena) catch return) catch return;
         args.appendSlice(arena, f.args(arena) catch return) catch return;
     }
     const command_line = process.buildCommandLine(arena, exe, args.items) catch return;
@@ -478,37 +510,37 @@ fn startRelay(
         .command_line = command_line,
         .env_block = env_block,
         .cwd = std.fs.path.dirname(exe).?,
-        .security = &own,
+        .security = if (own) |*o| o else null,
+        .token = token,
         .creation_flags = win32.DETACHED_PROCESS,
         .stdio = .{ null, null, null },
         .inherit = handles.items,
     }) catch {
         if (forwards) |f| f.close();
-        note("note: the relay of {s}'s run didn't start, so it {s} this run", .{
-            id,
-            if (published != null and forwards != null)
-                "publishes no service, and reaches none of the ports it uses,"
-            else if (published != null)
-                "publishes no service"
-            else
-                "reaches none of the ports it uses",
-        });
+        var lost: std.ArrayList([]const u8) = .empty;
+        if (published != null) lost.append(arena, "publishes no service") catch {};
+        if (forwards) |f| {
+            if (f.ports.len > 0) lost.append(arena, "reaches none of the ports it uses") catch {};
+            if (f.proxy != null) lost.append(arena, "reaches none of the hosts its allow list names") catch {};
+        }
+        note("note: the relay of {s}'s run didn't start, so it {s} this run", .{ id, oci.joinAnd(arena, lost.items) catch "" });
         return;
     };
     if (forwards) |f| if (!f.serve(relay))
-        note("note: the relay of {s}'s run couldn't listen for the ports it uses, so it doesn't reach them this run", .{id});
+        note("note: the relay of {s}'s run couldn't listen for the ports it uses or its proxy, so it doesn't reach them this run", .{id});
     _ = win32.CloseHandle(relay);
 }
 
-/// The forwards of the ports a run uses, to the ports the relay listens on.
-fn forwardsOf(arena: Allocator, targets: []const services.Target) !forward.Forwards {
+/// The forwards of the ports a run uses, to the ports the relay listens on,
+/// and the proxy of its allow list, if it has one.
+fn forwardsOf(arena: Allocator, targets: []const services.Target, allowed: ?*proxy.Proxy, proxy_port: u16) !forward.Forwards {
     const ports = try arena.alloc(u16, targets.len);
     const connect = try arena.alloc(u16, targets.len);
     for (ports, connect, targets) |*p, *c, t| {
         p.* = t.port;
         c.* = t.connect;
     }
-    return forward.Forwards.open(arena, ports, connect);
+    return forward.Forwards.open(arena, ports, connect, allowed, proxy_port);
 }
 
 /// A host path the run may use, which the enforcing sandboxes grant: null

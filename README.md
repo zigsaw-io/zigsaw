@@ -819,6 +819,8 @@ to finish.
 | `--nofilesystem=<location>` | Take away access that the app's permissions or its overrides give to a location |
 | `--file=<path>` | Have the app open a file of yours: grants it that file, to read and write, and adds the file's path to the app's arguments (see [below](#opening-a-file)) |
 | `--share=network` / `--unshare=network` | Override the app's network permission. With the network, a run gets your `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` |
+| `--allow-host=<host>[:<port>]` | Let a run without the network reach this host, through zigsaw's proxy ([allow lists](#allow-lists)): a name, `*.<domain>`, an IPv4 address or an `[IPv6]` one; without a port, 443 and 80 |
+| `--noallow-host=<host>[:<port>]` | Take away a host that the app's list or an override allows |
 | `--share=commands` / `--unshare=commands` | Put [your zigsaw apps' commands](#your-apps-commands-and-your-own-programs) on the run's PATH, or not (`soft` sandbox only) |
 | `--share=host` / `--unshare=host` | Put [`zigsaw-host`](#your-apps-commands-and-your-own-programs) on the run's PATH, or not (not in an AppContainer) |
 | `--port=<name>=<port>` | Serve one of the app's [services](#services) on another port, or reach a port it [uses](#reaching-this-machine) on another |
@@ -1177,6 +1179,37 @@ zigsaw volume export pgdata - | ssh other zigsaw volume import pgdata -        #
   with empty data in `data\`. If that left files, the new one tells you about them
   and leaves them; if it left only empty folders, from 0.86 on the new one deletes
   them without a word.
+
+### Allow lists
+
+An app can reach a few hosts and nothing else on the network: its recipe lists them
+(`"permissions": { "hosts": [...] }`), or you do.
+
+```
+zigsaw run --allow-host=api.github.com org.example.App                     # one more host, this run
+zigsaw run --unshare=network --allow-host=github.com org.example.App       # an app with the network, narrowed
+zigsaw override --allow-host=*.npmjs.org org.example.App                   # every run of the app
+zigsaw run --sandbox=appcontainer org.example.App                          # enforced
+```
+
+- **The run holds no network capability.** zigsaw's relay is an HTTP proxy for it,
+  which `HTTP_PROXY` and `HTTPS_PROXY` name. For each request, zigsaw checks the host,
+  connects outside the app's container, and hands the connection in. A host the list
+  doesn't name gets `403`, and when the run ends zigsaw says what it refused.
+- **Only `--sandbox=appcontainer` enforces it.** Under `low` and `soft`, the proxy is
+  there and a note says the list isn't enforced.
+- **A program that doesn't use the proxy reaches nothing** under `appcontainer`, not
+  even DNS. Curl, git, Go, Python and .NET use it; Node's `fetch` needs
+  `NODE_USE_ENV_PROXY=1`, Java its own options, and Qt and Chromium-based apps read
+  Windows' proxy settings instead.
+- **A name that resolves to this machine is refused.** A run with a list reaches this
+  machine at an address its list names, or on the ports it [uses](#reaching-this-machine).
+- **Your own proxy is used**, if `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` is set and
+  `NO_PROXY` doesn't name the host, through a CONNECT with Basic authentication.
+- `--share=network` gives the run all of the network; `--unshare=network` takes the
+  app's list away too. A list with nothing left is no network.
+
+How it works, and what Windows lets it do: [networking.md](docs/networking.md#allow-lists).
 
 ### Limits
 

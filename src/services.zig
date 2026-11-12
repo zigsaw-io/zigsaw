@@ -286,6 +286,15 @@ pub fn forwardThrough(ctx: *Context, list: []Target, ports: []const Ports) !void
     }
 }
 
+/// Where the relay of a run with an allow list listens as its proxy: picked
+/// as forwards' ports are, for the run only.
+pub fn proxyPort(ctx: *Context, list: []const Target, ports: []const Ports) !u16 {
+    var taken: std.ArrayList(u16) = .empty;
+    for (ports) |p| try taken.appendSlice(ctx.arena, &.{ p.port, p.listen });
+    for (list) |t| try taken.appendSlice(ctx.arena, &.{ t.port, t.connect });
+    return pick(ctx, taken.items);
+}
+
 fn isFree(port: u16) bool {
     for ([_]net.Family{ .ipv4, .ipv6 }) |family| switch (net.listen(.loopback(family, port))) {
         .socket => |s| _ = win32.closesocket(s),

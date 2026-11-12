@@ -148,6 +148,27 @@ integrity, and what a low-integrity program writes is labelled low.
   images that don't ask keep their digests.
 - A zigsaw before 0.54 ignores it, and runs every app under `soft`.
 
+### A few hosts
+
+An app that needs only a few hosts lists them instead of asking for the
+network ([allow lists](networking.md#allow-lists)):
+
+```json
+"permissions": { "hosts": ["api.github.com", "*.npmjs.org", "192.0.2.7:5432"] }
+```
+
+- Each is a name, `*.<domain>` for the names under it, an IPv4 address or an
+  `[IPv6]` one, with an optional `:<port>`; without one, 443 and 80.
+- Its runs reach them through zigsaw's proxy, which `HTTP_PROXY` and
+  `HTTPS_PROXY` name, and nothing else under `appcontainer`. A program that
+  doesn't use those variables gets nothing, so an image whose programs need
+  telling sets that in its `env` (Node's `NODE_USE_ENV_PROXY=1`, say).
+- A recipe can't have both `hosts` and `"network": true`, nor an empty list.
+- `info` and the install question say "the network, only to …"; an update
+  that adds a host its list didn't cover asks first.
+- Without it, the image's config has no `hosts`, so images keep their
+  digests. A zigsaw before 0.94 ignores it, and gives the app no network.
+
 An image can say which sandboxes it can't work under, and why, so that a run
 told to use one says so, rather than failing however the program fails:
 

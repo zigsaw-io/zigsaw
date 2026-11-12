@@ -12,6 +12,7 @@
 const std = @import("std");
 const Context = @import("Context.zig");
 const format = @import("format.zig");
+const hosts = @import("hosts.zig");
 const repeat = @import("testing.zig").repeat;
 const fail = Context.fail;
 
@@ -78,8 +79,14 @@ pub const Permissions = struct {
     /// low integrity asks for `soft`, which lets it write wherever you can.
     /// A zigsaw before 0.54 ignores it, and runs every app under soft.
     sandbox: ?Sandbox = null,
-    /// Outbound network access.
+    /// Outbound network access, to anywhere.
     network: bool = false,
+    /// Outbound network access to these hosts only (see hosts.zig), for an
+    /// app without `network`: its runs reach them through zigsaw's proxy.
+    /// Absent unless there are some, so images without it keep their
+    /// digests. A zigsaw before 0.94 ignores it, and gives the app no
+    /// network at all.
+    hosts: ?[]const []const u8 = null,
     /// Host locations the app may use: "cwd", one of the user's folders
     /// ("documents"; see `UserFolder`) or an absolute path, each optionally
     /// suffixed with ":ro". Anything not listed is off limits.
@@ -667,6 +674,13 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
     // which a run leaves out.
     for (c.permissions.filesystem) |spec| if (parseFsGrant(spec) == null)
         return fail("{s}: filesystem permission \"{s}\" must be \"cwd\", one of the user's folders ({s}) or an absolute path, optionally with \":ro\"", .{ what, spec, UserFolder.list });
+    if (c.permissions.hosts) |list| {
+        if (c.permissions.network)
+            return fail("{s}: hosts lists what an app without the network may reach; it has the network, which reaches every host", .{what});
+        if (list.len == 0) return fail("{s}: hosts must name at least one host, or be left out", .{what});
+        for (list) |h| if (hosts.parse(h) == null)
+            return fail("{s}: host \"{s}\" {s}", .{ what, h, hosts.invalid_message });
+    }
     try validateServices(what, c);
     try validateUses(what, "", c.permissions.uses, c.permissions.services orelse &.{});
     if (c.permissions.unsupported) |u| {
@@ -907,7 +921,9 @@ pub fn describePermissions(arena: std.mem.Allocator, p: Permissions) ![]const u8
     if (p.sandbox == .soft) try parts.append(arena, "whatever you can write (it asks for the soft sandbox)");
     if (p.commands orelse false) try parts.append(arena, "the commands of your zigsaw apps");
     if (p.host orelse false) try parts.append(arena, "your own programs, in your real environment (zigsaw-host)");
-    if (p.network) try parts.append(arena, "the network");
+    if (p.network) try parts.append(arena, "the network")
+    else if (p.hosts) |list| if (list.len > 0)
+        try parts.append(arena, try std.fmt.allocPrint(arena, "the network, only to {s}", .{try joinAnd(arena, list)}));
     var folders: [2]std.ArrayList([]const u8) = .{ .empty, .empty };
     for (p.filesystem) |spec| {
         const g = parseFsGrant(spec) orelse continue;
@@ -961,7 +977,8 @@ pub const Access = struct {
     }
 
     pub fn isEmpty(a: Access) bool {
-        return a.permissions.sandbox != .soft and !a.permissions.network and a.permissions.filesystem.len == 0 and
+        return a.permissions.sandbox != .soft and !a.permissions.network and (if (a.permissions.hosts) |h| h.len == 0 else true) and
+            a.permissions.filesystem.len == 0 and
             !(a.permissions.commands orelse false) and !(a.permissions.host orelse false) and
             a.uses.len == 0 and a.registry.len == 0;
     }
@@ -978,7 +995,7 @@ pub fn addUses(arena: std.mem.Allocator, list: *std.ArrayList(Use), more: []cons
 }
 
 /// What `after` lets an app reach that `before` didn't, which an update asks
-/// about: the soft sandbox, the network, a location it couldn't use, or
+/// about: the soft sandbox, the network, a host its list didn't name, a location it couldn't use, or
 /// could only read, a port it didn't use, and a key it didn't keep. A location or key inside
 /// one it had counts as had.
 pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Access {
@@ -1008,6 +1025,11 @@ pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Acc
         .permissions = .{
             .sandbox = if (after.permissions.sandbox == .soft and before.permissions.sandbox != .soft) .soft else null,
             .network = after.permissions.network and !before.permissions.network,
+            // The hosts it didn't reach: none, if it reached every one.
+            .hosts = if (after.permissions.network or before.permissions.network) null else blk: {
+                const more = try hosts.added(arena, before.permissions.hosts orelse &.{}, after.permissions.hosts orelse &.{});
+                break :blk if (more.len == 0) null else more;
+            },
             .filesystem = filesystem.items,
             .commands = if ((after.permissions.commands orelse false) and !(before.permissions.commands orelse false)) true else null,
             .host = if ((after.permissions.host orelse false) and !(before.permissions.host orelse false)) true else null,
@@ -1070,12 +1092,28 @@ test addedAccess {
     try std.testing.expect(!(try addedAccess(arena, before, soft)).isEmpty());
     try std.testing.expect((try addedAccess(arena, soft, soft)).isEmpty());
     try std.testing.expect((try addedAccess(arena, before, .{ .permissions = .{ .sandbox = .appcontainer } })).isEmpty());
+
+    // A host its list didn't name is access; one under a name it had isn't;
+    // from a list to the whole network is; from the whole network to a list
+    // isn't.
+    const listed: Access = .{ .permissions = .{ .hosts = &.{ "*.github.com", "pypi.org" } } };
+    try std.testing.expect(!listed.isEmpty());
+    try std.testing.expect((try addedAccess(arena, listed, .{ .permissions = .{ .hosts = &.{"api.github.com"} } })).isEmpty());
+    const more = try addedAccess(arena, listed, .{ .permissions = .{ .hosts = &.{ "api.github.com", "files.pythonhosted.org" } } });
+    try std.testing.expectEqualStrings("files.pythonhosted.org", more.permissions.hosts.?[0]);
+    try std.testing.expectEqual(1, more.permissions.hosts.?.len);
+    try std.testing.expect((try addedAccess(arena, listed, .{ .permissions = .{ .network = true } })).permissions.network);
+    try std.testing.expect((try addedAccess(arena, .{ .permissions = .{ .network = true } }, listed)).isEmpty());
 }
 
 test describePermissions {
     var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    try std.testing.expectEqualStrings(
+        "the network, only to api.github.com and *.npmjs.org",
+        try describePermissions(arena, .{ .hosts = &.{ "api.github.com", "*.npmjs.org" } }),
+    );
     try std.testing.expectEqualStrings("nothing outside its own files", try describePermissions(arena, .{}));
     try std.testing.expectEqualStrings("nothing outside its own files", try describePermissions(arena, .{ .sandbox = .appcontainer }));
     try std.testing.expectEqualStrings(
@@ -1173,6 +1211,19 @@ test isValidScheme {
         try std.testing.expect(!isValidScheme(bad));
     const long: [65]u8 = @splat(0x61);
     try std.testing.expect(!isValidScheme(&long));
+}
+
+test "an allow list is checked" {
+    var c: AppConfig = .{ .id = "x", .version = "1", .command = "a.exe" };
+    c.permissions.hosts = &.{ "api.github.com", "*.npmjs.org:443", "192.0.2.7:5432" };
+    try validateEntryPoints("x", c, &.{});
+    c.permissions.network = true;
+    try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
+    c.permissions.network = false;
+    c.permissions.hosts = &.{};
+    try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
+    c.permissions.hosts = &.{"https://api.github.com"};
+    try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
 }
 
 test "unsupported sandboxes and schemes are checked" {

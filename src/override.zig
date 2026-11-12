@@ -37,6 +37,11 @@ pub const Settings = struct {
     /// Locations whose filesystem permission the layers below give, and
     /// this one takes away, like Flatpak's --nofilesystem.
     nofilesystem: []const []const u8 = &.{},
+    /// Hosts the run may reach, as hosts.zig reads them, on top of the
+    /// app's own list (see `networkOf`).
+    hosts: []const []const u8 = &.{},
+    /// Hosts whose patterns the layers below give, and this one takes away.
+    nohosts: []const []const u8 = &.{},
     /// "NAME=VALUE" environment variables, set over the app's own.
     env: []const []const u8 = &.{},
     /// Installed extensions, by id, that don't join the app's runs, which
@@ -70,7 +75,7 @@ pub const Settings = struct {
 
     pub fn isEmpty(s: Settings) bool {
         return s.sandbox == null and s.network == null and s.commands == null and s.host == null and s.ephemeral == null and
-            s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.env.len == 0 and
+            s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.hosts.len == 0 and s.nohosts.len == 0 and s.env.len == 0 and
             s.noextension.len == 0 and s.extension.len == 0 and s.ports.len == 0 and
             s.volumes.len == 0 and s.novolume.len == 0 and s.real_folders == null and s.snapshot == null and
             s.memory == null and s.cpus == null;
@@ -96,6 +101,8 @@ pub const Settings = struct {
             .ephemeral = upper.ephemeral orelse lower.ephemeral,
             .filesystem = try mergeList(arena, try without(arena, lower.filesystem, upper.nofilesystem, grantPath, grantPath), upper.filesystem, grantPath),
             .nofilesystem = try mergeList(arena, try without(arena, lower.nofilesystem, upper.filesystem, grantPath, grantPath), upper.nofilesystem, grantPath),
+            .hosts = try mergeList(arena, try without(arena, lower.hosts, upper.nohosts, hostKey, hostKey), upper.hosts, hostKey),
+            .nohosts = try mergeList(arena, try without(arena, lower.nohosts, upper.hosts, hostKey, hostKey), upper.nohosts, hostKey),
             .env = try mergeList(arena, lower.env, upper.env, envName),
             .noextension = try mergeList(arena, try without(arena, lower.noextension, upper.extension, itself, itself), upper.noextension, itself),
             .ports = try mergeList(arena, lower.ports, upper.ports, envName),
@@ -123,7 +130,8 @@ pub const Settings = struct {
         inline for (info.field_names, info.field_types) |name, T| {
             const v = @field(s, name);
             const later_list = comptime std.mem.eql(u8, name, "noextension") or std.mem.eql(u8, name, "extension") or
-                std.mem.eql(u8, name, "ports") or std.mem.eql(u8, name, "volumes") or std.mem.eql(u8, name, "novolume");
+                std.mem.eql(u8, name, "ports") or std.mem.eql(u8, name, "volumes") or std.mem.eql(u8, name, "novolume") or
+                std.mem.eql(u8, name, "hosts") or std.mem.eql(u8, name, "nohosts");
             const skip = switch (@typeInfo(T)) {
                 .optional => v == null,
                 else => if (later_list) v.len == 0 else false,
@@ -165,6 +173,14 @@ pub const Settings = struct {
         }
         for (s.nofilesystem) |f| {
             try w.print("{s}--nofilesystem={s}", .{ sep, f });
+            sep = " ";
+        }
+        for (s.hosts) |h| {
+            try w.print("{s}--allow-host={s}", .{ sep, h });
+            sep = " ";
+        }
+        for (s.nohosts) |h| {
+            try w.print("{s}--noallow-host={s}", .{ sep, h });
             sep = " ";
         }
         for (s.env) |e| {
@@ -247,6 +263,28 @@ pub fn sandboxOf(s: Settings, permissions: oci.Permissions) Sandbox {
     return s.sandbox orelse permissions.sandbox orelse .low;
 }
 
+/// What of the network a run reaches.
+pub const Network = union(enum) {
+    none,
+    /// Every host.
+    all,
+    /// Only these, through zigsaw's proxy (see proxy.zig).
+    list: []const []const u8,
+};
+
+/// The network a run with `s` gets. `--share=network` gives it all of it;
+/// `--unshare=network` takes it away, and the app's own list too, which
+/// lets `--allow-host` narrow an app that has the network to a few hosts.
+/// Otherwise the app's own list, with the hosts `s` adds and without those
+/// it takes away.
+pub fn networkOf(arena: Allocator, s: Settings, permissions: oci.Permissions) !Network {
+    if (s.network orelse permissions.network) return .all;
+    const none: []const []const u8 = &.{};
+    const own = if (s.network == false) none else permissions.hosts orelse none;
+    const list = (try Settings.merge(arena, .{ .hosts = own }, s)).hosts;
+    return if (list.len == 0) .none else .{ .list = list };
+}
+
 /// A --port value, "NAME=PORT", as two parts; null if it isn't one.
 pub fn parsePort(value: []const u8) ?struct { name: []const u8, port: u16 } {
     const eq = std.mem.indexOfScalar(u8, value, '=') orelse return null;
@@ -294,6 +332,11 @@ fn itself(id: []const u8) []const u8 {
 fn grantPath(spec: []const u8) []const u8 {
     if (std.mem.endsWith(u8, spec, ":ro") or std.mem.endsWith(u8, spec, ":rw")) return spec[0 .. spec.len - 3];
     return spec;
+}
+
+/// A host pattern as a key: case is ignored when keys are compared.
+fn hostKey(pattern: []const u8) []const u8 {
+    return if (pattern.len > 1 and pattern[pattern.len - 1] == '.') pattern[0 .. pattern.len - 1] else pattern;
 }
 
 fn envName(assignment: []const u8) []const u8 {
@@ -371,6 +414,42 @@ test "Settings.merge: upper wins, lists replace by path or name" {
 
     try std.testing.expect((Settings{}).isEmpty());
     try std.testing.expectEqualDeep(saved, try Settings.merge(arena, .{}, saved));
+}
+
+test networkOf {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const t = std.testing;
+    const listed: oci.Permissions = .{ .hosts = &.{ "api.github.com", "pypi.org" } };
+    try t.expectEqual(Network.none, try networkOf(arena, .{}, .{}));
+    try t.expectEqual(Network.all, try networkOf(arena, .{}, .{ .network = true }));
+    try t.expectEqualDeep(Network{ .list = &.{ "api.github.com", "pypi.org" } }, try networkOf(arena, .{}, listed));
+    // --share=network widens a list; --unshare=network takes it away.
+    try t.expectEqual(Network.all, try networkOf(arena, .{ .network = true }, listed));
+    try t.expectEqual(Network.none, try networkOf(arena, .{ .network = false }, listed));
+    // --unshare=network with --allow-host narrows an app with the network.
+    try t.expectEqualDeep(Network{ .list = &.{"example.org"} }, try networkOf(arena, .{ .network = false, .hosts = &.{"example.org"} }, .{ .network = true }));
+    // --allow-host adds to the app's list, --noallow-host takes from it.
+    try t.expectEqualDeep(
+        Network{ .list = &.{ "pypi.org", "example.org" } },
+        try networkOf(arena, .{ .hosts = &.{"example.org"}, .nohosts = &.{"API.GitHub.com."} }, listed),
+    );
+    try t.expectEqual(Network.none, try networkOf(arena, .{ .nohosts = &.{ "api.github.com", "pypi.org" } }, listed));
+    // An override's --noallow-host, and the command line's --allow-host of it.
+    const saved: Settings = .{ .nohosts = &.{"pypi.org"} };
+    try t.expectEqualDeep(Network{ .list = &.{"api.github.com"} }, try networkOf(arena, saved, listed));
+    try t.expectEqualDeep(
+        Network{ .list = &.{ "api.github.com", "pypi.org" } },
+        try networkOf(arena, try Settings.merge(arena, saved, .{ .hosts = &.{"pypi.org"} }), listed),
+    );
+
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    try (Settings{ .hosts = &.{"a.org"}, .nohosts = &.{"*.b.org:8080"} }).format(&w);
+    try t.expectEqualStrings("--allow-host=a.org --noallow-host=*.b.org:8080", w.buffered());
+    // Saved only when there are some: a zigsaw before them reads the rest.
+    try t.expect(std.mem.indexOf(u8, try oci.toJson(arena, Settings{ .network = true }), "hosts") == null);
 }
 
 test "Settings.merge: --nofilesystem takes away what the layers below grant, until a layer above grants it again" {
