@@ -189,6 +189,14 @@ zigsaw volume create [--path=<dir>] <name>
 zigsaw volume ls                       list the volumes, each app's own (its data, named by
                                        its id) too, where each is, and what mounts it
 zigsaw volume inspect <name>           show a volume's size, mounts, use and grants
+zigsaw volume export [--all] <name> <file>
+                                       write a volume's files to a tar, .tar.gz by its name,
+                                       or - for stdout; an app's data by the app's id,
+                                       without its temporary files and cache unless --all
+zigsaw volume import [--replace] <name> <file>
+                                       make a tar's files (- for stdin) a volume's, a new
+                                       one or one with no files; --replace puts them in the
+                                       place of the files it has, which are deleted
 zigsaw volume rm <name>...             delete volumes in the store, or forget ones kept
                                        elsewhere, leaving their files; not one an override
                                        mounts, nor the data of an installed app
@@ -1116,6 +1124,44 @@ pgdata                    store                                    org.postgresq
 - An `--ephemeral` run mounts its volumes too: a fresh app, and the volume's files.
 - A zigsaw before 0.80 can't read overrides that have volumes: `override --reset`
   makes it work again.
+
+**A volume as a file, and back.** `zigsaw volume export` writes a volume's files to a
+tar, and `zigsaw volume import` makes a tar's files a volume's: a copy to keep before
+something risky, or an app's data on its way to another machine.
+
+```powershell
+zigsaw volume export pgdata D:\backup\pgdata.tar                 # a named volume
+zigsaw volume export org.postgresql.PostgreSQL D:\backup\pg.tar.gz   # an app's data, by its id
+zigsaw volume import pgdata D:\backup\pgdata.tar                 # into a new volume, or an empty one
+zigsaw volume import --replace org.postgresql.PostgreSQL D:\backup\pg.tar.gz   # over the data it has
+zigsaw volume export pgdata - | ssh other zigsaw volume import pgdata -        # through a pipe
+```
+
+- The file is a plain tar that `tar`, 7-Zip and `podman volume import` read, with the
+  volume's files at its root; a name that ends in `.tar.gz` or `.tgz` makes it gzip.
+  Import takes a tar from any of them, compressed or not, whatever its name.
+- It keeps files, folders (empty ones too), each file's time of last change and whether
+  it's read-only. Not ACLs, other attributes or alternate streams.
+- **An app's own volume goes without its temporary files and its cache** (`cache\` and
+  `home\AppData\Local\Temp`), as the copy kept for [`rollback`](#going-back-and-holding) does;
+  `--all` has those too. The keys it keeps in the registry are in the archive, as they're
+  in its data between runs. A named volume is always exported whole.
+- **A link is passed over**, and export says how many: a volume mounted in the app's data
+  is a link there, and is exported by its own name.
+- **Neither works on a volume a run uses**: the archive has the files as one moment left
+  them, and an import never changes files under an app. Stop the app first.
+- **Import leaves files alone unless you say `--replace`.** Without it, a volume that has
+  any refuses. With it, the archive is unpacked beside the old files first; only when
+  all of it is there are they swapped, and the old ones deleted. An archive that is cut
+  short, isn't a tar, or has a name Windows can't have (or a path that leads out of the
+  volume) leaves the volume as it was. The volume's folder stays the same one, so what it
+  was granted and what mounts it stay too; links among the old files go with them, never
+  what they lead to, and the app's next run makes its mounts again.
+- Importing by an app's id works before the app is installed: the data waits in
+  `volumes\<app-id>` for it. `zigsaw volume prune` would delete it meanwhile, as any
+  uninstalled app's.
+- An app whose data is mounted from elsewhere (`--volume=<source>:.`) has no volume of
+  its own to export: export the volume it names, or copy the folder.
 - **Coming from a zigsaw before 0.85**, which kept an app's data in `data\<app-id>`:
   the first command of the new one moves each app's data to `volumes\<app-id>`, and
   says so; the data of an app that's running moves once it has ended. `zigsaw repair`,

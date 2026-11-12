@@ -909,7 +909,8 @@
 - The data kept for going back is one copy for each app, replaced at the app's next
   install. That goes for data a rollback set aside too: go back with the data, work a
   week, and take an update, and what the version you left had written is gone (the
-  update says "dropped"). It's in the store beside the data, and no backup.
+  update says "dropped"). It's in the store beside the data, and no backup: `zigsaw
+  volume export` makes one, when you run it.
 - If you go back and leave the data, then go forward again, the copy kept of the older
   version's data is replaced by one of the data as it is now, which that version may
   not read: zigsaw can't tell whether it did.
@@ -937,6 +938,54 @@
   runs the older one, and the daily check says nothing about it.
 - A rollback isn't checked against signatures: the image was when it came in. A key
   removed since, or one that never signed it (a warning then), doesn't stop it.
+- `zigsaw volume export` keeps files, folders, each file's time of last change and
+  whether it's read-only. It doesn't keep ACLs, the hidden and system attributes,
+  alternate data streams, or the times of folders; two hard links to one file become
+  two files, and a sparse file is written whole. An import makes the files anew, with
+  what the volume's folder passes on to them.
+- An export passes over links, and so over the volumes an app mounts in its data and
+  the folders of yours it links: an app with its cluster in a named volume needs two
+  exports, the app's id and the volume's name, and nothing ties the two archives
+  together. An app whose data is mounted from a folder of yours (`--volume=<folder>:.`)
+  isn't exported by its id at all.
+- An app's own volume is exported without its cache and temporary files unless
+  `--all`: data imported from such an archive starts with neither, as data a rollback
+  takes back does.
+- Neither export nor import works while a run uses the volume, so there's no backup of
+  a server that has to stay up: stop it, export, start it. They also hold the store's
+  lock as every command does, so a `pull`, `update` or `build` waits for a long export
+  to end ("waiting for another zigsaw command to finish...").
+- An archive isn't signed or encrypted, and an app's has its settings and the registry
+  keys it keeps: whoever has the file has those. Nothing checks, either, that data is
+  imported for the app, or the version, that wrote it: the import says what the archive
+  is of, and a server may not read what a newer major version wrote.
+- An app's data can hold paths into the store it was in (a config file naming
+  `...\volumes\<id>\...`). Imported into a store kept elsewhere, those lead nowhere, as
+  after 0.85's move from `data\`.
+- gzip is one thread of Zig's deflate, about 45 MB/s here; a plain `.tar` is as fast as
+  the drive. There's no zstd: Zig's std only reads it.
+- Importing many small files is slow where Defender watches: 20,000 files of 4 KiB took
+  19 to 23 s here, three times what Windows' `tar.exe` takes for the same archive, and
+  the same as a 40-line program that only creates the files
+  ([findings](findings.md#what-a-file-costs-to-make-iteration-91)). Threads don't help,
+  so there are none. Large files don't feel it (1 GB in 10 files: 1 s).
+- A file's time of last change costs 1 KiB in a plain tar, as a header of its own:
+  20,000 files of 4 KiB make an archive of 107 MiB for 78 MiB of files, where
+  `tar.exe`'s, which keeps whole seconds, is 88 MiB. gzip takes most of it back.
+- `import --replace` needs room for the old files and the new at once, on the volume's
+  drive, and deletes the old ones for good: nothing is set aside to go back to.
+- If zigsaw is killed between the renames of an `import --replace` (a few milliseconds,
+  after the archive is unpacked), the volume's files are in two folders inside it,
+  `.zigsaw-replaced-…` (the old) and `.zigsaw-import-…` (the new, some of them moved
+  up already). Export and import of that volume then refuse and name both; an app that
+  runs meanwhile finds its data gone, and nothing puts it back but you.
+- Windows' own `tar.exe` (bsdtar) skips a file whose name its code page can't hold
+  ("empty or unreadable filename"), from zigsaw's archives as from any with names in
+  UTF-8, and it crashed here making an archive of a folder with such a name. GNU tar and
+  7-Zip read them, and `zigsaw volume import` does.
+- An archive from another tool with links in it (symbolic or hard) imports without
+  them, with a count: Linux data with symlinks isn't whole afterwards. One whose tar
+  spans several gzip members (`bgzip`, `pigz -i`) reads as cut short.
 - A zigsaw before 0.76 doesn't know of `versions\`: its `update` moves a held app, and
   takes the version a rollback left, and its `prune` deletes the blobs kept for
   `rollback`, which then says how to have the version back.

@@ -131,6 +131,30 @@ folder is then one of the run's host paths, granted, recorded and taken back as
 that the app's last run to end, or a change to its overrides, removes those no
 saved mount names any more.
 
+**A volume leaves the store as a tar**, and comes back from one (`zigsaw volume
+export` and `import`, `src/archive.zig`). The archive is the folder's contents in
+sorted order: an old-style tar header for each file and folder, with a pax header
+before it where that falls short (a path over 255 bytes or not ASCII, a size from
+8 GiB, the fraction of a second in a file's time), and one global pax header first
+that says what the archive is of (`ZIGSAW.volume`, `ZIGSAW.app` and its version for
+an app's own, the time). Zig's `std.tar`, which writes layers, has none of these.
+Both commands hold the lock that says no run uses the volume (the app's runs lock
+for its own, `volumes\<name>.lock` otherwise), and put back what a killed run left
+in HKCU first, so an app's keys are in the archive. An export walks the folder as
+the copy for a rollback does: never through a link, and for an app's own volume
+without `cache\` and its temporary folder unless `--all`. An import checks every
+name before it makes anything (no `..`, drive, stream, device name or character
+Windows refuses), and unpacks into `.zigsaw-import-<random>\` inside the volume's
+own folder: on its drive, and inheriting its label and ACL. Only then does it
+rename the old files into `.zigsaw-replaced-<random>\` and the new ones up, one
+name at a time, and delete the old; removing the import folder is what says the
+renames are done. A failure before that deletes the import folder, and a failed
+rename puts back the ones done. The volume's folder is never renamed, so its
+grants, its record and a link to it stay. A leftover import folder (zigsaw was
+killed while unpacking) is deleted by the next import and left out of an export;
+both kinds of leftover at once mean it died between renames, and both commands
+then refuse, naming the two folders.
+
 The app shares the terminal, so Ctrl+C and Ctrl+Break reach it just as when
 it runs alone, also through a shim. zigsaw waits for it and passes on its
 exit code. Closing the terminal gives the app the usual time to clean up.

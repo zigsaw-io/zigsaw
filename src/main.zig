@@ -132,6 +132,14 @@ const usage =
     \\  volume ls                       list the volumes, each app's own (its data, named by
     \\                                  its id) too, where each is, and what mounts it
     \\  volume inspect <name>           show a volume's size, mounts, use and grants
+    \\  volume export [--all] <name> <file>
+    \\                                  write a volume's files to a tar, .tar.gz by its name,
+    \\                                  or - for stdout; an app's data by the app's id,
+    \\                                  without its temporary files and cache unless --all
+    \\  volume import [--replace] <name> <file>
+    \\                                  make a tar's files (- for stdin) a volume's, a new
+    \\                                  one or one with no files; --replace puts them in the
+    \\                                  place of the files it has, which are deleted
     \\  volume rm <name>...             delete volumes in the store, or forget ones kept
     \\                                  elsewhere, leaving their files; not one an override
     \\                                  mounts, nor the data of an installed app
@@ -580,6 +588,25 @@ fn volumeCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
             note("no volume to remove: each is mounted by an app, kept outside the store, or in use", .{})
         else
             note("{s} {d} volume(s), {Bi:.1}", .{ if (dry_run) "would remove" else "removed", pruned.count, pruned.bytes });
+        return 0;
+    }
+    const exporting = std.mem.eql(u8, what, "export");
+    if (exporting or std.mem.eql(u8, what, "import")) {
+        // --all for an export, --replace for an import; "-" is a file.
+        var flag = false;
+        var words: std.ArrayList([]const u8) = .empty;
+        for (rest) |arg| {
+            if (isFlag(arg, if (exporting) "all" else "replace")) {
+                flag = true;
+            } else if (std.mem.startsWith(u8, arg, "--")) {
+                return usageError();
+            } else try words.append(ctx.arena, arg);
+        }
+        if (words.items.len != 2) return usageError();
+        if (exporting)
+            try volumes.exportTo(ctx, words.items[0], words.items[1], flag)
+        else
+            try volumes.importFrom(ctx, words.items[0], words.items[1], flag);
         return 0;
     }
     for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
@@ -1084,6 +1111,7 @@ test {
     _ = @import("services.zig");
     _ = @import("signature.zig");
     _ = @import("sigstore.zig");
+    _ = @import("archive.zig");
     _ = @import("der.zig");
     _ = @import("merkle.zig");
     _ = @import("timestamp.zig");

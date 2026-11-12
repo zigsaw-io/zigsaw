@@ -4,7 +4,8 @@
 # as junctions; what each sandbox lets a run do with them, how long the
 # junctions and grants last, an app's files moved into an empty volume, an
 # app's own volume (its data), one mounted in its place, data from before 0.85
-# moved into it, and `zigsaw volume`. Busybox apps.
+# moved into it, `zigsaw volume`, and a volume exported to a tar and imported
+# from one (src/archive.zig). Busybox apps.
 #
 #   tests/volumes.sh [path\to\zigsaw.exe]
 #
@@ -374,6 +375,211 @@ link_kept() {
     return $r
 }
 check "  but a link among them keeps it all, and what it leads to" link_kept
+
+# --- Export and import -----------------------------------------------------
+#
+# A volume's files as a tar (src/archive.zig), and a tar's as a volume's.
+
+x="$work\\x"
+mkdir -p "$x"
+wintar="$(cygpath -u "${SYSTEMROOT:-C:\\Windows}")/System32/tar.exe"
+same_tree() { diff -r "$(cygpath -u "$1")" "$(cygpath -u "$2")" >/dev/null; }
+mtime_of() { stat -c %y "$(cygpath -u "$1")"; }
+in_tar() { tar -tf "$(cygpath -u "$1")" | grep -qxF -- "$2"; }
+# A file's name too long for a tar's old header: 120 characters.
+longname="$(printf 'n%.0s' $(seq 116)).txt"
+
+z volume create exp >/dev/null 2>&1
+mkdir -p "$(vol exp)\\sub\\empty" && echo alpha >"$(vol exp)\\a.txt" && echo beta >"$(vol exp)\\sub\\b.txt" &&
+    echo long >"$(vol exp)\\sub\\$longname" && head -c 300000 "$zigsaw" >"$(vol exp)\\blob.bin"
+touch -d '2024-05-06 07:08:09.123456700' "$(cygpath -u "$(vol exp)")/a.txt"
+attrib +r "$(vol exp)\\sub\\b.txt" >/dev/null
+
+check "volume export writes a volume's files to a tar" says "in 4 file(s), an archive of" z volume export exp "$x\\exp.tar"
+tar_lists() { in_tar "$x\\exp.tar" a.txt && in_tar "$x\\exp.tar" sub/empty/ && in_tar "$x\\exp.tar" "sub/$longname"; }
+check "  which tar lists: folders with no files, and a long name, too" tar_lists
+if [ -x "$wintar" ]; then
+    check "  and Windows' own tar" sh -c "'$wintar' -tf '$x\\exp.tar' | tr -d '\r' | grep -qxF 'sub/$longname'"
+else
+    echo "skip  Windows' own tar: there's no $wintar"
+fi
+check "  a file that's there already refuses" refuses "is there already" z volume export exp "$x\\exp.tar"
+check "  and one in the volume itself" refuses "in the volume itself" z volume export exp "$(vol exp)\\self.tar"
+check "  nothing is left of either" sh -c "$(declare -f absent is_link); absent '$x\\exp.tar.partial' && absent '$(vol exp)\\self.tar.partial'"
+check "  a volume there isn't refuses" refuses "there's no volume nosuch" z volume export nosuch "$x\\nosuch.tar"
+
+check "volume import makes a volume of a tar" says "into volume imp, a new one" z volume import imp "$x\\exp.tar"
+check "  and says what the archive is of" says "the archive is of volume exp, exported" z volume import imp0 "$x\\exp.tar"
+came_whole() {
+    same_tree "$(vol exp)" "$(vol imp)" && test -d "$(vol imp)\\sub\\empty" || return 1
+    [ "$(mtime_of "$(vol exp)\\a.txt")" = "$(mtime_of "$(vol imp)\\a.txt")" ] || { echo "a.txt's time: $(mtime_of "$(vol imp)\\a.txt")"; return 1; }
+    [ "$(stat -c %A "$(cygpath -u "$(vol imp)")/sub/b.txt")" = "-r--r--r--" ] || { echo "b.txt isn't read-only"; return 1; }
+    [ "$(stat -c %A "$(cygpath -u "$(vol imp)")/a.txt")" = "-rw-r--r--" ]
+}
+check "  with its files and folders, each file's time, and what's read-only" came_whole
+gz_round() {
+    z volume export exp "$x\\exp.tar.gz" >/dev/null 2>&1 && gzip -t "$(cygpath -u "$x\\exp.tar.gz")" &&
+        z volume import impgz "$x\\exp.tar.gz" >/dev/null 2>&1 && same_tree "$(vol exp)" "$(vol impgz)"
+}
+check "a name that ends in .tar.gz is gzip, which import tells by itself" gz_round
+piped() { "$zigsaw" volume export exp - 2>/dev/null </dev/null | "$zigsaw" volume import imppipe - >/dev/null 2>&1 && same_tree "$(vol exp)" "$(vol imppipe)"; }
+check "- is stdout, and stdin: through a pipe" piped
+from_gnu() {
+    (cd "$(cygpath -u "$(vol exp)")" && tar -cf "$(cygpath -u "$x\\gnu.tar")" .) &&
+        z volume import impgnu "$x\\gnu.tar" >/dev/null 2>&1 && same_tree "$(vol exp)" "$(vol impgnu)"
+}
+check "a tar of GNU tar's imports" from_gnu
+if [ -x "$wintar" ]; then
+    from_bsd() {
+        (cd "$(cygpath -u "$(vol exp)")" && "$wintar" -czf "$x\\bsd.tar.gz" .) &&
+            z volume import impbsd "$x\\bsd.tar.gz" >/dev/null 2>&1 && same_tree "$(vol exp)" "$(vol impbsd)"
+    }
+    check "  and one of Windows' tar, compressed" from_bsd
+fi
+
+# Over files: only if asked, and then all or nothing.
+check "import into a volume that has files refuses" refuses "has files already" z volume import imp "$x\\exp.tar"
+z override --volume=imp:m $BB >/dev/null 2>&1 && z override --volume=imp:s $OTHER >/dev/null 2>&1 &&
+    writes $BB low m/old.txt >/dev/null 2>&1 && writes $OTHER appcontainer s/old2.txt >/dev/null 2>&1
+replaces() {
+    says "in place of the files it had" z volume import --replace imp "$x\\exp.tar" && absent "$(vol imp)\\old.txt" &&
+        absent "$(vol imp)\\old2.txt" && same_tree "$(vol exp)" "$(vol imp)"
+}
+check "--replace puts the archive's files in the place of the volume's" replaces
+keeps_grants() {
+    low_label "$(vol imp)" && granted $BB "low $(vol imp)" && has_ace "$(vol imp)" 'S-1-15-3-1024-' || return 1
+    label_of "$(vol imp)\\a.txt" | grep -q 'Low' || { echo "a.txt has no low label"; return 1; }
+    has_ace "$(vol imp)\\sub\\b.txt" 'S-1-15-3-1024-'
+}
+check "  the volume keeps its label and its grants, which the new files inherit" keeps_grants
+check "  a low run reads them, and writes there" sh -c "$(declare -f z reads writes); zigsaw='$zigsaw'; reads $BB low m/a.txt alpha && writes $BB low m/new.txt"
+check "  and an AppContainer's" sh -c "$(declare -f z reads writes); zigsaw='$zigsaw'; reads $OTHER appcontainer s/a.txt alpha && writes $OTHER appcontainer s/new2.txt"
+used() {
+    local r=1
+    hold "$work\\hold" $BB && refuses "is in use" z volume export imp "$x\\used.tar" &&
+        refuses "is in use" z volume import --replace imp "$x\\exp.tar" && test -f "$(vol imp)\\new.txt" && r=0
+    release
+    return $r
+}
+check "a volume a run uses is neither exported nor imported into" used
+no_leftover() { ! ls -a "$(cygpath -u "$1")" | grep -q '^\.zigsaw-'; }
+cut_short() {
+    head -c 6000 "$(cygpath -u "$x\\exp.tar")" >"$(cygpath -u "$x\\cut.tar")"
+    refuses "stops before its end" z volume import --replace imp "$x\\cut.tar" && test -f "$(vol imp)\\new.txt" &&
+        test -f "$(vol imp)\\sub\\b.txt" && no_leftover "$(vol imp)" || return 1
+    head -c 2000 "$(cygpath -u "$x\\exp.tar.gz")" >"$(cygpath -u "$x\\cut.tar.gz")"
+    refuses "cut short" z volume import cutgz "$x\\cut.tar.gz" && absent "$(vol cutgz)" || return 1
+    head -c 2000 "$zigsaw" >"$(cygpath -u "$x\\not.tar")"
+    refuses "isn't a tar archive" z volume import nottar "$x\\not.tar" && absent "$(vol nottar)" || return 1
+    # Zeros read as a tar with nothing in it, which replaces nothing.
+    head -c 4096 /dev/zero >"$(cygpath -u "$x\\zeros.tar")"
+    refuses "has no files or folders in it" z volume import --replace imp "$x\\zeros.tar" && test -f "$(vol imp)\\sub\\b.txt"
+}
+check "an archive cut short, or no archive, leaves the volume as it was, or makes none" cut_short
+bad_names() {
+    local t
+    t=$(cygpath -u "$x")
+    tar -cPf "$t/up.tar" -C "$(cygpath -u "$(vol exp)")" --transform 's|^a.txt|../escaped.txt|' a.txt &&
+        refuses "isn't a path inside the volume" z volume import evil "$x\\up.tar" && absent "$ZIGSAW_HOME\\volumes\\escaped.txt" &&
+        absent "$(vol evil)" || return 1
+    tar -cPf "$t/abs.tar" -C "$(cygpath -u "$(vol exp)")" --transform 's|^a.txt|C:/escaped.txt|' a.txt &&
+        refuses "isn't a path inside the volume" z volume import evil "$x\\abs.tar" || return 1
+    tar -cf "$t/nul.tar" -C "$(cygpath -u "$(vol exp)")" --transform 's|^a.txt|sub/nul.txt|' a.txt &&
+        refuses "Windows can't have" z volume import evil "$x\\nul.tar" && absent "$(vol evil)"
+}
+check "an archive with a path out of the volume, or a name Windows can't have, refuses" bad_names
+leftovers() {
+    mkdir -p "$(vol imp)\\.zigsaw-import-dead" && echo junk >"$(vol imp)\\.zigsaw-import-dead\\j" || return 1
+    z volume export imp "$x\\left.tar" >/dev/null 2>&1 && ! tar -tf "$(cygpath -u "$x\\left.tar")" | grep -q zigsaw-import || return 1
+    says "an import that didn't finish left" z volume import --replace imp "$x\\exp.tar" && no_leftover "$(vol imp)" || return 1
+    mkdir -p "$(vol imp)\\.zigsaw-import-dead" "$(vol imp)\\.zigsaw-replaced-dead" &&
+        refuses "stopped between its renames" z volume import --replace imp "$x\\exp.tar" &&
+        refuses "stopped between its renames" z volume export imp "$x\\half.tar"
+    local r=$?
+    rmdir "$(vol imp)\\.zigsaw-import-dead" "$(vol imp)\\.zigsaw-replaced-dead"
+    return $r
+}
+check "what an import that didn't finish left is never exported, and goes with the next one" leftovers
+hollow() {
+    z volume create hollow >/dev/null 2>&1 && says "in 0 file(s)" z volume export hollow "$x\\hollow.tar" &&
+        says "a new one" z volume import hollow2 "$x\\hollow.tar" && test -d "$(vol hollow2)"
+}
+check "a volume with no files has an archive, which imports as one" hollow
+z override --novolume=m $BB >/dev/null 2>&1
+z override --novolume=s $OTHER >/dev/null 2>&1
+
+# An app's own volume, its data, by the app's id.
+mkdir -p "$(data_of $WHOLE)\\cache" "$(data_of $WHOLE)\\home\\AppData\\Local\\Temp" && echo c >"$(data_of $WHOLE)\\cache\\c.txt" &&
+    echo t >"$(data_of $WHOLE)\\home\\AppData\\Local\\Temp\\t.txt"
+z override --volume=inner:mnt $WHOLE >/dev/null 2>&1 && z run $WHOLE sh -c 'echo in > "$USERPROFILE/../mnt/in.txt"' >/dev/null 2>&1
+own_export() {
+    says "without its temporary files and its cache" z volume export $WHOLE "$x\\own.tar" || return 1
+    in_tar "$x\\own.tar" legacy.txt && ! in_tar "$x\\own.tar" cache/c.txt && ! in_tar "$x\\own.tar" home/AppData/Local/Temp/t.txt
+}
+check "an app's data is exported by the app's id, without its temporary files and cache" own_export
+check "  and says whose it is" sh -c "head -c 1024 '$(cygpath -u "$x\\own.tar")' | grep -aqF 'ZIGSAW.app=$WHOLE'"
+passes_over() {
+    is_link "$(data_of $WHOLE)\\mnt" && ! in_tar "$x\\own.tar" mnt/in.txt && ! in_tar "$x\\own.tar" mnt/ &&
+        rm -f "$(cygpath -u "$x\\own2.tar")" && says "passed over 1 link" z volume export $WHOLE "$x\\own2.tar"
+}
+check "  a volume mounted in it is passed over, and said" passes_over
+all_of_it() { z volume export --all $WHOLE "$x\\all.tar" >/dev/null 2>&1 && in_tar "$x\\all.tar" cache/c.txt && in_tar "$x\\all.tar" home/AppData/Local/Temp/t.txt; }
+check "  --all has the temporary files and the cache too" all_of_it
+under_mount() {
+    mkdir -p "$x\\clash\\mnt" && echo hidden >"$x\\clash\\mnt\\h.txt" && tar -cf "$(cygpath -u "$x\\clash.tar")" -C "$(cygpath -u "$x\\clash")" . &&
+        refuses "where $WHOLE mounts volume inner" z volume import --replace $WHOLE "$x\\clash.tar" &&
+        test -f "$(data_of $WHOLE)\\legacy.txt" && is_link "$(data_of $WHOLE)\\mnt" && no_leftover "$(data_of $WHOLE)"
+}
+check "an archive with files where the app mounts a volume refuses, and leaves its data" under_mount
+own_replace() {
+    echo newer >"$(data_of $WHOLE)\\newer.txt"
+    says "in place of the files it had" z volume import --replace $WHOLE "$x\\own.tar" && absent "$(data_of $WHOLE)\\newer.txt" &&
+        absent "$(data_of $WHOLE)\\cache" && test -f "$(vol inner)\\in.txt" || return 1
+    # Its next run makes the mount again, in its data as the archive has it.
+    reads $WHOLE low legacy.txt old && reads $WHOLE low mnt/in.txt in && is_link "$(data_of $WHOLE)\\mnt"
+}
+check "--replace takes an app's data back to the archive's; its mounts stay what they are" own_replace
+z override --novolume=mnt $WHOLE >/dev/null 2>&1
+
+# The keys an app keeps in HKCU are in its data between runs, and so in its
+# archive: those a killed run left there, too.
+z build "$root\\tests\\volumes\\registry.json" >/dev/null 2>&1
+killed_run() {
+    z run $REG sh -c "reg add '$REG_KEY' /v v /d exported /f >/dev/null && sleep 60" &
+    local pid=$! i
+    for i in $(seq 100); do
+        reg query "$REG_KEY" /v v 2>/dev/null | grep -q exported && break
+        sleep 0.1
+    done
+    taskkill /F /T /PID "$(cat /proc/$pid/winpid)" >/dev/null 2>&1
+    wait $pid 2>/dev/null
+    reg query "$REG_KEY" /v v 2>/dev/null | grep -q exported || { echo "the key isn't in HKCU after the kill"; return 1; }
+}
+check "a run killed leaves the app's keys in HKCU" killed_run
+keys_exported() {
+    z volume export $REG "$x\\reg.tar" >/dev/null 2>&1 && in_tar "$x\\reg.tar" registry/user.dat || return 1
+    reg query "$REG_KEY" >/dev/null 2>&1 && { echo "the key stayed in HKCU"; return 1; }
+    return 0
+}
+check "  export puts them back in its data first, and so in the archive" keys_exported
+moved_in() {
+    z rm --delete-data $REG >/dev/null 2>&1 && absent "$(data_of $REG)" || return 1
+    says "for when that app is installed" z volume import $REG "$x\\reg.tar" || return 1
+    z build "$root\\tests\\volumes\\registry.json" >/dev/null 2>&1 &&
+        [ "$(z run $REG sh -c "reg query '$REG_KEY' /v v" | tr -d '\r' | grep -o 'exported')" = exported ]
+}
+check "data imported for an app that isn't installed is the app's once it is, keys and all" moved_in
+at_root() {
+    mkdir -p "$work\\regroot2" && z override --volume="$work\\regroot2:." $REG >/dev/null 2>&1 && z run $REG true >/dev/null 2>&1 &&
+        refuses "a folder of yours mounted in place of its own volume" z volume export $REG "$x\\root.tar" &&
+        refuses "a folder of yours mounted in place of its own volume" z volume import --replace $REG "$x\\reg.tar"
+}
+check "data mounted from a folder of yours is neither exported nor imported by the app's id" at_root
+z override --novolume=. $REG >/dev/null 2>&1
+z rm --delete-data $REG >/dev/null 2>&1
+reg delete "$REG_KEY" /f >/dev/null 2>&1
+check "a name that is neither a volume's nor an app's refuses" refuses "an app's own volume has the app's id" z volume import 'a b' "$x\\exp.tar"
+for v in exp imp imp0 impgz imppipe impgnu impbsd inner hollow hollow2; do z volume rm $v >/dev/null 2>&1; done
 
 # --- Pruning ---------------------------------------------------------------
 

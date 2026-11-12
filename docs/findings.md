@@ -2861,6 +2861,46 @@ Iteration 89's Reproduce run (43092858003) failed in `build (zig)` only.
   whose images all reproduced, and were signed, failed on that step alone.
   A failed upload no longer fails a job.
 
+## What a file costs to make (iteration 91)
+
+`zigsaw volume import` of 20,000 files of 4 KiB (random bytes, 200 folders)
+took 19 to 23 s here, on NTFS and on a Dev Drive alike, where Windows'
+`tar.exe` unpacks the same archive in 4 to 8 s and Git Bash's `tar` in 8.
+
+- **It isn't how the files are written.** Eight workers or one, Zig's `Io`
+  or plain `CreateFileW`, `WriteFile` and `CloseHandle`, with the times set
+  or not, into the store or a folder outside it: 19.5 to 20.3 s each. The
+  renames after it never had to wait (no retry in any run).
+- **A program of 40 lines takes as long.** `CreateFileW`, `WriteFile`,
+  `CloseHandle` in a loop, built with the same Zig, nothing else in it: 19 s
+  for the same 20,000 files, on either drive. So it's what this machine
+  charges a program it hasn't seen for each file it makes, about a
+  millisecond, one file at a time however many threads ask: Defender, by
+  every sign, though nothing here could turn it off to prove it. Iteration
+  70 found it judging zigsaw's builds by their exact bytes; every build is a
+  program nobody has seen.
+- **Files with the same bytes cost less.** The first measurement copied one
+  4 KiB file 20,000 times, and imported in 7 s: whatever looks at a new
+  file knows one it has seen.
+- **So the import writes one file after another.** Writing small files
+  several at once, as a rollback's copy does (iteration 87, `CopyFileW`
+  from 8 threads: 15 s to 6 s), was built, measured (19.8 s against 20.3)
+  and taken out again.
+- **Large files don't feel it**: 1 GB in 10 files imports in 1 s, and
+  exports in 1.4 to 2 s. Exporting 20,000 small files takes 1.3 to 1.8 s:
+  reading is cheap. But the first export after PostgreSQL's server had
+  written its cluster took 4.3 s for 978 files, and each one after 0.1 s:
+  files another program has just written are slow to open once.
+- **Windows' `tar.exe` can't have a name outside the machine's code page**:
+  it skips such a file in any archive with UTF-8 names ("empty or unreadable
+  filename"), and crashed making an archive of a folder that had one. GNU
+  tar and 7-Zip read zigsaw's archive of it.
+- **A tar of nothing is two blocks of zeros**, and so is the start of any
+  file of zeros: a reader that takes the end of the archive for success
+  would replace a volume's files with none. An archive that ends without
+  its two empty blocks is one cut short, and one with no entries is refused
+  unless it says it's zigsaw's export of an empty volume.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

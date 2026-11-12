@@ -39,7 +39,7 @@ pub const Kept = Store.KeptData;
 
 /// What a copy leaves out, as paths in the data directory: what the app
 /// makes again, and would only take long to copy.
-const left_out = [_][]const u8{ "home\\AppData\\Local\\Temp", "cache" };
+pub const left_out = [_][]const u8{ "home\\AppData\\Local\\Temp", "cache" };
 
 /// How many files a folder has, and their size.
 pub const Tally = struct { bytes: u64 = 0, files: u64 = 0 };
@@ -528,7 +528,7 @@ const Walk = struct {
 };
 
 /// A path with its drive, and '\' between its parts.
-fn absolute(io: Io, arena: Allocator, p: []const u8) ![]u8 {
+pub fn absolute(io: Io, arena: Allocator, p: []const u8) ![]u8 {
     const full = if (std.fs.path.isAbsoluteWindows(p))
         try arena.dupe(u8, p)
     else
@@ -539,7 +539,7 @@ fn absolute(io: Io, arena: Allocator, p: []const u8) ![]u8 {
 
 /// A path for the Windows functions that otherwise stop at 260 characters:
 /// an app's profile may hold longer ones.
-fn long(arena: Allocator, p: []const u8) ![:0]u16 {
+pub fn long(arena: Allocator, p: []const u8) ![:0]u16 {
     const on_drive = p.len >= 3 and std.ascii.isAlphabetic(p[0]) and p[1] == ':' and p[2] == '\\';
     return win32.wide(arena, if (on_drive) try std.mem.concat(arena, u8, &.{ "\\\\?\\", p }) else p);
 }

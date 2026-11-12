@@ -442,6 +442,7 @@ pub const INHERITED_ACE: u8 = 0x10;
 pub const FILE_MODIFY: DWORD = 0x00010156;
 pub const WRITE_OWNER: DWORD = 0x00080000;
 pub const ERROR_ACCESS_DENIED: DWORD = 5;
+pub const ERROR_SHARING_VIOLATION: DWORD = 32;
 
 pub const TOKEN_QUERY: DWORD = 0x0008;
 pub const TokenUser: c_int = 1;
@@ -707,6 +708,7 @@ pub extern "kernel32" fn CancelIoEx(file: HANDLE, overlapped: ?*OVERLAPPED) call
 // Directory junctions: the user's folders in an app's home (folders.zig)
 
 pub const INVALID_FILE_ATTRIBUTES: DWORD = 0xFFFFFFFF;
+pub const FILE_ATTRIBUTE_READONLY: DWORD = 0x1;
 pub const FILE_ATTRIBUTE_DIRECTORY: DWORD = 0x10;
 pub const FILE_ATTRIBUTE_REPARSE_POINT: DWORD = 0x400;
 pub const ERROR_PATH_NOT_FOUND: DWORD = 3;
@@ -742,6 +744,7 @@ pub const MOUNT_POINT_REPARSE_HEADER = extern struct {
 };
 
 pub extern "kernel32" fn GetFileAttributesW(name: LPCWSTR) callconv(.winapi) DWORD;
+pub extern "kernel32" fn SetFileAttributesW(name: LPCWSTR, attributes: DWORD) callconv(.winapi) BOOL;
 /// A file's attributes, times (FILETIMEs, as two DWORDs each) and size.
 pub const WIN32_FILE_ATTRIBUTE_DATA = extern struct {
     dwFileAttributes: DWORD,

@@ -44,12 +44,17 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const win32 = @import("win32.zig");
+const flate = std.compress.flate;
+const options = @import("options");
 const acl = @import("acl.zig");
+const archive = @import("archive.zig");
 const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
 const junction = @import("junction.zig");
+const layer = @import("layer.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
+const snapshot = @import("snapshot.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const fail = Context.fail;
@@ -240,7 +245,7 @@ pub fn isValidName(name: []const u8) bool {
 }
 
 /// A part of a path that Windows takes as a file's name.
-fn isValidPart(part: []const u8) bool {
+pub fn isValidPart(part: []const u8) bool {
     if (part.len == 0 or part.len > 255 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
     for (part) |c| if (c < 0x20 or std.mem.indexOfScalar(u8, "<>:\"|?*", c) != null) return false;
     if (part[part.len - 1] == '.' or part[part.len - 1] == ' ') return false;
@@ -935,6 +940,380 @@ pub fn unmounted(ctx: *Context) !struct { names: []const []const u8, bytes: u64 
         bytes += size;
     }
     return .{ .names = names.items, .bytes = bytes };
+}
+
+// ---------------------------------------------------------------------------
+// Export and import
+
+/// The folders an import keeps in a volume while it goes on: the archive's
+/// files, until they're all there, and the ones they replace, until they're
+/// deleted. One that's left (zigsaw was killed) goes with the next import,
+/// and is never exported.
+const import_dir_prefix = ".zigsaw-import-";
+const replaced_dir_prefix = ".zigsaw-replaced-";
+const leftover_prefix = ".zigsaw-";
+
+const in_use_hint = "is in use, by a run of an app or another export or import: let that end first";
+
+/// `zigsaw volume export [--all] <name> <file>`: the volume's files as a tar
+/// (archive.zig), gzip-compressed if the file's name says so, or to stdout
+/// for `-`. Of an app's own volume, its data, without its temporary files
+/// and cache, as the copy kept for a rollback is (snapshot.zig), unless
+/// `all`. Only while no run uses the volume, so that the archive has the
+/// files as one moment left them, with the keys the app keeps in HKCU among
+/// them.
+pub fn exportTo(ctx: *Context, name: []const u8, file: []const u8, all: bool) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+    const start = ctx.now();
+    const v = try find(ctx.store, arena, name) orelse {
+        try failIfMountedAtRoot(ctx, name);
+        return fail("there's no volume {s}; `zigsaw volume ls` lists them", .{name});
+    };
+    if (!try isDir(io, v.path)) return fail("volume {s} is kept in {s}, which isn't there: is its drive plugged in?", .{ name, v.path });
+    const target = if (std.mem.eql(u8, file, "-")) null else try snapshot.absolute(io, arena, file);
+    if (target) |t| {
+        if (isWithin(t, v.path)) return fail("{s} is in the volume itself: give a file somewhere else", .{t});
+        if (try Store.exists(io, t)) return fail("{s} is there already: delete it first, or give another name", .{t});
+    } else if (try Context.stdout().isTty(io)) {
+        return fail("an archive isn't for a console: give a file, or send `-` into a pipe", .{});
+    }
+
+    // A rollback's swap that stopped halfway has an app's data elsewhere.
+    if (v.own) try snapshot.finishSwap(ctx, v.name);
+    const lock = try lockUnused(ctx, v) orelse return fail("volume {s} {s}", .{ name, in_use_hint });
+    defer lock.release(io);
+    // What a run that didn't end left in HKCU goes back into the data first:
+    // the app's own, or the app's whose data this volume is.
+    if (v.own) {
+        try hkcu.settleLeftovers(ctx, v.name);
+    } else for (try usersOf(ctx, try allSaved(ctx), v)) |user| {
+        if (user.mount.isRoot()) if (user.id) |id| try hkcu.settleLeftovers(ctx, id);
+    }
+    try settleImports(ctx, v, .leave);
+
+    var records: std.ArrayList(archive.Record) = .empty;
+    try records.append(arena, .{ .key = "ZIGSAW.volume", .value = v.name });
+    if (v.own) {
+        try records.append(arena, .{ .key = "ZIGSAW.app", .value = v.name });
+        if (try ctx.store.readRef(arena, v.name)) |ref| try records.append(arena, .{ .key = "ZIGSAW.version", .value = ref.version });
+    }
+    try records.append(arena, .{ .key = "ZIGSAW.zigsaw", .value = options.version });
+    try records.append(arena, .{ .key = "ZIGSAW.exported", .value = try std.fmt.allocPrint(arena, "{d}", .{Io.Timestamp.now(io, .real).toSeconds()}) });
+    const leaves_out = v.own and !all;
+    const pack_options: archive.PackOptions = .{
+        .global = records.items,
+        .left_out = if (leaves_out) &snapshot.left_out else &.{},
+        .left_out_prefix = leftover_prefix,
+    };
+
+    const gz = isGzipName(file);
+    var archive_size: ?u64 = null;
+    const tally = if (target) |t| tally: {
+        // Under another name until it's whole: an export that stops leaves
+        // no archive.
+        const partial = try std.fmt.allocPrint(arena, "{s}.partial", .{t});
+        var out = Io.Dir.cwd().createFile(io, partial, .{}) catch |err| return fail("making {s}: {t}", .{ partial, err });
+        const result = writeArchive(ctx, v.path, out, false, gz, pack_options);
+        out.close(io);
+        const tally = result catch |err| {
+            Io.Dir.cwd().deleteFile(io, partial) catch {};
+            return err;
+        };
+        Io.Dir.rename(.cwd(), partial, .cwd(), t, io) catch |err| {
+            Io.Dir.cwd().deleteFile(io, partial) catch {};
+            return fail("naming the archive {s}: {t}", .{ t, err });
+        };
+        if (Io.Dir.cwd().statFile(io, t, .{})) |stat| archive_size = stat.size else |_| {}
+        break :tally tally;
+    } else try writeArchive(ctx, v.path, Context.stdout(), true, gz, pack_options);
+
+    if (archive_size) |size|
+        note("exported volume {s} to {s}: {Bi:.1} in {d} file(s), an archive of {Bi:.1}, in {f}", .{ name, target.?, tally.bytes, tally.files, size, ctx.since(start) })
+    else
+        note("exported volume {s}: {Bi:.1} in {d} file(s), in {f}", .{ name, tally.bytes, tally.files, ctx.since(start) });
+    if (leaves_out) note("  without its temporary files and its cache: --all has those too", .{});
+    if (tally.links > 0) note("  passed over {d} link(s): a volume mounted in it is exported by its own name", .{tally.links});
+}
+
+/// ".tar.gz" and ".tgz" say gzip; any other name is a plain tar.
+fn isGzipName(file: []const u8) bool {
+    return std.ascii.endsWithIgnoreCase(file, ".gz") or std.ascii.endsWithIgnoreCase(file, ".tgz");
+}
+
+fn writeArchive(ctx: *Context, folder: []const u8, out: Io.File, streaming: bool, gz: bool, pack_options: archive.PackOptions) !archive.Tally {
+    var buf: [64 * 1024]u8 = undefined;
+    var writer = if (streaming) out.writerStreaming(ctx.io, &buf) else out.writer(ctx.io, &buf);
+    const tally = packInto(ctx, folder, &writer.interface, gz, pack_options) catch |err| switch (err) {
+        error.WriteFailed => return fail("writing the archive: {t}", .{writer.err orelse error.Unexpected}),
+        else => |e| return e,
+    };
+    writer.interface.flush() catch return fail("writing the archive: {t}", .{writer.err orelse error.Unexpected});
+    return tally;
+}
+
+fn packInto(ctx: *Context, folder: []const u8, out: *Io.Writer, gz: bool, pack_options: archive.PackOptions) !archive.Tally {
+    if (!gz) return archive.pack(ctx.io, ctx.arena, folder, out, pack_options);
+    const compress = try layer.gzip(ctx.arena, out);
+    const tally = try archive.pack(ctx.io, ctx.arena, folder, &compress.writer, pack_options);
+    try compress.finish();
+    return tally;
+}
+
+/// Fails if `name` is an app whose data is mounted from elsewhere
+/// (`--volume=<source>:.`): volumes\<id> is then a link, and no volume.
+fn failIfMountedAtRoot(ctx: *Context, name: []const u8) !void {
+    const arena = ctx.arena;
+    if (!isValidName(name) and !oci.isValidId(name)) return;
+    const to = switch (try junction.inspect(ctx.io, arena, try inStorePath(ctx.store, arena, name))) {
+        .link => |to| to orelse "elsewhere",
+        else => return,
+    };
+    const settings = override.loadFor(ctx.store, arena, name) catch |err| switch (err) {
+        error.Failed => override.Settings{}, // Reported.
+        else => |e| return e,
+    };
+    for (settings.volumes) |value| switch (try parse(arena, value)) {
+        .ok => |m| if (m.isRoot()) switch (m.source) {
+            .name => |n| return fail("{s}'s data is volume {s}, mounted in place of its own: give that volume's name, {s}", .{ name, n, n }),
+            .path => |p| return fail("{s}'s data is {s}, a folder of yours mounted in place of its own volume: that one is yours to copy", .{ name, p }),
+        },
+        .invalid => {},
+    };
+    return fail("{s}'s data is {s}, mounted in place of its own volume, which has no name here", .{ name, to });
+}
+
+/// `zigsaw volume import [--replace] <name> <file>`: the files of a tar,
+/// plain or gzip-compressed, or of stdin for `-`, as the volume's. The
+/// volume is made if there is none: a named one in the store, or for an
+/// app's id its own, its data, whether the app is installed yet or not.
+///
+/// One that has files is left alone, unless `replace`: then the archive's
+/// files take their place. They're unpacked in a folder inside the volume
+/// first, so on its drive and with what its files inherit; only then are the
+/// old ones moved aside and the new ones moved up, by renaming, and the old
+/// ones deleted. So an archive that turns out cut short, or with a name
+/// Windows can't have, leaves the volume as it was. The links among the old
+/// files go with them, never what they lead to: the app's next run makes
+/// its mounts again.
+pub fn importFrom(ctx: *Context, name: []const u8, file: []const u8, replace: bool) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+    const store = ctx.store;
+    const start = ctx.now();
+    if (nameProblem(name)) |why| if (!oci.isValidId(name))
+        return fail("\"{s}\": {s}; an app's own volume has the app's id", .{ name, why });
+    // An app's data, by its id: as `isOwn` has it, of a volume there or not.
+    const is_app = try isOwn(store, arena, name);
+
+    const from_stdin = std.mem.eql(u8, file, "-");
+    var in_file = if (from_stdin) Context.stdin() else Io.Dir.cwd().openFile(io, file, .{}) catch |err|
+        return fail("reading {s}: {t}", .{ file, err });
+    defer if (!from_stdin) in_file.close(io);
+    if (from_stdin and try in_file.isTty(io)) return fail("an archive doesn't come from a console: give a file, or pipe one into `-`", .{});
+    const in_buf = try arena.alloc(u8, 64 * 1024);
+    var file_reader = if (from_stdin) in_file.readerStreaming(io, in_buf) else in_file.reader(io, in_buf);
+    const magic = file_reader.interface.peek(2) catch |err| switch (err) {
+        error.EndOfStream => return fail("{s} is empty, or shorter than any archive", .{file}),
+        error.ReadFailed => return fail("reading {s}: {t}", .{ file, file_reader.err orelse error.Unexpected }),
+    };
+    const gz = magic[0] == 0x1f and magic[1] == 0x8b;
+    var inflate: flate.Decompress = undefined;
+    if (gz) inflate = .init(&file_reader.interface, .gzip, try arena.alloc(u8, flate.max_window_len));
+    const in: *Io.Reader = if (gz) &inflate.reader else &file_reader.interface;
+
+    if (is_app) try snapshot.finishSwap(ctx, name);
+    // Before the volume is looked up or made, as a run takes it.
+    const lock_path = if (is_app) try store.runsLockPath(arena, name) else try lockPath(store, arena, name);
+    const lock = try Store.tryLock(io, lock_path, .exclusive) orelse return fail("volume {s} {s}", .{ name, in_use_hint });
+    defer lock.release(io);
+
+    var made = false;
+    const v: Volume = try find(store, arena, name) orelse new: {
+        try failIfMountedAtRoot(ctx, name);
+        const p = try inStorePath(store, arena, name);
+        Io.Dir.cwd().createDirPath(io, p) catch |err| return fail("making {s}: {t}", .{ p, err });
+        made = true;
+        break :new .{ .name = name, .path = p, .external = false, .own = is_app };
+    };
+    // One this import made goes with it, if it fails.
+    const made_w = try win32.wide(arena, v.path);
+    errdefer if (made) {
+        _ = win32.RemoveDirectoryW(made_w);
+    };
+    if (!try isDir(io, v.path)) return fail("volume {s} is kept in {s}, which isn't there: is its drive plugged in?", .{ name, v.path });
+    if (!from_stdin and isWithin(try snapshot.absolute(io, arena, file), v.path))
+        return fail("{s} is in the volume itself: move it somewhere else first", .{file});
+    if (is_app) try hkcu.settleLeftovers(ctx, name);
+
+    try settleImports(ctx, v, .delete);
+    const old = try childrenOf(io, arena, v.path);
+    if (old.len > 0 and !replace) return fail("volume {s} has files already ({s}{s}): --replace puts the archive's in their place, and deletes them", .{
+        name, old[0], if (old.len > 1) try std.fmt.allocPrint(arena, " and {d} more", .{old.len - 1}) else "",
+    });
+
+    var random: [8]u8 = undefined;
+    io.random(&random);
+    const tag = std.fmt.bytesToHex(random, .lower);
+    const import_dir = try std.fmt.allocPrint(arena, "{s}\\{s}{s}", .{ v.path, import_dir_prefix, &tag });
+    const replaced_dir = try std.fmt.allocPrint(arena, "{s}\\{s}{s}", .{ v.path, replaced_dir_prefix, &tag });
+    const unpacked = unpacked: {
+        // Until the renames are done, a failure leaves the volume as it was.
+        errdefer {
+            Store.deleteTree(io, arena, import_dir) catch {};
+            if (!made) note("nothing was imported: volume {s} is as it was", .{name});
+        }
+        Io.Dir.cwd().createDir(io, import_dir, .default_dir) catch |err| return fail("making {s}: {t}", .{ import_dir, err });
+        const unpacked = archive.unpack(io, arena, in, import_dir) catch |err| switch (err) {
+            error.ReadFailed => {
+                if (gz) if (inflate.err) |e|
+                    return fail("{s}: its gzip data can't be read ({t}): it was cut short, or is damaged", .{ file, e });
+                return fail("reading {s}: {t}", .{ file, file_reader.err orelse error.Unexpected });
+            },
+            else => |e| return e,
+        };
+        // A file of zeros reads as a tar with nothing in it: not what to put
+        // in the place of a volume's files. An export of an empty volume
+        // says what it is.
+        if (unpacked.tally.files + unpacked.tally.dirs == 0 and unpacked.get("ZIGSAW.volume") == null)
+            return fail("{s} has no files or folders in it, and isn't an archive of zigsaw's", .{file});
+        if (is_app) try failIfUnderMount(ctx, name, import_dir);
+        try swapIn(io, arena, v.path, import_dir, replaced_dir, old);
+        break :unpacked unpacked;
+    };
+    // The archive's files are the volume's now; the rest only tidies.
+    if (old.len > 0) Store.deleteTree(io, arena, replaced_dir) catch |err|
+        note("warning: the files replaced are still in {s} ({t}): delete that folder", .{ replaced_dir, err });
+    // A copy still owed for a rollback would be of the files just imported.
+    if (is_app and old.len > 0 and try store.forgetOwedData(arena, name))
+        note("note: no copy of {s}'s data as the version before left it is kept for `zigsaw rollback`: that data was replaced", .{name});
+
+    const tally = unpacked.tally;
+    const how = if (made) ", a new one" else if (old.len > 0) ", in place of the files it had" else "";
+    note("imported {Bi:.1} in {d} file(s) into volume {s}{s}, in {f}", .{ tally.bytes, tally.files, name, how, ctx.since(start) });
+    if (unpacked.get("ZIGSAW.volume")) |of| {
+        const version = if (unpacked.get("ZIGSAW.version")) |ver| try std.fmt.allocPrint(arena, ", as {s} left it", .{ver}) else "";
+        const when = if (unpacked.get("ZIGSAW.exported")) |text| std.fmt.parseInt(i64, text, 10) catch null else null;
+        if (when) |t|
+            note("  the archive is of volume {s}{s}, exported {f}", .{ of, version, snapshot.ago(ctx, t) })
+        else
+            note("  the archive is of volume {s}{s}", .{ of, version });
+    }
+    if (tally.links > 0) note("  passed over {d} link(s) and the like in the archive: only files and folders are imported", .{tally.links});
+    if (is_app and try store.readRef(arena, name) == null) note("  it's the data of {s}, for when that app is installed", .{name});
+}
+
+/// Fails if the files unpacked in `import_dir` have any where one of the
+/// app's saved mounts goes: they would hide under the volume mounted there,
+/// or stop the app's next run.
+fn failIfUnderMount(ctx: *Context, id: []const u8, import_dir: []const u8) !void {
+    const arena = ctx.arena;
+    const settings = override.loadFor(ctx.store, arena, id) catch |err| switch (err) {
+        error.Failed => return, // Reported.
+        else => |e| return e,
+    };
+    for (settings.volumes) |value| switch (try parse(arena, value)) {
+        .ok => |m| {
+            if (m.isRoot()) continue;
+            if (try junction.inspect(ctx.io, arena, try std.fs.path.join(arena, &.{ import_dir, m.target })) != .other) continue;
+            return fail("the archive has files at {s}, where {s} mounts {f}: import those into that, or take the mount away first with `zigsaw override --novolume={s} {s}`", .{
+                m.target, id, m, m.target, id,
+            });
+        },
+        .invalid => {},
+    };
+}
+
+/// Deletes what an import that didn't finish left in the volume, or leaves
+/// it for the next import (an export changes nothing); and fails, if it
+/// stopped between its renames, with the volume's files in two folders:
+/// only whoever knows which they want can settle that.
+fn settleImports(ctx: *Context, v: Volume, leftovers: enum { delete, leave }) !void {
+    const io = ctx.io;
+    const arena = ctx.arena;
+    var unpacked: std.ArrayList([]const u8) = .empty;
+    var replaced: std.ArrayList([]const u8) = .empty;
+    for (try childrenOf(io, arena, v.path)) |child| {
+        const left = if (std.ascii.startsWithIgnoreCase(child, import_dir_prefix))
+            &unpacked
+        else if (std.ascii.startsWithIgnoreCase(child, replaced_dir_prefix))
+            &replaced
+        else
+            continue;
+        try left.append(arena, try std.fs.path.join(arena, &.{ v.path, child }));
+    }
+    // The folder of the archive's files goes as the renames end: with it
+    // there still, the old files aren't all back, or the new ones all in.
+    if (unpacked.items.len > 0 and replaced.items.len > 0)
+        return fail("an import into volume {s} stopped between its renames: the files it was replacing are in {s}, the archive's in {s}; move the ones you want back into {s}, and delete both folders", .{
+            v.name, replaced.items[0], unpacked.items[0], v.path,
+        });
+    if (leftovers == .leave) return;
+    for (unpacked.items) |p| try Store.deleteTree(io, arena, p);
+    for (replaced.items) |p| try Store.deleteTree(io, arena, p);
+    if (unpacked.items.len + replaced.items.len > 0) note("deleted what an import that didn't finish left in volume {s}", .{v.name});
+}
+
+/// The archive's files, in `import_dir`, become the volume's, and the
+/// volume's own, `old`, go to `replaced_dir`: all by renaming what's in each
+/// folder, so the volume's folder stays what it is, with its label, its
+/// grants, and whatever links to it. A rename that fails puts back the ones
+/// done.
+fn swapIn(io: Io, arena: Allocator, volume: []const u8, import_dir: []const u8, replaced_dir: []const u8, old: []const []const u8) !void {
+    const fresh = try childrenOf(io, arena, import_dir);
+    // The next import would take one for what this one left.
+    for (fresh) |n| if (std.ascii.startsWithIgnoreCase(n, leftover_prefix))
+        return fail("the archive has {s}, a name zigsaw keeps in a volume for its own use", .{n});
+    const replaced_w = try win32.wide(arena, replaced_dir);
+    var moved_old: usize = 0;
+    var moved_new: usize = 0;
+    errdefer {
+        for (fresh[0..moved_new]) |n| moveChild(arena, volume, import_dir, n) catch {};
+        for (old[0..moved_old]) |n| moveChild(arena, replaced_dir, volume, n) catch {};
+        if (old.len > 0) _ = win32.RemoveDirectoryW(replaced_w);
+    }
+    if (old.len > 0) {
+        if (win32.CreateDirectoryW(replaced_w, null) == 0) return win32.lastErrorFail("CreateDirectoryW");
+        for (old) |n| {
+            try moveChild(arena, volume, replaced_dir, n);
+            moved_old += 1;
+        }
+    }
+    for (fresh) |n| {
+        try moveChild(arena, import_dir, volume, n);
+        moved_new += 1;
+    }
+    // Its going says the renames are done (see settleImports).
+    if (win32.RemoveDirectoryW(try win32.wide(arena, import_dir)) == 0) return win32.lastErrorFail("RemoveDirectoryW");
+}
+
+/// Renames `name` in one folder into another. What scans a file just
+/// written (Defender) can hold it a moment, and with it the folder it's in.
+fn moveChild(arena: Allocator, from_dir: []const u8, to_dir: []const u8, name: []const u8) !void {
+    const from = try std.fs.path.join(arena, &.{ from_dir, name });
+    const to = try std.fs.path.join(arena, &.{ to_dir, name });
+    const from_w = try snapshot.long(arena, from);
+    const to_w = try snapshot.long(arena, to);
+    var tries: usize = 0;
+    while (true) : (tries += 1) {
+        if (win32.MoveFileExW(from_w, to_w, 0) != 0) return;
+        const code = win32.GetLastError();
+        if ((code == win32.ERROR_ACCESS_DENIED or code == win32.ERROR_SHARING_VIOLATION) and tries < 50) {
+            win32.Sleep(100);
+            continue;
+        }
+        return fail("moving {s} to {s}: error {d} ({s}); close what has files open there, then try again", .{ from, to, code, win32.errorName(code) });
+    }
+}
+
+/// The names of what's in a folder, links and all.
+fn childrenOf(io: Io, arena: Allocator, p: []const u8) ![]const []const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    var dir = try Io.Dir.cwd().openDir(io, p, .{ .iterate = true });
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| try names.append(arena, try arena.dupe(u8, entry.name));
+    return names.items;
 }
 
 // ---------------------------------------------------------------------------

@@ -39,6 +39,13 @@ pub fn stdout() std.Io.File {
     return f;
 }
 
+/// Standard input, flagged as `stdout` is, for the same reason.
+pub fn stdin() std.Io.File {
+    var f = std.Io.File.stdin();
+    if (win32.synchronousIo(f.handle) == false) f.flags.nonblocking = true;
+    return f;
+}
+
 /// Writes to stderr, ignoring failures. std.debug.print means to as well,
 /// but in Zig 0.16 it crashes on Windows once stderr is a pipe nobody reads
 /// any more, as in `zigsaw build ... | head`. A build ending that way would
