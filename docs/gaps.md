@@ -1,5 +1,21 @@
 # Known gaps
 
+- Devices ([findings](findings.md#devices-iteration-95)), all of them Windows'
+  doing, seen on Windows 11 26300:
+  - **No sandbox keeps an app from the microphone**, the speakers, the GPU or
+    your printers: they open in an AppContainer that holds nothing. There's
+    no `microphone` device to take away.
+  - **Under `low`, the default, no app gets the camera.** One that needs it
+    runs under `appcontainer` with the `camera` device, or under `soft`.
+  - **Under `appcontainer`, the camera opens only through Media Foundation.**
+    A program that opens the camera's driver itself gets none even with the
+    device. DirectShow's do, so VLC's and ffmpeg's `dshow` capture would be
+    among them; neither was tried.
+  - **Under `appcontainer`, no app reaches a USB, HID or Bluetooth device**,
+    and so most likely no serial port either (none was there to try): an app
+    for a board, a controller's own tool or a headset's needs `low` or `soft`,
+    and its image can say so (`permissions.unsupported.appcontainer`).
+
 - A command an app's run installs that names the app's files by their
   absolute path, as pip's launchers name their `python.exe`, stops working
   when an update deploys the app elsewhere. npm's and cargo's don't.

@@ -42,6 +42,10 @@ pub const Settings = struct {
     hosts: []const []const u8 = &.{},
     /// Hosts whose patterns the layers below give, and this one takes away.
     nohosts: []const []const u8 = &.{},
+    /// Devices the run may use (see oci.Device), on top of the app's own.
+    devices: []const []const u8 = &.{},
+    /// Devices the layers below give, and this one takes away.
+    nodevices: []const []const u8 = &.{},
     /// "NAME=VALUE" environment variables, set over the app's own.
     env: []const []const u8 = &.{},
     /// Installed extensions, by id, that don't join the app's runs, which
@@ -75,7 +79,8 @@ pub const Settings = struct {
 
     pub fn isEmpty(s: Settings) bool {
         return s.sandbox == null and s.network == null and s.commands == null and s.host == null and s.ephemeral == null and
-            s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.hosts.len == 0 and s.nohosts.len == 0 and s.env.len == 0 and
+            s.filesystem.len == 0 and s.nofilesystem.len == 0 and s.hosts.len == 0 and s.nohosts.len == 0 and
+            s.devices.len == 0 and s.nodevices.len == 0 and s.env.len == 0 and
             s.noextension.len == 0 and s.extension.len == 0 and s.ports.len == 0 and
             s.volumes.len == 0 and s.novolume.len == 0 and s.real_folders == null and s.snapshot == null and
             s.memory == null and s.cpus == null;
@@ -103,6 +108,8 @@ pub const Settings = struct {
             .nofilesystem = try mergeList(arena, try without(arena, lower.nofilesystem, upper.filesystem, grantPath, grantPath), upper.nofilesystem, grantPath),
             .hosts = try mergeList(arena, try without(arena, lower.hosts, upper.nohosts, hostKey, hostKey), upper.hosts, hostKey),
             .nohosts = try mergeList(arena, try without(arena, lower.nohosts, upper.hosts, hostKey, hostKey), upper.nohosts, hostKey),
+            .devices = try mergeList(arena, try without(arena, lower.devices, upper.nodevices, itself, itself), upper.devices, itself),
+            .nodevices = try mergeList(arena, try without(arena, lower.nodevices, upper.devices, itself, itself), upper.nodevices, itself),
             .env = try mergeList(arena, lower.env, upper.env, envName),
             .noextension = try mergeList(arena, try without(arena, lower.noextension, upper.extension, itself, itself), upper.noextension, itself),
             .ports = try mergeList(arena, lower.ports, upper.ports, envName),
@@ -131,7 +138,8 @@ pub const Settings = struct {
             const v = @field(s, name);
             const later_list = comptime std.mem.eql(u8, name, "noextension") or std.mem.eql(u8, name, "extension") or
                 std.mem.eql(u8, name, "ports") or std.mem.eql(u8, name, "volumes") or std.mem.eql(u8, name, "novolume") or
-                std.mem.eql(u8, name, "hosts") or std.mem.eql(u8, name, "nohosts");
+                std.mem.eql(u8, name, "hosts") or std.mem.eql(u8, name, "nohosts") or
+                std.mem.eql(u8, name, "devices") or std.mem.eql(u8, name, "nodevices");
             const skip = switch (@typeInfo(T)) {
                 .optional => v == null,
                 else => if (later_list) v.len == 0 else false,
@@ -181,6 +189,14 @@ pub const Settings = struct {
         }
         for (s.nohosts) |h| {
             try w.print("{s}--noallow-host={s}", .{ sep, h });
+            sep = " ";
+        }
+        for (s.devices) |d| {
+            try w.print("{s}--device={s}", .{ sep, d });
+            sep = " ";
+        }
+        for (s.nodevices) |d| {
+            try w.print("{s}--nodevice={s}", .{ sep, d });
             sep = " ";
         }
         for (s.env) |e| {
@@ -283,6 +299,12 @@ pub fn networkOf(arena: Allocator, s: Settings, permissions: oci.Permissions) !N
     const own = if (s.network == false) none else permissions.hosts orelse none;
     const list = (try Settings.merge(arena, .{ .hosts = own }, s)).hosts;
     return if (list.len == 0) .none else .{ .list = list };
+}
+
+/// The devices a run with `s` gets: the app's own, with those `s` adds and
+/// without those it takes away, as their names.
+pub fn devicesOf(arena: Allocator, s: Settings, permissions: oci.Permissions) ![]const []const u8 {
+    return (try Settings.merge(arena, .{ .devices = permissions.devices orelse &.{} }, s)).devices;
 }
 
 /// A --port value, "NAME=PORT", as two parts; null if it isn't one.
@@ -450,6 +472,37 @@ test networkOf {
     try t.expectEqualStrings("--allow-host=a.org --noallow-host=*.b.org:8080", w.buffered());
     // Saved only when there are some: a zigsaw before them reads the rest.
     try t.expect(std.mem.indexOf(u8, try oci.toJson(arena, Settings{ .network = true }), "hosts") == null);
+}
+
+test devicesOf {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const t = std.testing;
+    const none: []const []const u8 = &.{};
+    const camera: oci.Permissions = .{ .devices = &.{"camera"} };
+    try t.expectEqualDeep(none, try devicesOf(arena, .{}, .{}));
+    try t.expectEqualDeep(@as([]const []const u8, &.{"camera"}), try devicesOf(arena, .{}, camera));
+    // --device adds to the app's own, --nodevice takes from them.
+    try t.expectEqualDeep(@as([]const []const u8, &.{"camera"}), try devicesOf(arena, .{ .devices = &.{"camera"} }, .{}));
+    try t.expectEqualDeep(@as([]const []const u8, &.{"camera"}), try devicesOf(arena, .{ .devices = &.{"camera"} }, camera));
+    try t.expectEqualDeep(none, try devicesOf(arena, .{ .nodevices = &.{"camera"} }, camera));
+    // An override's --nodevice, and the command line's --device of it.
+    const saved: Settings = .{ .nodevices = &.{"camera"} };
+    const cli = try Settings.merge(arena, saved, .{ .devices = &.{"camera"} });
+    try t.expectEqual(0, cli.nodevices.len);
+    try t.expectEqualDeep(@as([]const []const u8, &.{"camera"}), try devicesOf(arena, cli, camera));
+    // And the other way: the store-wide --device, taken away for one app.
+    try t.expectEqualDeep(none, try devicesOf(arena, try Settings.merge(arena, .{ .devices = &.{"camera"} }, saved), .{}));
+
+    var buf: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    try (Settings{ .devices = &.{"camera"}, .nodevices = &.{"lidar"} }).format(&w);
+    try t.expectEqualStrings("--device=camera --nodevice=lidar", w.buffered());
+    try t.expect(!(Settings{ .nodevices = &.{"camera"} }).isEmpty());
+    // Saved only when there are some: a zigsaw before them reads the rest.
+    try t.expect(std.mem.indexOf(u8, try oci.toJson(arena, Settings{ .network = true }), "device") == null);
+    try t.expectEqualDeep(saved, try std.json.parseFromSliceLeaky(Settings, arena, try oci.toJson(arena, saved), .{}));
 }
 
 test "Settings.merge: --nofilesystem takes away what the layers below grant, until a layer above grants it again" {

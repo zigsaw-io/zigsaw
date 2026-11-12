@@ -198,7 +198,10 @@ const usage =
     \\                                  port, 443 and 80. --unshare=network --allow-host=...
     \\                                  narrows an app that has the network to those
     \\  --noallow-host=<host>[:<port>]  take away a host the app or an override allows
-    \\  --share=commands                put your zigsaw apps' commands on its PATH, after the
+    \\  --device=camera                 let it use the camera: under appcontainer, a run without
+    \\                                  it gets none
+    \\  --nodevice=camera               take away a device the app or an override gives
+    \\  --share=commands               put your zigsaw apps' commands on its PATH, after the
     \\                                  system's; each runs as its own app (soft sandbox only)
     \\  --share=host                    put zigsaw-host on its PATH, which runs your own programs
     \\                                  in your real environment, with the run's rights (not in
@@ -241,6 +244,11 @@ const usage =
     \\A run with a list of hosts holds no network capability: under appcontainer, it reaches
     \\those hosts only through the proxy that HTTP_PROXY and HTTPS_PROXY name, and programs
     \\that don't use them reach nothing. Under soft and low, the list isn't enforced.
+    \\
+    \\Under appcontainer, a run opens the camera only with the camera device, its image's or
+    \\yours, and through Media Foundation. At low integrity Windows opens it for no program;
+    \\under soft, for any. The microphone, speakers, GPU and printers open in every sandbox,
+    \\and USB, HID and Bluetooth devices under soft and low only: zigsaw can't change either.
     \\
     \\Data lives in %ZIGSAW_HOME%, or %LOCALAPPDATA%\zigsaw when that isn't set. Apps of a
     \\store elsewhere don't get your real folders until `override --global --real-folders`.
@@ -778,6 +786,8 @@ const SettingsParser = struct {
     nofilesystem: std.ArrayList([]const u8) = .empty,
     hosts: std.ArrayList([]const u8) = .empty,
     nohosts: std.ArrayList([]const u8) = .empty,
+    devices: std.ArrayList([]const u8) = .empty,
+    nodevices: std.ArrayList([]const u8) = .empty,
     env: std.ArrayList([]const u8) = .empty,
     noextension: std.ArrayList([]const u8) = .empty,
     extension: std.ArrayList([]const u8) = .empty,
@@ -822,6 +832,11 @@ const SettingsParser = struct {
         } else if (std.mem.eql(u8, name, "allow-host") or std.mem.eql(u8, name, "noallow-host")) {
             if (hosts.parse(value) == null) return fail("--{s}={s}: a host {s}", .{ name, value, hosts.invalid_message });
             try (if (name[0] == 'n') &p.nohosts else &p.hosts).append(arena, value);
+        } else if (std.mem.eql(u8, name, "device") or std.mem.eql(u8, name, "nodevice")) {
+            // Kept as images write it, so that the layers' names compare.
+            const device = oci.Device.parse(value) orelse
+                return fail("--{s} takes a device zigsaw knows, which is only {s}; got \"{s}\"", .{ name, oci.Device.list, value });
+            try (if (name[0] == 'n') &p.nodevices else &p.devices).append(arena, @tagName(device));
         } else if (std.mem.eql(u8, name, "env")) {
             if (std.mem.indexOfScalar(u8, value, '=') == null) return fail("--env expects NAME=VALUE, got \"{s}\"", .{value});
             try p.env.append(arena, value);
@@ -857,6 +872,8 @@ const SettingsParser = struct {
         s.nofilesystem = p.nofilesystem.items;
         s.hosts = p.hosts.items;
         s.nohosts = p.nohosts.items;
+        s.devices = p.devices.items;
+        s.nodevices = p.nodevices.items;
         s.env = p.env.items;
         s.noextension = p.noextension.items;
         s.extension = p.extension.items;

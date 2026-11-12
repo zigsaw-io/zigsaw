@@ -87,6 +87,12 @@ pub const Permissions = struct {
     /// digests. A zigsaw before 0.94 ignores it, and gives the app no
     /// network at all.
     hosts: ?[]const []const u8 = null,
+    /// Devices the app may use, by name (see `Device`): "camera". Under
+    /// appcontainer, its runs hold Windows' capability for each one, and for
+    /// no other; low and soft runs aren't held to the list. Absent unless
+    /// there are some, so images without it keep their digests. A zigsaw
+    /// before 0.95 ignores it, and gives an AppContainer run no device.
+    devices: ?[]const []const u8 = null,
     /// Host locations the app may use: "cwd", one of the user's folders
     /// ("documents"; see `UserFolder`) or an absolute path, each optionally
     /// suffixed with ":ro". Anything not listed is off limits.
@@ -113,6 +119,35 @@ pub const Permissions = struct {
     /// sandbox. Absent unless true.
     host: ?bool = null,
 };
+
+/// A device an app may use (see `Permissions.devices`). Only the ones that
+/// Windows keeps an AppContainer from and lets one with the device's
+/// capability reach have a name (tests/devprobe.zig, docs/findings.md): the
+/// camera, so far. The microphone, the speakers, the GPU and printers open in
+/// a container that holds nothing; USB, HID and Bluetooth devices in none.
+pub const Device = enum {
+    camera,
+
+    /// For messages.
+    pub const list = "camera";
+
+    pub fn parse(name: []const u8) ?Device {
+        const info = @typeInfo(Device).@"enum";
+        inline for (info.field_names, info.field_values) |field_name, value| {
+            if (std.ascii.eqlIgnoreCase(name, field_name)) return @enumFromInt(value);
+        }
+        return null;
+    }
+};
+
+/// A device's name as an image writes it: lowercase letters, digits and '-',
+/// starting with a letter. One this zigsaw doesn't know is a later zigsaw's
+/// device, which a run leaves out.
+pub fn isDeviceName(s: []const u8) bool {
+    if (s.len == 0 or s.len > 32 or !std.ascii.isLower(s[0])) return false;
+    for (s) |c| if (!std.ascii.isLower(c) and !std.ascii.isDigit(c) and c != '-') return false;
+    return true;
+}
 
 /// Why an app can't work under a sandbox, per sandbox: a line for a warning.
 pub const Unsupported = struct {
@@ -681,6 +716,17 @@ pub fn validateEntryPoints(what: []const u8, c: AppConfig, aliases: []const []co
         for (list) |h| if (hosts.parse(h) == null)
             return fail("{s}: host \"{s}\" {s}", .{ what, h, hosts.invalid_message });
     }
+    // As with filesystem, a name this zigsaw doesn't know passes: recipes
+    // are held to the known ones when they're read (recipe.zig).
+    if (c.permissions.devices) |list| {
+        if (list.len == 0) return fail("{s}: devices must name at least one device, or be left out", .{what});
+        for (list, 0..) |d, i| {
+            if (!isDeviceName(d))
+                return fail("{s}: device \"{s}\" must be a name in lowercase letters, digits and '-', such as \"{s}\"", .{ what, d, Device.list });
+            for (list[0..i]) |earlier| if (std.mem.eql(u8, earlier, d))
+                return fail("{s}: device \"{s}\" is listed twice", .{ what, d });
+        }
+    }
     try validateServices(what, c);
     try validateUses(what, "", c.permissions.uses, c.permissions.services orelse &.{});
     if (c.permissions.unsupported) |u| {
@@ -924,6 +970,14 @@ pub fn describePermissions(arena: std.mem.Allocator, p: Permissions) ![]const u8
     if (p.network) try parts.append(arena, "the network")
     else if (p.hosts) |list| if (list.len > 0)
         try parts.append(arena, try std.fmt.allocPrint(arena, "the network, only to {s}", .{try joinAnd(arena, list)}));
+    if (p.devices) |list| {
+        var known: std.ArrayList([]const u8) = .empty;
+        for (list) |name| if (Device.parse(name)) |d| try known.append(arena, @tagName(d));
+        if (known.items.len > 0)
+            try parts.append(arena, try std.fmt.allocPrint(arena, "your {s}", .{try joinAnd(arena, known.items)}));
+        for (list) |name| if (Device.parse(name) == null)
+            try parts.append(arena, try std.fmt.allocPrint(arena, "the device \"{s}\", which this zigsaw doesn't know", .{name}));
+    }
     var folders: [2]std.ArrayList([]const u8) = .{ .empty, .empty };
     for (p.filesystem) |spec| {
         const g = parseFsGrant(spec) orelse continue;
@@ -978,6 +1032,7 @@ pub const Access = struct {
 
     pub fn isEmpty(a: Access) bool {
         return a.permissions.sandbox != .soft and !a.permissions.network and (if (a.permissions.hosts) |h| h.len == 0 else true) and
+            (if (a.permissions.devices) |d| d.len == 0 else true) and
             a.permissions.filesystem.len == 0 and
             !(a.permissions.commands orelse false) and !(a.permissions.host orelse false) and
             a.uses.len == 0 and a.registry.len == 0;
@@ -995,9 +1050,9 @@ pub fn addUses(arena: std.mem.Allocator, list: *std.ArrayList(Use), more: []cons
 }
 
 /// What `after` lets an app reach that `before` didn't, which an update asks
-/// about: the soft sandbox, the network, a host its list didn't name, a location it couldn't use, or
-/// could only read, a port it didn't use, and a key it didn't keep. A location or key inside
-/// one it had counts as had.
+/// about: the soft sandbox, the network, a host its list didn't name, a device it didn't have,
+/// a location it couldn't use, or could only read, a port it didn't use, and a key it didn't
+/// keep. A location or key inside one it had counts as had.
 pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Access {
     var uses: std.ArrayList(Use) = .empty;
     for (after.uses) |u| {
@@ -1021,6 +1076,13 @@ pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Acc
         } else false;
         if (!had) try keys.append(arena, key);
     }
+    var devices: std.ArrayList([]const u8) = .empty;
+    for (after.permissions.devices orelse &.{}) |d| {
+        const had = for (before.permissions.devices orelse &.{}) |b| {
+            if (std.mem.eql(u8, b, d)) break true;
+        } else false;
+        if (!had) try devices.append(arena, d);
+    }
     return .{
         .permissions = .{
             .sandbox = if (after.permissions.sandbox == .soft and before.permissions.sandbox != .soft) .soft else null,
@@ -1030,6 +1092,7 @@ pub fn addedAccess(arena: std.mem.Allocator, before: Access, after: Access) !Acc
                 const more = try hosts.added(arena, before.permissions.hosts orelse &.{}, after.permissions.hosts orelse &.{});
                 break :blk if (more.len == 0) null else more;
             },
+            .devices = if (devices.items.len == 0) null else devices.items,
             .filesystem = filesystem.items,
             .commands = if ((after.permissions.commands orelse false) and !(before.permissions.commands orelse false)) true else null,
             .host = if ((after.permissions.host orelse false) and !(before.permissions.host orelse false)) true else null,
@@ -1224,6 +1287,44 @@ test "an allow list is checked" {
     try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
     c.permissions.hosts = &.{"https://api.github.com"};
     try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
+}
+
+test "devices are checked, described, and count as access when added" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var c: AppConfig = .{ .id = "x", .version = "1", .command = "a.exe" };
+    c.permissions.devices = &.{"camera"};
+    try validateEntryPoints("x", c, &.{});
+    // A later zigsaw's device passes, as a later zigsaw's folder does.
+    c.permissions.devices = &.{ "camera", "lidar-2" };
+    try validateEntryPoints("x", c, &.{});
+    for ([_][]const []const u8{ &.{}, &.{"Camera"}, &.{""}, &.{"web cam"}, &.{ "camera", "camera" }, &.{"2nd"} }) |bad| {
+        c.permissions.devices = bad;
+        try std.testing.expectError(error.Failed, validateEntryPoints("x", c, &.{}));
+    }
+    try std.testing.expectEqual(Device.camera, Device.parse("Camera").?);
+    try std.testing.expectEqual(null, Device.parse("microphone"));
+
+    try std.testing.expectEqualStrings("your camera", try describePermissions(arena, .{ .devices = &.{"camera"} }));
+    try std.testing.expectEqualStrings(
+        "the network; your camera; the device \"lidar-2\", which this zigsaw doesn't know",
+        try describePermissions(arena, .{ .network = true, .devices = &.{ "lidar-2", "camera" } }),
+    );
+
+    const none: Access = .{};
+    const camera: Access = .{ .permissions = .{ .devices = &.{"camera"} } };
+    try std.testing.expect(!camera.isEmpty());
+    try std.testing.expectEqualStrings("camera", (try addedAccess(arena, none, camera)).permissions.devices.?[0]);
+    try std.testing.expect((try addedAccess(arena, camera, camera)).isEmpty());
+    try std.testing.expect((try addedAccess(arena, camera, none)).isEmpty());
+    const more = try addedAccess(arena, camera, .{ .permissions = .{ .devices = &.{ "camera", "lidar-2" } } });
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{"lidar-2"}), more.permissions.devices.?);
+
+    // Absent unless there are some: images without devices keep their digests.
+    try std.testing.expect(std.mem.indexOf(u8, try toJson(arena, Permissions{}), "devices") == null);
+    const parsed = try parseConfig(arena, "test", media_type.config, "{\"id\": \"x\", \"version\": \"1\", \"command\": \"x.exe\", \"permissions\": {\"devices\": [\"camera\"]}}");
+    try std.testing.expectEqualStrings("camera", parsed.permissions.devices.?[0]);
 }
 
 test "unsupported sandboxes and schemes are checked" {

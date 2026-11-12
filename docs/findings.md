@@ -3032,6 +3032,62 @@ a session that isn't elevated (the account is in the Administrators group).
   version lost six rows to it, with exit code 0 and no output; its scripts
   now end in `exit $?`. zigsaw 0.92 does the same: it isn't the limits'.
 
+## Devices (iteration 95)
+
+Probed with `tests/devprobe.zig` (`report`) on Windows 11 26300, unelevated, on
+a laptop with one camera, a microphone array, a Bluetooth radio, 14 HID
+interfaces, 3 USB device interfaces and one printer; no serial port, no smart
+card reader, and location switched off for the machine. Windows' switches for
+the camera and the microphone were all on (machine, apps, desktop apps). Each
+check opens a device as a desktop program would, on the host, at low
+integrity, in an AppContainer that holds nothing, and in one that holds the
+device's capability:
+
+| | host | low | container | + capability by name | + capability by class |
+|---|---|---|---|---|---|
+| camera, a frame through Media Foundation | ok | denied | denied | denied | **ok** |
+| camera, its driver opened directly | ok | denied | denied | denied | denied |
+| microphone, half a second through WASAPI | sound | sound | sound | sound | sound |
+| speakers (a stream started) | ok | ok | ok | | |
+| GPU (a Direct3D 11 device) | ok | ok | ok | | |
+| printer (listed, opened) | ok | ok | ok | | |
+| Bluetooth (the radio, remembered devices) | ok | ok | none seen | none seen | none seen |
+| HID (interfaces opened to read and write) | 10 of 14 | 10 of 14 | 0, all denied | 0 | 0 |
+| USB (device interfaces opened) | 3 of 3 | 3 of 3 | 0, all denied | 0 | 0 |
+| location (the report's status) | no provider | | | | |
+
+- **A capability has two SIDs, and only one opens the camera.** The one
+  Windows derives from the name `webcam` (`DeriveCapabilitySidsFromName`,
+  `S-1-15-3-1024-` and eight numbers) opens nothing. The one made from the
+  GUID of the camera's device class does: `S-1-15-3-` and the GUID's sixteen
+  bytes as four numbers, so `{E5323777-F976-4F5B-9B55-B94699C46E44}` is
+  `S-1-15-3-3845273463-1331427702-1186551195-1148109977`. Windows registers
+  that class for the capability
+  (`HKLM\...\CapabilityAccessManager\Capabilities\webcam`,
+  `LegacyInterfaceClassGuid`). A container holding it needs no package and
+  gets no consent prompt.
+- **Only through Media Foundation.** Its camera service answers a container
+  with the capability. The camera's driver, which DirectShow's programs open
+  themselves, stays denied whatever the container holds.
+- **At low integrity the camera opens for no program**, by either way. So the
+  default sandbox has no camera, and nothing of zigsaw's gives it one.
+- **The microphone isn't gated at all** for a program without a package: a
+  container that holds nothing reads real sound. Windows seems to count such
+  a program among desktop apps, whose one switch is for all of them.
+- **Speakers, the GPU and printers aren't gated either.**
+- **USB, HID and Bluetooth devices can't be opened from a container**, with
+  the capability by name (`usb`, `humanInterfaceDevice`, `bluetooth`) or by
+  the class of the interfaces opened. Their access lists name no container,
+  and changing them takes an administrator. Windows' own apps reach such
+  devices through a broker that checks a package.
+- **So one device has a name: `camera`.** It's the only row where the
+  container without the capability is refused and the one with it gets
+  through.
+
+Not seen here: a serial port, a smart card reader and a location provider
+(none on the machine), a second camera, and any of it on Windows 10 or Server.
+CI runners have no camera; the suite's rows there read the run's token.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

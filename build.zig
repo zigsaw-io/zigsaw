@@ -141,6 +141,26 @@ pub fn build(b: *std.Build) void {
     const netprobe = b.addExecutable(.{ .name = "zigsaw-netprobe", .root_module = netprobe_mod });
     const netprobe_step = b.step("netprobe", "Build the network probe used by tests/network.sh");
     netprobe_step.dependOn(&b.addInstallArtifact(netprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
+    // What Windows lets a program reach of this machine's devices under each
+    // sandbox, and the test app of tests/devices.sh. Its checks are C, for
+    // Windows' own headers. Also installed under zig-out\test.
+    const devprobe_mod = b.createModule(.{
+        .root_source_file = b.path("tests/devprobe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    devprobe_mod.addImport("win32", b.createModule(.{
+        .root_source_file = b.path("src/win32.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    devprobe_mod.addCSourceFile(.{ .file = b.path("tests/devprobe/checks.c"), .flags = &.{} });
+    for ([_][]const u8{ "mf", "mfplat", "mfreadwrite", "ole32", "bthprops", "d3d11", "winscard", "cfgmgr32", "winspool" }) |lib|
+        devprobe_mod.linkSystemLibrary(lib, .{});
+    const devprobe = b.addExecutable(.{ .name = "zigsaw-devprobe", .root_module = devprobe_mod });
+    const devprobe_step = b.step("devprobe", "Build the device probe used by tests/devices.sh");
+    devprobe_step.dependOn(&b.addInstallArtifact(devprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
     const acprobe_step = b.step("acprobe", "Build the AppContainer probe used by tests/matrix.sh");
     acprobe_step.dependOn(&b.addInstallArtifact(acprobe, .{ .dest_dir = .{ .override = .{ .custom = "test" } } }).step);
 

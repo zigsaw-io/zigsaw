@@ -185,6 +185,32 @@ it starts, and goes ahead: a program's own switch may get it past that, as
 shows it. Through a GUI shim, which has no console, the warning reaches the
 message box of a run that fails. An image can't say it of the sandbox it asks for.
 
+### Devices
+
+An app that uses the camera lists it ([devices](../README.md#devices)):
+
+```json
+"permissions": { "sandbox": "appcontainer", "devices": ["camera"] }
+```
+
+- `camera` is the only device there is: the only one Windows keeps from an
+  AppContainer and lets one with its capability open
+  ([findings](findings.md#devices-iteration-95)). A recipe naming another is
+  refused. A pulled image that names one a later zigsaw knows runs without
+  it, with a note.
+- Under `appcontainer`, the app's runs hold the camera's capability, and a
+  run without the device gets no camera. The camera then opens through Media
+  Foundation only: a program that goes to the camera's driver itself, as
+  DirectShow's do, gets nothing in a container.
+- At low integrity Windows opens the camera for no program, so an app that
+  needs it asks for `appcontainer`, as above, or for `soft`. Under `low` its
+  runs get a note.
+- The microphone needs no device, and has none: it opens in every sandbox.
+- The install question says "your camera"; an update that adds it asks first.
+- Without it, the image's config has no `devices`, so images keep their
+  digests. A zigsaw before 0.95 ignores it, and gives an AppContainer run no
+  camera.
+
 ### Commands and your own programs
 
 ```json

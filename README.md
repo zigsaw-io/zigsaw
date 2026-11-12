@@ -821,6 +821,8 @@ to finish.
 | `--share=network` / `--unshare=network` | Override the app's network permission. With the network, a run gets your `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` |
 | `--allow-host=<host>[:<port>]` | Let a run without the network reach this host, through zigsaw's proxy ([allow lists](#allow-lists)): a name, `*.<domain>`, an IPv4 address or an `[IPv6]` one; without a port, 443 and 80 |
 | `--noallow-host=<host>[:<port>]` | Take away a host that the app's list or an override allows |
+| `--device=camera` | Let the run use the camera ([devices](#devices)); under `appcontainer`, a run without it gets none |
+| `--nodevice=camera` | Take away a device that the app's permissions or an override give |
 | `--share=commands` / `--unshare=commands` | Put [your zigsaw apps' commands](#your-apps-commands-and-your-own-programs) on the run's PATH, or not (`soft` sandbox only) |
 | `--share=host` / `--unshare=host` | Put [`zigsaw-host`](#your-apps-commands-and-your-own-programs) on the run's PATH, or not (not in an AppContainer) |
 | `--port=<name>=<port>` | Serve one of the app's [services](#services) on another port, or reach a port it [uses](#reaching-this-machine) on another |
@@ -1211,6 +1213,37 @@ zigsaw run --sandbox=appcontainer org.example.App                          # enf
 
 How it works, and what Windows lets it do: [networking.md](docs/networking.md#allow-lists).
 
+### Devices
+
+An app that uses the camera says so in its recipe (`"permissions": { "devices":
+["camera"] }`), or you do. Installing it tells you ("permits your camera"), and an
+update that adds the camera asks first.
+
+```
+zigsaw run --sandbox=appcontainer org.example.Meet                 # the app's own devices, enforced
+zigsaw run --sandbox=appcontainer --device=camera org.example.App  # the camera, this run
+zigsaw override --nodevice=camera org.example.Meet                 # never, for this app
+```
+
+What a run gets depends on its sandbox, because Windows decides, not zigsaw:
+
+| | `soft` | `low` (the default) | `appcontainer` |
+|---|---|---|---|
+| The camera | opens | never opens | opens only with the `camera` device, and only through Media Foundation |
+| The microphone, speakers, GPU, printers | open | open | open, with or without a device |
+| USB, HID and Bluetooth devices | open | open | never open |
+
+- **Only `--sandbox=appcontainer` enforces the list**, and only the camera is on it:
+  it's the one device Windows keeps from a container and gives back with a capability.
+  An app that needs the camera asks for that sandbox in its recipe.
+- **At low integrity Windows opens the camera for no program**, so a run with the camera
+  under `low` gets a note. Under `soft`, a note says a list you changed isn't enforced.
+- **No sandbox of zigsaw's keeps an app from the microphone.** Windows' own switch for
+  desktop apps (Settings, Privacy & security, Microphone) is the one that does, for
+  all of them at once.
+
+What was tried, device by device: [findings.md](docs/findings.md#devices-iteration-95).
+
 ### Limits
 
 A run, and each command of a build, can be held to an amount of memory and a number
@@ -1522,6 +1555,7 @@ bash tests/sandbox.sh   # which sandbox a run gets (low by default, the image's,
 bash tests/network.sh   # an app's service reached from the host in each sandbox, on its port, one --port or an override moves it to, and not after the run; in an AppContainer, an internal port the app's runs agree on and reach each other on without the network, and a port another program holds; an AppContainer run with the network exempt from loopback isolation while it goes (not without the network, nor with ZIGSAW_LOOPBACK_EXEMPTION=0), a killed run's exemption taken back by repair, one you made kept; a port the app uses reached directly, or through zigsaw's forward when not exempt, and --port moving it; proxy variables passed to runs with the network; eight first AppContainer runs at once; the probe's report of what Windows lets AppContainers do on the loopback and over AF_UNIX (tests/netprobe.zig)
 bash tests/reach.sh     # what a run may reach of the rest of the machine: the store's commands on its PATH, each running as its own app; zigsaw-host, your real environment with the run's rights; an image saying it can't run under a sandbox; URL schemes and Default apps in a scratch key, and one private scheme followed through Windows, which rm removes (30 s; opens a console for a moment)
 bash tests/limits.sh    # --memory and --cpus on runs, in each sandbox, saved as overrides, through a shim, and on builds; what zigsaw says when a limit is reached
+bash tests/devices.sh   # an app's devices: the camera's capability in an AppContainer run's token and no other, --device and --nodevice, overrides, a relay that holds none, the notes under low and soft; with DEVICES_REAL=1 a frame from a real camera in each sandbox (its light comes on); the probe's report of what each sandbox reaches of this machine's devices (tests/devprobe.zig)
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)
 bash tests/store.sh     # update, prune, and what they keep while apps run, and for rollback
 bash tests/upstream.sh  # scripts/check-upstream.sh with made-up recipes, pages, repositories and OSV answers, and that scripts/upstream.txt covers every recipe's sources (no network; runs on Linux too)

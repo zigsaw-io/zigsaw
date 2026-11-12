@@ -239,6 +239,10 @@ pub fn parse(arena: std.mem.Allocator, file_name: []const u8, bytes: []const u8)
     // The same checks an image pulled from a registry gets, apart from those
     // that need the runtimes resolved.
     try oci.validateEntryPoints(file_name, try r.appConfig(arena, .{}, .{}), r.runtimes.map.keys());
+    // A pulled image may name a device a later zigsaw knows; a recipe built
+    // here can only mean one this zigsaw does, or a mistake.
+    if (r.permissions.devices) |list| for (list) |d| if (oci.Device.parse(d) == null)
+        return fail("{s}: device \"{s}\" isn't one zigsaw knows; only {s} is", .{ file_name, d, oci.Device.list });
     try validateModules(file_name, r.modules);
     for (r.cleanup) |pattern| if (!isValidCleanupPattern(pattern))
         return fail("{s}: cleanup pattern \"{s}\" must be \"/<path>\" inside the app, or a file name pattern without '/' or '\\'", .{ file_name, pattern });

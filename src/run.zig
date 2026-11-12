@@ -99,6 +99,24 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .list => |l| l,
         else => null,
     };
+    // The devices: an AppContainer run holds Windows' capability for each,
+    // and for no other (see oci.Device).
+    var devices: std.ArrayList(oci.Device) = .empty;
+    for (try override.devicesOf(arena, settings, cfg.permissions)) |name| {
+        if (oci.Device.parse(name)) |d|
+            try devices.append(arena, d)
+        else
+            note("note: {s} asks for the device \"{s}\", which this zigsaw doesn't know: the run goes without it", .{ cfg.id, name });
+    }
+    switch (sandbox) {
+        .appcontainer => {},
+        // Neither through Media Foundation nor from its driver
+        // (tests/devprobe.zig): no option of zigsaw's changes that.
+        .low => if (std.mem.indexOfScalar(oci.Device, devices.items, .camera) != null)
+            note("note: {s} gets no camera under the low sandbox: Windows opens it for no program at low integrity; --sandbox=appcontainer lets the app use it", .{cfg.id}),
+        .soft => if (settings.devices.len > 0 or settings.nodevices.len > 0)
+            note("note: {s}'s devices aren't enforced under the soft sandbox, where a program opens whatever you can; --sandbox=appcontainer enforces them", .{cfg.id}),
+    }
     var host_grants: std.ArrayList(HostGrant) = .empty;
     var folder_grants: std.ArrayList(folders.Grant) = .empty;
     var cwd_granted = false;
@@ -340,6 +358,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
             .host_cwd = host_cwd,
             .grants = host_grants.items,
             .network = network,
+            .devices = devices.items,
             .own = own,
         }),
     }
@@ -666,6 +685,8 @@ const AppContainerSetup = struct {
     host_cwd: []const u8,
     grants: []const HostGrant,
     network: bool,
+    /// The devices the run may use: it holds the capability of each.
+    devices: []const oci.Device,
     own: grants.Own,
 };
 
@@ -733,6 +754,12 @@ fn setUpAppContainer(ctx: *Context, id: []const u8, setup: AppContainerSetup) !w
         for ([_][]const u8{ appcontainer.capability.internet_client, appcontainer.capability.private_network_client_server }) |s| {
             try caps.append(arena, .{ .Sid = try appcontainer.sidFromString(arena, s), .Attributes = win32.SE_GROUP_ENABLED });
         }
+    }
+    // After the app's own, which is all the relay keeps (see startRelay).
+    for (setup.devices) |d| {
+        const sid = appcontainer.deviceCapability(d);
+        try caps.append(arena, .{ .Sid = try appcontainer.sidFromString(arena, sid), .Attributes = win32.SE_GROUP_ENABLED });
+        if (ctx.verbose) note("device {t}: the run holds {s}", .{ d, sid });
     }
     return .{
         .AppContainerSid = profile.sid,

@@ -239,7 +239,10 @@ identity (`zigsaw.<id>`). It can then read and write only its data directory,
 read its own files and its runtimes', and use the host paths and network it
 was granted.
 Grants are ACL entries for a capability of the app's own, which only its runs
-hold; those on host paths go as [grants do](#how-long-grants-last). (An entry for the
+hold; those on host paths go as [grants do](#how-long-grants-last). A run with the
+camera device also holds Windows' capability for it, as the SID of the camera's
+device class, which is what lets Media Foundation's camera service answer it
+([findings](findings.md#devices-iteration-95)); the run's relay doesn't. (An entry for the
 AppContainer's own SID, as zigsaw made before, would keep low-integrity
 programs out of the files: see [findings](findings.md).)
 Windows gives an AppContainer a temporary directory of its own, under

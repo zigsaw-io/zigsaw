@@ -14,6 +14,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const win32 = @import("win32.zig");
 const Context = @import("Context.zig");
+const oci = @import("oci.zig");
 const fail = Context.fail;
 
 pub const Profile = struct {
@@ -194,6 +195,19 @@ pub const capability = struct {
     pub const internet_client = "S-1-15-3-1";
     pub const private_network_client_server = "S-1-15-3-3";
 };
+
+/// The capability that lets a container use a device, as a string SID. It's
+/// the one made from the GUID of the device's interface class: S-1-15-3- and
+/// the GUID's sixteen bytes as four numbers. That is the one Windows checks:
+/// the SID it derives from the capability's name ("webcam") opens nothing
+/// (tests/devprobe.zig, docs/findings.md).
+pub fn deviceCapability(device: oci.Device) []const u8 {
+    return switch (device) {
+        // KSCATEGORY_VIDEO_CAMERA, {E5323777-F976-4F5B-9B55-B94699C46E44},
+        // which Windows registers as the class of its `webcam` capability.
+        .camera => "S-1-15-3-3845273463-1331427702-1186551195-1148109977",
+    };
+}
 
 /// Converts a string SID. The result is left to be freed at process exit.
 pub fn sidFromString(arena: Allocator, s: []const u8) !win32.PSID {
