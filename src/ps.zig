@@ -42,6 +42,9 @@ pub const Record = struct {
     started: i64,
     /// Its job's name; null if it has none, as between a build's commands.
     job: ?[]const u8 = null,
+    /// The name of the event `zigsaw stop` sets to ask it to end (see
+    /// stop.zig); null if it can't be asked.
+    stop: ?[]const u8 = null,
     /// Runs only: soft, low or appcontainer, and all, none or list.
     sandbox: ?[]const u8 = null,
     network: ?[]const u8 = null,
@@ -78,10 +81,28 @@ pub const Entry = struct {
     /// Deletes the record, then lets go of its lock.
     pub fn end(e: *const Entry, io: Io) void {
         Io.Dir.cwd().deleteFile(io, e.path) catch {};
+        deleteStopping(io, e.lock_path);
         e.lock.release(io);
         Io.Dir.cwd().deleteFile(io, e.lock_path) catch {};
     }
 };
+
+/// running\<pid>.stopping, next to a record's lock: the PID of the `zigsaw
+/// stop` that asked it to end (see stop.zig).
+pub fn stoppingPath(arena: Allocator, lock_path: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}.stopping", .{lock_path[0 .. lock_path.len - ".lock".len]});
+}
+
+fn deleteStopping(io: Io, lock_path: []const u8) void {
+    var buf: [Io.Dir.max_path_bytes]u8 = undefined;
+    const path = std.fmt.bufPrint(&buf, "{s}.stopping", .{lock_path[0 .. lock_path.len - ".lock".len]}) catch return;
+    Io.Dir.cwd().deleteFile(io, path) catch {};
+}
+
+/// running\<pid>.lock, for a run's PID.
+pub fn lockPath(store: Store, arena: Allocator, pid: u32) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}\\{d}.lock", .{ try store.path(arena, &.{"running"}), pid });
+}
 
 /// A name for a job of this zigsaw's (see process.newJob): random, so that
 /// nobody can have taken it beforehand.
@@ -152,6 +173,7 @@ pub fn live(store: Store, arena: Allocator) ![]const Record {
         // Taken: its zigsaw is gone, however it ended.
         if (try Store.tryLock(io, lock_path, .exclusive)) |l| {
             Io.Dir.cwd().deleteFile(io, json_path) catch {};
+            deleteStopping(io, lock_path);
             l.release(io);
             Io.Dir.cwd().deleteFile(io, lock_path) catch {};
             continue;
@@ -188,8 +210,18 @@ pub fn viewJob(arena: Allocator, name: []const u8) !?JobView {
     if (win32.QueryInformationJobObject(handle, win32.JobObjectBasicAccountingInformation, &accounting, @sizeOf(@TypeOf(accounting)), null) == 0) return null;
     var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
     const peak: u64 = if (win32.QueryInformationJobObject(handle, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits)), null) != 0) limits.PeakJobMemoryUsed else 0;
+    return .{
+        .pids = try jobPids(arena, handle, accounting.ActiveProcesses) orelse return null,
+        .cpu = @intCast(accounting.TotalUserTime + accounting.TotalKernelTime),
+        .peak = peak,
+    };
+}
+
+/// The PIDs of a job's processes; null if Windows won't say. `expect` is
+/// about how many there are.
+pub fn jobPids(arena: Allocator, handle: win32.HANDLE, expect: u32) !?[]const u32 {
     // Processes come and go between asking how many and asking which.
-    var room: usize = @max(accounting.ActiveProcesses, 1) + 8;
+    var room: usize = @as(usize, @max(expect, 1)) + 8;
     const Head = win32.JOBOBJECT_BASIC_PROCESS_ID_LIST;
     while (true) : (room *= 2) {
         const size = @sizeOf(Head) + room * @sizeOf(usize);
@@ -204,11 +236,7 @@ pub fn viewJob(arena: Allocator, name: []const u8) !?JobView {
         const ids: [*]const usize = @ptrCast(@alignCast(buf.ptr + @sizeOf(Head)));
         const pids = try arena.alloc(u32, head.NumberOfProcessIdsInList);
         for (pids, ids[0..pids.len]) |*p, id| p.* = @intCast(id);
-        return .{
-            .pids = pids,
-            .cpu = @intCast(accounting.TotalUserTime + accounting.TotalKernelTime),
-            .peak = peak,
-        };
+        return pids;
     }
 }
 
@@ -298,20 +326,25 @@ pub const Options = struct {
 };
 
 /// A record with what `ps` found of it.
-const Seen = struct {
+pub const Seen = struct {
     record: Record,
     job: ?JobView,
     /// The run whose job it's in, if it's inside another.
     inside: ?u32 = null,
 };
 
-pub fn ps(ctx: *Context, opts: Options) !void {
-    const arena = ctx.arena;
-    const records = try live(ctx.store, arena);
+/// The records, each with its job looked into, and which run each is
+/// inside, if any.
+pub fn nest(arena: Allocator, records: []const Record) ![]Seen {
     const seen = try arena.alloc(Seen, records.len);
     for (seen, records) |*s, r| s.* = .{ .record = r, .job = if (r.job) |name| try viewJob(arena, name) else null };
-    // Innermost first: a run is inside the run with the fewest processes
-    // whose job has its zigsaw.
+    nestSeen(seen);
+    return seen;
+}
+
+/// Innermost first: a run is inside the run with the fewest processes whose
+/// job has its zigsaw.
+fn nestSeen(seen: []Seen) void {
     for (seen) |*s| {
         var best: ?usize = null;
         for (seen, 0..) |o, i| {
@@ -322,6 +355,38 @@ pub fn ps(ctx: *Context, opts: Options) !void {
         }
         if (best) |i| s.inside = seen[i].record.pid;
     }
+}
+
+/// How many runs `pid` is inside, by `inside`; 0 for one inside none.
+pub fn depthOf(seen: []const Seen, pid: u32) usize {
+    var d: usize = 0;
+    var at = pid;
+    while (d < seen.len) : (d += 1) {
+        const s = for (seen) |s| {
+            if (s.record.pid == at) break s;
+        } else return d;
+        at = s.inside orelse return d;
+    }
+    return d;
+}
+
+/// Whether the run `pid` is `outer`, or inside it, however deep.
+pub fn within(seen: []const Seen, pid: u32, outer: u32) bool {
+    var at = pid;
+    var steps: usize = 0;
+    while (steps <= seen.len) : (steps += 1) {
+        if (at == outer) return true;
+        const s = for (seen) |s| {
+            if (s.record.pid == at) break s;
+        } else return false;
+        at = s.inside orelse return false;
+    }
+    return false;
+}
+
+pub fn ps(ctx: *Context, opts: Options) !void {
+    const arena = ctx.arena;
+    const seen = try nest(arena, try live(ctx.store, arena));
 
     var shown: std.ArrayList(*const Seen) = .empty;
     for (seen) |*s| if (matches(s.record, opts.filters)) try shown.append(arena, s);
@@ -658,6 +723,30 @@ test treeOrder {
         try testing.expectEqual(w[1], row.depth);
         try testing.expectEqual(w[2], row.run);
     }
+}
+
+test "nesting: depthOf and within" {
+    // 3 is inside 2, which is inside 1; 4 is inside none.
+    const seen = [_]Seen{
+        .{ .record = .{ .id = "a", .pid = 1, .started = 0 }, .job = null },
+        .{ .record = .{ .id = "b", .pid = 2, .started = 0 }, .job = null, .inside = 1 },
+        .{ .record = .{ .id = "c", .pid = 3, .started = 0 }, .job = null, .inside = 2 },
+        .{ .record = .{ .id = "d", .pid = 4, .started = 0 }, .job = null },
+    };
+    try testing.expectEqual(0, depthOf(&seen, 1));
+    try testing.expectEqual(2, depthOf(&seen, 3));
+    try testing.expectEqual(0, depthOf(&seen, 4));
+    try testing.expect(within(&seen, 3, 1));
+    try testing.expect(within(&seen, 3, 3));
+    try testing.expect(!within(&seen, 1, 3));
+    try testing.expect(!within(&seen, 4, 1));
+    // A loop, which no real nesting makes, still ends.
+    const loop = [_]Seen{
+        .{ .record = .{ .id = "x", .pid = 5, .started = 0 }, .job = null, .inside = 6 },
+        .{ .record = .{ .id = "y", .pid = 6, .started = 0 }, .job = null, .inside = 5 },
+    };
+    try testing.expect(!within(&loop, 5, 7));
+    _ = depthOf(&loop, 5);
 }
 
 test "a PID given again isn't a parent" {

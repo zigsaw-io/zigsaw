@@ -258,6 +258,17 @@ pub const Report = struct {
     peak_memory: u64 = 0,
     /// The limit its processes asked for memory past, if they did.
     memory_limit_reached: ?u64 = null,
+    /// Whether `zigsaw stop` asked it to end (see `Child.stop`).
+    stopped: bool = false,
+};
+
+/// What `zigsaw stop` signals a run or a build's command by, and what asks
+/// its tree to end then (stop.zig's `Asker`): passed in, so that the shims,
+/// which wait here too, don't carry it.
+pub const Stop = struct {
+    event: win32.HANDLE,
+    context: *anyopaque,
+    ask: *const fn (context: *anyopaque, job: win32.HANDLE) void,
 };
 
 /// A process `start` started, in its job object.
@@ -268,10 +279,12 @@ pub const Child = struct {
     port: ?win32.HANDLE = null,
     memory_limit: ?u64 = null,
     job_name: ?[]const u8 = null,
+    stop: ?Stop = null,
 
     pub fn in(job: Job, process: win32.HANDLE) Child {
         return .{ .job = job.handle, .process = process, .port = job.port, .memory_limit = job.memory_limit, .job_name = job.name };
     }
+
 
     /// Waits for the process to exit, ends what's left of its tree, and
     /// returns its exit code.
@@ -287,17 +300,31 @@ pub const Child = struct {
             _ = win32.CloseHandle(p);
         };
         var told = false;
-        if (child.port) |port| {
+        var stopped = false;
+        // The process, and until it's been heard once, the stop event.
+        var handles = [2]win32.HANDLE{ child.process, undefined };
+        var count: win32.DWORD = 1;
+        if (child.stop) |s| {
+            handles[1] = s.event;
+            count = 2;
+        }
+        // Only the first signal asks; the event stays set.
+        while (true) {
             // The job also tells its port of every process that starts and
             // ends, which a long build has many of: taken off as they come.
-            while (true) {
-                const waited = win32.WaitForSingleObject(child.process, 250);
+            const waited = win32.WaitForMultipleObjects(count, &handles, win32.FALSE, if (child.port != null) 250 else win32.INFINITE);
+            if (child.port) |port| {
                 if (drain(port)) told = true;
-                if (waited == win32.WAIT_OBJECT_0) break;
-                if (waited != win32.WAIT_TIMEOUT) return win32.lastErrorFail("WaitForSingleObject");
             }
-        } else if (win32.WaitForSingleObject(child.process, win32.INFINITE) != win32.WAIT_OBJECT_0)
-            return win32.lastErrorFail("WaitForSingleObject");
+            if (waited == win32.WAIT_OBJECT_0) break;
+            if (waited == win32.WAIT_OBJECT_0 + 1) {
+                child.stop.?.ask(child.stop.?.context, child.job);
+                stopped = true;
+                count = 1;
+                continue;
+            }
+            if (waited != win32.WAIT_TIMEOUT) return win32.lastErrorFail("WaitForMultipleObjects");
+        }
         var code: win32.DWORD = 0;
         if (win32.GetExitCodeProcess(child.process, &code) == 0)
             return win32.lastErrorFail("GetExitCodeProcess");
@@ -305,7 +332,7 @@ pub const Child = struct {
         if (child.port) |port| {
             if (drain(port)) told = true;
         }
-        var report: Report = .{ .code = code };
+        var report: Report = .{ .code = code, .stopped = stopped };
         var info: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
         if (win32.QueryInformationJobObject(child.job, win32.JobObjectExtendedLimitInformation, &info, @sizeOf(@TypeOf(info)), null) != 0)
             report.peak_memory = info.PeakJobMemoryUsed;
@@ -737,7 +764,7 @@ fn endJob(job: win32.HANDLE) void {
     }
 }
 
-fn ignoreCtrlC(event: win32.DWORD) callconv(.winapi) win32.BOOL {
+pub fn ignoreCtrlC(event: win32.DWORD) callconv(.winapi) win32.BOOL {
     return if (event == win32.CTRL_C_EVENT or event == win32.CTRL_BREAK_EVENT) win32.TRUE else win32.FALSE;
 }
 

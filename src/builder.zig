@@ -48,6 +48,7 @@ const msvc_host = @import("msvc.zig");
 const oci = @import("oci.zig");
 const process = @import("process.zig");
 const ps = @import("ps.zig");
+const stop = @import("stop.zig");
 const override = @import("override.zig");
 const project = @import("project.zig");
 const recipe = @import("recipe.zig");
@@ -81,6 +82,8 @@ pub const Options = struct {
     /// What `zigsaw ps` lists of the build, which says each command as it
     /// starts; `build` keeps it.
     listed: ?*ps.Entry = null,
+    /// What `zigsaw stop` sets to ask the build to end (see stop.zig).
+    asker: ?*stop.Asker = null,
 };
 
 /// The fixed time builds see as SOURCE_DATE_EPOCH: 1980-01-01, the earliest
@@ -117,16 +120,19 @@ pub fn build(ctx: *Context, recipe_path: []const u8, opts: Options) !install.Ima
     };
     const start = ctx.now();
     var resumed = false;
+    const asker = stop.Asker.create(ctx, try std.fmt.allocPrint(arena, "the build of {s}", .{r.id}));
     var listed = ps.begin(ctx, .{
         .kind = .build,
         .id = r.id,
         .version = r.version,
         .pid = win32.GetCurrentProcessId(),
         .started = ps.now(),
+        .stop = if (asker) |a| a.name else null,
     });
     defer if (listed) |*l| l.end(io);
     var with_listed = opts;
     with_listed.listed = if (listed) |*l| l else null;
+    with_listed.asker = asker;
     const image = try buildImage(ctx, r, recipe_path, source, &projects, with_listed, &resumed);
     if (r.hasBuildCommands()) note("built {s} {s} in {f}", .{ r.id, r.version, ctx.since(start) });
     if (inputs) |*h| try ctx.store.writeBuildCache(arena, h, image.manifest_digest, resumed);
@@ -243,6 +249,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         root = try .init(ctx, r, tools.list.items, from_last);
         root.?.limits = opts.limits;
         root.?.listed = opts.listed;
+        root.?.asker = opts.asker;
         if (root.?.msvc) |tc| {
             try build_info.host.map.put(arena, "msvc", tc.tools_version);
             try build_info.host.map.put(arena, "windows-sdk", tc.sdk_version);
@@ -517,6 +524,8 @@ const BuildRoot = struct {
     limits: process.Limits = .{},
     /// See `Options.listed`.
     listed: ?*ps.Entry = null,
+    /// See `Options.asker`.
+    asker: ?*stop.Asker = null,
 
     const letter = drive.letter;
 
@@ -889,11 +898,12 @@ const BuildRoot = struct {
         const label = if (step == .vendor) " vendor" else "";
         for (commands, 1..) |command, n| {
             if (n <= how.from) continue;
+            if (b.asker) |a| if (a.isSet()) return fail("module {s}: stopped by `zigsaw stop` before {t} command {d}", .{ m.name, step, n });
             note("[{s}{s} {d}/{d}] {s}", .{ m.name, label, n, commands.len, command });
             const start = ctx.now();
             // Named, so that `zigsaw ps` may look into it.
             const job_name = if (b.listed != null) try ps.jobName(ctx.io, arena) else null;
-            const child = try process.start(arena, .{
+            var child = try process.start(arena, .{
                 .exe = shell.exe,
                 .command_line = try shell.commandLine(arena, command),
                 .env_block = block,
@@ -901,6 +911,7 @@ const BuildRoot = struct {
                 .limits = b.limits,
                 .job_name = job_name,
             });
+            if (b.asker) |a| child.stop = a.stop();
             if (b.listed) |l| {
                 l.record.module = m.name;
                 l.record.step = @tagName(step);
@@ -926,6 +937,8 @@ const BuildRoot = struct {
             // paging file is too small, and may go on and fail later, or not.
             if (report.memory_limit_reached) |bytes|
                 note("[{s}{s} {d}/{d}] reached the build's memory limit of {f} (--memory), and was refused more", .{ m.name, label, n, commands.len, override.Size{ .bytes = bytes } });
+            // What the kept build root keeps, the next build goes on from.
+            if (code != 0 and report.stopped) return fail("module {s}: stopped by `zigsaw stop` during {t} command {d}:\n  {s}", .{ m.name, step, n, command });
             if (code != 0) switch (on_failure) {
                 .fail => {
                     if (how.continued) note("module {s} went on from what its last build left; if that's what's wrong, `zigsaw build --clean={s}` starts it afresh", .{ m.name, m.name });

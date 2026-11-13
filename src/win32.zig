@@ -352,6 +352,26 @@ pub const JOBOBJECT_BASIC_PROCESS_ID_LIST = extern struct {
 };
 pub extern "kernel32" fn OpenJobObjectW(access: DWORD, inherit: BOOL, name: LPCWSTR) callconv(.winapi) ?HANDLE;
 
+// ---------------------------------------------------------------------------
+// Asking a run to end, and ending it, for `zigsaw stop` and `zigsaw kill`
+
+pub const JOB_OBJECT_TERMINATE: DWORD = 0x0008;
+pub const WAIT_FAILED: DWORD = 0xFFFFFFFF;
+pub extern "kernel32" fn ResetEvent(event: HANDLE) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetConsoleProcessList(list: [*]DWORD, count: DWORD) callconv(.winapi) DWORD;
+pub extern "kernel32" fn GenerateConsoleCtrlEvent(event: DWORD, group: DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn AttachConsole(pid: DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn FreeConsole() callconv(.winapi) BOOL;
+pub const HWND = *opaque {};
+pub const WM_CLOSE: c_uint = 0x0010;
+pub const GW_OWNER: c_uint = 4;
+pub extern "user32" fn EnumWindows(callback: *const fn (HWND, isize) callconv(.winapi) BOOL, param: isize) callconv(.winapi) BOOL;
+pub extern "user32" fn GetWindowThreadProcessId(window: HWND, pid: ?*DWORD) callconv(.winapi) DWORD;
+pub extern "user32" fn IsWindowVisible(window: HWND) callconv(.winapi) BOOL;
+pub extern "user32" fn GetWindow(window: HWND, cmd: c_uint) callconv(.winapi) ?HWND;
+pub extern "user32" fn GetClassNameW(window: HWND, name: [*]u16, size: c_int) callconv(.winapi) c_int;
+pub extern "user32" fn PostMessageW(window: HWND, message: c_uint, wparam: usize, lparam: isize) callconv(.winapi) BOOL;
+
 pub const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x1000;
 pub const TH32CS_SNAPPROCESS: DWORD = 0x2;
 pub const PROCESSENTRY32W = extern struct {

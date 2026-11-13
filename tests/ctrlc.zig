@@ -40,6 +40,9 @@ pub fn main(init: std.process.Init) !void {
     if (args.len == 3 and std.mem.eql(u8, args[1], "break")) {
         win32.ExitProcess(sendBreak(try std.fmt.parseInt(DWORD, args[2], 10)));
     }
+    if (args.len == 3 and std.mem.eql(u8, args[1], "term")) {
+        win32.ExitProcess(try term(arena, args[2]));
+    }
     if (args.len != 4) {
         std.debug.print("usage: zigsaw-ctrlc <zigsaw.exe> <store> <work-dir>\n", .{});
         win32.ExitProcess(2);
@@ -371,6 +374,33 @@ fn childPid(after_ready: []const u8) ?DWORD {
 fn killIfRunning(process: HANDLE) void {
     if (win32.WaitForSingleObject(process, 0) != win32.WAIT_OBJECT_0) _ = TerminateProcess(process, 1);
     _ = win32.CloseHandle(process);
+}
+
+/// `term <command line>`: runs it in a pseudoconsole of its own, as a terminal
+/// does, for at most two minutes; then prints what it wrote, a line at a time,
+/// and exits with its exit code (124 if it was still running). For
+/// tests/stop.sh, which stops what runs there from outside.
+fn term(arena: Allocator, command_line: []const u8) !u32 {
+    _ = win32.SetConsoleCtrlHandler(null, win32.FALSE);
+    var console = try Console.start(arena, command_line);
+    var code = console.exitCode(120_000);
+    if (code == null) _ = TerminateProcess(console.process, 1);
+    console.deinit();
+    const output = console.text.get();
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < output.len) : (i += 1) {
+        const ch = output[i];
+        if (ch == 0x1b) {
+            i += 1;
+            while (i < output.len and !std.ascii.isAlphabetic(output[i]) and output[i] != 0x07) i += 1;
+            continue;
+        }
+        if (ch == '\n' or ch >= 0x20) try out.append(arena, ch);
+    }
+    std.debug.print("{s}\n", .{out.items});
+    if (code == null) code = 124;
+    return code.?;
 }
 
 /// The Ctrl+Break sender: attaches to the console of `pid` and sends the

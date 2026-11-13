@@ -21,6 +21,7 @@ const oci = @import("oci.zig");
 const override = @import("override.zig");
 const prune = @import("prune.zig");
 const ps = @import("ps.zig");
+const stop = @import("stop.zig");
 const remote = @import("remote.zig");
 const rollback = @import("rollback.zig");
 const snapshot = @import("snapshot.zig");
@@ -87,6 +88,12 @@ const usage =
     \\                                  process id: its sandbox, processes, memory, processor
     \\                                  time and command; --processes lists its processes
     \\                                  too, each under the one that started it
+    \\  stop [--time=<seconds>] <app-id>|<run>...
+    \\                                  ask runs and builds to end: their windows to close,
+    \\                                  and Ctrl+C if nothing else is on their console; what
+    \\                                  hasn't ended after 10 seconds, or --time, is killed
+    \\  kill <app-id>|<run>...          end runs and builds now; a run's zigsaw still cleans
+    \\                                  up after it, and a build goes on from there next time
     \\  override [options] <app-id>     save run options that every run of the app gets;
     \\                                  --show shows them, --reset removes them; also
     \\                                  --nosnapshot has updates keep no copy of its data
@@ -443,6 +450,21 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         opts.filters = filters.items;
         try ps.ps(ctx, opts);
         return 0;
+    }
+    if (std.mem.eql(u8, command, "stop") or std.mem.eql(u8, command, "kill")) {
+        var opts: stop.Options = .{ .kill = std.mem.eql(u8, command, "kill") };
+        var filters: std.ArrayList([]const u8) = .empty;
+        for (rest) |arg| {
+            if (!opts.kill and std.mem.startsWith(u8, arg, "--time=")) {
+                opts.seconds = std.fmt.parseInt(u32, arg["--time=".len..], 10) catch
+                    return fail("--time takes a number of seconds, not {s}", .{arg["--time=".len..]});
+            } else if (std.mem.startsWith(u8, arg, "-")) {
+                return usageError();
+            } else try filters.append(ctx.arena, arg);
+        }
+        if (filters.items.len == 0) return usageError();
+        opts.filters = filters.items;
+        return stop.stop(ctx, opts);
     }
     if (std.mem.eql(u8, command, "override")) {
         _ = try ctx.store.lock(ctx.arena, .shared);
@@ -1156,6 +1178,7 @@ test {
     _ = @import("builder.zig");
     _ = @import("checkpoint.zig");
     _ = @import("ps.zig");
+    _ = @import("stop.zig");
     _ = @import("catalog.zig");
     _ = @import("cloudfiles.zig");
     _ = @import("credentials.zig");

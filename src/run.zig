@@ -44,6 +44,7 @@ const override = @import("override.zig");
 const process = @import("process.zig");
 const proxy = @import("proxy.zig");
 const ps = @import("ps.zig");
+const stop = @import("stop.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
 const snapshot = @import("snapshot.zig");
@@ -388,8 +389,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const job = try process.newJob(arena, limits, try ps.jobName(io, arena));
     if (relay_exe) |r| startRelay(ctx, cfg.id, job.handle, r, published, forwards, security, token, env_block);
     const watcher = written.Watcher.start(arena, ctx.io, try watchedDirs(arena, sandbox, host_grants.items, host_cwd, data_dir, data_root, ctx.env.get("USERPROFILE"), own));
+    // What `zigsaw stop` sets to ask the app to end (see stop.zig).
+    const asker = stop.Asker.create(ctx, cfg.id);
     const started = ps.now();
-    const child: process.Child = .in(job, try process.startIn(arena, job.handle, .{
+    var child: process.Child = .in(job, try process.startIn(arena, job.handle, .{
         .exe = exe,
         .command_line = command_line,
         .env_block = env_block,
@@ -399,6 +402,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         // Set by a shim that a shortcut started (see shim.zig).
         .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
     }));
+    if (asker) |a| child.stop = a.stop();
     // What `zigsaw ps` lists, while the run goes.
     const listed = ps.begin(ctx, .{
         .id = cfg.id,
@@ -408,6 +412,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .app_pid = win32.GetProcessId(child.process),
         .started = started,
         .job = job.name,
+        .stop = if (asker) |a| a.name else null,
         .sandbox = @tagName(sandbox),
         .network = @tagName(network_of),
         .memory_limit = limits.memory,
