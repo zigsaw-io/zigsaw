@@ -11,6 +11,11 @@
 //! started from inside another, as a command of `--share=commands` is, is in
 //! the other's job too; `ps` lists its processes under it, and not twice.
 //!
+//! A `zigsaw exec` keeps a record too, of the command it started in a run
+//! (see exec.zig). Its zigsaw isn't in the run's job, so the record says
+//! which run it's in; its command is in both jobs, and `ps` lists it under
+//! the exec's line, not the run's.
+//!
 //! Nothing here holds the store lock: `ps` only reads, as `list` does. A
 //! zigsaw that can't write its record (one at low integrity, that a low
 //! run's shim started) goes on without; its processes are still in the job
@@ -25,7 +30,7 @@ const override = @import("override.zig");
 const win32 = @import("win32.zig");
 const note = Context.note;
 
-pub const Kind = enum { run, build };
+pub const Kind = enum { run, build, exec };
 
 /// What a run or a build says of itself in running\.
 pub const Record = struct {
@@ -36,8 +41,10 @@ pub const Record = struct {
     manifest: []const u8 = "",
     /// The zigsaw that runs it: the run's name in `ps`.
     pid: u32,
-    /// The app's first process, which the run waits for.
+    /// The app's first process, which the run waits for; an exec's command.
     app_pid: ?u32 = null,
+    /// Execs only: the run the command was started in, by its zigsaw's PID.
+    run: ?u32 = null,
     /// When it started, as a FILETIME.
     started: i64,
     /// Its job's name; null if it has none, as between a build's commands.
@@ -45,7 +52,7 @@ pub const Record = struct {
     /// The name of the event `zigsaw stop` sets to ask it to end (see
     /// stop.zig); null if it can't be asked.
     stop: ?[]const u8 = null,
-    /// Runs only: soft, low or appcontainer, and all, none or list.
+    /// Runs and execs only: soft, low or appcontainer, and all, none or list.
     sandbox: ?[]const u8 = null,
     network: ?[]const u8 = null,
     memory_limit: ?u64 = null,
@@ -81,7 +88,7 @@ pub const Entry = struct {
     /// Deletes the record, then lets go of its lock.
     pub fn end(e: *const Entry, io: Io) void {
         Io.Dir.cwd().deleteFile(io, e.path) catch {};
-        deleteStopping(io, e.lock_path);
+        deleteBeside(io, e.lock_path);
         e.lock.release(io);
         Io.Dir.cwd().deleteFile(io, e.lock_path) catch {};
     }
@@ -93,10 +100,19 @@ pub fn stoppingPath(arena: Allocator, lock_path: []const u8) ![]const u8 {
     return std.fmt.allocPrint(arena, "{s}.stopping", .{lock_path[0 .. lock_path.len - ".lock".len]});
 }
 
-fn deleteStopping(io: Io, lock_path: []const u8) void {
-    var buf: [Io.Dir.max_path_bytes]u8 = undefined;
-    const path = std.fmt.bufPrint(&buf, "{s}.stopping", .{lock_path[0 .. lock_path.len - ".lock".len]}) catch return;
-    Io.Dir.cwd().deleteFile(io, path) catch {};
+/// running\<pid>.spec, next to a run's lock: how it starts programs, for
+/// `zigsaw exec` (see exec.zig). Not .json, which `live` takes for records.
+pub fn specPath(arena: Allocator, lock_path: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}.spec", .{lock_path[0 .. lock_path.len - ".lock".len]});
+}
+
+/// What goes with a record: the stopper's PID, and a run's spec.
+fn deleteBeside(io: Io, lock_path: []const u8) void {
+    for ([_][]const u8{ "stopping", "spec" }) |ext| {
+        var buf: [Io.Dir.max_path_bytes]u8 = undefined;
+        const path = std.fmt.bufPrint(&buf, "{s}.{s}", .{ lock_path[0 .. lock_path.len - ".lock".len], ext }) catch return;
+        Io.Dir.cwd().deleteFile(io, path) catch {};
+    }
 }
 
 /// running\<pid>.lock, for a run's PID.
@@ -173,7 +189,7 @@ pub fn live(store: Store, arena: Allocator) ![]const Record {
         // Taken: its zigsaw is gone, however it ended.
         if (try Store.tryLock(io, lock_path, .exclusive)) |l| {
             Io.Dir.cwd().deleteFile(io, json_path) catch {};
-            deleteStopping(io, lock_path);
+            deleteBeside(io, lock_path);
             l.release(io);
             Io.Dir.cwd().deleteFile(io, lock_path) catch {};
             continue;
@@ -343,9 +359,16 @@ pub fn nest(arena: Allocator, records: []const Record) ![]Seen {
 }
 
 /// Innermost first: a run is inside the run with the fewest processes whose
-/// job has its zigsaw.
+/// job has its zigsaw. An exec is inside the run it says, if that's going.
 fn nestSeen(seen: []Seen) void {
     for (seen) |*s| {
+        if (s.record.kind == .exec) {
+            const run = s.record.run orelse continue;
+            for (seen) |o| if (o.record.pid == run and o.record.pid != s.record.pid) {
+                s.inside = run;
+            };
+            continue;
+        }
         var best: ?usize = null;
         for (seen, 0..) |o, i| {
             if (o.record.pid == s.record.pid) continue;
@@ -423,7 +446,7 @@ pub fn ps(ctx: *Context, opts: Options) !void {
             .{ memory_text, .right },
             .{ if (s.job) |j| try std.fmt.allocPrint(arena, "{f}", .{Cpu{ .t = j.cpu }}) else "-", .right },
             .{ try std.fmt.allocPrint(arena, "{f}", .{Age{ .t = time - r.started }}), .right },
-            .{ if (s.inside) |p| try std.fmt.allocPrint(arena, "{s}  (in run {d})", .{ command, p }) else command, .left },
+            .{ if (s.inside) |p| try std.fmt.allocPrint(arena, "{s}  ({s}in run {d})", .{ command, if (r.kind == .exec) "exec " else "", p }) else command, .left },
         };
     }
     var widths: [columns]usize = undefined;
@@ -484,7 +507,7 @@ pub fn matches(r: Record, filters: []const []const u8) bool {
 pub fn summary(arena: Allocator, r: Record) ![]const u8 {
     const max = 80;
     const text = switch (r.kind) {
-        .run => try shortCommand(arena, r.command),
+        .run, .exec => try shortCommand(arena, r.command),
         .build => if (r.module) |m| try std.fmt.allocPrint(arena, "[{s}{s} {d}/{d}] {s}", .{
             m,
             if (r.step != null and std.mem.eql(u8, r.step.?, "vendor")) " vendor" else "",
@@ -517,15 +540,20 @@ pub fn shortCommand(arena: Allocator, command_line: []const u8) ![]const u8 {
 }
 
 /// The run's processes as a tree, each under the one that started it. A
-/// run inside it shows as itself, its processes under its own line.
+/// run inside it shows as itself, its processes under its own line; an
+/// exec's, under the exec's.
 fn printTree(arena: Allocator, w: *Io.Writer, s: *const Seen, all: []const Seen, procs: []const Proc, time: i64) !void {
     if (s.job == null) {
         try w.print("        (its processes can't be looked into)\n", .{});
         return;
     }
-    // The processes of runs inside this one are theirs to show.
+    // The processes of runs inside this one are theirs to show. An exec's
+    // zigsaw isn't in the run's job, so isn't among `procs`: its processes
+    // are left out, and it's named after them.
     var theirs: std.AutoHashMapUnmanaged(u32, u32) = .empty;
-    for (all) |o| if (o.inside != null and o.inside.? == s.record.pid) {
+    var execs: std.ArrayList(*const Seen) = .empty;
+    for (all) |*o| if (o.inside != null and o.inside.? == s.record.pid) {
+        if (o.record.kind == .exec) try execs.append(arena, o);
         try theirs.put(arena, o.record.pid, o.record.pid);
         if (o.job) |j| for (j.pids) |pid| try theirs.put(arena, pid, o.record.pid);
     };
@@ -550,6 +578,8 @@ fn printTree(arena: Allocator, w: *Io.Writer, s: *const Seen, all: []const Seen,
         try w.splatByteAll(' ', row.depth * 2);
         try w.print("{s}\n", .{p.command_line orelse p.name});
     }
+    for (execs.items) |o|
+        try w.print("        {d:<7} {s:<7} {s:>10} {s:>8}  {s:>7}  -> exec {d} ({s})\n", .{ o.record.pid, "-", "", "", "", o.record.pid, try summary(arena, o.record) });
 }
 
 pub const Row = struct {

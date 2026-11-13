@@ -1379,6 +1379,40 @@ killed 21364 (net.frippery.busybox)
   The next `zigsaw build` goes on from where it stopped, as after any failure.
 - The run itself says, on its own console, that it was asked to stop, and how.
 
+### Running a command in a run
+
+`zigsaw exec` starts a command in a run that's going, as the run's own app goes: in its
+sandbox and job, with its variables and working directory. So it sees what the run sees:
+its data (an `--ephemeral` run's too), its volumes, the folders it was granted, its keys
+in HKCU, and the ports and hosts it reaches. `zigsaw run --command=...` would start another
+run instead, with data and options of its own.
+
+```
+> zigsaw exec org.postgresql.postgresql psql -c "select 1"
+> zigsaw exec --env=DEBUG=1 21364 busybox sh
+> zigsaw exec -d org.nodejs.node node scripts/warm-cache.js
+20480
+```
+
+- The run is named as `ps` names it: by the app's id, when one run of it is going, or by
+  the run's number.
+- The command is found as `--command` finds one: one of the app's exports, a program on
+  the run's PATH (the app's and its runtimes'), one in System32, or one of yours by its
+  absolute path, which the run's sandbox has to let it read. Everything after it is its
+  arguments.
+- It uses the terminal you typed `exec` in, and `exec` ends with its exit code. Ctrl+C
+  goes to it, as to a run.
+- `--env=NAME=VALUE` sets a variable for it, over the run's.
+- `--detach` (`-d`) starts it with no console and nothing on its input or output, prints
+  the number `ps` lists it by, and returns.
+- `ps` lists it as `(exec in run <n>)`, and `stop` and `kill` take it as they take a run,
+  leaving the run going. The run's numbers count it, as its limits hold it.
+- It ends when the run ends (`exec` says so, and ends with exit code 1), and when its
+  `zigsaw exec` ends.
+- A run writes down how it starts programs in the store's `running` folder, which `exec`
+  reads. Its variables are among that, so it's labelled so that nothing at low integrity,
+  such as a low run, can read it. A run that zigsaw 0.98 or older started can't be joined.
+
 ### Batch files
 
 An app's command, an export, or a `--command` can be a batch file (`.cmd` or

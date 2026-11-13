@@ -356,6 +356,9 @@ pub extern "kernel32" fn OpenJobObjectW(access: DWORD, inherit: BOOL, name: LPCW
 // Asking a run to end, and ending it, for `zigsaw stop` and `zigsaw kill`
 
 pub const JOB_OBJECT_TERMINATE: DWORD = 0x0008;
+/// For `zigsaw exec`, which starts a command in a run's job.
+pub const JOB_OBJECT_ASSIGN_PROCESS: DWORD = 0x0001;
+pub const CREATE_NEW_PROCESS_GROUP: DWORD = 0x00000200;
 pub const WAIT_FAILED: DWORD = 0xFFFFFFFF;
 pub extern "kernel32" fn ResetEvent(event: HANDLE) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GetConsoleProcessList(list: [*]DWORD, count: DWORD) callconv(.winapi) DWORD;
@@ -488,6 +491,9 @@ pub const TOKEN_MANDATORY_LABEL = extern struct {
 pub const LABEL_SECURITY_INFORMATION: DWORD = 0x00000010;
 pub const SYSTEM_MANDATORY_LABEL_ACE_TYPE: u8 = 0x11;
 pub const SYSTEM_MANDATORY_LABEL_NO_WRITE_UP: DWORD = 0x1;
+pub const SDDL_REVISION_1: DWORD = 1;
+pub const FILE_ATTRIBUTE_NORMAL: DWORD = 0x80;
+pub extern "advapi32" fn ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl: LPCWSTR, revision: DWORD, sd: *?*anyopaque, size: ?*DWORD) callconv(.winapi) BOOL;
 pub const OBJECT_INHERIT_ACE: u8 = 0x1;
 pub const CONTAINER_INHERIT_ACE: u8 = 0x2;
 pub const ACL_REVISION: DWORD = 2;

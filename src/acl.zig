@@ -208,6 +208,30 @@ pub fn labelProgram(arena: Allocator, path: []const u8, level: enum { low, mediu
     try writeLabel(arena, path, sacl);
 }
 
+/// Writes `bytes` to a new file at `path` labelled medium integrity with
+/// NO_READ_UP: a process below medium, such as a low run's, can then
+/// neither write it nor read it, though it reads what the user can
+/// otherwise. For what a run writes down for `zigsaw exec` (see exec.zig),
+/// its environment among it. Labelled as it's made, which takes no right to
+/// change its owner, as a label set afterwards does; renaming it keeps the
+/// label. Fails quietly, with an error and nothing printed.
+pub fn writeUnreadableBelowMedium(arena: Allocator, path: []const u8, bytes: []const u8) !void {
+    var sd: ?*anyopaque = null;
+    if (win32.ConvertStringSecurityDescriptorToSecurityDescriptorW(std.unicode.utf8ToUtf16LeStringLiteral("S:(ML;;NWNR;;;ME)"), win32.SDDL_REVISION_1, &sd, null) == 0)
+        return error.SecurityDescriptor;
+    defer _ = win32.LocalFree(sd);
+    var attributes: win32.SECURITY_ATTRIBUTES = .{ .lpSecurityDescriptor = sd };
+    const file = win32.CreateFileW(try win32.wide(arena, path), win32.GENERIC_WRITE, 0, &attributes, win32.CREATE_ALWAYS, win32.FILE_ATTRIBUTE_NORMAL, null);
+    if (file == win32.INVALID_HANDLE_VALUE) return error.CreateFile;
+    defer _ = win32.CloseHandle(file);
+    var rest = bytes;
+    while (rest.len > 0) {
+        var written: win32.DWORD = 0;
+        if (win32.WriteFile(file, rest.ptr, @intCast(@min(rest.len, 1 << 20)), &written, null) == 0 or written == 0) return error.WriteFile;
+        rest = rest[written..];
+    }
+}
+
 /// Whether zigsaw itself runs below medium integrity: a low run's shim
 /// started it, or Windows did, for a program file labelled low.
 pub fn belowMedium() !bool {

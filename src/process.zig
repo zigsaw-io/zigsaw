@@ -155,6 +155,10 @@ pub const SpawnSpec = struct {
     /// A name for the child's job, so `zigsaw ps` can look into it (see
     /// `newJob`).
     job_name: ?[]const u8 = null,
+    /// Jobs the child joins besides its own, each of which its own job then
+    /// nests in: a run's, for `zigsaw exec` (see exec.zig). Their limits
+    /// hold it too, and ending one ends it.
+    outer_jobs: []const win32.HANDLE = &.{},
 };
 
 /// A copy of zigsaw's token labelled low integrity, which a process can make
@@ -649,15 +653,47 @@ pub const Detached = struct {
 /// and out of our jobs if they let it. A low or AppContainer token, or a job
 /// that doesn't allow it, keeps it in.
 pub fn startDetached(arena: Allocator, exe: []const u8, command_line: []const u8, cwd: []const u8) !Detached {
+    return startDetachedWith(arena, exe, command_line, cwd, null);
+}
+
+/// As `startDetached`, with `stdio` as its stdin, stdout and stderr, and
+/// still no other handle of ours: for a zigsaw that tells us how its start
+/// went before it goes on alone (see exec.zig's `--detach`).
+pub fn startDetachedWith(arena: Allocator, exe: []const u8, command_line: []const u8, cwd: []const u8, stdio: ?[3]win32.HANDLE) !Detached {
     const exe_w = try win32.wide(arena, exe);
     const cwd_w = try win32.wide(arena, cwd);
+    var startup: win32.STARTUPINFOEXW = .{
+        .StartupInfo = .{ .cb = if (stdio != null) @sizeOf(win32.STARTUPINFOEXW) else @sizeOf(win32.STARTUPINFOW) },
+        .lpAttributeList = null,
+    };
+    var inherit: std.ArrayList(win32.HANDLE) = .empty;
+    if (stdio) |handles| {
+        for (handles) |h| {
+            if (win32.SetHandleInformation(h, win32.HANDLE_FLAG_INHERIT, win32.HANDLE_FLAG_INHERIT) == 0)
+                return win32.lastErrorFail("SetHandleInformation");
+            if (std.mem.indexOfScalar(win32.HANDLE, inherit.items, h) == null) try inherit.append(arena, h);
+        }
+        var attr_size: usize = 0;
+        _ = win32.InitializeProcThreadAttributeList(null, 1, 0, &attr_size);
+        const attrs = try arena.alignedAlloc(u8, .of(usize), attr_size);
+        if (win32.InitializeProcThreadAttributeList(attrs.ptr, 1, 0, &attr_size) == 0)
+            return win32.lastErrorFail("InitializeProcThreadAttributeList");
+        if (win32.UpdateProcThreadAttribute(attrs.ptr, 0, win32.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, @ptrCast(inherit.items.ptr), inherit.items.len * @sizeOf(win32.HANDLE), null, null) == 0)
+            return win32.lastErrorFail("UpdateProcThreadAttribute(HANDLE_LIST)");
+        startup.lpAttributeList = attrs.ptr;
+        startup.StartupInfo.dwFlags |= win32.STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = handles[0];
+        startup.StartupInfo.hStdOutput = handles[1];
+        startup.StartupInfo.hStdError = handles[2];
+    }
+    defer if (startup.lpAttributeList) |a| win32.DeleteProcThreadAttributeList(a);
     for ([_]bool{ true, false }) |breakaway| {
         const line = try win32.wide(arena, command_line);
-        var startup: win32.STARTUPINFOW = .{ .cb = @sizeOf(win32.STARTUPINFOW) };
         var info: win32.PROCESS_INFORMATION = undefined;
         const flags = win32.DETACHED_PROCESS | win32.CREATE_UNICODE_ENVIRONMENT |
+            (if (stdio != null) win32.EXTENDED_STARTUPINFO_PRESENT else 0) |
             (if (breakaway) win32.CREATE_BREAKAWAY_FROM_JOB else 0);
-        if (win32.CreateProcessW(exe_w, line, null, null, win32.FALSE, flags, null, cwd_w, &startup, &info) == 0) {
+        if (win32.CreateProcessW(exe_w, line, null, null, @intFromBool(stdio != null), flags, null, cwd_w, &startup.StartupInfo, &info) == 0) {
             if (breakaway and win32.GetLastError() == win32.ERROR_ACCESS_DENIED) continue;
             return win32.lastErrorFail("CreateProcessW");
         }
@@ -697,9 +733,11 @@ pub fn startIn(arena: Allocator, job: win32.HANDLE, spec: SpawnSpec) !win32.HAND
         return win32.lastErrorFail("InitializeProcThreadAttributeList");
     defer win32.DeleteProcThreadAttributeList(attrs.ptr);
 
-    // Assigning the job at creation means no child process can start outside it.
-    const jobs = [1]win32.HANDLE{job};
-    if (win32.UpdateProcThreadAttribute(attrs.ptr, 0, win32.PROC_THREAD_ATTRIBUTE_JOB_LIST, &jobs, @sizeOf(win32.HANDLE), null, null) == 0)
+    // Assigning the job at creation means no child process can start outside
+    // it. Outer jobs come first, so that the child's own, which has no
+    // process yet, nests in them.
+    const jobs = try std.mem.concat(arena, win32.HANDLE, &.{ spec.outer_jobs, &.{job} });
+    if (win32.UpdateProcThreadAttribute(attrs.ptr, 0, win32.PROC_THREAD_ATTRIBUTE_JOB_LIST, @ptrCast(jobs.ptr), jobs.len * @sizeOf(win32.HANDLE), null, null) == 0)
         return win32.lastErrorFail("UpdateProcThreadAttribute(JOB_LIST)");
     if (inherit_count > 0) {
         if (win32.UpdateProcThreadAttribute(attrs.ptr, 0, win32.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, @ptrCast(inherit.items.ptr), inherit_count * @sizeOf(win32.HANDLE), null, null) == 0)

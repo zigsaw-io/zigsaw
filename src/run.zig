@@ -32,6 +32,7 @@ const oci = @import("oci.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const environment = @import("environment.zig");
+const exec = @import("exec.zig");
 const exports = @import("exports.zig");
 const extensions = @import("extensions.zig");
 const folders = @import("folders.zig");
@@ -224,17 +225,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     for (ext_own, found.loaded) |*p, e| p.* = .{ .app = e.dir, .data = data_dir, .cache = cache_dir, .roots = roots_file, .uses = uses };
     for (ext_own, found.loaded) |p, e| try app_path.appendSlice(arena, try environment.pathDirs(arena, p, e.config.path));
     const command = try resolveCommand(io, arena, placeholders, cfg, opts.command, app_path.items, system_root);
-    const args = try std.mem.concat(arena, []const u8, &.{ command.args, opts.args, files });
-    // Batch files run through cmd.exe; System32's, not ComSpec's.
-    const exe = if (command.batch) try std.fmt.allocPrint(arena, "{s}\\System32\\cmd.exe", .{system_root}) else command.exe;
-    const command_line = if (command.batch)
-        process.buildBatchCommandLine(arena, exe, command.exe, args) catch |err| switch (err) {
-            error.InvalidBatchArgument => return fail("{s} is a batch file, and cmd.exe can't pass it an argument with a line break or a NUL character", .{command.exe}),
-            error.InvalidBatchScript => return fail("{s} can't be run as a batch file", .{command.exe}),
-            error.OutOfMemory => |e| return e,
-        }
-    else
-        try process.buildCommandLine(arena, exe, args);
+    const exe, const command_line = try commandLine(arena, command, try std.mem.concat(arena, []const u8, &.{ opts.args, files }), system_root);
     // The runtimes' variables first, then the extensions', so the app's win;
     // those the extension points join add up instead.
     const joined = try extensions.joined(arena, found.points);
@@ -422,6 +413,22 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
     });
     defer if (listed) |l| l.end(io);
+    // How it starts programs, for `zigsaw exec` (see exec.zig): with the
+    // record, which is what names it, and the job, which is what it joins.
+    // The app is going: nothing here may fail the run. An AppContainer
+    // spec without its capabilities is one exec refuses.
+    if (listed) |l| if (job.name) |job_name| exec.writeSpec(ctx, l, .{
+        .id = cfg.id,
+        .job = job_name,
+        .sandbox = @tagName(sandbox),
+        .capabilities = if (security) |s| exec.capabilityStrings(arena, s) catch &.{} else &.{},
+        .cwd = cwd,
+        .env = env.items,
+        .path = app_path.items,
+        .deploy_dir = image.deploy_dir,
+        .system_root = system_root,
+        .exports = exportsOf(arena, placeholders, cfg) catch &.{},
+    });
     const report = try child.waitReport();
     const code = report.code;
     // A program refused memory says what Windows told it, that the paging
@@ -1079,7 +1086,7 @@ fn extensionDirs(arena: Allocator, exts: []const extensions.Extension) ![]const 
     return dirs;
 }
 
-const Command = struct {
+pub const Command = struct {
     /// The executable, or the batch file.
     exe: []const u8,
     /// Arguments that go before the caller's.
@@ -1087,7 +1094,7 @@ const Command = struct {
     /// A .bat or .cmd file, which runs through cmd.exe.
     batch: bool = false,
 
-    fn init(exe: []const u8, args: []const []const u8) Command {
+    pub fn init(exe: []const u8, args: []const []const u8) Command {
         const ext = std.fs.path.extension(exe);
         return .{
             .exe = exe,
@@ -1127,13 +1134,42 @@ fn resolveCommand(
     return .init(resolved, &.{});
 }
 
+/// The program to start for `command`, with `args` after its own, and its
+/// command line: a batch file runs through System32's cmd.exe, not
+/// ComSpec's.
+pub fn commandLine(arena: Allocator, command: Command, args: []const []const u8, system_root: []const u8) !struct { []const u8, []const u8 } {
+    const all = try std.mem.concat(arena, []const u8, &.{ command.args, args });
+    if (!command.batch) return .{ command.exe, try process.buildCommandLine(arena, command.exe, all) };
+    const cmd = try std.fmt.allocPrint(arena, "{s}\\System32\\cmd.exe", .{system_root});
+    const line = process.buildBatchCommandLine(arena, cmd, command.exe, all) catch |err| switch (err) {
+        error.InvalidBatchArgument => return fail("{s} is a batch file, and cmd.exe can't pass it an argument with a line break or a NUL character", .{command.exe}),
+        error.InvalidBatchScript => return fail("{s} can't be run as a batch file", .{command.exe}),
+        error.OutOfMemory => |e| return e,
+    };
+    return .{ cmd, line };
+}
+
+/// The app's exports as the run would start them, for `zigsaw exec`.
+fn exportsOf(arena: Allocator, placeholders: oci.Placeholders, cfg: oci.AppConfig) ![]const exec.Export {
+    var out: std.ArrayList(exec.Export) = .empty;
+    var it = cfg.exports.map.iterator();
+    while (it.next()) |e| try out.append(arena, .{
+        .name = e.key_ptr.*,
+        .exe = try placeholders.commandPath(arena, e.value_ptr.command),
+        .args = try expandAll(arena, placeholders, e.value_ptr.args),
+    });
+    return out.items;
+}
+
 fn expandAll(arena: Allocator, placeholders: oci.Placeholders, templates: []const []const u8) ![]const []const u8 {
     const out = try arena.alloc([]const u8, templates.len);
     for (out, templates) |*arg, template| arg.* = try placeholders.expand(arena, template);
     return out;
 }
 
-fn findCommand(
+/// An executable or batch file by name: an absolute path, a path in the
+/// app, or a name looked up in `app_path` and then System32.
+pub fn findCommand(
     io: Io,
     arena: Allocator,
     deploy_dir: []const u8,

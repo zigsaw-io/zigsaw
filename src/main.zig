@@ -8,6 +8,7 @@ const builder = @import("builder.zig");
 const catalog = @import("catalog.zig");
 const credentials = @import("credentials.zig");
 const environment = @import("environment.zig");
+const exec = @import("exec.zig");
 const exports = @import("exports.zig");
 const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
@@ -94,6 +95,13 @@ const usage =
     \\                                  hasn't ended after 10 seconds, or --time, is killed
     \\  kill <app-id>|<run>...          end runs and builds now; a run's zigsaw still cleans
     \\                                  up after it, and a build goes on from there next time
+    \\  exec [--env=NAME=VALUE]... [-d|--detach] <app-id>|<run> <command> [<arg>...]
+    \\                                  run a command in a run that's going, in its sandbox,
+    \\                                  job, variables and working directory, on this
+    \\                                  terminal; the command is found as --command finds
+    \\                                  one. It ends with the run, and with this zigsaw.
+    \\                                  --detach starts it with no console and prints the
+    \\                                  PID `ps` lists it by
     \\  override [options] <app-id>     save run options that every run of the app gets;
     \\                                  --show shows them, --reset removes them; also
     \\                                  --nosnapshot has updates keep no copy of its data
@@ -466,6 +474,7 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         opts.filters = filters.items;
         return stop.stop(ctx, opts);
     }
+    if (std.mem.eql(u8, command, "exec")) return exec.exec(ctx, try parseExecOptions(ctx, rest));
     if (std.mem.eql(u8, command, "override")) {
         _ = try ctx.store.lock(ctx.arena, .shared);
         try overrideApp(ctx, rest);
@@ -961,6 +970,45 @@ fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
     return opts;
 }
 
+/// Options go before the run, as for `run`; the command and everything
+/// after it are the command's. "--" also ends zigsaw's options.
+fn parseExecOptions(ctx: *Context, args: []const [:0]const u8) !exec.Options {
+    var env: std.ArrayList([]const u8) = .empty;
+    var detach = false;
+    var detached_child = false;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--")) {
+            i += 1;
+            break;
+        }
+        if (!std.mem.startsWith(u8, arg, "-")) break;
+        if (isFlag(arg, "verbose")) {
+            ctx.verbose = true;
+            ctx.store.verbose = true;
+        } else if (isFlag(arg, "detach") or std.mem.eql(u8, arg, "-d")) {
+            detach = true;
+        } else if (isFlag(arg, "detached-child")) {
+            detached_child = true;
+        } else if (std.mem.startsWith(u8, arg, "--env=")) {
+            try env.append(ctx.arena, arg["--env=".len..]);
+        } else if (std.mem.eql(u8, arg, "--env") and i + 1 < args.len) {
+            i += 1;
+            try env.append(ctx.arena, args[i]);
+        } else return fail("unknown exec option {s}", .{arg});
+    }
+    if (args.len - i < 2) return usageError();
+    return .{
+        .target = args[i],
+        .command = args[i + 1],
+        .args = @ptrCast(args[i + 2 ..]),
+        .env = env.items,
+        .detach = detach or detached_child,
+        .detached_child = detached_child,
+    };
+}
+
 fn parseLoginOptions(args: []const [:0]const u8) !credentials.LoginOptions {
     var opts: credentials.LoginOptions = .{ .registry = undefined };
     var registry: ?[]const u8 = null;
@@ -1179,6 +1227,7 @@ test {
     _ = @import("checkpoint.zig");
     _ = @import("ps.zig");
     _ = @import("stop.zig");
+    _ = @import("exec.zig");
     _ = @import("catalog.zig");
     _ = @import("cloudfiles.zig");
     _ = @import("credentials.zig");

@@ -10,7 +10,8 @@
 //! its job, so that its zigsaw sees the app end and cleans up after it as
 //! ever (the app's keys in HKCU, an --ephemeral data directory, its record);
 //! a build by its zigsaw, whose kept build root the next build goes on from.
-//! Runs inside another (see ps.nest) end first, for the same reason.
+//! Runs inside another (see ps.nest) end first, for the same reason, and so
+//! do the commands `zigsaw exec` started in it, each by its exec's own job.
 //!
 //! Windows sends Ctrl+C to every process on a console, as the key does. So
 //! it's sent only when everything else on the run's console is the run's
@@ -433,7 +434,7 @@ fn insideMatched(seen: []const ps.Seen, targets: []const Target, pid: u32) bool 
 
 /// The zigsaw of a record, opened to wait for it; null if it's gone. Its
 /// lock still held after opening it means the PID is still that zigsaw's.
-fn openZigsaw(store: Store, arena: Allocator, r: ps.Record) !?win32.HANDLE {
+pub fn openZigsaw(store: Store, arena: Allocator, r: ps.Record) !?win32.HANDLE {
     const access = win32.SYNCHRONIZE | (if (r.kind == .build) win32.PROCESS_TERMINATE else 0);
     const handle = win32.OpenProcess(access, win32.FALSE, r.pid) orelse return null;
     const lock_path = try ps.lockPath(store, arena, r.pid);
@@ -457,12 +458,13 @@ fn ask(store: Store, arena: Allocator, pid: u32, event_name: []const u8, self: [
     if (win32.SetEvent(event) == 0) return win32.lastErrorFail("SetEvent");
 }
 
-/// Ends a run by its job, and a build by its zigsaw.
+/// Ends a run by its job, and a build by its zigsaw. An exec by its own job,
+/// which has only its command: the run it's in goes on.
 fn end(arena: Allocator, t: *Target) !void {
     const r = t.seen.record;
     switch (r.kind) {
         .build => if (win32.TerminateProcess(t.process.?, 1) == 0) return win32.lastErrorFail("TerminateProcess"),
-        .run => {
+        .run, .exec => {
             const name = r.job orelse {
                 t.why = "its job has no name, so nothing else can reach it";
                 return error.NoJobName;
