@@ -258,6 +258,11 @@ jobs:
         shell: bash
         run: bash tests/limits.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/limits.txt"
 
+      - name: tests/ps.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/ps.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/ps.txt"
+
       - name: tests/hosts.sh
         if: ${{ !cancelled() }}
         shell: bash

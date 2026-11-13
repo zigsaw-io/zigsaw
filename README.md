@@ -136,6 +136,11 @@ zigsaw logout <registry>               delete a registry's saved login
 zigsaw run [options] <app-id> [args]   run an installed app
 zigsaw list                            list installed apps, their commands and shortcuts,
                                        and the kinds of file they open
+zigsaw ps [--processes] [<app-id>|<run>...]
+                                       list the runs and builds going, each by its zigsaw's
+                                       process id: its sandbox, processes, memory, processor
+                                       time and command; --processes lists its processes
+                                       too, each under the one that started it
 zigsaw override [options] <app-id>     save run options that every run of the app gets;
                                        --show shows them, --reset removes them; also
                                        --nosnapshot has updates keep no copy of its data
@@ -1308,6 +1313,35 @@ zigsaw build --memory=8GB --cpus=8 recipes/rnote.json  # each of the build's com
 
 What limits don't do is in [gaps.md](docs/gaps.md).
 
+### What's running
+
+`zigsaw ps` lists the runs and builds going in the store, however they were started: from
+a prompt, a command's shim, a shortcut or a file association. Each one is named by the
+process id of the zigsaw that runs it.
+
+```
+> zigsaw ps
+RUN    APP                   VERSION   SANDBOX  PROCS           MEMORY   CPU   UP  COMMAND
+21364  net.frippery.busybox  1.37.0    low          2  3 MB (of 512MB)  0:00  12m  busybox.exe sh -c ...
+18132  org.nodejs.node       24.21.0   soft         4            61 MB  0:04   2h  node.exe server.js
+20216  org.sqlite.sqlite     3.51.0    soft         1             2 MB  0:00   5s  sqlite3.exe  (in run 18132)
+5120   org.example.tool      1.2       build        3            88 MB  0:31   2m  [tool 3/5] make
+```
+
+- PROCS, MEMORY and CPU are the whole tree's: the app, what it starts, and what those
+  start, those that already ended too for CPU. MEMORY is what they have committed now,
+  and the run's `--memory` limit if it has one.
+- `zigsaw ps --processes` lists each run's processes under it, each under the one that
+  started it, with its own memory, processor time and command line.
+- A run started from inside another, as your other apps' commands are under
+  `--share=commands`, is listed as `(in run <n>)`. The outer run's processes show it as
+  one line, `-> run <n>`, and its numbers count it, as its limits do.
+- `zigsaw ps <app-id>` and `zigsaw ps <run>` list only those.
+- A build shows the command it's at, as its log says it.
+
+`ps` only looks. A run's zigsaw names the run's job object so that `ps` can open it to
+query, which the low and appcontainer sandboxes keep their apps from doing.
+
 ### Batch files
 
 An app's command, an export, or a `--command` can be a batch file (`.cmd` or
@@ -1580,6 +1614,7 @@ bash tests/matrix.sh    # runs real tools through the three sandboxes (Git Bash,
 bash tests/sandbox.sh   # which sandbox a run gets (low by default, the image's, store-wide and app overrides); what the low and appcontainer sandboxes change on the host, how long it lasts, and rm undoes; a working directory low won't label, read-only; --file; your folders (fake ones); registry keys kept with an app
 bash tests/network.sh   # an app's service reached from the host in each sandbox, on its port, one --port or an override moves it to, and not after the run; in an AppContainer, an internal port the app's runs agree on and reach each other on without the network, and a port another program holds; an AppContainer run with the network exempt from loopback isolation while it goes (not without the network, nor with ZIGSAW_LOOPBACK_EXEMPTION=0), a killed run's exemption taken back by repair, one you made kept; a port the app uses reached directly, or through zigsaw's forward when not exempt, and --port moving it; proxy variables passed to runs with the network; eight first AppContainer runs at once; the probe's report of what Windows lets AppContainers do on the loopback and over AF_UNIX (tests/netprobe.zig)
 bash tests/reach.sh     # what a run may reach of the rest of the machine: the store's commands on its PATH, each running as its own app; zigsaw-host, your real environment with the run's rights; an image saying it can't run under a sandbox; URL schemes and Default apps in a scratch key, and one private scheme followed through Windows, which rm removes (30 s; opens a console for a moment)
+bash tests/ps.sh        # zigsaw ps: runs in each sandbox, through a shim, one inside another, one whose zigsaw was killed, a build's command; --processes and filters
 bash tests/limits.sh    # --memory and --cpus on runs, in each sandbox, saved as overrides, through a shim, and on builds; what zigsaw says when a limit is reached
 bash tests/devices.sh   # an app's devices: the camera's capability in an AppContainer run's token and no other, --device and --nodevice, overrides, a relay that holds none, the notes under low and soft; with DEVICES_REAL=1 a frame from a real camera in each sandbox (its light comes on); the probe's report of what each sandbox reaches of this machine's devices (tests/devprobe.zig)
 bash tests/shims.sh     # command shims end to end, also for commands installed at run time and GUI programs; Start menu shortcuts; file associations (in a scratch registry key)

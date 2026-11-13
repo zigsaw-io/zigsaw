@@ -338,6 +338,66 @@ pub extern "kernel32" fn SetInformationJobObject(
 ) callconv(.winapi) BOOL;
 
 // ---------------------------------------------------------------------------
+// Looking at running processes and jobs, for `zigsaw ps`
+
+pub extern "kernel32" fn SetLastError(code: DWORD) callconv(.winapi) void;
+pub const ERROR_ALREADY_EXISTS: DWORD = 183;
+pub const ERROR_MORE_DATA: DWORD = 234;
+pub const JOB_OBJECT_QUERY: DWORD = 0x0004;
+pub const JobObjectBasicProcessIdList: c_int = 3;
+/// JOBOBJECT_BASIC_PROCESS_ID_LIST's head; the PIDs (ULONG_PTRs) follow.
+pub const JOBOBJECT_BASIC_PROCESS_ID_LIST = extern struct {
+    NumberOfAssignedProcesses: DWORD = 0,
+    NumberOfProcessIdsInList: DWORD = 0,
+};
+pub extern "kernel32" fn OpenJobObjectW(access: DWORD, inherit: BOOL, name: LPCWSTR) callconv(.winapi) ?HANDLE;
+
+pub const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x1000;
+pub const TH32CS_SNAPPROCESS: DWORD = 0x2;
+pub const PROCESSENTRY32W = extern struct {
+    dwSize: DWORD = @sizeOf(PROCESSENTRY32W),
+    cntUsage: DWORD = 0,
+    th32ProcessID: DWORD = 0,
+    th32DefaultHeapID: usize = 0,
+    th32ModuleID: DWORD = 0,
+    cntThreads: DWORD = 0,
+    th32ParentProcessID: DWORD = 0,
+    pcPriClassBase: i32 = 0,
+    dwFlags: DWORD = 0,
+    szExeFile: [MAX_PATH]u16 = @splat(0),
+};
+pub extern "kernel32" fn CreateToolhelp32Snapshot(flags: DWORD, pid: DWORD) callconv(.winapi) HANDLE;
+pub extern "kernel32" fn Process32FirstW(snapshot: HANDLE, entry: *PROCESSENTRY32W) callconv(.winapi) BOOL;
+pub extern "kernel32" fn Process32NextW(snapshot: HANDLE, entry: *PROCESSENTRY32W) callconv(.winapi) BOOL;
+pub extern "kernel32" fn QueryFullProcessImageNameW(process: HANDLE, flags: DWORD, name: [*]u16, size: *DWORD) callconv(.winapi) BOOL;
+/// The times are FILETIMEs (100 ns since 1601) for creation and exit, and
+/// 100 ns counts for kernel and user time.
+pub extern "kernel32" fn GetProcessTimes(process: HANDLE, creation: *i64, exit: *i64, kernel: *i64, user: *i64) callconv(.winapi) BOOL;
+pub const PROCESS_MEMORY_COUNTERS_EX = extern struct {
+    cb: DWORD = @sizeOf(PROCESS_MEMORY_COUNTERS_EX),
+    PageFaultCount: DWORD = 0,
+    PeakWorkingSetSize: usize = 0,
+    WorkingSetSize: usize = 0,
+    QuotaPeakPagedPoolUsage: usize = 0,
+    QuotaPagedPoolUsage: usize = 0,
+    QuotaPeakNonPagedPoolUsage: usize = 0,
+    QuotaNonPagedPoolUsage: usize = 0,
+    PagefileUsage: usize = 0,
+    PeakPagefileUsage: usize = 0,
+    PrivateUsage: usize = 0,
+};
+pub extern "kernel32" fn K32GetProcessMemoryInfo(process: HANDLE, counters: *PROCESS_MEMORY_COUNTERS_EX, cb: DWORD) callconv(.winapi) BOOL;
+/// ProcessCommandLineInformation: a UNICODE_STRING, its buffer after it.
+/// Answers with PROCESS_QUERY_LIMITED_INFORMATION, since Windows 8.1.
+pub const ProcessCommandLineInformation: c_int = 60;
+pub const UNICODE_STRING = extern struct {
+    Length: u16,
+    MaximumLength: u16,
+    Buffer: ?[*]u16,
+};
+pub extern "ntdll" fn NtQueryInformationProcess(process: HANDLE, class: c_int, info: *anyopaque, length: u32, return_length: ?*u32) callconv(.winapi) i32;
+
+// ---------------------------------------------------------------------------
 // AppContainer
 
 pub const SE_GROUP_ENABLED: DWORD = 0x00000004;

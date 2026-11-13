@@ -47,6 +47,7 @@ const Fetcher = @import("fetch.zig");
 const msvc_host = @import("msvc.zig");
 const oci = @import("oci.zig");
 const process = @import("process.zig");
+const ps = @import("ps.zig");
 const override = @import("override.zig");
 const project = @import("project.zig");
 const recipe = @import("recipe.zig");
@@ -77,6 +78,9 @@ pub const Options = struct {
     /// What each of the build's commands, with all it starts, may use (see
     /// process.Limits). No input of the build: what it makes is the same.
     limits: process.Limits = .{},
+    /// What `zigsaw ps` lists of the build, which says each command as it
+    /// starts; `build` keeps it.
+    listed: ?*ps.Entry = null,
 };
 
 /// The fixed time builds see as SOURCE_DATE_EPOCH: 1980-01-01, the earliest
@@ -113,7 +117,17 @@ pub fn build(ctx: *Context, recipe_path: []const u8, opts: Options) !install.Ima
     };
     const start = ctx.now();
     var resumed = false;
-    const image = try buildImage(ctx, r, recipe_path, source, &projects, opts, &resumed);
+    var listed = ps.begin(ctx, .{
+        .kind = .build,
+        .id = r.id,
+        .version = r.version,
+        .pid = win32.GetCurrentProcessId(),
+        .started = ps.now(),
+    });
+    defer if (listed) |*l| l.end(io);
+    var with_listed = opts;
+    with_listed.listed = if (listed) |*l| l else null;
+    const image = try buildImage(ctx, r, recipe_path, source, &projects, with_listed, &resumed);
     if (r.hasBuildCommands()) note("built {s} {s} in {f}", .{ r.id, r.version, ctx.since(start) });
     if (inputs) |*h| try ctx.store.writeBuildCache(arena, h, image.manifest_digest, resumed);
     return image;
@@ -228,6 +242,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         if (from_last) |res| resumed.* = res.plan.resumes();
         root = try .init(ctx, r, tools.list.items, from_last);
         root.?.limits = opts.limits;
+        root.?.listed = opts.listed;
         if (root.?.msvc) |tc| {
             try build_info.host.map.put(arena, "msvc", tc.tools_version);
             try build_info.host.map.put(arena, "windows-sdk", tc.sdk_version);
@@ -500,6 +515,8 @@ const BuildRoot = struct {
     from_last: ?*Resume = null,
     /// What each command, with all it starts, may use.
     limits: process.Limits = .{},
+    /// See `Options.listed`.
+    listed: ?*ps.Entry = null,
 
     const letter = drive.letter;
 
@@ -874,13 +891,27 @@ const BuildRoot = struct {
             if (n <= how.from) continue;
             note("[{s}{s} {d}/{d}] {s}", .{ m.name, label, n, commands.len, command });
             const start = ctx.now();
+            // Named, so that `zigsaw ps` may look into it.
+            const job_name = if (b.listed != null) try ps.jobName(ctx.io, arena) else null;
             const child = try process.start(arena, .{
                 .exe = shell.exe,
                 .command_line = try shell.commandLine(arena, command),
                 .env_block = block,
                 .cwd = cwd,
                 .limits = b.limits,
+                .job_name = job_name,
             });
+            if (b.listed) |l| {
+                l.record.module = m.name;
+                l.record.step = @tagName(step);
+                l.record.n = @intCast(n);
+                l.record.of = @intCast(commands.len);
+                l.record.command = command;
+                l.record.job = child.job_name;
+                l.record.memory_limit = b.limits.memory;
+                l.record.cpus = b.limits.fewerCpus();
+                l.update(ctx);
+            }
             const report = try child.waitReport();
             const code = report.code;
             // So a log shows where a build's time goes, and its memory.

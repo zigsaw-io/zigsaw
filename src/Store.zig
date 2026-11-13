@@ -69,7 +69,7 @@ verbose: bool = false,
 /// from another.
 ledger_key: ?[]const u8 = null,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "snapshots", "deploy", "lazy", "learned", "volumes", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "snapshots", "deploy", "lazy", "learned", "volumes", "grants", "overrides", "bin", "aliases", "open", "ports", "running", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|

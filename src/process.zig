@@ -152,6 +152,9 @@ pub const SpawnSpec = struct {
     /// Explorer starts from one does: Windows keeps it in the child's
     /// start-up information, where the shell can tell what started it.
     shortcut: ?[]const u8 = null,
+    /// A name for the child's job, so `zigsaw ps` can look into it (see
+    /// `newJob`).
+    job_name: ?[]const u8 = null,
 };
 
 /// A copy of zigsaw's token labelled low integrity, which a process can make
@@ -243,6 +246,8 @@ pub const Job = struct {
     handle: win32.HANDLE,
     port: ?win32.HANDLE = null,
     memory_limit: ?u64 = null,
+    /// Its name, if it got the one asked for (see `newJob`).
+    name: ?[]const u8 = null,
 };
 
 /// How a job's process tree ended.
@@ -262,9 +267,10 @@ pub const Child = struct {
     /// As `Job`'s.
     port: ?win32.HANDLE = null,
     memory_limit: ?u64 = null,
+    job_name: ?[]const u8 = null,
 
     pub fn in(job: Job, process: win32.HANDLE) Child {
-        return .{ .job = job.handle, .process = process, .port = job.port, .memory_limit = job.memory_limit };
+        return .{ .job = job.handle, .process = process, .port = job.port, .memory_limit = job.memory_limit, .job_name = job.name };
     }
 
     /// Waits for the process to exit, ends what's left of its tree, and
@@ -395,7 +401,7 @@ pub fn output(arena: Allocator, spec: SpawnSpec, input: []const u8, ms: win32.DW
 
 /// Starts a process as `spawn` does, without waiting for it.
 pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
-    const job = try newJobAllowing(arena, spec.breakaway_ok, spec.limits);
+    const job = try newJobAllowing(arena, spec.breakaway_ok, spec.limits, spec.job_name);
     errdefer _ = win32.CloseHandle(job.handle);
     return .in(job, try startIn(arena, job.handle, spec));
 }
@@ -403,18 +409,39 @@ pub fn start(arena: Allocator, spec: SpawnSpec) !Child {
 /// A job object whose processes end when it's closed, as when we end, and
 /// use no more than `limits` together. For `startIn`, when another process
 /// has to be in the job before the one a `Child` waits for.
-pub fn newJob(arena: Allocator, limits: Limits) !Job {
-    return newJobAllowing(arena, false, limits);
+///
+/// With a `name` (ps.jobName's), other processes of the user's can open the
+/// job to look into it, as `zigsaw ps` does. One that is taken already, or
+/// that Windows refuses (to a zigsaw at low integrity, say), leaves the job
+/// unnamed: `Job.name` says which it got.
+pub fn newJob(arena: Allocator, limits: Limits, name: ?[]const u8) !Job {
+    return newJobAllowing(arena, false, limits, name);
+}
+
+/// A job object, named if it may be (see `newJob`).
+fn createJob(arena: Allocator, name: ?[]const u8) !Job {
+    if (name) |n| named: {
+        win32.SetLastError(0);
+        const handle = win32.CreateJobObjectW(null, try win32.wide(arena, n)) orelse break :named;
+        // Someone else's: not to be used, nor told about.
+        if (win32.GetLastError() == win32.ERROR_ALREADY_EXISTS) {
+            _ = win32.CloseHandle(handle);
+            break :named;
+        }
+        return .{ .handle = handle, .name = n };
+    }
+    const handle = win32.CreateJobObjectW(null, null) orelse return win32.lastErrorFail("CreateJobObjectW");
+    return .{ .handle = handle };
 }
 
 /// The same, letting its processes start one outside it if they ask
 /// (CREATE_BREAKAWAY_FROM_JOB): a shim's job, whose zigsaw may start a lazy
 /// pull's helper that must outlive it (see lazy.zig). An app's job never
 /// does, so nothing an app starts gets out of it.
-fn newJobAllowing(arena: Allocator, breakaway: bool, limits: Limits) !Job {
-    const handle = win32.CreateJobObjectW(null, null) orelse return win32.lastErrorFail("CreateJobObjectW");
+fn newJobAllowing(arena: Allocator, breakaway: bool, limits: Limits, name: ?[]const u8) !Job {
+    var job = try createJob(arena, name);
+    const handle = job.handle;
     errdefer _ = win32.CloseHandle(handle);
-    var job: Job = .{ .handle = handle };
     var info: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
     info.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
         (if (breakaway) win32.JOB_OBJECT_LIMIT_BREAKAWAY_OK else 0);

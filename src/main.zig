@@ -20,6 +20,7 @@ const LazyHelper = @import("LazyHelper.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
 const prune = @import("prune.zig");
+const ps = @import("ps.zig");
 const remote = @import("remote.zig");
 const rollback = @import("rollback.zig");
 const snapshot = @import("snapshot.zig");
@@ -81,6 +82,11 @@ const usage =
     \\  run [options] <app-id> [args]   run an installed app
     \\  list                            list installed apps, their commands and shortcuts,
     \\                                  and the kinds of file they open
+    \\  ps [--processes] [<app-id>|<run>...]
+    \\                                  list the runs and builds going, each by its zigsaw's
+    \\                                  process id: its sandbox, processes, memory, processor
+    \\                                  time and command; --processes lists its processes
+    \\                                  too, each under the one that started it
     \\  override [options] <app-id>     save run options that every run of the app gets;
     \\                                  --show shows them, --reset removes them; also
     \\                                  --nosnapshot has updates keep no copy of its data
@@ -422,6 +428,20 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     if (std.mem.eql(u8, command, "list")) {
         if (rest.len != 0) return usageError();
         try list(ctx);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "ps")) {
+        var opts: ps.Options = .{};
+        var filters: std.ArrayList([]const u8) = .empty;
+        for (rest) |arg| {
+            if (isFlag(arg, "processes")) {
+                opts.processes = true;
+            } else if (std.mem.startsWith(u8, arg, "-")) {
+                return usageError();
+            } else try filters.append(ctx.arena, arg);
+        }
+        opts.filters = filters.items;
+        try ps.ps(ctx, opts);
         return 0;
     }
     if (std.mem.eql(u8, command, "override")) {
@@ -1135,6 +1155,7 @@ test {
     _ = @import("BlobReader.zig");
     _ = @import("builder.zig");
     _ = @import("checkpoint.zig");
+    _ = @import("ps.zig");
     _ = @import("catalog.zig");
     _ = @import("cloudfiles.zig");
     _ = @import("credentials.zig");

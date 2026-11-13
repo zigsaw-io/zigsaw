@@ -43,6 +43,7 @@ const lazy = @import("lazy.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
 const proxy = @import("proxy.zig");
+const ps = @import("ps.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
 const snapshot = @import("snapshot.zig");
@@ -383,9 +384,11 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // The job is what holds the run to its limits: the relay counts, and so
     // does all the app starts, zigsaw-host's programs and other apps' runs
     // among them.
-    const job = try process.newJob(arena, limits);
+    // Named, so that `zigsaw ps` may look into it.
+    const job = try process.newJob(arena, limits, try ps.jobName(io, arena));
     if (relay_exe) |r| startRelay(ctx, cfg.id, job.handle, r, published, forwards, security, token, env_block);
     const watcher = written.Watcher.start(arena, ctx.io, try watchedDirs(arena, sandbox, host_grants.items, host_cwd, data_dir, data_root, ctx.env.get("USERPROFILE"), own));
+    const started = ps.now();
     const child: process.Child = .in(job, try process.startIn(arena, job.handle, .{
         .exe = exe,
         .command_line = command_line,
@@ -396,6 +399,24 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         // Set by a shim that a shortcut started (see shim.zig).
         .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
     }));
+    // What `zigsaw ps` lists, while the run goes.
+    const listed = ps.begin(ctx, .{
+        .id = cfg.id,
+        .version = cfg.version,
+        .manifest = image.ref.manifest,
+        .pid = win32.GetCurrentProcessId(),
+        .app_pid = win32.GetProcessId(child.process),
+        .started = started,
+        .job = job.name,
+        .sandbox = @tagName(sandbox),
+        .network = @tagName(network_of),
+        .memory_limit = limits.memory,
+        .cpus = if (limits.fewerCpus()) |n| n else null,
+        .ephemeral = run_dir != null,
+        .command = command_line,
+        .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
+    });
+    defer if (listed) |l| l.end(io);
     const report = try child.waitReport();
     const code = report.code;
     // A program refused memory says what Windows told it, that the paging
