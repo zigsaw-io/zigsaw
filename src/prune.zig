@@ -13,6 +13,7 @@ const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const checkpoint = @import("checkpoint.zig");
 const lazy = @import("lazy.zig");
+const learned = @import("learned.zig");
 const oci = @import("oci.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
@@ -148,6 +149,17 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     // What lazy pulls left (see lazy.zig): a layer's folder in lazy\ once its
     // deployment is gone, as above, and copies of zigsaw no helper runs.
     if (!opts.dry_run) _ = try lazy.prune(store, arena, null);
+    // And what runs read of images that no installed app is, or has as a
+    // runtime (see learned.zig). (Tiny files, so not reported.)
+    if (!opts.dry_run) {
+        var learned_of: std.ArrayList([]const u8) = .empty;
+        for (refs) |ref| {
+            try learned_of.append(arena, ref.id);
+            const image = store.readImage(arena, ref.id, ref.manifest) catch continue;
+            for (image.config.runtimes.map.values()) |r| try learned_of.append(arena, r.id);
+        }
+        _ = try learned.pruneUnused(store, arena, learned_of.items);
+    }
 
     // Leftovers in tmp\: everything but the directories of running
     // --ephemeral apps. Builds and pulls stage files here too, but can't be

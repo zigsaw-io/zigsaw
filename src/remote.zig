@@ -146,10 +146,13 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
     errdefer for (lazy_layers.items) |l| {
         _ = ctx.store.deleteDeployment(arena, l.digest) catch {};
     };
-    for (manifest.layers) |l| {
+    // Whose layer each is (validateLayers): a runtime's, in the config's
+    // order, then the app's own.
+    const runtimes = config.runtimes.map.values();
+    for (manifest.layers, 0..) |l, i| {
         const have = try Store.exists(ctx.io, try ctx.store.blobPath(arena, oci.digestHex(l.digest).?));
         if (opts.lazy and !have and lazy.eligible(ctx, l)) {
-            if (try lazy.prepare(ctx, &registry, l) == .lazy) {
+            if (try lazy.prepare(ctx, &registry, l, if (i < runtimes.len) runtimes[i].id else config.id) == .lazy) {
                 note("  lazy     layer {s} ({d} bytes): its files are fetched as they're used; the rest downloads meanwhile", .{ oci.shortDigest(l.digest), l.size });
                 try lazy_layers.append(arena, l);
                 continue;

@@ -9,6 +9,8 @@
 # away; and a volume that can't have placeholders, or a test hook acting as
 # one, gets a whole download. `update --lazy` copies what the version before
 # has (stores f to h), and a slow fetch tells Windows how far it's got (i).
+# What runs read of a lazy layer is written down for its image, and asked for
+# ahead of any run when its next version is pulled lazily (j).
 # Store a builds a small app (BusyBox, a 16 MiB file and three small ones, one
 # of them prefetched) and pushes it, then its version 2; the others pull them.
 #
@@ -61,7 +63,7 @@ ze() { ZIGSAW_HOME="$(store e)" ZIGSAW_TEST_LAZY_REFUSE=1 "$zigsaw" "$@"; }
 
 cleanup() {
     # rm stops a lazy layer's helper; one whose app is gone already, by its pid.
-    for s in b c d e f g h i a; do
+    for s in b c d e f g h i j a; do
         ZIGSAW_HOME="$(store $s)" "$zigsaw" rm $APP >/dev/null 2>&1
         p=$(helper_pid $s) && [ -n "$p" ] && taskkill /F /PID "$p" >/dev/null 2>&1
         [ -n "${hex2:-}" ] && p=$(helper2_pid $s) && [ -n "$p" ] && taskkill /F /PID "$p" >/dev/null 2>&1
@@ -152,6 +154,19 @@ done
 # program, the file it read.
 check "the helper's log names what fetched each file" grep -q 'fetched small.txt: [0-9]* bytes, for busybox.exe' "$(lazy_of b)\\log"
 check "a file nothing read is still a placeholder" recall_on_access "$(deploy_of b)\\never.txt"
+# The helper writes a file down once it has served it, which the run doesn't
+# wait for.
+learned_of() { echo "$(store "$1")\\learned\\$APP.txt"; }
+written_down() {
+    local i
+    for i in $(seq 1 20); do grep -qxF "$hex small.txt" "$(learned_of b)" 2>/dev/null && break; sleep 0.25; done
+    grep -qxF "$hex small.txt" "$(learned_of b)" || { echo "small.txt isn't in it"; return 1; }
+    grep -qxF "$hex busybox.exe" "$(learned_of b)" || { echo "busybox.exe isn't in it"; return 1; }
+    # Not what the helper hydrated itself, nor what nothing read.
+    ! grep -q 'first.txt\|never.txt' "$(learned_of b)" || { echo "it has: $(tr '\n' ' ' <"$(learned_of b)")"; return 1; }
+    [ "$(wc -l <"$(learned_of b)")" = 2 ] || { echo "it has $(wc -l <"$(learned_of b)") lines"; return 1; }
+}
+check "what runs read of the lazy layer is written down for its image, each file once" written_down
 breakaway() { local out; out=$(zb run --sandbox=soft $APP sh -c "'$(cygpath -m "$jobprobe")' breakaway" 2>&1); grep -q refused <<<"$out" || { echo "$out"; return 1; }; }
 check "a program the app starts can't leave the app's job" breakaway
 
@@ -395,6 +410,67 @@ bad_copy_caught() {
     [ "$(sha256sum <"$(store h)\\blobs\\sha256\\$hex2" | cut -d' ' -f1)" = "$hex2" ] || { echo "the blob isn't the layer"; return 1; }
 }
 check "bytes copied wrong fail the blob's digest, and it's fetched again" bad_copy_caught
+
+# --- What runs read, asked for ahead of the next version ---------------------
+# Store j pulls version 1 lazily, from a repository of its own; a run reads
+# small.txt, and the layer downloads and is swapped in. Version 2, whose
+# small.txt is another, then has it asked for before any run does. (Store a
+# builds each version again, which its build cache answers.)
+zj() { ZIGSAW_HOME="$(store j)" ZIGSAW_TEST_LAZY_GATE="$gate" "$zigsaw" "$@"; }
+za build "$fixture\\app.json" >/dev/null 2>&1 && za push $APP "$repo-j:latest" >/dev/null 2>&1 || { echo "pushing version 1 again failed"; exit 1; }
+touch "$(cygpath -u "$gate")"
+zj pull --yes --lazy "$repo-j:latest" >/dev/null 2>&1
+zj run $APP cat "$(deploy_of j)\\small.txt" >/dev/null 2>&1
+for i in $(seq 1 20); do grep -qxF "$hex small.txt" "$(learned_of j)" 2>/dev/null && break; sleep 0.25; done
+rm -f "$(cygpath -u "$gate")"
+for i in $(seq 1 80); do [ -d "$(lazy_of j)" ] || break; sleep 0.25; done
+za build "$fixture2\\app.json" >/dev/null 2>&1 && za push $APP "$repo-j:latest" >/dev/null 2>&1 || { echo "pushing version 2 again failed"; exit 1; }
+touch "$(cygpath -u "$gate")"
+ahead_out=$(zj update --yes --lazy $APP 2>&1)
+# The helper's requests so far, once two looks a second apart agree: its
+# state is written once a second.
+settled_requests() {
+    local i r= last=
+    for i in $(seq 1 10); do
+        r=$(state2 "$1" requests)
+        [ -n "$r" ] && [ "$r" = "$last" ] && break
+        last=$r
+        sleep 1.2
+    done
+    echo "$r"
+}
+asked_ahead() {
+    grep -q 'that runs read before come' <<<"$ahead_out" || { echo "$ahead_out" | tail -3; return 1; }
+    local i a=
+    for i in $(seq 1 40); do a=$(state2 j ahead); [ -n "$a" ] && [ "$a" -gt 0 ] && break; sleep 0.25; done
+    [ -n "$a" ] && [ "$a" -gt 0 ] || { echo "nothing was fetched ahead (${a:-no state})"; return 1; }
+    grep -q 'asked ahead for 2 files runs read before' "$(lazy2_of j)\\log" || { echo "the log: $(grep 'ahead' "$(lazy2_of j)\\log" | tail -1)"; return 1; }
+    # Fetched, not hydrated: a run's read of it is still to be seen.
+    recall_on_access "$(deploy2_of j)\\small.txt" || { echo "small.txt isn't a placeholder any more"; return 1; }
+}
+check "update --lazy asks for what runs read of the version before, ahead of any run" asked_ahead
+read_ahead() {
+    local before after demand s
+    before=$(settled_requests j)
+    demand=$(state2 j on_demand)
+    s=$(zj run $APP cat "$(deploy2_of j)\\small.txt" 2>/dev/null | tr -d '\r')
+    [ "$s" = 'hello lazy, version 2' ] || { echo "small.txt says '$s'"; return 1; }
+    after=$(settled_requests j)
+    [ -n "$before" ] && [ "$before" = "$after" ] || { echo "requests went from ${before:-?} to ${after:-?}"; return 1; }
+    [ "$(state2 j on_demand)" = "$demand" ] || { echo "bytes fetched for reads went from $demand to $(state2 j on_demand)"; return 1; }
+    # Seen, and so written down for version 2 as well.
+    grep -qxF "$hex2 small.txt" "$(learned_of j)" || { echo "the read wasn't written down: $(tr '\n' ' ' <"$(learned_of j)")"; return 1; }
+    recall_on_access "$(deploy2_of j)\\new.bin" || { echo "new.bin was fetched for a run"; return 1; }
+}
+check "and a run then reads it without a request to the registry" read_ahead
+forgotten() {
+    zj rm $APP >/dev/null 2>&1 || { echo "rm failed"; return 1; }
+    [ -e "$(learned_of j)" ] || { echo "rm deleted the list"; return 1; }
+    zj prune >/dev/null 2>&1 || { echo "prune failed"; return 1; }
+    [ ! -e "$(learned_of j)" ] || { echo "prune left the list"; return 1; }
+}
+check "rm leaves what runs read of the app, and prune forgets it" forgotten
+rm -f "$(cygpath -u "$gate")"
 
 # --- A slow link -------------------------------------------------------------
 # LAZY_SLOW bytes a second, 1 MiB by default: big.bin's first 4 MiB chunk takes

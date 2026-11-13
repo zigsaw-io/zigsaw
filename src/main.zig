@@ -1169,6 +1169,7 @@ test {
     _ = @import("rollback.zig");
     _ = @import("snapshot.zig");
     _ = @import("layer.zig");
+    _ = @import("learned.zig");
     _ = @import("ledger.zig");
     _ = @import("run.zig");
     _ = @import("schedule.zig");

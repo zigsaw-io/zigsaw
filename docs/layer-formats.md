@@ -172,6 +172,10 @@ What a first run reads can come first in the blob, as eStargz allows:
 - Only Qt's runtime and SDK have lists (iteration 78): 36 files of Qt's
   runtime for Designer's window, 456 of its SDK for a CMake build of a Qt
   program. Other eStargz images would need publishing again.
+- What a list doesn't name, a machine learns (iteration 96): a lazy layer's
+  helper writes down the files runs read of it, and the next lazy pull of
+  that image asks for them ahead of any run. Nothing of it is in the layer
+  or the image: see [how it works](how-it-works.md#lazy-pulls).
 
 ### Recipes
 
@@ -318,6 +322,7 @@ A gzip layer is named as one that can't be read without pulling.
 | 66 | Range downloads (and resuming a broken download); stargazer 0.2's update plans; updates that build the blob from the store's; `zigsaw ls` and `zigsaw cat`; llvm-mingw on eStargz |
 | 77 | stargazer 0.3's chunk reads; `pull --lazy`, Cloud Files placeholders served by a helper until the blob is in; TeX Live on eStargz |
 | 78 | stargazer 0.4's prioritized files; recipes' `prefetch`, and `scripts/record-prefetch.sh`; a helper that fetches in parallel and once; Qt's chain re-pinned to llvm-mingw on eStargz, with lists |
+| 96 | lists nobody writes: a lazy layer's helper writes down what runs read of it, by image, and the image's next lazy layer has those files asked for ahead of any run; no format or recipe change |
 
 ## Decisions
 

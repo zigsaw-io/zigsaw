@@ -19,7 +19,10 @@
 //!   <root>\lazy\<hex>\            what a layer has while it's pulled lazily: its TOC,
 //!                                 the download so far, its helper's state and log
 //!                                 (see lazy.zig)
-//!   <root>\data\<id>\             per-app writable state, kept across runs
+//!   <root>\learned\<id>.txt       the files runs read of an image's layers while
+//!                                 they were lazy, which its next lazy pull asks
+//!                                 for first (see learned.zig)
+//!   <root>\data\<id>\            per-app writable state, kept across runs
 //!   <root>\grants\<id>.txt        host paths whose ACLs zigsaw changed for the app:
 //!                                 grants to its AppContainer, low integrity labels
 //!   <root>\grants\<id>.cwd        those of them granted as a run's working directory
@@ -66,7 +69,7 @@ verbose: bool = false,
 /// from another.
 ledger_key: ?[]const u8 = null,
 
-const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "snapshots", "deploy", "lazy", "volumes", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
+const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "snapshots", "deploy", "lazy", "learned", "volumes", "grants", "overrides", "bin", "aliases", "open", "ports", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
     const root = if (env.get("ZIGSAW_HOME")) |home|

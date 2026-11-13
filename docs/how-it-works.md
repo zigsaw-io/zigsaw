@@ -422,6 +422,29 @@ before `.prefetch.landmark`), the helper asks for their span as soon as it's con
 at a run's priority, and has Windows hydrate each file (`CfHydratePlaceholder`, on a
 handle that only reads attributes, which the provider's own process may open) as its
 blocks are in. A first run then finds those on disk.
+
+**What runs read** (0.96 on): `pull` writes the id of the image a layer is the own one
+of, an app's or a runtime's, in its `layer.json`. Each time the helper has served a
+file to a process other than itself, it appends `<layer hex> <path>` to
+`learned\<id>.txt` in the store, once a file, under that file's lock (two versions of a
+runtime can be lazy at once, each with its helper). The image's list is the paths of
+the last three layers that file has lines of, by when each last got one
+(`learned.select`); whoever reads it leaves the file with only those. When the image's
+next layer is made lazy, `pull` says how many of the list's files it has, and its
+helper asks for their spans in the blob as it starts (`lazy.learnedAhead`): those
+within a MiB of each other as one, in the order runs first read them, less the
+prioritized files. They go out at a priority of their own (`BlobReader.prefetchAhead`):
+behind anything a run waits for, which moves a queued piece up if it wants it, before
+the download, on at most three of the four threads, and counted apart (`ahead` in
+`state.json`). On an update, blocks the copy plan claimed are passed over, so the list
+costs requests only for what changed. The files stay placeholders: a run that reads
+one gets it from the blob, in a callback that takes no request, and that callback is
+how the helper sees the read and writes the file down for the new layer. A file that
+no run reads any more is therefore gone from the list three layers later. Nothing is
+seen once a layer is swapped in, and a layer nothing read from while it was lazy has
+no lines and counts for nothing. `prune` deletes the lists of images that no installed
+app is or has as a runtime; `rm` leaves them.
+
 **The swap**: once no run uses the deployment (0.79 on: unpacking beside a run, with
 Defender looking at each new file, made TeX Live's first `pdflatex` take 52 s instead
 of 12), the helper unpacks the blob into `tmp\` as `Store.deploy` would, at background

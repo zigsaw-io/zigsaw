@@ -1079,6 +1079,29 @@
   version, reads other files, which then come as asked. Perl's is what TeX Live's first
   `pdflatex` reads of it, not what PostgreSQL's PL/Perl does. Qt's SDK's is 456 paths
   long, VSCodium's 193, in their recipes.
+- What a list doesn't name, a machine writes down as its runs read it (0.96,
+  `learned\<id>.txt`), for the versions after only: a first pull of an image has nothing
+  learned, on any machine, and nothing learned here reaches another machine or the image.
+  Only reads made while the layer was lazy are seen, and none once it's swapped in: an
+  app pulled without `--lazy`, or first run after its download finished, learns nothing.
+- A learned file is asked for ahead and left a placeholder: its first read still pays
+  Windows' callback into the helper and Defender's look (some 7 ms a file), which a file
+  of a recipe's list, on disk by then, doesn't. That callback is how the helper sees the
+  file is still read; one that isn't drops off after three lazy layers that were read
+  from, not before.
+- Anything's reads count, not only a run's: Defender's, Explorer's (a shortcut's icon),
+  an indexer's or a backup's walk of the store, after which much of the next layer is
+  asked for ahead, in the order that walk read it. The download wants those bytes
+  anyway; what a wrong list costs is the order they come in, and threads a run's own
+  reads don't wait behind.
+- `rm` leaves an image's list and `prune` deletes it, as it deletes the blobs: so a list
+  never serves a second pull of the same version (after `rm` alone the layer's blob is
+  still there), only a newer one. There's no command to see a list or forget it:
+  deleting the file does.
+- A list is paths, by image id, across versions: a version that renames what runs read
+  (`lib/clang/23` to `24`) has none of those asked for ahead, and comes as it's asked.
+- A zigsaw before 0.96 neither writes nor reads the lists, and a layer it made lazy says
+  nothing of its image: a 0.96 helper that serves it writes nothing down.
 - The unpack waits while a run uses the deployment, so a long run (an editor left open)
   keeps the app on placeholders until it ends, and the layer then unpacks and swaps.
   A run that starts during the unpack gets the machine first, but not to itself.

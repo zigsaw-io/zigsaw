@@ -28,6 +28,10 @@
 //!                           waits, so that the pull's own downloads go first
 //!   lazy\zigsaw-<hash>.exe  the copy of zigsaw that helpers run, so that
 //!                           zigsaw.exe can be replaced while they do
+//!
+//! And what outlives the layer: learned\<id>.txt, the files runs read of the
+//! image's layers while they were lazy (learned.zig), which the helper of the
+//! image's next lazy layer asks for before any run does (`learnedAhead`).
 
 const std = @import("std");
 const Io = std.Io;
@@ -39,6 +43,7 @@ const BlobReader = @import("BlobReader.zig");
 const cloudfiles = @import("cloudfiles.zig");
 const Store = @import("Store.zig");
 const format = @import("format.zig");
+const learned = @import("learned.zig");
 const oci = @import("oci.zig");
 const process = @import("process.zig");
 const remote = @import("remote.zig");
@@ -51,6 +56,9 @@ pub const Meta = struct {
     host: []const u8,
     repository: []const u8,
     layer: oci.Descriptor,
+    /// The id of the image the layer is the own one of, an app or a runtime:
+    /// whose list what runs read of it goes on (0.96 on).
+    image: ?[]const u8 = null,
 };
 
 /// What `state.json` holds.
@@ -65,7 +73,68 @@ pub const State = struct {
     /// rather than for the download (0.78 on).
     requests: u64 = 0,
     on_demand: u64 = 0,
+    /// Bytes it fetched ahead of reads: files runs read of the image's
+    /// layers before this one (0.96 on).
+    ahead: u64 = 0,
 };
+
+/// What a layer's helper asks for before any run does.
+pub const Ahead = struct {
+    files: usize = 0,
+    /// Their sizes, unpacked.
+    bytes: u64 = 0,
+    /// Where they are in the blob, neighbours joined, in the order runs
+    /// first read a file of each.
+    spans: []const BlobReader.Piece = &.{},
+};
+
+/// The files of the layer that runs read of the image's layers before it
+/// (learned.zig), less those the layer has first, its recipe's `prefetch`,
+/// which the helper hydrates anyway.
+pub fn learnedAhead(store: Store, arena: Allocator, image: []const u8, index: *const format.Index) !Ahead {
+    const names = try learned.read(store, arena, image);
+    if (names.len == 0) return .{};
+    const prioritized = format.prioritized(index).len;
+    const Span = struct { start: u64, end: u64, rank: usize };
+    var spans: std.ArrayList(Span) = .empty;
+    var ahead: Ahead = .{};
+    for (names, 0..) |name, rank| {
+        const f = index.lookup(name) orelse continue;
+        if (f.entry.type != .reg or f.chunks.len == 0) continue;
+        if ((@intFromPtr(f) - @intFromPtr(index.files.ptr)) / @sizeOf(format.Index.File) < prioritized) continue;
+        ahead.files += 1;
+        ahead.bytes += f.size;
+        try spans.append(arena, .{ .start = f.chunks[0].offset, .end = f.chunks[f.chunks.len - 1].end, .rank = rank });
+    }
+    // What lies within a MiB of another goes with it, in one request: the
+    // download wants what's between them too.
+    std.mem.sort(Span, spans.items, {}, struct {
+        fn less(_: void, a: Span, b: Span) bool {
+            return a.start < b.start;
+        }
+    }.less);
+    var joined: std.ArrayList(Span) = .empty;
+    for (spans.items) |s| {
+        if (joined.items.len > 0) {
+            const last = &joined.items[joined.items.len - 1];
+            if (s.start <= last.end + (1 << 20)) {
+                last.end = @max(last.end, s.end);
+                last.rank = @min(last.rank, s.rank);
+                continue;
+            }
+        }
+        try joined.append(arena, s);
+    }
+    std.mem.sort(Span, joined.items, {}, struct {
+        fn less(_: void, a: Span, b: Span) bool {
+            return a.rank < b.rank;
+        }
+    }.less);
+    const pieces = try arena.alloc(BlobReader.Piece, joined.items.len);
+    for (pieces, joined.items) |*p, s| p.* = .{ .start = s.start, .end = s.end };
+    ahead.spans = pieces;
+    return ahead;
+}
 
 /// What `plan.json` holds: the bytes of the layer's blob that blobs the store
 /// has hold too, as an update's previous version of the layer does, for the
@@ -166,8 +235,9 @@ pub const Prepared = enum {
 /// Makes the layer's deployment placeholders, served by a new helper, for a
 /// pull that has agreed to the image: its TOC fetched and checked against
 /// the descriptor, as the deployment comes from it alone. Falls back to a
-/// whole download, with a note, where that isn't possible.
-pub fn prepare(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !Prepared {
+/// whole download, with a note, where that isn't possible. `image` is the id
+/// of the image the layer is the own one of.
+pub fn prepare(ctx: *Context, registry: *Registry, desc: oci.Descriptor, image: ?[]const u8) !Prepared {
     const store = ctx.store;
     const arena = ctx.arena;
     const io = ctx.io;
@@ -202,8 +272,16 @@ pub fn prepare(ctx: *Context, registry: *Registry, desc: oci.Descriptor) !Prepar
         .host = registry.ref.host,
         .repository = registry.ref.repository,
         .layer = desc,
+        .image = image,
     }) });
     try writePlan(ctx, registry, desc, index, blob.tail_start);
+    // What its helper asks for as it starts. A list that can't be read is
+    // none: the layer's files then come as they're asked for.
+    if (image) |id| {
+        const ahead = learnedAhead(store, arena, id, index) catch Ahead{};
+        if (ahead.files > 0)
+            note("  layer {s}: {d} file{s} that runs read before come{s} first", .{ short, ahead.files, if (ahead.files == 1) "" else "s", if (ahead.files == 1) "s" else "" });
+    }
     try writeState(store, arena, hex, .{ .phase = "starting", .size = desc.size });
     // Until this process ends, however it ends: its other layers' downloads,
     // and the first run, which follows, have the network first.

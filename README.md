@@ -432,6 +432,32 @@ layer, and the helper asks for them all at once and puts them on disk before
 the run gets to them, rather than as it asks, one after another. Qt's runtime
 and SDK, TeX Live, Perl, VSCodium and Electron's runtime have such lists.
 
+What a list doesn't name, zigsaw writes down itself (0.96 on). While a layer
+is lazy, its helper notes each file that something reads of it, and the next
+version of that image you pull or update lazily has those files asked for at
+once, before any run does:
+
+```powershell
+zigsaw update --lazy org.tug.texlive
+#   layer sha256:98d15a334bed: 249 files that runs read before come first
+```
+
+TeX Live's list is what `pdflatex` reads. Here `lualatex` had been run on the
+version before, and after that update it took 6 s instead of 18 to 20, from
+ghcr.io with nothing in the store to copy from; the update took as long
+either way. Where the version before was complete, so that most of the new
+layer was copied from it, it took 6 s instead of 11 (one pair of runs).
+[findings.md](docs/findings.md#lists-that-write-themselves-iteration-96)
+has the table.
+
+The list is this machine's, one for each image, an app's or a runtime's:
+`learned\<id>.txt` in the store, paths and nothing else. A file that nothing
+has read during the last three versions pulled lazily drops off it. `zigsaw
+rm` leaves it for the app's next pull, `zigsaw prune` deletes the lists of
+images that nothing installed uses, and deleting the file forgets it. It does
+nothing for an image's first pull, and sees only reads made before the
+download finished.
+
 The layer's deployment starts as Windows' Cloud Files placeholders, as
 OneDrive's files are: listed, with their sizes, and empty. A helper process,
 which is zigsaw itself, gives Windows a file's bytes when a program first
@@ -1582,7 +1608,7 @@ bash tests/install.sh   # scripts/package.sh's release files, and install.ps1 in
 bash tests/upgrade.sh   # v0.80.0 and v0.83.0 from GitHub, each with a store of its own (data, a command a run added, a shortcut, a named volume, keys a killed run left in HKCU), upgraded with `zigsaw upgrade` to this checkout's package: everything where this zigsaw keeps it, and still working (RELEASES narrows it; under 1 min)
 bash tests/zot.sh bash tests/updates.sh # what a check finds, keeps and tells, and that nothing installs anything; real scheduled tasks under this run's own name, which it removes, and the real one untouched (under 1 min; without a registry, only the task rows)
 bash tests/zot.sh bash tests/rollback.sh # the version an update replaces is kept, rollback goes back to it without the network and updates pass over the version left, a newer one gets through, hold and unhold; an install over a version copies the app's data, a rollback asks and takes it back or leaves it, --data-only, while the app runs, a swap that didn't finish, --nosnapshot (under 1 min)
-bash tests/zot.sh bash tests/lazy.sh # pull --lazy: placeholders served under each sandbox, a file's chunks in a few requests, a recipe's prefetch files first in the layer and hydrated ahead, a helper that comes back, goes on from what the last one fetched and says what it couldn't fetch, a download that fetches nothing twice, the swap once the download's done and no run uses it, rm, a job that keeps what it starts, a whole download where placeholders can't be, update --lazy copying what the version before has (a source gone, a copy wrong), and a slow fetch telling Windows how far it's got (under 1 min; needs NTFS: LAZY_WORK, and LAZY_DEV_DRIVE for a real Dev Drive row; LAZY_WAIT=90000 for a fetch past Windows' 60 s)
+bash tests/zot.sh bash tests/lazy.sh # pull --lazy: placeholders served under each sandbox, a file's chunks in a few requests, a recipe's prefetch files first in the layer and hydrated ahead, a helper that comes back, goes on from what the last one fetched and says what it couldn't fetch, a download that fetches nothing twice, the swap once the download's done and no run uses it, rm, a job that keeps what it starts, a whole download where placeholders can't be, update --lazy copying what the version before has (a source gone, a copy wrong), what runs read written down and asked for ahead of the next version's runs, and a slow fetch telling Windows how far it's got (about 1 min; needs NTFS: LAZY_WORK, and LAZY_DEV_DRIVE for a real Dev Drive row; LAZY_WAIT=90000 for a fetch past Windows' 60 s)
 bash tests/zot.sh bash tests/signing.sh # what pull, update and info do with an image's good, wrong and missing signature, with keys `zigsaw trust` adds (under 1 min)
 bash tests/self.sh      # zigsaw building this checkout's zigsaw.json makes the same programs as zig build -Dstrip (the Release workflow runs it on its package); an incremental build of a copy after a change makes what --clean does
 bash tests/ctrlc.sh     # Ctrl+C, Ctrl+Break and closing the console, in a pseudoconsole

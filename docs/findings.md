@@ -3088,6 +3088,52 @@ Not seen here: a serial port, a smart card reader and a location provider
 (none on the machine), a second camera, and any of it on Windows 10 or Server.
 CI runners have no camera; the suite's rows there read the run's token.
 
+## Lists that write themselves (iteration 96)
+
+What a lazy layer's helper serves to anything but itself, it writes down for the layer's
+image (`learned\<id>.txt`), and the image's next lazy layer has those files asked for
+ahead of any run. Measured from ghcr.io on 2026-11-13 (a link of some 5 to 10 MB/s, zigsaw
+0.96.0, `D:\zs\i96\lab.sh`): each row is a store of its own, which pulls the published
+TeX Live `99b0c1d4` lazily, runs `lualatex hello.tex` once, and is then updated lazily to
+`7d55caed`, where `lualatex` runs again. The recipe's list is `pdflatex`'s, so `lualatex`
+is a command no list was recorded for. "Without" has `learned\` deleted before the
+update. The ref's source was edited to the image's `latest` tag, so that `update` had
+somewhere to go from a version pulled by digest.
+
+| | `update --lazy` | then `lualatex` | together |
+|---|---|---|---|
+| nothing to copy, without the list | 52.6 s, 55.1 s | 17.5 s, 19.9 s | 70.1 s, 75.0 s |
+| nothing to copy, with it | 60.4 s, 55.2 s | 5.8 s, 6.1 s | 66.2 s, 61.3 s |
+| 97% copied from the version before, without | 42.6 s | 10.6 s | 53.1 s |
+| 97% copied, with | 42.0 s | 6.4 s | 48.4 s |
+
+- **"Nothing to copy"** holds the older version's download back (the tests' gate), so its
+  blob is never whole and the update's plan has no source: what a first version on
+  eStargz, or an update soon after a pull, is like. The two pairs were run in opposite
+  orders, within the same half hour.
+- **What was learned**: 326 files (77.2 MB) of TeX Live's layer, read by the older
+  version's `lualatex`. The new layer has 249 of them outside its own prioritized
+  files: 63.4 MB, which lie in 10 spans of its blob once neighbours within a MiB are
+  joined.
+- **With nothing to copy**, the helper fetched 53.5 MB ahead and 8.0 MB for reads (the
+  prioritized span counts as reads); without the list, 65.6 and 73.0 MB for reads. The
+  same bytes, then, at the link's speed in three requests at a time rather than as the
+  program asks. The update itself took as long in the second pair and 8 s longer in the
+  first: pulls of this image varied from 38 to 51 s on the day, so that's within what the
+  link does, and it may also be the list's fetches sharing the link with the pull's own.
+- **With 97% copied**, the list had 0.8 MB to fetch ahead, as the copy plan's blocks are
+  passed over, and `lualatex` was still 4 s quicker with it. One pair: the difference is
+  no more than the first row's two runs differ by, so it shows no loss, not a gain.
+- **The first version, where nothing is learned yet**: `pull --lazy` took 38 to 51 s and
+  `lualatex` 24 to 36 s after it, its 326 files as they were asked for.
+- **Where a recipe's list already says it, learning adds nothing**: llvm-mingw 20261020
+  to 20261104, `clang hello.c -o hello.exe`. The older version, which has no list, served
+  32 files (139 MB) and wrote them down; 31 are in the new version's list of 464, so one
+  file (14 KB) was asked for ahead. The compile came 2.1 s after an update of 8.2 s.
+- **In `tests/lazy.sh`**, against a local registry: a run of the next version reads a
+  file that changed without a request leaving the helper, and without the count of bytes
+  fetched for reads moving.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

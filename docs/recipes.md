@@ -64,7 +64,9 @@ app doesn't have is left out, with a warning, so a version bump still
 builds. `scripts/record-prefetch.sh <ref> [--command=<name>] [-- <args>]`
 (or `--window=<title>`) makes the list from a run of the published image,
 to paste in. Qt's runtime lists what Designer's window reads, and its SDK
-what a CMake build of a Qt program does.
+what a CMake build of a Qt program does. A list is for a first pull, on any
+machine; what its runs read beyond it, each machine
+[writes down itself](../README.md#pulling-lazily) for the versions after.
 
 An eStargz layer is also what an update can download in part (zigsaw
 0.66 and later): the new layer's blob is built from the members of

@@ -9,8 +9,10 @@
 //! blocks of its whole span that nobody has asked for yet, which go out as
 //! one Range request per run of them (at most `demand_piece`), on a few
 //! threads with a registry client each: what a run waits for first, then
-//! the download's, which never takes the last thread. It then waits for its
-//! blocks and reads them from the file. Once the blob is complete (`finish`),
+//! what was asked for ahead of any run (`prefetchAhead`: the files runs read
+//! of the layer before this one), then the download's; neither of those ever
+//! takes the last thread. It then waits for its blocks and reads them from
+//! the file. Once the blob is complete (`finish`),
 //! reads come from the store's blob.
 //!
 //! The pull's own (`attachMemory`), which reads its programs' headers, keeps
@@ -55,10 +57,13 @@ blocks: []State = &.{},
 have_blocks: usize = 0,
 have_bytes: u64 = 0,
 demand: std.ArrayList(Piece) = .empty,
+ahead: std.ArrayList(Piece) = .empty,
 background: std.ArrayList(Piece) = .empty,
 /// The download's pieces queued, and those being fetched.
 background_out: usize = 0,
 background_busy: usize = 0,
+/// Pieces asked for ahead of use being fetched.
+ahead_busy: usize = 0,
 /// Runs' pieces being fetched, and when the last one ended (GetTickCount64).
 demand_busy: usize = 0,
 demand_done_at: u64 = 0,
@@ -81,10 +86,11 @@ map_path: []const u8 = "",
 /// Once complete: the store's blob, opened for each read so that it can move.
 done_path: []const u8 = "",
 
-/// Requests sent; bytes fetched for reads and for the download; bytes an
-/// earlier helper had fetched.
+/// Requests sent; bytes fetched for reads, ahead of them, and for the
+/// download; bytes an earlier helper had fetched.
 requests: std.atomic.Value(u64) = .init(0),
 on_demand: std.atomic.Value(u64) = .init(0),
+ahead_bytes: std.atomic.Value(u64) = .init(0),
 downloaded: std.atomic.Value(u64) = .init(0),
 earlier: u64 = 0,
 /// Bytes copied from other blobs in the store, rather than fetched.
@@ -113,7 +119,7 @@ const quiet_ms = 1000;
 
 /// `copying`: claimed by whoever copies it from another blob, until it
 /// `settle`s it.
-const State = enum(u8) { missing, queued_background, queued_demand, fetching, copying, have };
+const State = enum(u8) { missing, queued_background, queued_ahead, queued_demand, fetching, copying, have };
 
 const Inflight = struct {
     busy: bool = false,
@@ -180,6 +186,7 @@ pub fn deinit(b: *BlobReader) void {
     b.gpa.free(b.clients);
     b.gpa.free(b.inflight);
     b.demand.deinit(b.gpa);
+    b.ahead.deinit(b.gpa);
     b.background.deinit(b.gpa);
     b.closeFiles();
     for (b.mem) |m| if (m) |block| b.gpa.free(block);
@@ -471,13 +478,22 @@ fn readAllAt(io: Io, file: Io.File, offset: u64, buffer: []u8) !void {
     }
 }
 
-const Priority = enum { demand, background };
+/// `ahead`: what nothing waits for yet, but a run is expected to read.
+const Priority = enum { demand, ahead, background };
 
 /// Asks for the blocks from `start` to `end` without waiting for them: what
 /// a fetch of several chunks wants, so that they come in parallel.
 pub fn prefetch(b: *BlobReader, start: u64, end: u64) void {
     if (b.blocks.len == 0) return;
     b.request(start, @min(end, b.tail_start), .demand) catch {};
+}
+
+/// Asks for the blocks from `start` to `end` ahead of any read of them:
+/// behind what runs wait for, before the download, and counted apart
+/// (`ahead_bytes`). A read that gets to one first has it moved up.
+pub fn prefetchAhead(b: *BlobReader, start: u64, end: u64) void {
+    if (b.blocks.len == 0) return;
+    b.request(start, @min(end, b.tail_start), .ahead) catch {};
 }
 
 /// Waits until the blocks from `start` to `end` are in, asking for those
@@ -538,18 +554,24 @@ fn request(b: *BlobReader, start: u64, end: u64, priority: Priority) !void {
 fn requestLocked(b: *BlobReader, start: u64, end: u64, priority: Priority) !void {
     const first: usize = @intCast(start / b.block_size);
     const last: usize = @intCast(std.math.divCeil(u64, @min(end, b.tail_start), b.block_size) catch unreachable);
-    const max_blocks: usize = @intCast((if (priority == .demand) demand_piece else background_piece) / b.block_size);
+    const max_blocks: usize = @intCast((if (priority == .background) background_piece else demand_piece) / b.block_size);
+    const queued: State = switch (priority) {
+        .demand => .queued_demand,
+        .ahead => .queued_ahead,
+        .background => .queued_background,
+    };
     var i = first;
     while (i < last) {
         switch (b.blocks[i]) {
             .missing => {
                 var j = i;
                 while (j < last and j - i < max_blocks and b.blocks[j] == .missing) : (j += 1) {
-                    b.blocks[j] = if (priority == .demand) .queued_demand else .queued_background;
+                    b.blocks[j] = queued;
                 }
                 const piece: Piece = .{ .start = @as(u64, i) * b.block_size, .end = b.blockEnd(j - 1) };
                 switch (priority) {
                     .demand => try b.demand.append(b.gpa, piece),
+                    .ahead => try b.ahead.append(b.gpa, piece),
                     .background => {
                         try b.background.append(b.gpa, piece);
                         b.background_out += 1;
@@ -558,7 +580,11 @@ fn requestLocked(b: *BlobReader, start: u64, end: u64, priority: Priority) !void
                 i = j;
             },
             .queued_background => {
-                if (priority == .demand) b.promote(i);
+                if (priority != .background) b.promote(i, priority);
+                i += 1;
+            },
+            .queued_ahead => {
+                if (priority == .demand) b.promote(i, .demand);
                 i += 1;
             },
             else => i += 1,
@@ -566,22 +592,25 @@ fn requestLocked(b: *BlobReader, start: u64, end: u64, priority: Priority) !void
     }
 }
 
-/// Moves the download's queued piece with block `i` to the front of what
-/// runs wait for.
-fn promote(b: *BlobReader, i: usize) void {
+/// Moves the queued piece with block `i`, the download's or one asked for
+/// ahead, up: to the front of what runs wait for, or behind what else was
+/// asked for ahead.
+fn promote(b: *BlobReader, i: usize, to: Priority) void {
     const at = @as(u64, i) * b.block_size;
-    for (b.background.items, 0..) |p, k| {
+    const from_background = b.blocks[i] == .queued_background;
+    const from = if (from_background) &b.background else &b.ahead;
+    for (from.items, 0..) |p, k| {
         if (at < p.start or at >= p.end) continue;
-        _ = b.background.orderedRemove(k);
-        b.background_out -= 1;
-        b.demand.insert(b.gpa, 0, p) catch {
-            // No room: it stays the download's.
-            b.background.insert(b.gpa, k, p) catch unreachable;
-            b.background_out += 1;
-            return;
-        };
+        // No room: it stays where it is.
+        if (to == .demand) {
+            b.demand.insert(b.gpa, 0, p) catch return;
+        } else {
+            b.ahead.append(b.gpa, p) catch return;
+        }
+        _ = from.orderedRemove(k);
+        if (from_background) b.background_out -= 1;
         var j: usize = @intCast(p.start / b.block_size);
-        while (@as(u64, j) * b.block_size < p.end) : (j += 1) b.blocks[j] = .queued_demand;
+        while (@as(u64, j) * b.block_size < p.end) : (j += 1) b.blocks[j] = if (to == .demand) .queued_demand else .queued_ahead;
         return;
     }
 }
@@ -706,18 +735,25 @@ fn work(b: *BlobReader, slot: *Inflight) void {
     defer win32.ReleaseSRWLockExclusive(&b.lock);
     while (!b.stopping) {
         var piece: Piece = undefined;
-        var background = false;
+        var kind: Priority = .demand;
         // A run's fetches have the network to themselves: the download
         // starts nothing while one is queued or going, or for a second after,
         // as a run's next is often right behind.
         const quiet = b.demand_busy == 0 and win32.GetTickCount64() -% b.demand_done_at >= quiet_ms;
+        // One thread is always left for what a run waits for.
+        const spare = b.background_busy + b.ahead_busy + 1 < @max(b.workers.len, 2);
         if (b.demand.items.len > 0) {
             piece = b.demand.orderedRemove(0);
             b.demand_busy += 1;
-        } else if (quiet and b.background.items.len > 0 and b.background_busy + 1 < @max(b.workers.len, 2)) {
-            // One thread is always left for what a run waits for.
+        } else if (spare and b.ahead.items.len > 0) {
+            // Beside a run's fetches, not after them: it's what the run is
+            // expected to ask for next.
+            piece = b.ahead.orderedRemove(0);
+            kind = .ahead;
+            b.ahead_busy += 1;
+        } else if (quiet and spare and b.ahead_busy == 0 and b.background.items.len > 0) {
             piece = b.background.orderedRemove(0);
-            background = true;
+            kind = .background;
             b.background_busy += 1;
         } else {
             _ = win32.SleepConditionVariableSRW(&b.cond, &b.lock, if (quiet) 1000 else 100, 0);
@@ -730,22 +766,30 @@ fn work(b: *BlobReader, slot: *Inflight) void {
         const result = b.fetchInto(piece.start, buf[0..len], &slot.got);
         win32.AcquireSRWLockExclusive(&b.lock);
         slot.busy = false;
-        if (background) {
-            b.background_busy -= 1;
-            b.background_out -= 1;
-        } else {
-            b.demand_busy -= 1;
-            b.demand_done_at = win32.GetTickCount64();
+        switch (kind) {
+            .background => {
+                b.background_busy -= 1;
+                b.background_out -= 1;
+            },
+            .ahead => b.ahead_busy -= 1,
+            .demand => {
+                b.demand_busy -= 1;
+                b.demand_done_at = win32.GetTickCount64();
+            },
         }
         if (result) |_| {
             b.mark(piece, .have);
-            const counter = if (background) &b.downloaded else &b.on_demand;
+            const counter = switch (kind) {
+                .background => &b.downloaded,
+                .ahead => &b.ahead_bytes,
+                .demand => &b.on_demand,
+            };
             _ = counter.fetchAdd(len, .monotonic);
             b.writeMap();
         } else |err| {
             b.mark(piece, .missing);
             b.last_error = err;
-            if (background) b.background_failed = err;
+            if (kind == .background) b.background_failed = err;
         }
         win32.WakeAllConditionVariable(&b.cond);
     }
@@ -1310,4 +1354,95 @@ test "received counts what's come of a fetch while it comes" {
     Halting.go.store(true, .release);
     try testing.expect(try b.ensureFor(0, 1 << 20, 10_000));
     try testing.expectEqual(@as(u64, 1 << 20), b.received(0, 1 << 20));
+}
+
+/// A fetch that says what it was asked for, in the order it was, and waits
+/// for `go`.
+const Gated = struct {
+    var lock: win32.SRWLOCK = .{};
+    var order: [64]u64 = undefined;
+    var count: usize = 0;
+    var go: std.atomic.Value(bool) = .init(false);
+
+    fn fetch(b: *BlobReader, offset: u64, len: usize, w: *Io.Writer) anyerror!void {
+        _ = b;
+        win32.AcquireSRWLockExclusive(&lock);
+        if (count < order.len) order[count] = offset;
+        count += 1;
+        win32.ReleaseSRWLockExclusive(&lock);
+        while (!go.load(.acquire)) win32.Sleep(2);
+        try Fake.writePattern(w, offset, len);
+    }
+
+    fn started() usize {
+        win32.AcquireSRWLockExclusive(&lock);
+        defer win32.ReleaseSRWLockExclusive(&lock);
+        return count;
+    }
+
+    /// Which request, from 0, was the one for the piece at `offset`.
+    fn position(offset: u64) ?usize {
+        win32.AcquireSRWLockExclusive(&lock);
+        defer win32.ReleaseSRWLockExclusive(&lock);
+        for (order[0..@min(count, order.len)], 0..) |o, i| if (o == offset) return i;
+        return null;
+    }
+};
+
+test "what's asked for ahead comes beside a read and before the download, and a read moves it up" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var ctx = testContext(arena.allocator());
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    Gated.count = 0;
+    Gated.go.store(false, .monotonic);
+    const size: u64 = 48 << 20;
+    const b = try testReaderOf(&ctx, "tail", size, try tmpPath(arena.allocator(), &tmp), .{}, Gated.fetch);
+    defer b.deinit();
+    // Whatever fails below, the threads end.
+    defer Gated.go.store(true, .release);
+
+    const Reader = struct {
+        fn run(r: *BlobReader, offset: u64, ok: *bool) void {
+            var buf: [10]u8 = undefined;
+            r.source().readAll(offset, &buf) catch return;
+            ok.* = buf[0] == @as(u8, @truncate(offset));
+        }
+    };
+    // Six pieces of 4 MiB, then a read elsewhere: three threads have a piece
+    // asked for ahead each, and the fourth, kept for reads, the read's.
+    b.prefetchAhead(8 << 20, 32 << 20);
+    var ok1 = false;
+    const t1 = try std.Thread.spawn(.{}, Reader.run, .{ b, 40 << 20, &ok1 });
+    while (Gated.started() < 4) win32.Sleep(2);
+    win32.Sleep(50);
+    try testing.expectEqual(@as(usize, 4), Gated.started());
+    try testing.expect(Gated.position(40 << 20) != null);
+    for ([_]u64{ 8, 12, 16 }) |mib| try testing.expect(Gated.position(mib << 20) != null);
+
+    // A read of the last piece asked for ahead: it's the next to go.
+    var ok2 = false;
+    const t2 = try std.Thread.spawn(.{}, Reader.run, .{ b, 28 << 20, &ok2 });
+    while (true) {
+        win32.AcquireSRWLockExclusive(&b.lock);
+        const waiting = b.demand.items.len;
+        win32.ReleaseSRWLockExclusive(&b.lock);
+        if (waiting == 1) break;
+        win32.Sleep(2);
+    }
+    Gated.go.store(true, .release);
+    t1.join();
+    t2.join();
+    try testing.expect(ok1 and ok2);
+    try testing.expectEqual(@as(?usize, 4), Gated.position(28 << 20));
+
+    try b.downloadAll(null);
+    // The download's first piece went after the last one asked for ahead.
+    try testing.expect(Gated.position(0).? > Gated.position(24 << 20).?);
+    try testing.expectEqual(size, b.haveBytes());
+    // Five pieces ahead; the read's block and the piece a read moved up.
+    try testing.expectEqual(@as(u64, 20 << 20), b.ahead_bytes.load(.monotonic));
+    try testing.expectEqual(@as(u64, 5 << 20), b.on_demand.load(.monotonic));
+    try testing.expectEqual(size - 4 - (25 << 20), b.downloaded.load(.monotonic));
 }

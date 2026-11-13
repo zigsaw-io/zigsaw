@@ -3,6 +3,8 @@
 //! them, and serves what Windows asks for from the blob, each chunk checked
 //! against the TOC; downloads the whole blob meanwhile, and checks it; and,
 //! once no run uses the deployment, unpacks the blob and swaps the result in.
+//! What it serves a run, it writes down for the image (learned.zig), and it
+//! starts by asking for what runs read of the image's layers before this one.
 //! One per layer: Windows lets one process provide for a sync root. It must
 //! not open the placeholders itself (Windows refuses its own process, error
 //! 395), which is why it isn't `zigsaw run`.
@@ -23,6 +25,7 @@ const acl = @import("acl.zig");
 const cloudfiles = @import("cloudfiles.zig");
 const format = @import("format.zig");
 const lazy = @import("lazy.zig");
+const learned = @import("learned.zig");
 const oci = @import("oci.zig");
 const win32 = @import("win32.zig");
 const fail = Context.fail;
@@ -64,6 +67,22 @@ const Helper = struct {
     plan: ?lazy.Plan = null,
     copy_runs: []const BlobReader.Piece = &.{},
     copy_files: []?Io.File = &.{},
+    /// The image the layer is the own one of, whose list what runs read
+    /// goes on; none for a layer a zigsaw before 0.96 made lazy.
+    image: ?[]const u8 = null,
+    /// By the index's files: whether this helper wrote the file down.
+    written_down: []std.atomic.Value(bool) = &.{},
+
+    /// Writes down, once, that something read the index's file `i`.
+    fn learn(h: *Helper, i: usize) void {
+        const image = h.image orelse return;
+        if (i >= h.written_down.len or h.written_down[i].swap(true, .monotonic)) return;
+        // A path of the store, its lock's, and a line: a few times MAX_PATH.
+        var buf: [16 << 10]u8 = undefined;
+        var fba: std.heap.FixedBufferAllocator = .init(&buf);
+        learned.record(h.ctx.store, fba.allocator(), image, h.hex, h.index.files[i].name) catch |err|
+            note("couldn't write down that {s} was read: {t}", .{ h.index.files[i].name, err });
+    }
 
     fn setError(h: *Helper, comptime fmt: []const u8, args: anytype) void {
         win32.AcquireSRWLockExclusive(&h.error_lock);
@@ -90,6 +109,7 @@ const Helper = struct {
             .@"error" = h.errorText(arena),
             .requests = h.reader.requests.load(.monotonic),
             .on_demand = h.reader.on_demand.load(.monotonic),
+            .ahead = h.reader.ahead_bytes.load(.monotonic),
         };
     }
 };
@@ -138,6 +158,7 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
         .index = undefined,
         .reader = reader,
         .blob_path = blob_path,
+        .image = meta.image,
     };
     h.progress_at.store(nowSeconds(), .monotonic);
     if (try Store.exists(io, blob_path)) {
@@ -157,6 +178,10 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
     // in the store, which anything of the user's could have changed.
     h.index = format.openIndex(gpa, desc, reader.source()) catch |err| return fail("the layer's index: {t}", .{err});
     try format.checkDeployable(desc, h.index);
+    if (h.image != null) {
+        h.written_down = try gpa.alloc(std.atomic.Value(bool), h.index.files.len);
+        for (h.written_down) |*w| w.* = .init(false);
+    }
 
     if (try finishedAlready(&h)) return 0;
     h.test_gate = ctx.env.get("ZIGSAW_TEST_LAZY_GATE");
@@ -192,9 +217,12 @@ pub fn main(ctx: *Context, hex: []const u8) !u32 {
         t.detach();
         // scripts/record-prefetch.sh's hook: what a run reads, fetched by it,
         // the prioritized files too.
-        if (format.prioritized(h.index).len > 0 and ctx.env.get("ZIGSAW_TEST_LAZY_NO_HYDRATE") == null) {
-            const p = try std.Thread.spawn(.{}, hydrateAhead, .{&h});
-            p.detach();
+        if (ctx.env.get("ZIGSAW_TEST_LAZY_NO_HYDRATE") == null) {
+            if (format.prioritized(h.index).len > 0) {
+                const p = try std.Thread.spawn(.{}, hydrateAhead, .{&h});
+                p.detach();
+            }
+            fetchAhead(&h);
         }
     }
 
@@ -371,11 +399,31 @@ fn onFetch(info: *const cloudfiles.CallbackInfo, raw: *const anyopaque) callconv
         _ = cloudfiles.transfer(info, status, null, first, len);
         return;
     };
-    // Not "fetched": what a run read is what record-prefetch.sh lists.
-    if (info.process_info != null and info.process_info.?.pid == win32.GetCurrentProcessId())
-        note("hydrated {s}: {d} bytes, ahead of use", .{ file.name, served })
-    else
+    // Not "fetched": what a run read is what record-prefetch.sh lists, and
+    // what the image's next lazy layer has asked for ahead.
+    if (info.process_info != null and info.process_info.?.pid == win32.GetCurrentProcessId()) {
+        note("hydrated {s}: {d} bytes, ahead of use", .{ file.name, served });
+    } else {
         note("fetched {s}: {d} bytes, for {s}", .{ file.name, served, image });
+        h.learn(index);
+    }
+}
+
+/// Asks for the files that runs read of the image's layers before this one
+/// (learned.zig), at once and behind whatever a run asks for meanwhile. They
+/// stay placeholders: a run that reads one is served it from the blob, and
+/// so is seen to, which keeps the file on the list.
+fn fetchAhead(h: *Helper) void {
+    const image = h.image orelse return;
+    var arena_state: std.heap.ArenaAllocator = .init(h.gpa);
+    defer arena_state.deinit();
+    const ahead = lazy.learnedAhead(h.ctx.store, arena_state.allocator(), image, h.index) catch |err| {
+        note("couldn't read what runs read of {s} before: {t}", .{ image, err });
+        return;
+    };
+    if (ahead.files == 0) return;
+    for (ahead.spans) |s| h.reader.prefetchAhead(s.start, s.end);
+    note("asked ahead for {d} files runs read before ({d} bytes), in {d} spans", .{ ahead.files, ahead.bytes, ahead.spans.len });
 }
 
 /// Asks for the layer's prioritized files at once, which its blob has first,
@@ -671,8 +719,8 @@ fn finishDownload(h: *Helper) !void {
     try h.reader.finish(h.blob_path);
     h.complete.store(true, .release);
     const r = h.reader;
-    note("downloaded and checked the whole blob: {d} bytes by the download, {d} for reads, {d} an earlier helper got, in {d} requests; {d} bytes from the store's layers", .{
-        r.downloaded.load(.monotonic), r.on_demand.load(.monotonic), r.earlier, r.requests.load(.monotonic), r.copied.load(.monotonic),
+    note("downloaded and checked the whole blob: {d} bytes by the download, {d} for reads, {d} an earlier helper got, in {d} requests; {d} bytes from the store's layers; {d} ahead of reads", .{
+        r.downloaded.load(.monotonic), r.on_demand.load(.monotonic), r.earlier, r.requests.load(.monotonic), r.copied.load(.monotonic), r.ahead_bytes.load(.monotonic),
     });
 }
 
