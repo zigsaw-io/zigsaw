@@ -9,6 +9,8 @@
 //!   zigsaw-ctrlc <zigsaw.exe> <store> <work-dir>   run the checks; org.nodejs.node
 //!                                                  must be installed in <store>
 //!   zigsaw-ctrlc break <pid>                       send Ctrl+Break to <pid>'s console
+//!   zigsaw-ctrlc term <command line> [<text>...]   run it in a pseudoconsole, pressing
+//!                                                  Ctrl+C once each text shows
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -40,8 +42,8 @@ pub fn main(init: std.process.Init) !void {
     if (args.len == 3 and std.mem.eql(u8, args[1], "break")) {
         win32.ExitProcess(sendBreak(try std.fmt.parseInt(DWORD, args[2], 10)));
     }
-    if (args.len == 3 and std.mem.eql(u8, args[1], "term")) {
-        win32.ExitProcess(try term(arena, args[2]));
+    if (args.len >= 3 and std.mem.eql(u8, args[1], "term")) {
+        win32.ExitProcess(try term(arena, args[2], args[3..]));
     }
     if (args.len != 4) {
         std.debug.print("usage: zigsaw-ctrlc <zigsaw.exe> <store> <work-dir>\n", .{});
@@ -376,13 +378,20 @@ fn killIfRunning(process: HANDLE) void {
     _ = win32.CloseHandle(process);
 }
 
-/// `term <command line>`: runs it in a pseudoconsole of its own, as a terminal
-/// does, for at most two minutes; then prints what it wrote, a line at a time,
-/// and exits with its exit code (124 if it was still running). For
-/// tests/stop.sh, which stops what runs there from outside.
-fn term(arena: Allocator, command_line: []const u8) !u32 {
+/// `term <command line> [<text>...]`: runs it in a pseudoconsole of its own,
+/// as a terminal does, for at most two minutes; then prints what it wrote, a
+/// line at a time, and exits with its exit code (124 if it was still
+/// running). For tests/stop.sh, which stops what runs there from outside.
+/// For each text given, it waits for the output to show it (with no spaces:
+/// ConPTY may write them as cursor moves), then presses Ctrl+C, as
+/// tests/up.sh does to a foreground `zigsaw up`.
+fn term(arena: Allocator, command_line: []const u8, presses: []const [:0]const u8) !u32 {
     _ = win32.SetConsoleCtrlHandler(null, win32.FALSE);
     var console = try Console.start(arena, command_line);
+    var seen: usize = 0;
+    for (presses) |text| {
+        if (console.waitForAfter(text, &seen, 60_000)) try console.pressCtrlC() else break;
+    }
     var code = console.exitCode(120_000);
     if (code == null) _ = TerminateProcess(console.process, 1);
     console.deinit();
@@ -518,6 +527,21 @@ const Console = struct {
             Sleep(20);
         }
         return null;
+    }
+
+    /// Waits until the output after `from.*` contains `needle`, and moves
+    /// `from` past it; false if it doesn't in time.
+    fn waitForAfter(c: *Console, needle: []const u8, from: *usize, timeout_ms: u64) bool {
+        const deadline = GetTickCount64() + timeout_ms;
+        while (GetTickCount64() < deadline) {
+            const text = c.text.get();
+            if (std.mem.indexOfPos(u8, text, from.*, needle)) |i| {
+                from.* = i + needle.len;
+                return true;
+            }
+            Sleep(20);
+        }
+        return false;
     }
 
     /// Types Ctrl+C, as in a terminal.

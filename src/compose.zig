@@ -38,6 +38,9 @@ pub const Project = struct {
     order: []const usize,
     /// For each member, the members it uses.
     uses: []const []const usize,
+    /// What it lists in `"run"`, unchecked: the apps `zigsaw up` starts
+    /// (see `runList`).
+    run: ?std.json.Value = null,
 };
 
 pub const Member = struct {
@@ -73,7 +76,9 @@ pub fn read(ctx: *Context, path: []const u8) !?Project {
         return fail("reading {s}: {t}", .{ path, err });
     const entries = try parseList(arena, path, bytes) orelse return null;
     const file = try Io.Dir.cwd().realPathFileAlloc(ctx.io, path, arena);
-    return try load(ctx, file, try memberPaths(ctx, file, entries));
+    var p = try load(ctx, file, try memberPaths(ctx, file, entries));
+    p.run = (std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{}) catch unreachable).object.get("run");
+    return p;
 }
 
 /// The `"apps"` of a project's zigsaw.json, unchecked; null if it has none,
@@ -85,14 +90,16 @@ fn appsOf(arena: Allocator, bytes: []const u8) ?std.json.Value {
     return value.object.get("apps");
 }
 
-/// What a project's zigsaw.json lists in `"apps"`, checked; null if it has
-/// none (see `appsOf`).
+/// What a project's zigsaw.json lists in `"apps"`, checked: none, for one
+/// that lists only apps to `"run"`; null if it has neither, as a recipe
+/// hasn't (see `appsOf`).
 fn parseList(arena: Allocator, file: []const u8, bytes: []const u8) !?[]const []const u8 {
     const value = std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{}) catch return null;
     if (value != .object) return null;
-    const apps = value.object.get("apps") orelse return null;
-    for (value.object.keys()) |key| if (!std.mem.eql(u8, key, "apps"))
-        return fail("{s}: a project's zigsaw.json lists its \"apps\", and nothing else; \"{s}\" belongs in an app's recipe", .{ file, key });
+    if (value.object.get("apps") == null and value.object.get("run") == null) return null;
+    for (value.object.keys()) |key| if (!std.mem.eql(u8, key, "apps") and !std.mem.eql(u8, key, "run"))
+        return fail("{s}: a project's zigsaw.json lists its \"apps\" and the apps to \"run\", and nothing else; \"{s}\" belongs in an app's recipe", .{ file, key });
+    const apps = value.object.get("apps") orelse return &.{};
     if (apps != .array) return fail("{s}: \"apps\" is a list of the project's recipes, by path", .{file});
     if (apps.array.items.len == 0) return fail("{s}: \"apps\" lists no apps", .{file});
     const entries = try arena.alloc([]const u8, apps.array.items.len);
@@ -288,6 +295,10 @@ fn pinOne(arena: Allocator, kind: deps.Kind, alias: []const u8, text: []const u8
 /// isn't pinned and isn't one of them fails first, before anything builds.
 pub fn buildAll(ctx: *Context, p: Project, opts: builder.Options) !void {
     const arena = ctx.arena;
+    if (p.members.len == 0) {
+        note("{s} lists no \"apps\" to build, only apps to \"run\"", .{p.file});
+        return;
+    }
     if (opts.clean_from) |module|
         return fail("--clean={s} starts a module of one app afresh; give that app's directory or recipe, as in: zigsaw build <dir> --clean={s}", .{ module, module });
     for (p.members) |m| for (try references(arena, m.recipe)) |ref| {
@@ -376,6 +387,138 @@ fn quietPath(ctx: *Context, dir: []const u8, entry: []const u8) !?[]const u8 {
     const stat = Io.Dir.cwd().statFile(ctx.io, full, .{}) catch return null;
     if (stat.kind == .directory) full = try std.fs.path.join(ctx.arena, &.{ full, project.manifest_name });
     return Io.Dir.cwd().realPathFileAlloc(ctx.io, full, ctx.arena) catch null;
+}
+
+// ---------------------------------------------------------------------------
+// The apps to run
+
+/// An app `zigsaw up` starts, as the project's `"run"` lists it: an app's
+/// id, or an object with its `"app"`, its `"args"`, and `zigsaw run`'s
+/// options by their names (`"env": ["A=B"]`, `"sandbox": "soft"`).
+pub const RunEntry = struct {
+    /// As listed: an app's id, or a pinned reference to one.
+    app: []const u8,
+    /// The app's id.
+    id: []const u8,
+    /// The project's app it is, by its index in `members`.
+    member: ?usize = null,
+    /// For an app from a registry, the pinned reference to pull it by.
+    pinned: ?[]const u8 = null,
+    /// Its run options, as `zigsaw run` takes them: "--env=A=B".
+    options: []const []const u8 = &.{},
+    /// The app's arguments.
+    args: []const []const u8 = &.{},
+    /// What its options and arguments hash to: a run started from it
+    /// records it, and `up` starts the run again when it changes.
+    key: []const u8,
+};
+
+/// The run options an entry may give, by their names: each takes a string
+/// or a list of them, but `ephemeral`, which takes true.
+pub const run_options = [_][]const u8{
+    "sandbox",  "filesystem", "nofilesystem", "share",     "unshare",     "allow-host", "noallow-host",
+    "device",   "nodevice",   "env",          "extension", "noextension", "port",       "volume",
+    "novolume", "memory",     "cpus",         "ephemeral", "command",
+};
+
+/// The project's `"run"`, checked as far as it can be without the store:
+/// that it's a list of apps, each the project's or pinned, listed once, with
+/// options `zigsaw run` has (whose values `up` checks as `run` would).
+pub fn runList(arena: Allocator, p: Project) ![]const RunEntry {
+    const value = p.run orelse
+        return fail("{s} lists no apps to \"run\": `zigsaw up` starts those, each an app's id or an object with its \"app\" and run options", .{p.file});
+    if (value != .array) return fail("{s}: \"run\" is a list of apps, each an app's id or an object with its \"app\" and run options", .{p.file});
+    if (value.array.items.len == 0) return fail("{s}: \"run\" lists no apps", .{p.file});
+    const out = try arena.alloc(RunEntry, value.array.items.len);
+    for (out, value.array.items, 0..) |*e, item, i| {
+        e.* = try parseEntry(arena, p, item);
+        for (out[0..i]) |earlier| if (std.ascii.eqlIgnoreCase(earlier.id, e.id))
+            return fail("{s}: \"run\" lists {s} twice", .{ p.file, e.id });
+    }
+    return out;
+}
+
+fn parseEntry(arena: Allocator, p: Project, item: std.json.Value) !RunEntry {
+    const file = p.file;
+    var options: std.ArrayList([]const u8) = .empty;
+    var args: std.ArrayList([]const u8) = .empty;
+    const app = switch (item) {
+        .string => |s| s,
+        .object => |o| app: {
+            const app_value = o.get("app") orelse
+                return fail("{s}: an entry of \"run\" names its app as \"app\"", .{file});
+            if (app_value != .string) return fail("{s}: an entry of \"run\" names its app as \"app\", a string", .{file});
+            const app = app_value.string;
+            for (o.keys(), o.values()) |key, v| {
+                if (std.mem.eql(u8, key, "app")) continue;
+                if (std.mem.eql(u8, key, "args")) {
+                    try appendStrings(arena, &args, file, app, key, v);
+                    continue;
+                }
+                const known = for (run_options) |name| {
+                    if (std.mem.eql(u8, name, key)) break true;
+                } else false;
+                if (!known) return fail("{s}: run {s}: \"{s}\" isn't one of `zigsaw run`'s options, which an entry may give as \"args\" and {s}", .{
+                    file, app, key, try oci.joinAnd(arena, &run_options),
+                });
+                if (std.mem.eql(u8, key, "ephemeral")) {
+                    if (v != .bool) return fail("{s}: run {s}: \"ephemeral\" is true or false", .{ file, app });
+                    if (v.bool) try options.append(arena, "--ephemeral");
+                    continue;
+                }
+                var values: std.ArrayList([]const u8) = .empty;
+                try appendStrings(arena, &values, file, app, key, v);
+                for (values.items) |s| try options.append(arena, try std.fmt.allocPrint(arena, "--{s}={s}", .{ key, s }));
+            }
+            break :app app;
+        },
+        else => return fail("{s}: an entry of \"run\" is an app's id, or an object with its \"app\" and run options", .{file}),
+    };
+    var e: RunEntry = .{ .app = app, .id = appId(app), .options = options.items, .args = args.items, .key = undefined };
+    if (std.mem.indexOfScalar(u8, app, '/') != null or !oci.isValidId(e.id))
+        return fail("{s}: run \"{s}\": an app is named by its id, as org.example.web, and one from a registry pinned, as <id>:<version>@sha256:<digest>", .{ file, app });
+    for (p.members, 0..) |m, i| if (std.ascii.eqlIgnoreCase(m.recipe.id, e.id)) {
+        if (!std.mem.eql(u8, app, e.id))
+            return fail("{s}: run {s}: the project's own apps are named by their id alone: {s}", .{ file, app, m.recipe.id });
+        e.member = i;
+        e.id = m.recipe.id;
+    };
+    if (e.member == null and !std.mem.eql(u8, app, e.id)) {
+        if (std.mem.indexOfScalar(u8, app, '@') == null)
+            return fail("{s}: run {s}: an app from a registry is pinned to its image's digest, as recipes pin theirs: \"{s}@sha256:...\"", .{ file, app, app });
+        e.pinned = app;
+    }
+    e.key = try entryKey(arena, e);
+    return e;
+}
+
+fn appendStrings(arena: Allocator, out: *std.ArrayList([]const u8), file: []const u8, app: []const u8, key: []const u8, v: std.json.Value) !void {
+    switch (v) {
+        .string => |s| try out.append(arena, s),
+        .array => |a| for (a.items) |item| {
+            if (item != .string) return fail("{s}: run {s}: \"{s}\" is a string or a list of strings", .{ file, app, key });
+            try out.append(arena, item.string);
+        },
+        else => return fail("{s}: run {s}: \"{s}\" is a string or a list of strings", .{ file, app, key }),
+    }
+}
+
+/// 16 hex digits of a hash of what the entry starts.
+fn entryKey(arena: Allocator, e: RunEntry) ![]const u8 {
+    var h = std.crypto.hash.sha2.Sha256.init(.{});
+    h.update(e.app);
+    for (e.options) |o| {
+        h.update("\x00");
+        h.update(o);
+    }
+    h.update("\x00--");
+    for (e.args) |a| {
+        h.update("\x00");
+        h.update(a);
+    }
+    var digest: [32]u8 = undefined;
+    h.final(&digest);
+    return std.fmt.allocPrint(arena, "{x}", .{digest[0..8]});
 }
 
 fn testRecipe(arena: Allocator, json: []const u8) !recipe.Recipe {
@@ -532,4 +675,91 @@ test "pinning gives what the project built, by id, version and digest" {
     const kept = try pin(arena, pinned, &built, "web.json");
     try std.testing.expectEqualStrings("engine@" ++ digest_a, kept.recipe.runtimes.map.get("engine").?);
     try std.testing.expectEqual(0, kept.pins.len);
+}
+
+fn testProject(arena: Allocator, members: []const Member, run: []const u8) !Project {
+    return .{
+        .file = "p.json",
+        .members = members,
+        .order = &.{},
+        .uses = &.{},
+        .run = try std.json.parseFromSliceLeaky(std.json.Value, arena, run, .{}),
+    };
+}
+
+test "the apps a project runs" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    const web = try testRecipe(arena,
+        \\{ "id": "org.example.web", "version": "1", "command": "w.exe", "modules": [{ "name": "a", "build": ["x"] }] }
+    );
+    const members = [_]Member{.{ .path = "web.json", .recipe = web }};
+    const list = try runList(arena, try testProject(arena, &members,
+        \\[ "ORG.example.web",
+        \\  { "app": "org.db:18@sha256:abc", "env": ["A=B", "C=D"], "ephemeral": true, "sandbox": "soft", "args": ["--dev"] },
+        \\  { "app": "org.cache", "ephemeral": false } ]
+    ));
+    try std.testing.expectEqual(3, list.len);
+    try std.testing.expectEqual(0, list[0].member.?);
+    try std.testing.expectEqualStrings("org.example.web", list[0].id);
+    try std.testing.expectEqual(null, list[0].pinned);
+    try std.testing.expectEqualStrings("org.db", list[1].id);
+    try std.testing.expectEqualStrings("org.db:18@sha256:abc", list[1].pinned.?);
+    try std.testing.expectEqual(4, list[1].options.len);
+    try std.testing.expectEqualStrings("--env=A=B", list[1].options[0]);
+    try std.testing.expectEqualStrings("--env=C=D", list[1].options[1]);
+    try std.testing.expectEqualStrings("--ephemeral", list[1].options[2]);
+    try std.testing.expectEqualStrings("--sandbox=soft", list[1].options[3]);
+    try std.testing.expectEqualStrings("--dev", list[1].args[0]);
+    // An app installed from elsewhere, named by its id alone.
+    try std.testing.expectEqual(null, list[2].member);
+    try std.testing.expectEqual(null, list[2].pinned);
+    try std.testing.expectEqual(0, list[2].options.len);
+    try std.testing.expectEqual(16, list[0].key.len);
+
+    // What an entry starts decides its key.
+    const again = try runList(arena, try testProject(arena, &members,
+        \\[ { "app": "org.db:18@sha256:abc", "env": ["A=B", "C=D"], "ephemeral": true, "sandbox": "soft", "args": ["--dev"] },
+        \\  { "app": "org.example.web", "env": "A=B" } ]
+    ));
+    try std.testing.expectEqualStrings(list[1].key, again[0].key);
+    try std.testing.expect(!std.mem.eql(u8, list[0].key, again[1].key));
+
+    const refused = [_][]const u8{
+        \\{ "app": "org.example.web" }
+        ,
+        \\[]
+        ,
+        \\[ 3 ]
+        ,
+        \\[ "org.example.web", "org.example.web" ]
+        ,
+        \\[ { "app": "org.example.web", "volumes": ["a:."] } ]
+        ,
+        \\[ { "app": "org.example.web", "env": [1] } ]
+        ,
+        \\[ { "app": "org.example.web", "ephemeral": "yes" } ]
+        ,
+        \\[ { "env": ["A=B"] } ]
+        ,
+        \\[ "org.example.web:1" ]
+        ,
+        \\[ "org.db:18" ]
+        ,
+        \\[ "ghcr.io/owner/db@sha256:abc" ]
+        ,
+    };
+    for (refused) |json| try std.testing.expectError(error.Failed, runList(arena, try testProject(arena, &members, json)));
+    // No "run" at all.
+    try std.testing.expectError(error.Failed, runList(arena, .{ .file = "p.json", .members = &members, .order = &.{}, .uses = &.{} }));
+}
+
+test "a project may list only apps to run" {
+    var a: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer a.deinit();
+    const arena = a.allocator();
+    try std.testing.expectEqual(0, (try parseList(arena, "p", "{ \"run\": [\"org.db\"] }")).?.len);
+    try std.testing.expectEqual(1, (try parseList(arena, "p", "{ \"apps\": [\"a\"], \"run\": [\"org.db\"] }")).?.len);
+    try std.testing.expectError(error.Failed, parseList(arena, "p", "{ \"run\": [], \"id\": \"x\" }"));
 }

@@ -124,7 +124,28 @@ pub const FILE_TYPE_PIPE: DWORD = 3;
 pub extern "kernel32" fn GetFileType(file: HANDLE) callconv(.winapi) DWORD;
 pub extern "kernel32" fn GetEnvironmentVariableW(name: LPCWSTR, buffer: ?[*]u16, size: DWORD) callconv(.winapi) DWORD;
 pub const CREATE_ALWAYS: DWORD = 2;
+pub const OPEN_ALWAYS: DWORD = 4;
 pub const GENERIC_WRITE: DWORD = 0x40000000;
+/// The right to write at the end of a file, and nowhere else: what several
+/// writers of one log share.
+pub const FILE_APPEND_DATA: DWORD = 0x4;
+pub const FILE_BEGIN: DWORD = 0;
+pub const FILE_END: DWORD = 2;
+pub extern "kernel32" fn SetFilePointerEx(file: HANDLE, distance: i64, new_position: ?*i64, method: DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetFileSizeEx(file: HANDLE, size: *i64) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetFileTime(file: HANDLE, creation: ?*i64, access: ?*i64, write: ?*i64) callconv(.winapi) BOOL;
+pub const SYSTEMTIME = extern struct {
+    wYear: WORD,
+    wMonth: WORD,
+    wDayOfWeek: WORD,
+    wDay: WORD,
+    wHour: WORD,
+    wMinute: WORD,
+    wSecond: WORD,
+    wMilliseconds: WORD,
+};
+pub extern "kernel32" fn FileTimeToLocalFileTime(utc: *const i64, local: *i64) callconv(.winapi) BOOL;
+pub extern "kernel32" fn FileTimeToSystemTime(time: *const i64, system: *SYSTEMTIME) callconv(.winapi) BOOL;
 pub const MB_OK: c_uint = 0x0;
 pub const MB_ICONERROR: c_uint = 0x10;
 pub extern "user32" fn MessageBoxW(window: ?HANDLE, text: LPCWSTR, caption: LPCWSTR, kind: c_uint) callconv(.winapi) c_int;
@@ -890,6 +911,8 @@ pub const ERROR_NOT_SAME_DEVICE: DWORD = 17;
 pub const FILE_READ_ATTRIBUTES: DWORD = 0x80;
 pub const FILE_SHARE_WRITE: DWORD = 0x2;
 pub const FILE_SHARE_DELETE: DWORD = 0x4;
+pub const DELETE: DWORD = 0x00010000;
+pub const FILE_FLAG_DELETE_ON_CLOSE: DWORD = 0x04000000;
 pub const FILE_FLAG_BACKUP_SEMANTICS: DWORD = 0x02000000;
 /// Opens a link itself rather than what it points to.
 pub const FILE_FLAG_OPEN_REPARSE_POINT: DWORD = 0x00200000;

@@ -31,6 +31,7 @@ const appcontainer = @import("appcontainer.zig");
 const oci = @import("oci.zig");
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const detach = @import("detach.zig");
 const environment = @import("environment.zig");
 const exec = @import("exec.zig");
 const exports = @import("exports.zig");
@@ -41,6 +42,7 @@ const grants = @import("grants.zig");
 const hkcu = @import("hkcu.zig");
 const junction = @import("junction.zig");
 const lazy = @import("lazy.zig");
+const logs = @import("logs.zig");
 const override = @import("override.zig");
 const process = @import("process.zig");
 const proxy = @import("proxy.zig");
@@ -68,10 +70,30 @@ pub const Options = struct {
     files: []const []const u8 = &.{},
     /// From the command line. They go over the app's saved overrides.
     settings: override.Settings = .{},
+    /// `--detach`: the run goes on in a zigsaw of its own, with no console
+    /// and its app's output in a log (see logs.zig), and this one returns.
+    detach: bool = false,
+    /// This is the zigsaw `--detach` started (see detach.zig).
+    detached_child: bool = false,
+    /// The options as given, but `--detach`: the detached child's.
+    given: []const []const u8 = &.{},
+    /// The project whose `up` started the run, and its entry's hash: for
+    /// the record (see up.zig).
+    project: ?[]const u8 = null,
+    entry: ?[]const u8 = null,
 };
 
-/// Runs the app and returns its exit code.
+/// Runs the app and returns its exit code; or, detached, starts the run
+/// and returns 0.
 pub fn run(ctx: *Context, opts: Options) !u32 {
+    if (opts.detach and !opts.detached_child) {
+        const started = try startDetached(ctx, opts.given, opts.id, opts.args);
+        var buf: [64]u8 = undefined;
+        var out = Context.stdout().writerStreaming(ctx.io, &buf);
+        try out.interface.print("{d}\n", .{started.pid});
+        try out.interface.flush();
+        return 0;
+    }
     const io = ctx.io;
     const arena = ctx.arena;
     // Held while preparing the run, not while the app runs. The deployment
@@ -376,6 +398,14 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // The job is what holds the run to its limits: the relay counts, and so
     // does all the app starts, zigsaw-host's programs and other apps' runs
     // among them.
+    // Detached: the app's output goes to the run's log, as this zigsaw's
+    // does once the run has started; it has no console of its own.
+    const log: ?logs.Log = if (opts.detached_child) try logs.create(ctx, cfg.id, cfg.version, host_cwd) else null;
+    const nul = if (opts.detached_child) try detach.openNul(arena) else null;
+    // Whoever started `run -d` may have had Ctrl+C turned off, as Git Bash
+    // has for what it starts, and processes inherit that: the app would
+    // ignore the Ctrl+C `zigsaw stop` sends it, its only one.
+    if (opts.detached_child) _ = win32.SetConsoleCtrlHandler(null, win32.FALSE);
     // Named, so that `zigsaw ps` may look into it.
     const job = try process.newJob(arena, limits, try ps.jobName(io, arena));
     if (relay_exe) |r| startRelay(ctx, cfg.id, job.handle, r, published, forwards, security, token, env_block);
@@ -392,6 +422,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .token = token,
         // Set by a shim that a shortcut started (see shim.zig).
         .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
+        // A console app gets a console of its own, with no window, which
+        // `zigsaw stop` sends Ctrl+C to (see stop.zig).
+        .creation_flags = if (log != null) win32.CREATE_NO_WINDOW else 0,
+        .stdio = if (log) |l| .{ nul.?, l.handle, l.handle } else null,
     }));
     if (asker) |a| child.stop = a.stop();
     // What `zigsaw ps` lists, while the run goes.
@@ -411,6 +445,10 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .ephemeral = run_dir != null,
         .command = command_line,
         .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
+        .log = if (log) |l| l.path else null,
+        .project = opts.project,
+        .entry = opts.entry,
+        .ports = try servedPorts(arena, cfg, service_ports, opts.command),
     });
     defer if (listed) |l| l.end(io);
     // How it starts programs, for `zigsaw exec` (see exec.zig): with the
@@ -429,8 +467,11 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .system_root = system_root,
         .exports = exportsOf(arena, placeholders, cfg) catch &.{},
     });
+    // The zigsaw that started this one prints the run's number, and returns.
+    if (log) |l| detach.tellStarted(nul.?, l.handle);
     const report = try child.waitReport();
     const code = report.code;
+    defer if (log != null) note("zigsaw: {s} ended with exit code {d}", .{ cfg.id, code });
     // A program refused memory says what Windows told it, that the paging
     // file is too small, or nothing. Through a GUI shim, this reaches the
     // box a failed run shows.
@@ -452,6 +493,33 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     // --ephemeral run's are gone with its data directory.
     if (run_dir == null and exports.hasCommandDirs(cfg)) exports.syncAfterRun(ctx, cfg.id);
     return code;
+}
+
+/// Starts a detached run of `id`: `zigsaw run --detached-child <options>
+/// -- <id> <args>`, which runs it as any run, but for its output (see
+/// detach.zig). Says so if the run can't get out of the jobs this zigsaw is
+/// in, as it then ends when they do.
+pub fn startDetached(ctx: *Context, options: []const []const u8, id: []const u8, args: []const []const u8) !detach.Started {
+    const arena = ctx.arena;
+    var all: std.ArrayList([]const u8) = .empty;
+    if (ctx.verbose) try all.append(arena, "--verbose");
+    try all.appendSlice(arena, &.{ "run", "--detached-child" });
+    try all.appendSlice(arena, options);
+    try all.appendSlice(arena, &.{ "--", id });
+    try all.appendSlice(arena, args);
+    const started = try detach.start(ctx, all.items);
+    if (!started.broke_away)
+        note("note: a job this zigsaw is in kept {s}'s run {d} in it, so it ends when that job does, which may be when this terminal closes", .{ id, started.pid });
+    return started;
+}
+
+/// "<name>=<port>" for each service the run serves, for its record; null if
+/// none.
+fn servedPorts(arena: Allocator, cfg: oci.AppConfig, ports: []const services.Ports, command: ?[]const u8) !?[]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (ports) |p| if (services.serves(cfg, p.service, command))
+        try out.append(arena, try std.fmt.allocPrint(arena, "{s}={d}", .{ p.service.name, p.port }));
+    return if (out.items.len == 0) null else out.items;
 }
 
 /// The installed app's layers, its runtimes' included, that are still pulled

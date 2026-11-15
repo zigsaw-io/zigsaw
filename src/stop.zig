@@ -200,6 +200,12 @@ fn sendCtrlC(arena: Allocator, pids: []const u32, stopper: ?u32) !CtrlC {
             break;
         };
         if (!attached) return .no_console;
+        // The Ctrl+C reaches this zigsaw too, on that console, a moment
+        // later, on a thread of Windows'. One that comes after it has left
+        // the console ends it, whatever its handlers say: it waits for it.
+        if (ctrl_c_reached == null) ctrl_c_reached = win32.CreateEventW(null, win32.TRUE, win32.FALSE, null);
+        if (ctrl_c_reached) |e| _ = win32.ResetEvent(e);
+        _ = win32.SetConsoleCtrlHandler(&ctrlCReached, win32.TRUE);
     }
     const console = while (true) {
         const n = win32.GetConsoleProcessList(buf.ptr, @intCast(buf.len));
@@ -217,7 +223,21 @@ fn sendCtrlC(arena: Allocator, pids: []const u32, stopper: ?u32) !CtrlC {
         .stopper_here => return .stopper_here,
         .blocked => |pid| return .{ .blocked = .{ .pid = pid, .name = if (tree.snap.get(pid)) |p| p.name else "?" } },
     }
-    return if (win32.GenerateConsoleCtrlEvent(win32.CTRL_C_EVENT, 0) != 0) .sent else .failed;
+    const sent = win32.GenerateConsoleCtrlEvent(win32.CTRL_C_EVENT, 0) != 0;
+    if (attached and sent) if (ctrl_c_reached) |e| {
+        _ = win32.WaitForSingleObject(e, 2000);
+    };
+    return if (sent) .sent else .failed;
+}
+
+/// Set once the Ctrl+C a zigsaw with no console of its own sent on the
+/// app's has reached it too (see `sendCtrlC`).
+var ctrl_c_reached: ?win32.HANDLE = null;
+
+fn ctrlCReached(event: win32.DWORD) callconv(.winapi) win32.BOOL {
+    if (event != win32.CTRL_C_EVENT and event != win32.CTRL_BREAK_EVENT) return win32.FALSE;
+    if (ctrl_c_reached) |e| _ = win32.SetEvent(e);
+    return win32.TRUE;
 }
 
 pub const Verdict = union(enum) {
@@ -299,6 +319,11 @@ pub const Options = struct {
     seconds: u32 = 10,
     /// App ids, or runs' PIDs, as `ps` takes them.
     filters: []const []const u8 = &.{},
+    /// Runs and builds by their zigsaws' PIDs, as `down` and `up` pick them.
+    pids: []const u32 = &.{},
+    /// Set to end what's still going at once, rather than wait out
+    /// `seconds`: `up`'s second Ctrl+C.
+    cancel: ?win32.HANDLE = null,
 };
 
 /// After its app is ended, how long a run's zigsaw gets to clean up.
@@ -320,20 +345,46 @@ const Target = struct {
         const h = t.process orelse return true;
         return win32.WaitForSingleObject(h, ms) == win32.WAIT_OBJECT_0;
     }
+
+    fn endedOrCancelled(t: *const Target, ms: win32.DWORD, cancel: ?win32.HANDLE) enum { ended, waiting, cancelled } {
+        const h = t.process orelse return .ended;
+        const c = cancel orelse return if (t.ended(ms)) .ended else .waiting;
+        const handles = [2]win32.HANDLE{ h, c };
+        return switch (win32.WaitForMultipleObjects(2, &handles, win32.FALSE, ms)) {
+            win32.WAIT_OBJECT_0 => .ended,
+            win32.WAIT_OBJECT_0 + 1 => .cancelled,
+            else => .waiting,
+        };
+    }
 };
 
+/// Whether `opts` names the record: by app id or run, or by PID.
+fn named(opts: Options, r: ps.Record) bool {
+    if (opts.filters.len > 0 and ps.matches(r, opts.filters)) return true;
+    return std.mem.indexOfScalar(u32, opts.pids, r.pid) != null;
+}
+
+/// `zigsaw stop` and `zigsaw kill`.
 pub fn stop(ctx: *Context, opts: Options) !u32 {
-    const arena = ctx.arena;
-    const io = ctx.io;
     // Ctrl+C may come to this console too.
     _ = win32.SetConsoleCtrlHandler(&process.ignoreCtrlC, win32.TRUE);
+    return try end(ctx, opts) orelse
+        fail("nothing running is {s}", .{try std.mem.join(ctx.arena, " or ", opts.filters)});
+}
+
+/// Asks what `opts` names to end, and what's inside it, and ends what
+/// doesn't in time (or ends it all, with `kill`), saying how each ended, as
+/// `stop` does. Null if nothing running is that.
+pub fn end(ctx: *Context, opts: Options) !?u32 {
+    const arena = ctx.arena;
+    const io = ctx.io;
     const seen = try ps.nest(arena, try ps.live(ctx.store, arena));
 
     var targets: std.ArrayList(Target) = .empty;
     for (seen) |*s| {
-        const matched = ps.matches(s.record, opts.filters);
+        const matched = named(opts, s.record);
         const inside_one = for (seen) |o| {
-            if (o.record.pid != s.record.pid and ps.matches(o.record, opts.filters) and ps.within(seen, s.record.pid, o.record.pid)) break true;
+            if (o.record.pid != s.record.pid and named(opts, o.record) and ps.within(seen, s.record.pid, o.record.pid)) break true;
         } else false;
         if (!matched and !inside_one) continue;
         try targets.append(arena, .{
@@ -343,7 +394,7 @@ pub fn stop(ctx: *Context, opts: Options) !u32 {
             .depth = ps.depthOf(seen, s.record.pid),
         });
     }
-    if (targets.items.len == 0) return fail("nothing running is {s}", .{try std.mem.join(arena, " or ", opts.filters)});
+    if (targets.items.len == 0) return null;
     // Innermost first.
     std.mem.sort(Target, targets.items, {}, struct {
         fn lessThan(_: void, a: Target, b: Target) bool {
@@ -354,6 +405,8 @@ pub fn stop(ctx: *Context, opts: Options) !u32 {
         t.outcome = .gone;
     };
 
+    // Whether the wait was cut short (see Options.cancel).
+    var cut_short = false;
     if (!opts.kill) {
         const self = try std.fmt.allocPrint(arena, "{d}", .{win32.GetCurrentProcessId()});
         // Those asked for that aren't inside another asked for: asking that
@@ -375,7 +428,15 @@ pub fn stop(ctx: *Context, opts: Options) !u32 {
         for (targets.items) |*t| {
             if (t.outcome != .pending) continue;
             const left: win32.DWORD = @intCast(@min(time -| ctx.since(start).ms, std.math.maxInt(u31)));
-            if (t.ended(left)) t.outcome = .stopped;
+            switch (t.endedOrCancelled(left, opts.cancel)) {
+                .ended => t.outcome = .stopped,
+                .waiting => {},
+                // Cut short: what's left is ended now.
+                .cancelled => {
+                    cut_short = true;
+                    break;
+                },
+            }
         }
     }
 
@@ -385,7 +446,7 @@ pub fn stop(ctx: *Context, opts: Options) !u32 {
             t.outcome = .stopped;
             continue;
         }
-        end(arena, t) catch |err| {
+        endOne(arena, t) catch |err| {
             t.outcome = .cant;
             t.why = try std.fmt.allocPrint(arena, "{t}", .{err});
             continue;
@@ -409,7 +470,7 @@ pub fn stop(ctx: *Context, opts: Options) !u32 {
             .gone => try w.print("{d} ({s}){s} had ended\n", .{ r.pid, r.id, inside }),
             .killed, .cleaning => {
                 try w.print("killed {d} ({s}){s}", .{ r.pid, r.id, inside });
-                if (!opts.kill and t.why.len == 0) try w.print(" after {d} s", .{opts.seconds});
+                if (!opts.kill and !cut_short and t.why.len == 0) try w.print(" after {d} s", .{opts.seconds});
                 if (t.why.len > 0) try w.print(": {s}", .{t.why});
                 if (t.outcome == .cleaning) try w.print("; its zigsaw is still cleaning up", .{});
                 try w.writeAll("\n");
@@ -460,7 +521,7 @@ fn ask(store: Store, arena: Allocator, pid: u32, event_name: []const u8, self: [
 
 /// Ends a run by its job, and a build by its zigsaw. An exec by its own job,
 /// which has only its command: the run it's in goes on.
-fn end(arena: Allocator, t: *Target) !void {
+fn endOne(arena: Allocator, t: *Target) !void {
     const r = t.seen.record;
     switch (r.kind) {
         .build => if (win32.TerminateProcess(t.process.?, 1) == 0) return win32.lastErrorFail("TerminateProcess"),

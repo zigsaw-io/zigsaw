@@ -62,6 +62,15 @@ pub const Record = struct {
     command: []const u8 = "",
     /// The shortcut the run was started from.
     shortcut: ?[]const u8 = null,
+    /// A detached run's log, where its app's output goes (see logs.zig).
+    log: ?[]const u8 = null,
+    /// The project's zigsaw.json whose `up` started the run, and what its
+    /// entry there hashed to when it did (see up.zig).
+    project: ?[]const u8 = null,
+    entry: ?[]const u8 = null,
+    /// "<name>=<port>": the services the run serves, by the ports other
+    /// programs reach them on.
+    ports: ?[]const []const u8 = null,
     /// Builds only: the module, "build" or "vendor", and which command of
     /// how many.
     module: ?[]const u8 = null,

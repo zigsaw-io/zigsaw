@@ -14,6 +14,7 @@ const Store = @import("Store.zig");
 const checkpoint = @import("checkpoint.zig");
 const lazy = @import("lazy.zig");
 const learned = @import("learned.zig");
+const logs = @import("logs.zig");
 const oci = @import("oci.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
@@ -159,6 +160,9 @@ pub fn prune(ctx: *Context, opts: Options) !void {
             for (image.config.runtimes.map.values()) |r| try learned_of.append(arena, r.id);
         }
         _ = try learned.pruneUnused(store, arena, learned_of.items);
+        // And the logs of detached runs of apps that are gone, once those
+        // runs have ended (see logs.zig).
+        _ = try logs.deleteEnded(store, arena, .uninstalled);
     }
 
     // Leftovers in tmp\: everything but the directories of running

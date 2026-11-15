@@ -273,6 +273,11 @@ jobs:
         shell: bash
         run: bash tests/exec.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/exec.txt"
 
+      - name: tests/up.sh
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/up.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/up.txt"
+
       - name: tests/hosts.sh
         if: ${{ !cancelled() }}
         shell: bash

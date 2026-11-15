@@ -134,7 +134,21 @@ zigsaw push --catalog <app-id>...      make the default registry's catalog list 
 zigsaw login [--username=<user>] [--password-stdin] <registry>
                                        check and save a login for a registry
 zigsaw logout <registry>               delete a registry's saved login
-zigsaw run [options] <app-id> [args]   run an installed app
+zigsaw run [options] <app-id> [args]   run an installed app; -d (--detach) runs it in the
+                                       background, its output in a log, and prints the
+                                       number `ps` lists it by
+zigsaw logs [-f] [--tail=<n>] [<app-id>|<run>]
+                                       print a detached run's log, as it goes or after it
+                                       ended; -f (--follow) goes on until the run ends; with
+                                       no app or run, in a project's directory, the logs of
+                                       the apps it lists as "run", each line after its app
+zigsaw up [-d] [--build] [--yes] [<dir>]
+                                       start the apps a project's zigsaw.json lists as "run",
+                                       building those not installed from it and pulling those
+                                       pinned there, each once the one before serves, then
+                                       follow their logs; Ctrl+C stops them. -d (--detach)
+                                       returns once they're up; --build builds all first
+zigsaw down [--time=<seconds>] [<dir>] stop the apps `up` started, the last started first
 zigsaw list                            list installed apps, their commands and shortcuts,
                                        and the kinds of file they open
 zigsaw ps [--processes] [<app-id>|<run>...]
@@ -348,6 +362,41 @@ zigsaw build      # building 3 apps: org.example.engine, org.example.web, org.ex
   installing them.
 - The build stops at the first app that fails. Those before it stay
   installed, and the next build takes them from the cache.
+
+The apps to run together, the project's database and the web app that uses it, say, are
+listed as `"run"`, each with the options `zigsaw run` would take, and `zigsaw up` starts
+them, as `docker compose up` starts a compose file's services:
+
+```json
+{
+  "apps": ["engine", "web"],
+  "run": [
+    { "app": "org.postgresql.postgresql:18.1@sha256:...", "volume": ["shop-db:."] },
+    { "app": "org.example.web", "env": ["MODE=dev"], "port": ["http=8081"], "args": ["--watch"] }
+  ]
+}
+```
+
+```powershell
+zigsaw up        # postgresql | ...database system is ready to accept connections
+                 # web        | listening on http://localhost:8081
+zigsaw up -d     # the same, in the background
+zigsaw logs      # their logs, each line after its app
+zigsaw down      # stop them, web first
+```
+
+- **`zigsaw up` builds the apps it runs that aren't installed from the project** (all
+  of them with `--build`), and pulls the apps from registries it pins that aren't
+  installed, asking as `pull` asks (not with `--yes`).
+- **It starts each app as `run -d` would, in the order listed.** One that serves
+  something, as PostgreSQL serves its port, is up once its services answer, and only
+  then does the next start.
+- **Then it follows their logs**, each line after its app's name, until they've all
+  ended. Ctrl+C stops them, the last started first; a second Ctrl+C ends what hasn't
+  stopped yet. `up -d` returns once they're up instead.
+- **A later `up` leaves what's up as it is**, and starts an app again whose image or
+  entry in `"run"` has changed. `zigsaw down` stops them.
+- A project may list only apps to run, from registries, and no `"apps"`.
 
 See [several apps](docs/recipes.md#several-apps) for the details.
 
@@ -1351,6 +1400,40 @@ zigsaw build --memory=8GB --cpus=8 recipes/rnote.json  # each of the build's com
   tighter of the two. What `zigsaw-host` starts counts toward the run that started it.
 
 What limits don't do is in [gaps.md](docs/gaps.md).
+
+### Running in the background
+
+`zigsaw run -d` (`--detach`) starts a run that goes on in the background, prints the
+number `ps` lists it by, and returns. The app's output goes to a log, which `zigsaw logs`
+prints.
+
+```
+> zigsaw run -d --port=http=8081 org.example.web
+4812
+> zigsaw logs -f org.example.web
+zigsaw: org.example.web 1.2, run 4812, started 2026-11-15 12:30:05 in C:\work\shop
+listening on http://localhost:8081
+```
+
+- The run is any run, with the options given before the app's id, and the app's own
+  arguments after it. What zigsaw says before the app starts, a warning or an error,
+  comes on the terminal you typed `run -d` in, and an error means nothing was started.
+- A zigsaw of its own waits for the app, with no console, as a run's zigsaw always
+  does. The app gets a console with no window, and nothing on its input.
+- The log is the store's `logs\<app-id>.<run>.log`: a first line saying what the run
+  is, then what the app writes on its output and its errors, then what its zigsaw says,
+  such as how the run ended: `zigsaw: org.example.web ended with exit code 0`. A program
+  that buffers its output when it isn't on a terminal, as Python does, writes it in
+  blocks.
+- `zigsaw logs <app-id>` prints the log of the app's detached run, the one going or else
+  the one that started last; `zigsaw logs <run>` that run's, going or ended. `-f`
+  (`--follow`) prints what comes until the run ends, and `--tail=<n>` only the last lines.
+- A log stays after its run ends, until a detached run of the same app starts. `zigsaw rm`
+  deletes the app's logs, and `zigsaw prune` those of apps that aren't installed, but
+  never one a run is still writing.
+- `zigsaw stop` asks a detached run to end by Ctrl+C to its console, and the log says so;
+  `kill` ends it now. Closing the terminal it was started from doesn't, unless the job
+  that terminal is in keeps what it starts in it, which `run -d` then says.
 
 ### What's running
 

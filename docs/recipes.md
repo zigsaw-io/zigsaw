@@ -893,8 +893,9 @@ id, unpinned, as its SDK, a runtime or a module's `image`:
 
 - **An entry is a path from the project's directory**, inside it: a recipe,
   or a directory, whose recipe is its `zigsaw.json`. The project's
-  `zigsaw.json` has `"apps"` and nothing else. A project among the apps, two
-  apps of one id, and one listed twice are refused.
+  `zigsaw.json` has `"apps"`, the apps to [`"run"`](#the-apps-to-run), and
+  nothing else. A project among the apps, two apps of one id, and one listed
+  twice are refused.
 - **A reference that's an app id, with a tag or without, and no digest, is
   the project's app of that id**, ignoring case. A tag must be its version.
   One with a digest is left as it is, to an app of the project too, and the
@@ -927,6 +928,51 @@ its recipe names one: from the recipe's directory up, the first
 `zigsaw.json` with `"apps"` that lists it is its project. It builds them as
 the project would, with `--memory` and `--cpus` only, and doesn't install
 them. A recipe that no project lists fails as any unpinned reference does.
+
+#### The apps to run
+
+`"run"` lists the apps `zigsaw up` starts, in order, and `zigsaw down` stops,
+in the other order:
+
+```json
+{
+  "apps": ["engine", "web"],
+  "run": [
+    { "app": "org.postgresql.postgresql:18.1@sha256:...", "volume": ["shop-db:."] },
+    "org.example.engine",
+    { "app": "org.example.web", "env": ["MODE=dev", "DEBUG=1"], "sandbox": "soft", "args": ["--watch"] }
+  ]
+}
+```
+
+- **An entry is an app's id, or an object** with its `"app"`, its `"args"`, and
+  `zigsaw run`'s options by their names without the dashes: `sandbox`,
+  `filesystem`, `nofilesystem`, `share`, `unshare`, `allow-host`,
+  `noallow-host`, `device`, `nodevice`, `env`, `extension`, `noextension`,
+  `port`, `volume`, `novolume`, `memory`, `cpus`, `command`, each a string or a
+  list of them, and `ephemeral`, true or false. Their values are checked as
+  `run` checks them, before anything starts. The app's saved overrides go
+  under them, as under `run`'s options.
+- **An app of the project is named by its id alone.** One that isn't is pinned,
+  as `"<id>:<version>@sha256:<digest>"`, and pulled if the store hasn't that
+  image; or named by its id alone, if it's installed already. An app listed
+  twice, and one from a registry with a tag and no digest, are refused.
+- **`up` builds every app of the project if one it runs isn't installed from
+  the project's recipe**, or with `--build`, as `zigsaw build` would, then
+  starts each app as `zigsaw run --detach` does. An app that serves something
+  (its services, as `zigsaw info` lists them) is up once something answers on
+  each service's port, on 127.0.0.1 or ::1, within two minutes; only then does
+  the next start. One that ends first, or doesn't answer in time, fails `up`,
+  which shows the end of its log and stops what it started. Under the
+  appcontainer sandbox zigsaw itself listens on a service's port and relays
+  it, so there an answer only means the run has started.
+- **A run that `up` started records the project and a hash of its entry.** A
+  later `up` leaves it as it is, starts it again if the app's installed image
+  or its entry has changed, and leaves one whose app `"run"` no longer lists,
+  which `down` stops.
+- **A `zigsaw.json` with `"run"` and no `"apps"`** is a project of apps from
+  registries: `up`, `down` and `logs` take it, and `zigsaw build` has nothing to
+  build. A build doesn't read `"run"`.
 
 ## Zig
 

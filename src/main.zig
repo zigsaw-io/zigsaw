@@ -19,6 +19,8 @@ const peek = @import("peek.zig");
 const install = @import("install.zig");
 const lazy = @import("lazy.zig");
 const LazyHelper = @import("LazyHelper.zig");
+const logs = @import("logs.zig");
+const up = @import("up.zig");
 const oci = @import("oci.zig");
 const override = @import("override.zig");
 const prune = @import("prune.zig");
@@ -86,7 +88,21 @@ const usage =
     \\  login [--username=<user>] [--password-stdin] <registry>
     \\                                  check and save a login for a registry
     \\  logout <registry>               delete a registry's saved login
-    \\  run [options] <app-id> [args]   run an installed app
+    \\  run [options] <app-id> [args]   run an installed app; -d (--detach) runs it in the
+    \\                                  background, its output in a log, and prints the
+    \\                                  number `ps` lists it by
+    \\  logs [-f] [--tail=<n>] [<app-id>|<run>]
+    \\                                  print a detached run's log, as it goes or after it
+    \\                                  ended; -f (--follow) goes on until the run ends; with
+    \\                                  no app or run, in a project's directory, the logs of
+    \\                                  the apps it lists as "run", each line after its app
+    \\  up [-d] [--build] [--yes] [<dir>]
+    \\                                  start the apps a project's zigsaw.json lists as "run",
+    \\                                  building those not installed from it and pulling those
+    \\                                  pinned there, each once the one before serves, then
+    \\                                  follow their logs; Ctrl+C stops them. -d (--detach)
+    \\                                  returns once they're up; --build builds all first
+    \\  down [--time=<seconds>] [<dir>] stop the apps `up` started, the last started first
     \\  list                            list installed apps, their commands and shortcuts,
     \\                                  and the kinds of file they open
     \\  ps [--processes] [<app-id>|<run>...]
@@ -202,7 +218,9 @@ const usage =
     \\used. From a multi-platform index, pull takes the image for windows/amd64. Blobs over
     \\64 MiB are pushed in chunks of ZIGSAW_UPLOAD_CHUNK_SIZE bytes (0: in one request).
     \\
-    \\run options (override takes them too, except --command and --file):
+    \\run options (override takes them too, except -d, --command and --file):
+    \\  -d, --detach                    run it in the background: print the run's number and
+    \\                                  return; its output goes to a log (see logs)
     \\  --command=<name>                run one of the app's exported commands, or another
     \\                                  executable or batch file from the app or System32
     \\  --file=<path>                   have the app open a file of yours: grants it that
@@ -483,6 +501,47 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         return stop.stop(ctx, opts);
     }
     if (std.mem.eql(u8, command, "exec")) return exec.exec(ctx, try parseExecOptions(ctx, rest));
+    if (std.mem.eql(u8, command, "logs")) {
+        var opts: logs.Options = .{};
+        for (rest) |arg| {
+            if (isFlag(arg, "follow") or std.mem.eql(u8, arg, "-f")) {
+                opts.follow = true;
+            } else if (std.mem.startsWith(u8, arg, "--tail=")) {
+                opts.tail = std.fmt.parseInt(usize, arg["--tail=".len..], 10) catch
+                    return fail("--tail takes a number of lines, not {s}", .{arg["--tail=".len..]});
+            } else if (opts.target == null and !std.mem.startsWith(u8, arg, "-")) {
+                opts.target = arg;
+            } else return usageError();
+        }
+        return if (opts.target != null) logs.logs(ctx, opts) else up.projectLogs(ctx, opts);
+    }
+    if (std.mem.eql(u8, command, "up")) {
+        var opts: up.UpOptions = .{};
+        for (rest) |arg| {
+            if (isFlag(arg, "detach") or std.mem.eql(u8, arg, "-d")) {
+                opts.detach = true;
+            } else if (isFlag(arg, "build")) {
+                opts.build = true;
+            } else if (isFlag(arg, "yes")) {
+                opts.consent = .given;
+            } else if (opts.dir == null and !std.mem.startsWith(u8, arg, "-")) {
+                opts.dir = arg;
+            } else return usageError();
+        }
+        return up.up(ctx, opts, &checkRunOptions);
+    }
+    if (std.mem.eql(u8, command, "down")) {
+        var opts: up.DownOptions = .{};
+        for (rest) |arg| {
+            if (std.mem.startsWith(u8, arg, "--time=")) {
+                opts.seconds = std.fmt.parseInt(u32, arg["--time=".len..], 10) catch
+                    return fail("--time takes a number of seconds, not {s}", .{arg["--time=".len..]});
+            } else if (opts.dir == null and !std.mem.startsWith(u8, arg, "-")) {
+                opts.dir = arg;
+            } else return usageError();
+        }
+        return up.down(ctx, opts);
+    }
     if (std.mem.eql(u8, command, "override")) {
         _ = try ctx.store.lock(ctx.arena, .shared);
         try overrideApp(ctx, rest);
@@ -949,17 +1008,35 @@ fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
     var opts: runtime.Options = .{ .id = undefined };
     var settings: SettingsParser = .{};
     var files: std.ArrayList([]const u8) = .empty;
+    // As given, for a detached run's zigsaw, which takes them again.
+    var given: std.ArrayList([]const u8) = .empty;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--")) {
             i += 1;
             break;
         }
+        if (std.mem.eql(u8, args[i], "-d")) {
+            opts.detach = true;
+            continue;
+        }
         if (!std.mem.startsWith(u8, args[i], "--")) break;
-        const opt = try Option.read(args, &i, &(SettingsParser.flags ++ [_][]const u8{"verbose"}));
+        const first = i;
+        const opt = try Option.read(args, &i, &(SettingsParser.flags ++ [_][]const u8{ "verbose", "detach", "detached-child" }));
+        if (std.mem.eql(u8, opt.name, "detach") and opt.value == null) {
+            opts.detach = true;
+            continue;
+        }
+        try given.appendSlice(ctx.arena, @ptrCast(args[first .. i + 1]));
         if (std.mem.eql(u8, opt.name, "verbose") and opt.value == null) {
             ctx.verbose = true;
             ctx.store.verbose = true;
+        } else if (std.mem.eql(u8, opt.name, "detached-child") and opt.value == null) {
+            opts.detached_child = true;
+        } else if (opts.detached_child and std.mem.eql(u8, opt.name, "project") and opt.value != null) {
+            opts.project = opt.value;
+        } else if (opts.detached_child and std.mem.eql(u8, opt.name, "entry") and opt.value != null) {
+            opts.entry = opt.value;
         } else if (std.mem.eql(u8, opt.name, "command") and opt.value != null) {
             opts.command = opt.value;
         } else if (std.mem.eql(u8, opt.name, "file") and opt.value != null) {
@@ -975,7 +1052,14 @@ fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
     opts.args = @ptrCast(args[i + 1 ..]);
     opts.files = files.items;
     opts.settings = settings.finish();
+    opts.given = given.items;
     return opts;
+}
+
+/// For `up`: an entry of a project's "run", checked as `run` would take it.
+fn checkRunOptions(ctx: *Context, args: []const [:0]const u8) anyerror!void {
+    const opts = try parseRunOptions(ctx, args);
+    if (opts.detach) return fail("--detach: `zigsaw up` starts every app detached already", .{});
 }
 
 /// Options go before the run, as for `run`; the command and everything
@@ -1191,6 +1275,8 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     try grants.undoAll(ctx, id);
     try appcontainer.deleteProfile(arena, id);
     try services.forget(store, arena, id);
+    // Its detached runs' logs, but those still being written.
+    _ = try logs.deleteEnded(store, arena, .{ .app = id });
     // The keys the app keeps, if a run that didn't end left them in HKCU:
     // back into its data, before that goes too.
     try hkcu.settleLeftovers(ctx, id);
@@ -1236,6 +1322,7 @@ test {
     _ = @import("ps.zig");
     _ = @import("stop.zig");
     _ = @import("exec.zig");
+    _ = @import("logs.zig");
     _ = @import("catalog.zig");
     _ = @import("cloudfiles.zig");
     _ = @import("credentials.zig");
