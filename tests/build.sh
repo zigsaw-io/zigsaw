@@ -5,7 +5,7 @@
 # without C, .NET, and Java with Maven and Gradle), tools' caches and
 # aliases, and vendor steps; 7-Zip
 # unpacks a source zigsaw doesn't; projects with a zigsaw.json, whose own
-# files are a source.
+# files are a source, and projects of several apps.
 #
 #   tests/build.sh [path\to\zigsaw.exe]
 #   GROUP=<group> tests/build.sh [path\to\zigsaw.exe]
@@ -36,7 +36,7 @@ export MSYS_NO_PATHCONV=1
 # sections took on a runner in iteration 33, without the setup every group
 # has (BusyBox's image), and with zig's image where a group builds with it.
 groups=(
-    "base: runtimes images extensions aliases projects resume prettier msvc sevenzip" # 2
+    "base: runtimes images extensions aliases projects apps resume prettier msvc sevenzip" # 2
     "zig: commands sqlite"                                                     # 7
     "cmake-meson: cmake llvm meson make"                                       # 7
     "langs: rust go dotnet java php"                                           # 9
@@ -626,6 +626,148 @@ inc_untouched() { [ "$(cd "$(cygpath -u "$inc")" && find . | LC_ALL=C sort | gre
 check "the project's directory has no build output" inc_untouched
 inc_prune_note() { z prune --dry-run 2>&1 | grep -q 'kept the builds of [0-9]* recipe(s)'; }
 check "prune keeps kept builds, unless --downloads" inc_prune_note
+fi
+
+# --- a project of several apps -------------------------------------------------------
+
+if section apps; then
+# A zigsaw.json that lists "apps" builds and installs each of them, after
+# those it names by id, unpinned. lib (a runtime) and tool (a module's source,
+# and an SDK by its version) have no build commands; app runs on lib and
+# copies a file of tool's; cli builds with tool. They're listed out of order.
+apps="$work\\apps"
+au=$(cygpath -u "$apps")
+mkdir -p "$au"/lib "$au"/tool "$au"/app "$au"/cli
+echo lib 1 >"$au/lib/lib.txt"
+echo tool 1 >"$au/tool/tool.txt"
+printf '{ "apps": ["app", "cli", "lib", "tool/zigsaw.json"] }\n' >"$au/zigsaw.json"
+printf '{ "id": "test.apps.lib", "version": "1", "command": "lib.txt", "exports": {}, "modules": [{ "name": "lib", "sources": [{ "path": "." }] }] }\n' >"$au/lib/zigsaw.json"
+printf '{ "id": "test.apps.tool", "version": "2", "command": "tool.txt", "exports": {}, "modules": [{ "name": "tool", "sources": [{ "path": "." }] }] }\n' >"$au/tool/zigsaw.json"
+cat >"$au/app/zigsaw.json" <<EOF
+{
+  "id": "test.apps.app", "version": "1", "command": "app.txt", "exports": {},
+  "sdk": { "busybox": "$BB@$bb_digest" },
+  "runtimes": { "lib": "test.apps.lib" },
+  "modules": [{ "name": "app", "sources": [{ "image": "test.apps.tool", "dest": "t" }], "build": ["cp t/tool.txt \"\$PREFIX/app.txt\""] }]
+}
+EOF
+cat >"$au/cli/zigsaw.json" <<EOF
+{
+  "id": "test.apps.cli", "version": "1", "command": "cli.txt", "exports": {},
+  "sdk": { "busybox": "$BB@$bb_digest", "tool": "test.apps.tool:2" },
+  "modules": [{ "name": "cli", "build": ["echo cli >\"\$PREFIX/cli.txt\""] }]
+}
+EOF
+apps_state() { (cd "$au" && find . -type f -exec md5sum {} + | LC_ALL=C sort); }
+apps_before=$(apps_state)
+apps_out="$work\\apps-out.txt"
+apps_build() { (cd "$apps" && z "$@" build 2>&1) >"$apps_out" || { tail -3 "$apps_out"; return 1; }; }
+apps_all() {
+    apps_build || return 1
+    grep -q '^building 4 apps: test.apps.lib, test.apps.tool, test.apps.app, test.apps.cli$' "$apps_out" ||
+        { echo "no order, or another: $(grep building "$apps_out")"; return 1; }
+    local got
+    got=$(grep -o '^installed test\.apps\.[a-z]*' "$apps_out" | cut -d' ' -f2 | tr '\n' ' ')
+    [ "$got" = "test.apps.lib test.apps.tool test.apps.app test.apps.cli " ] || { echo "installed: $got"; return 1; }
+}
+check "a project's zigsaw.json builds and installs each of its apps, after those it uses" apps_all
+apps_recorded() {
+    local lib tool app cli
+    lib=$(manifest_of test.apps.lib) tool=$(manifest_of test.apps.tool)
+    app=$(config_of test.apps.app | tr -d ' \r\n') cli=$(config_of test.apps.cli | tr -d ' \r\n')
+    grep -q "\"image\":\"$lib\"" <<<"$app" || { echo "app's runtime lib isn't $lib"; return 1; }
+    grep -q "\"images\":\[\"$tool\"\]" <<<"$app" || { echo "app's module's image isn't $tool"; return 1; }
+    grep -q "\"tool\":\"$tool\"" <<<"$cli" || { echo "cli's SDK tool isn't $tool"; return 1; }
+}
+check "each image records the digests of the apps it was built with" apps_recorded
+app_text() { tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer test.apps.app)\\app.txt"; }
+apps_has() { [ "$(app_text)" = "$1" ] || { echo "app.txt: $(app_text)"; return 1; }; }
+check "app has the file of tool's it copied" apps_has "tool 1"
+apps_untouched() { [ "$(apps_state)" = "$apps_before" ] || { echo "the project's files changed"; return 1; }; }
+check "no recipe was rewritten, nor anything else in the project" apps_untouched
+apps_reused() { apps_build -v && [ "$(grep -c 'built before from the same inputs' "$apps_out")" = 4 ] || { grep -c 'built before' "$apps_out"; return 1; }; }
+check "built again with nothing changed, each is the image built before" apps_reused
+digests() { local a; for a in lib tool app cli; do printf '%s ' "$(manifest_of test.apps.$a | cut -c8-19)"; done; }
+apps_lib_changed() {
+    local before after
+    read -ra before <<<"$(digests)"
+    echo lib 2 >"$au/lib/lib.txt"
+    apps_build || return 1
+    read -ra after <<<"$(digests)"
+    [ "${before[0]}" != "${after[0]}" ] && [ "${before[1]}" = "${after[1]}" ] && [ "${before[2]}" != "${after[2]}" ] && [ "${before[3]}" = "${after[3]}" ] ||
+        { echo "lib tool app cli: ${before[*]} -> ${after[*]}"; return 1; }
+}
+check "lib changed: lib and app, which runs on it, are new images; tool and cli aren't" apps_lib_changed
+apps_alone() {
+    local tool_before out
+    tool_before=$(manifest_of test.apps.tool)
+    echo tool 2 >"$au/tool/tool.txt"
+    out=$( (cd "$work" && z build "$apps\\cli") 2>&1) || { tail -3 <<<"$out"; return 1; }
+    grep -q "^test.apps.cli uses test.apps.tool, which its project builds first; it isn't installed$" <<<"$out" ||
+        { echo "no word of tool: $(head -2 <<<"$out")"; return 1; }
+    [ "$(manifest_of test.apps.tool)" = "$tool_before" ] || { echo "tool was installed"; return 1; }
+    [ "$(grep -c '^installed' <<<"$out")" = 1 ] || { echo "installed: $(grep '^installed' <<<"$out")"; return 1; }
+    ! config_of test.apps.cli | tr -d ' \r\n' | grep -q "\"tool\":\"$tool_before\"" || { echo "cli was built with the old tool"; return 1; }
+}
+check "one app built alone has its project build the apps it uses first, and installs only itself" apps_alone
+# app's kept build: its module's image source is tool, whose digest changed.
+apps_again() {
+    apps_build -v || return 1
+    apps_has "tool 2" || return 1
+    grep -q '^test.apps.cli 1: built before from the same inputs' "$apps_out" || { echo "cli was built again"; return 1; }
+}
+check "then the project: app's module is built again with the new tool, and cli is the image built alone" apps_again
+apps_update() {
+    local lib_before out
+    lib_before=$(manifest_of test.apps.lib)
+    echo lib 3 >"$au/lib/lib.txt"
+    out=$(z update test.apps.app 2>&1) || { tail -3 <<<"$out"; return 1; }
+    grep -q '^updated test.apps.app' <<<"$out" || { echo "not updated: $(tail -2 <<<"$out")"; return 1; }
+    [ "$(manifest_of test.apps.lib)" = "$lib_before" ] || { echo "lib was installed"; return 1; }
+    ! config_of test.apps.app | tr -d ' \r\n' | grep -q "\"image\":\"$lib_before\"" || { echo "app still runs on the old lib"; return 1; }
+}
+check "update builds an app of a project again, with the others as they are now" apps_update
+
+# What's refused, each before anything is built.
+bu=$(cygpath -u "$work\\apps-bad")
+# mini <recipe> <id> [<sdk>]: a recipe with a file of its own, and that SDK.
+mini() {
+    mkdir -p "$(dirname "$1")" && echo x >"$(dirname "$1")/x.txt"
+    printf '{ "id": "%s", "version": "1", "command": "x.txt", "exports": {}%s, "modules": [{ "name": "m", "sources": [{ "path": "x.txt" }] }] }\n' \
+        "$2" "${3:+, \"sdk\": $3}" >"$1"
+}
+# refused <what it says> <project> [<option>]
+refused() {
+    local out
+    out=$( (cd "$work" && z build ${3:+"$3"} "$(cygpath -w "$2")") 2>&1) && { echo "it built"; return 1; }
+    grep -q "$1" <<<"$out" || { echo "said: $(grep -v '^\s*$' <<<"$out" | tail -1)"; return 1; }
+    ! grep -q -e '^installed' -e '^built ' <<<"$out" || { echo "it built something first"; return 1; }
+}
+mini "$bu/circle/a/zigsaw.json" test.bad.a '{ "b": "test.bad.b" }'
+mini "$bu/circle/b/zigsaw.json" test.bad.b '{ "a": "test.bad.a" }'
+mini "$bu/circle/c/zigsaw.json" test.bad.c
+printf '{ "apps": ["c", "a", "b"] }\n' >"$bu/circle/zigsaw.json"
+check "apps that use each other in a circle" refused 'use each other in a circle, so none of these can be built first: test.bad.a and test.bad.b' "$bu/circle"
+mkdir -p "$bu/outside" && printf '{ "apps": ["../circle/a"] }\n' >"$bu/outside/zigsaw.json"
+check "an app outside the project's directory" refused 'must be a path inside the project' "$bu/outside"
+mkdir -p "$bu/nested/inner" && printf '{ "apps": ["inner"] }\n' >"$bu/nested/zigsaw.json" && printf '{ "apps": ["x"] }\n' >"$bu/nested/inner/zigsaw.json"
+check "a project among a project's apps" refused "is a project's list of apps too" "$bu/nested"
+mini "$bu/twice/a/zigsaw.json" test.bad.same && mini "$bu/twice/b/zigsaw.json" test.bad.same
+printf '{ "apps": ["a", "b"] }\n' >"$bu/twice/zigsaw.json"
+check "two apps of one id" refused 'are both test.bad.same' "$bu/twice"
+mini "$bu/tag/a/zigsaw.json" test.bad.ta '{ "b": "test.bad.tb:7" }' && mini "$bu/tag/b/zigsaw.json" test.bad.tb
+printf '{ "apps": ["b", "a"] }\n' >"$bu/tag/zigsaw.json"
+check "a tag that isn't the app's version" refused "names test.bad.tb:7, but its project's test.bad.tb is version 1" "$bu/tag"
+mini "$bu/loose/a/zigsaw.json" test.bad.la && mini "$bu/loose/b/zigsaw.json" test.bad.lb '{ "x": "test.bad.nowhere" }'
+printf '{ "apps": ["a", "b"] }\n' >"$bu/loose/zigsaw.json"
+check "an image named unpinned that isn't one of the project's" refused 'sdk x .*pinned' "$bu/loose"
+check "--clean=<module>, which is for one app" refused 'starts a module of one app afresh' "$au" --clean=app
+mkdir -p "$bu/alone" && cp "$au/app/zigsaw.json" "$bu/alone/"
+# Above it, a project that doesn't list it, with troubles of its own.
+printf '{ "apps": ["nowhere"], "id": "x" }\n' >"$bu/zigsaw.json"
+check "an app's recipe away from its project, which names another unpinned" refused "runtime lib isn't pinned to a digest" "$bu/alone"
+alone_quiet() { [ "$( (cd "$work" && z build "$(cygpath -w "$bu/alone")") 2>&1 | grep -c '^error:')" = 1 ]; }
+check "a project above it that doesn't list it says nothing" alone_quiet
 fi
 
 # --- going on from the last build ----------------------------------------------------

@@ -81,6 +81,14 @@ pub fn resolve(ctx: *Context, recipe: []const u8, kind: Kind, alias: []const u8,
     return .{ .alias = alias, .manifest_digest = digest, .manifest = image.manifest, .config = image.config };
 }
 
+/// Fails as `resolve` would if `reference` isn't pinned, without looking
+/// for the image itself: for what a project's build checks first.
+pub fn checkPinned(ctx: *Context, recipe: []const u8, kind: Kind, alias: []const u8, reference: []const u8) !void {
+    const target = remote.resolve(ctx, reference) catch
+        return fail("{s}: {t} {s}: \"{s}\" isn't an app id or an image reference", .{ recipe, kind, alias, reference });
+    if (target.ref.digest == null) return failUnpinned(ctx, recipe, kind, alias, reference, target);
+}
+
 /// Fails, saying which digest to pin: the installed app's, if its version is
 /// the one named, or else whatever the registry has under that name.
 fn failUnpinned(ctx: *Context, recipe: []const u8, kind: Kind, alias: []const u8, reference: []const u8, target: remote.Target) error{ Failed, OutOfMemory } {

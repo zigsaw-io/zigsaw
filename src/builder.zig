@@ -38,6 +38,7 @@ const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const aliases = @import("aliases.zig");
 const checkpoint = @import("checkpoint.zig");
+const compose = @import("compose.zig");
 const Tree = @import("Tree.zig");
 const deps = @import("deps.zig");
 const drive = @import("drive.zig");
@@ -84,6 +85,10 @@ pub const Options = struct {
     listed: ?*ps.Entry = null,
     /// What `zigsaw stop` sets to ask the build to end (see stop.zig).
     asker: ?*stop.Asker = null,
+    /// The images a project built of its other apps, which the recipe may
+    /// name unpinned (see compose.zig). Without it, a recipe that does is
+    /// looked for in the projects above its directory.
+    siblings: ?*const compose.Built = null,
 };
 
 /// The fixed time builds see as SOURCE_DATE_EPOCH: 1980-01-01, the earliest
@@ -98,14 +103,23 @@ pub fn build(ctx: *Context, recipe_path: []const u8, opts: Options) !install.Ima
 
     const bytes = Io.Dir.cwd().readFileAlloc(io, recipe_path, arena, .limited(1 << 20)) catch |err|
         return fail("reading {s}: {t}", .{ recipe_path, err });
-    const r = try recipe.parse(arena, recipe_path, bytes);
+    var r = try recipe.parse(arena, recipe_path, bytes);
     const source = try Io.Dir.cwd().realPathFileAlloc(io, recipe_path, arena);
+    // Other apps of its project, named by id, as the project built them:
+    // pinned before anything reads the recipe, so that its inputs, its
+    // kept build and its image have their digests.
+    var pins: []const []const u8 = &.{};
+    if (compose.namesSiblings(r)) if (opts.siblings orelse try compose.buildFor(ctx, source, r, opts.limits)) |built| {
+        const pinned = try compose.pin(arena, r, built, recipe_path);
+        r = pinned.recipe;
+        pins = pinned.pins;
+    };
     // A project's own files, once, for the inputs and for the build.
     const projects = try project.Snapshots.take(ctx, r, recipe_path);
 
     // A host toolchain is an input zigsaw can't pin, so those builds are
     // never reused.
-    const inputs = if (r.host.len == 0) try inputHash(ctx, r, bytes, recipe_path, &projects) else null;
+    const inputs = if (r.host.len == 0) try inputHash(ctx, r, bytes, pins, recipe_path, &projects) else null;
     if (opts.clean_from) |name| if (moduleIndex(r, name) == null)
         return fail("{s} has no module {s} to start afresh", .{ recipe_path, name });
     const forced = opts.rebuild or opts.clean or opts.clean_from != null or opts.keep_build_dir;
@@ -162,16 +176,21 @@ pub fn recipePath(ctx: *Context, arg: ?[]const u8) ![]const u8 {
 }
 
 /// A hash of everything a build's result depends on: this zigsaw, the
-/// recipe, and the contents of its local sources, files and directories.
-/// URL sources, runtimes and SDK images are pinned by hash in the recipe
-/// itself.
-fn inputHash(ctx: *Context, r: recipe.Recipe, bytes: []const u8, recipe_path: []const u8, projects: *const project.Snapshots) ![64]u8 {
+/// recipe, the images of its project's apps it names unpinned (`pins`), and
+/// the contents of its local sources, files and directories. URL sources,
+/// runtimes and SDK images are pinned by hash in the recipe itself.
+fn inputHash(ctx: *Context, r: recipe.Recipe, bytes: []const u8, pins: []const []const u8, recipe_path: []const u8, projects: *const project.Snapshots) ![64]u8 {
     const io = ctx.io;
     const arena = ctx.arena;
     var h: std.crypto.hash.sha2.Sha256 = .init(.{});
     h.update("zigsaw build inputs\n");
     h.update(&(try Store.sha256File(io, try win32.selfExePath(arena))).hex);
     h.update(bytes);
+    // Only when there are some, so that other recipes' keys stay as they were.
+    for (pins) |p| {
+        h.update("\npinned by its project: ");
+        h.update(p);
+    }
     const base_dir = std.fs.path.dirname(recipe_path) orelse ".";
     for (r.modules) |m| for (m.sources, 0..) |src, i| {
         const p = src.path orelse continue;

@@ -105,9 +105,10 @@ zigsaw build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir]
              [--memory=<size>] [--cpus=<n>] [<recipe.json> | <dir>]
                                        build an app from a recipe, or from the zigsaw.json of a
                                        project's directory (the current one by default), install
-                                       it and its commands. It goes on from the recipe's last
-                                       build: modules whose inputs are the same are skipped, and
-                                       one that stopped goes on at its command. --clean deletes
+                                       it and its commands; or each app a zigsaw.json lists as
+                                       "apps", after those it names. It goes on from the recipe's
+                                       last build: modules whose inputs are the same are skipped,
+                                       and one that stopped goes on at its command. --clean deletes
                                        what that build left; --clean=<module> starts that module
                                        and those after it afresh; --rebuild and --no-resume build
                                        every module in a new directory. Kept builds may take
@@ -317,6 +318,38 @@ and its programs are the same bytes as those of a `zig build -Dstrip`
 outside zigsaw ([`tests/self.sh`](tests/self.sh)). It exports nothing, as
 zigsaw's own commands are on PATH already. See
 [projects](docs/recipes.md#projects) for the details.
+
+### A project of several apps
+
+A project made of several apps has a recipe for each, and a `zigsaw.json`
+at its root that lists them as `"apps"`, in place of being a recipe itself:
+
+```
+C:\work\shop\zigsaw.json          { "apps": ["engine", "web", "cli"] }
+C:\work\shop\engine\zigsaw.json   org.example.engine, which web runs on and cli builds with
+C:\work\shop\web\zigsaw.json      "runtimes": { "engine": "org.example.engine" }
+C:\work\shop\cli\zigsaw.json      "sdk": { "engine": "org.example.engine", "zig": "org.ziglang.zig:0.17.0@sha256:..." }
+```
+
+```powershell
+cd C:\work\shop
+zigsaw build      # building 3 apps: org.example.engine, org.example.web, org.example.cli
+```
+
+- **`zigsaw build` builds and installs each app, after those it uses**, as
+  `docker compose build` builds a compose file's services.
+- **An app names another of the project by its id, with no digest**, as web
+  and cli name the engine. The engine is built first, and they get that
+  image as if pinned to its digest: their images record it, a changed engine
+  makes new ones, and with nothing changed every app is reused. The recipes
+  stay as they are.
+- **One app built alone**, `zigsaw build web` or `zigsaw update
+  org.example.web`, has its project build the apps it uses first, without
+  installing them.
+- The build stops at the first app that fails. Those before it stay
+  installed, and the next build takes them from the cache.
+
+See [several apps](docs/recipes.md#several-apps) for the details.
 
 ## Sharing apps through registries
 

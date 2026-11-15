@@ -873,6 +873,61 @@ vendor` in the module's directory, with the project's files. The installed
 app records where its recipe is, so `zigsaw update <app-id>` builds it again
 from the directory as it is then.
 
+### Several apps
+
+A project of several apps has a recipe for each, and a `zigsaw.json` at its
+root that lists them as `"apps"`, in place of being a recipe itself, as a
+Cargo workspace lists its packages:
+
+```json
+{ "apps": ["engine", "web", "tools/cli.json"] }
+```
+
+`zigsaw build` builds and installs each of them, as `docker compose build`
+builds a compose file's services. An app of the project names another by its
+id, unpinned, as its SDK, a runtime or a module's `image`:
+
+```json
+"runtimes": { "engine": "org.example.engine" }
+```
+
+- **An entry is a path from the project's directory**, inside it: a recipe,
+  or a directory, whose recipe is its `zigsaw.json`. The project's
+  `zigsaw.json` has `"apps"` and nothing else. A project among the apps, two
+  apps of one id, and one listed twice are refused.
+- **A reference that's an app id, with a tag or without, and no digest, is
+  the project's app of that id**, ignoring case. A tag must be its version.
+  One with a digest is left as it is, to an app of the project too, and the
+  build warns if that isn't the image the project built.
+- **Each app is built after those it names so**, and of those that could go
+  next, the one listed first goes. Apps that name each other in a circle are
+  refused, naming them. Builds take turns on `B:`, so the apps build one
+  after another.
+- **Everything is checked before anything builds**: every recipe, the order,
+  and the unpinned references that aren't the project's apps, which fail as
+  they fail any build, with the digest to pin.
+- **The reference is pinned in memory**, as
+  `"<id>:<version>@sha256:<digest>"` of the image built, before anything
+  reads the recipe, which stays as it is. So the image is reused only while
+  that app's digest is the same, a [kept build's](#going-on-from-the-last-build)
+  module starts afresh when its SDK, runtime or image changed, and the image's
+  record of the build (`runtimes`, `build.sdk`, `build.images`) has the
+  digest. The same files make the same images anywhere.
+- **The build stops at the first app that fails.** Those before it stay
+  installed, and the next build takes them from the cache. `zigsaw ps` lists
+  each app's build as it goes; stopping it ends the project's build there.
+- `--clean`, `--rebuild`, `--no-resume`, `--keep-build-dir`, `--memory` and
+  `--cpus` apply to each app. `--clean=<module>` is refused: give the app's
+  directory instead.
+
+**One app built alone**, by its directory or recipe, or by `zigsaw update
+<app-id>`, which builds the recipe its install records, has the apps it
+names so built first, and those they name. zigsaw looks for them only when
+its recipe names one: from the recipe's directory up, the first
+`zigsaw.json` with `"apps"` that lists it is its project. It builds them as
+the project would, with `--memory` and `--cpus` only, and doesn't install
+them. A recipe that no project lists fails as any unpinned reference does.
+
 ## Zig
 
 A Zig project builds with `zig build` from [zig's image](#building-from-source),

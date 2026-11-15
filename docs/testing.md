@@ -15,7 +15,7 @@ bash tests/shims.sh     # command shims end to end, also for commands installed 
 bash tests/store.sh     # update, prune, and what they keep while apps run, and for rollback
 bash tests/upstream.sh  # scripts/check-upstream.sh with made-up recipes, pages, repositories and OSV answers, and that scripts/upstream.txt covers every recipe's sources (no network; runs on Linux too)
 bash tests/rebuild.sh   # scripts/rebuild.sh with made-up recipes and a stand-in zigsaw: its order, pins, stopping and going on (no network; runs on Linux too)
-bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, builds that go on from the last one, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
+bash tests/build.sh     # building apps: runtimes, images as sources, projects with a zigsaw.json, projects of several apps, builds that go on from the last one, build commands on B:, tool caches, aliases, vendor steps, CMake, Meson, Rust, Go, cgo, .NET (WinForms and WPF too), extension points, PHP extensions with zig, reproducibility
 GROUP=langs bash tests/build.sh # only one group of its sections (tests/build.sh --groups lists them), as a CI job does
 SECTIONS=php bash tests/build.sh # only these sections
 bash tests/standard-user.sh account.txt # zigsaw as a real standard user, in an account of its own you've made: the Quick start, your real folders (safe there), a guard's refusal, a store deleted by hand, and the suites that need no app's image

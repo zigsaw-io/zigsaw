@@ -5,6 +5,7 @@ const Store = @import("Store.zig");
 const appcontainer = @import("appcontainer.zig");
 const services = @import("services.zig");
 const builder = @import("builder.zig");
+const compose = @import("compose.zig");
 const catalog = @import("catalog.zig");
 const credentials = @import("credentials.zig");
 const environment = @import("environment.zig");
@@ -49,9 +50,13 @@ const usage =
     \\        [--memory=<size>] [--cpus=<n>]
     \\        [<recipe.json> | <dir>]   build an app from a recipe, or from the zigsaw.json of a
     \\                                  project's directory (by default the current one), and
-    \\                                  install it and its commands. A build goes on from the
-    \\                                  recipe's last one: modules whose inputs are the same are
-    \\                                  skipped, and one that stopped goes on at its command.
+    \\                                  install it and its commands. A zigsaw.json that lists
+    \\                                  "apps" builds and installs each of them, after those it
+    \\                                  names by id, unpinned; one of them built alone builds
+    \\                                  those first, without installing them. A build goes on
+    \\                                  from the recipe's last one: modules whose inputs are the
+    \\                                  same are skipped, and one that stopped goes on at its
+    \\                                  command.
     \\                                  --clean deletes what that build left first, and
     \\                                  --clean=<module> starts that module and those after it
     \\                                  afresh; --rebuild builds every module in a new directory,
@@ -376,7 +381,10 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
             } else return usageError();
         }
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try install.install(ctx, try builder.build(ctx, try builder.recipePath(ctx, recipe_path), opts));
+        const path = try builder.recipePath(ctx, recipe_path);
+        if (try compose.read(ctx, path)) |p| {
+            try compose.buildAll(ctx, p, opts);
+        } else try install.install(ctx, try builder.build(ctx, path, opts));
         return 0;
     }
     if (std.mem.eql(u8, command, "pull")) {
@@ -1252,6 +1260,7 @@ test {
     _ = @import("pe.zig");
     _ = @import("process.zig");
     _ = @import("project.zig");
+    _ = @import("compose.zig");
     _ = @import("prompt.zig");
     _ = @import("prune.zig");
     _ = @import("recipe.zig");
