@@ -72,16 +72,25 @@ ledger_key: ?[]const u8 = null,
 const subdirs = [_][]const u8{ "blobs\\sha256", "refs", "versions", "snapshots", "deploy", "lazy", "learned", "volumes", "grants", "overrides", "bin", "aliases", "open", "ports", "running", "relay", "host", "certs", "cache\\downloads", "cache\\images", "cache\\builds", "cache\\tools", "cache\\work", "tmp" };
 
 pub fn open(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
-    const root = if (env.get("ZIGSAW_HOME")) |home|
-        try arena.dupe(u8, home)
-    else if (env.get("LOCALAPPDATA")) |local|
-        try std.fs.path.join(arena, &.{ local, "zigsaw" })
-    else
-        return fail("neither ZIGSAW_HOME nor LOCALAPPDATA is set", .{});
-
-    const store: Store = .{ .io = io, .root = root, .ledger_key = env.get("ZIGSAW_GRANTS_KEY") orelse ledger.default_key };
+    const store = try locate(io, arena, env);
     for (subdirs) |sub| try Io.Dir.cwd().createDirPath(io, try store.path(arena, &.{sub}));
     return store;
+}
+
+/// The store `open` opens, without making it or anything in it: for
+/// `zigsaw doctor`, which changes nothing.
+pub fn locate(io: Io, arena: Allocator, env: *const std.process.Environ.Map) !Store {
+    const root = try rootFrom(arena, env) orelse
+        return fail("neither ZIGSAW_HOME nor LOCALAPPDATA is set", .{});
+    return .{ .io = io, .root = root, .ledger_key = env.get("ZIGSAW_GRANTS_KEY") orelse ledger.default_key };
+}
+
+/// Where the store is: ZIGSAW_HOME, or %LOCALAPPDATA%\zigsaw. Null if
+/// neither is set.
+pub fn rootFrom(arena: Allocator, env: *const std.process.Environ.Map) !?[]const u8 {
+    if (env.get("ZIGSAW_HOME")) |home| return try arena.dupe(u8, home);
+    if (env.get("LOCALAPPDATA")) |local| return try std.fs.path.join(arena, &.{ local, "zigsaw" });
+    return null;
 }
 
 /// The store's path as the ledger names it: whole, whatever ZIGSAW_HOME said.
@@ -340,7 +349,11 @@ pub fn deleteRef(s: Store, arena: Allocator, id: []const u8) !void {
 
 /// All installed apps, sorted by id.
 pub fn listRefs(s: Store, arena: Allocator) ![]Ref {
-    var dir = try Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{"refs"}), .{ .iterate = true });
+    // None in a store that isn't there yet, as `zigsaw doctor` may look at.
+    var dir = Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{"refs"}), .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return &.{},
+        else => |e| return e,
+    };
     defer dir.close(s.io);
     var refs: std.ArrayList(Ref) = .empty;
     var it = dir.iterate();
@@ -560,6 +573,20 @@ pub fn readCompleteImage(s: Store, arena: Allocator, manifest_digest: []const u8
         if (!try exists(s.io, try s.blobPath(arena, h))) return null;
     };
     return try s.readImage(arena, manifest_digest, manifest_digest);
+}
+
+/// Whether the image's manifest and config are in the store and can be read,
+/// as `readImage` needs, without saying anything when they can't: for what
+/// only looks, as `zigsaw doctor` does, which tells about that itself.
+pub fn imageReadable(s: Store, arena: Allocator, manifest_digest: []const u8) !bool {
+    const hex = oci.digestHex(manifest_digest) orelse return false;
+    const bytes = Io.Dir.cwd().readFileAlloc(s.io, try s.blobPath(arena, hex), arena, .limited(16 << 20)) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => |e| return e,
+    };
+    const manifest = std.json.parseFromSliceLeaky(oci.Manifest, arena, bytes, .{ .ignore_unknown_fields = true }) catch return false;
+    const config_hex = oci.digestHex(manifest.config.digest) orelse return false;
+    return exists(s.io, try s.blobPath(arena, config_hex));
 }
 
 /// The same, but with a layer still pulled lazily counted as there: what a
@@ -987,15 +1014,21 @@ pub fn lockGrantChanges(s: Store, arena: Allocator) !Lock {
 /// Whether an app other than `id` has `grant` recorded, in this store or in
 /// another that still stands: a label another app's runs still need, say.
 pub fn grantedToOthers(s: Store, arena: Allocator, id: []const u8, grant: Grant) !bool {
-    var dir = try Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{"grants"}), .{ .iterate = true });
-    defer dir.close(s.io);
-    const own = try std.fmt.allocPrint(arena, "{s}.txt", .{id});
-    var it = dir.iterate();
-    while (try it.next(s.io)) |entry| {
-        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".txt")) continue;
-        if (std.ascii.eqlIgnoreCase(entry.name, own)) continue;
-        const bytes = try dir.readFileAlloc(s.io, entry.name, arena, .limited(1 << 20));
-        for (try parseGrants(arena, bytes)) |g| if (g.eql(grant)) return true;
+    // A store that isn't there yet has none (see `listRefs`); others may.
+    if (Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{"grants"}), .{ .iterate = true })) |opened| {
+        var dir = opened;
+        defer dir.close(s.io);
+        const own = try std.fmt.allocPrint(arena, "{s}.txt", .{id});
+        var it = dir.iterate();
+        while (try it.next(s.io)) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".txt")) continue;
+            if (std.ascii.eqlIgnoreCase(entry.name, own)) continue;
+            const bytes = try dir.readFileAlloc(s.io, entry.name, arena, .limited(1 << 20));
+            for (try parseGrants(arena, bytes)) |g| if (g.eql(grant)) return true;
+        }
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => |e| return e,
     }
     const key = s.ledger_key orelse return false;
     const root = s.fullRoot(arena);
@@ -1019,7 +1052,10 @@ pub fn deleteGrants(s: Store, arena: Allocator, id: []const u8) !void {
 
 /// The ids of the apps with grants recorded, installed or not.
 pub fn listGrantIds(s: Store, arena: Allocator) ![]const []const u8 {
-    var dir = try Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{"grants"}), .{ .iterate = true });
+    var dir = Io.Dir.cwd().openDir(s.io, try s.path(arena, &.{"grants"}), .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return &.{},
+        else => |e| return e,
+    };
     defer dir.close(s.io);
     var ids: std.ArrayList([]const u8) = .empty;
     var it = dir.iterate();

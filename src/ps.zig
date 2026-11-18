@@ -215,6 +215,45 @@ pub fn live(store: Store, arena: Allocator) ![]const Record {
     return out.items;
 }
 
+/// A record, as `allRecords` finds it.
+pub const Found = struct {
+    record: Record,
+    /// Its zigsaw is gone: `live`, as `zigsaw ps` calls it, deletes it.
+    gone: bool,
+};
+
+/// Every record, going or gone, for `zigsaw doctor`: as `live`, but deleting
+/// nothing, so it asks whether a lock is held, not for it. A record that
+/// can't be read is named by its file's PID.
+pub fn allRecords(store: Store, arena: Allocator) ![]const Found {
+    const io = store.io;
+    const dir_path = try store.path(arena, &.{"running"});
+    var dir = Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return &.{},
+        else => |e| return e,
+    };
+    defer dir.close(io);
+    var out: std.ArrayList(Found) = .empty;
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".json")) continue;
+        const stem = entry.name[0 .. entry.name.len - ".json".len];
+        const pid = std.fmt.parseInt(u32, stem, 10) catch continue;
+        const lock_path = try std.fmt.allocPrint(arena, "{s}\\{s}.lock", .{ dir_path, stem });
+        const gone = !try Store.isLocked(io, lock_path);
+        const bytes = dir.readFileAlloc(io, entry.name, arena, .limited(1 << 20)) catch "";
+        const record = std.json.parseFromSliceLeaky(Record, arena, bytes, .{ .ignore_unknown_fields = true }) catch
+            Record{ .id = "?", .pid = pid, .started = 0 };
+        try out.append(arena, .{ .record = record, .gone = gone });
+    }
+    std.mem.sort(Found, out.items, {}, struct {
+        fn lessThan(_: void, a: Found, b: Found) bool {
+            return a.record.pid < b.record.pid;
+        }
+    }.lessThan);
+    return out.items;
+}
+
 // ---------------------------------------------------------------------------
 // What a job and its processes are
 
@@ -829,6 +868,15 @@ test "records: kept, listed, and dropped once their zigsaw is gone" {
 
     // As if its zigsaw had been killed: the lock goes, the record stays.
     first.lock.release(io);
+    // `allRecords` says so, and leaves it, as often as it's asked.
+    for (0..2) |_| {
+        const seen = try allRecords(store, a);
+        try testing.expectEqual(2, seen.len);
+        try testing.expectEqual(@as(u32, 7), seen[0].record.pid);
+        try testing.expect(seen[0].gone);
+        try testing.expect(!seen[1].gone);
+        try tmp.dir.access(io, "running\\7.json", .{});
+    }
     const one = try live(store, a);
     try testing.expectEqual(1, one.len);
     try testing.expectEqualStrings("c.d", one[0].id);

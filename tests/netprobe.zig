@@ -27,6 +27,12 @@
 //!       Basic authentication as <user:password> (407 otherwise), and
 //!       appends each request's target to <log>
 //!
+//! And for `zigsaw doctor` (tests/doctor.sh):
+//!
+//!   zigsaw-netprobe silent <port>
+//!       accepts connections on 127.0.0.1:<port>, and never answers or
+//!       closes them: a server that hangs
+//!
 //! The report's endpoints are processes of its own, on the host or in two
 //! AppContainer profiles it makes and deletes (zigsaw.test.netprobe.a and
 //! .b), so its executable must be readable to ALL APPLICATION PACKAGES.
@@ -144,6 +150,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
     if (std.mem.eql(u8, mode, "serve-http") and args.len == 3) return serveHttp(out, try port(args[2]));
+    if (std.mem.eql(u8, mode, "silent") and args.len == 3) return silent(out, try port(args[2]));
     if (std.mem.eql(u8, mode, "fetch") and args.len == 4) return fetch(arena, out, if (init.environ_map.get("HTTPS_PROXY")) |v| (if (v.len == 0) null else v) else null, args[2], try port(args[3]));
     if (std.mem.eql(u8, mode, "fetch-http") and args.len == 5) return fetchHttp(out, init.environ_map.get("HTTP_PROXY") orelse return 2, args[2], try port(args[3]), args[4]);
     if (std.mem.eql(u8, mode, "fake-proxy") and args.len == 5) return fakeProxy(arena, init.io, out, try port(args[2]), args[3], args[4]);
@@ -245,6 +252,25 @@ fn serveHttp(out: *std.Io.Writer, p: u16) !u8 {
         const msg = std.fmt.bufPrint(&res, "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body }) catch continue;
         _ = net.sendAll(c, msg);
         _ = win32.shutdown(c, win32.SD_SEND);
+    }
+}
+
+/// Accepts connections on 127.0.0.1:<p> and never answers, nor closes them:
+/// a server that hangs, for what must give up on one (tests/doctor.sh).
+fn silent(out: *std.Io.Writer, p: u16) !u8 {
+    const listener = switch (net.listen(.loopback(.ipv4, p))) {
+        .socket => |s| s,
+        .failed => |code| {
+            try out.print("can't listen on 127.0.0.1:{d}: error {d}\n", .{ p, code });
+            return 1;
+        },
+    };
+    try out.print("listening on 127.0.0.1:{d}\n", .{p});
+    try out.flush();
+    while (true) {
+        const c = win32.accept(listener, null, null);
+        if (c == win32.INVALID_SOCKET) continue;
+        // Held, unread, until the process ends.
     }
 }
 

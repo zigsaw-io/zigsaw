@@ -248,12 +248,31 @@ pub fn removeAll(ctx: *Context, app: []const u8) ![]const []const u8 {
 /// and `zigsaw rm`.
 pub fn removeStale(ctx: *Context, classes: Key) !void {
     const arena = ctx.arena;
-    for (try classes.subKeys(arena)) |name| {
-        if (name.len == 0 or name[0] == '.' or std.ascii.startsWithIgnoreCase(name, prefix)) continue;
-        if (!try namesThisStore(ctx, classes, name)) continue;
+    for (try staleIn(ctx, classes)) |name| {
         try classes.deleteTree(arena, name);
         note("removed the handler of {s}: links, which it started an app's program for directly", .{name});
     }
+}
+
+/// Those schemes' names.
+fn staleIn(ctx: *Context, classes: Key) ![]const []const u8 {
+    const arena = ctx.arena;
+    var out: std.ArrayList([]const u8) = .empty;
+    for (try classes.subKeys(arena)) |name| {
+        if (name.len == 0 or name[0] == '.' or std.ascii.startsWithIgnoreCase(name, prefix)) continue;
+        if (!try namesThisStore(ctx, classes, name)) continue;
+        try out.append(arena, name);
+    }
+    return out.items;
+}
+
+/// The schemes `removeStale` would remove from the store's own classes, for
+/// `zigsaw doctor`. Only reads.
+pub fn staleSchemes(ctx: *Context) ![]const []const u8 {
+    const classes_path = classesKey(ctx) orelse return &.{};
+    var classes = try Key.open(ctx.arena, win32.HKEY_CURRENT_USER, classes_path, win32.KEY_READ) orelse return &.{};
+    defer classes.close();
+    return staleIn(ctx, classes);
 }
 
 /// `removeStale`, on the store's own classes.

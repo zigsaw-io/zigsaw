@@ -193,7 +193,27 @@ pub fn ago(ctx: *Context, taken: i64) updates.Ago {
 /// Where a swap keeps the app's data between its renames: a name no app's id
 /// can be, as none starts with a dot.
 fn swapPath(ctx: *Context, id: []const u8) ![]u8 {
-    return ctx.store.path(ctx.arena, &.{ "snapshots", try std.fmt.allocPrint(ctx.arena, ".swap-{s}", .{id}) });
+    return ctx.store.path(ctx.arena, &.{ "snapshots", try std.fmt.allocPrint(ctx.arena, swap_prefix ++ "{s}", .{id}) });
+}
+
+const swap_prefix = ".swap-";
+
+/// The apps whose data a rollback was swapping when it stopped, between its
+/// renames: `finishSwap` puts it right, as the app's next run, rollback or
+/// `rm` call it. Only reads.
+pub fn interruptedSwaps(store: Store, arena: Allocator) ![]const []const u8 {
+    var ids: std.ArrayList([]const u8) = .empty;
+    var dir = Io.Dir.cwd().openDir(store.io, try store.path(arena, &.{"snapshots"}), .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return ids.items,
+        else => |e| return e,
+    };
+    defer dir.close(store.io);
+    var it = dir.iterate();
+    while (try it.next(store.io)) |entry| {
+        if (!std.mem.startsWith(u8, entry.name, swap_prefix)) continue;
+        try ids.append(arena, try arena.dupe(u8, entry.name[swap_prefix.len..]));
+    }
+    return ids.items;
 }
 
 /// Makes the data kept of the installed version the app's data, and sets

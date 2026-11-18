@@ -235,6 +235,11 @@ pub fn writeUnreadableBelowMedium(arena: Allocator, path: []const u8, bytes: []c
 /// Whether zigsaw itself runs below medium integrity: a low run's shim
 /// started it, or Windows did, for a program file labelled low.
 pub fn belowMedium() !bool {
+    return try integrityRid() < win32.SECURITY_MANDATORY_MEDIUM_RID;
+}
+
+/// The integrity level zigsaw runs at, as its RID (SECURITY_MANDATORY_*_RID).
+pub fn integrityRid() !win32.DWORD {
     var token: ?win32.HANDLE = null;
     if (win32.OpenProcessToken(win32.GetCurrentProcess(), win32.TOKEN_QUERY, &token) == 0) return win32.lastErrorFail("OpenProcessToken");
     defer _ = win32.CloseHandle(token.?);
@@ -243,7 +248,7 @@ pub fn belowMedium() !bool {
     if (win32.GetTokenInformation(token.?, win32.TokenIntegrityLevel, &buf, buf.len, &len) == 0) return win32.lastErrorFail("GetTokenInformation");
     const label: *const win32.TOKEN_MANDATORY_LABEL = @ptrCast(&buf);
     const sid = label.Label.Sid;
-    return win32.GetSidSubAuthority(sid, win32.GetSidSubAuthorityCount(sid).* - 1).* < win32.SECURITY_MANDATORY_MEDIUM_RID;
+    return win32.GetSidSubAuthority(sid, win32.GetSidSubAuthorityCount(sid).* - 1).*;
 }
 
 /// The integrity level (as its RID) of `path`'s own label; null when it has

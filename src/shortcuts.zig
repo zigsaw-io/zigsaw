@@ -254,6 +254,18 @@ pub fn removeAll(ctx: *Context, app: []const u8) ![]const []const u8 {
     return removed.items;
 }
 
+/// The store's shortcuts whose shim is gone, which belong to no app any
+/// more: the next install or `zigsaw repair` of any app deletes them. Only
+/// reads, for `zigsaw doctor`.
+pub fn stale(ctx: *Context) ![]const []const u8 {
+    const folder = try dir(ctx) orelse return &.{};
+    var com: Com = try .init();
+    defer com.deinit();
+    var out: std.ArrayList([]const u8) = .empty;
+    for (try listOwned(ctx, &com, folder)) |o| if (o.app == null) try out.append(ctx.arena, o.name);
+    return out.items;
+}
+
 /// The names of the app's shortcuts, for `zigsaw list`.
 pub fn names(ctx: *Context, app: []const u8) ![]const []const u8 {
     const folder = try dir(ctx) orelse return &.{};

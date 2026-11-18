@@ -499,7 +499,7 @@ fn serve(h: *Helper, info: *const cloudfiles.CallbackInfo, file: *const format.I
             if (!reported) {
                 reported = true;
                 note("progress: {s}: {d} of {d} bytes of a chunk after {d} s{s}", .{
-                    file.name, got, c.end - c.offset, (win32.GetTickCount64() - asked_at) / 1000,
+                    file.name,                                     got, c.end - c.offset, (win32.GetTickCount64() - asked_at) / 1000,
                     if (hr < 0) ", which Windows refused" else "",
                 });
             }

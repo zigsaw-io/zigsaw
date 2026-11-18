@@ -247,6 +247,20 @@ pub const Ago = struct {
     }
 };
 
+/// What the last check found that's still waiting, and when it was, for
+/// `zigsaw doctor`: as `show` says it, without taking it as looked at.
+pub const Summary = struct {
+    /// In seconds since 1970; 0 if nothing has checked.
+    checked: i64,
+    apps: usize,
+    zigsaw: ?[]const u8,
+};
+
+pub fn summary(ctx: *Context) !Summary {
+    const state = try stillWaiting(ctx, try load(ctx));
+    return .{ .checked = state.checked, .apps = state.apps.len, .zigsaw = state.zigsaw };
+}
+
 /// One line for `zigsaw list`, if anything's waiting.
 pub fn noteWaiting(ctx: *Context) !void {
     const state = try stillWaiting(ctx, try load(ctx));

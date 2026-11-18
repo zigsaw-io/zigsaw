@@ -8,6 +8,7 @@ const builder = @import("builder.zig");
 const compose = @import("compose.zig");
 const catalog = @import("catalog.zig");
 const credentials = @import("credentials.zig");
+const doctor = @import("doctor.zig");
 const environment = @import("environment.zig");
 const exec = @import("exec.zig");
 const exports = @import("exports.zig");
@@ -203,6 +204,10 @@ const usage =
     \\                                  associations again, as after installing a new zigsaw,
     \\                                  and take back what apps may no longer reach, and what
     \\                                  stores since deleted left
+    \\  doctor [--offline] [<app-id>]   look for what would make zigsaw fail here, in this
+    \\                                  zigsaw, its store, its apps and the network, and say
+    \\                                  what fixes each; changes nothing. --offline leaves out
+    \\                                  the network; an app's id tells about that app at length
     \\  version                         print zigsaw's version
     \\
     \\An image is <registry>/<repository>[:tag][@digest], e.g. ghcr.io/owner/node:24.21.0,
@@ -352,6 +357,19 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         if (rest.len != 1 or std.mem.startsWith(u8, rest[0], "-")) return usageError();
         try credentials.logout(ctx, rest[0]);
         return 0;
+    }
+    // Before the store is opened, which makes its folders, and before its
+    // data is moved: doctor changes nothing (see doctor.zig).
+    if (std.mem.eql(u8, command, "doctor")) {
+        var opts: doctor.Options = .{};
+        for (rest) |arg| {
+            if (isFlag(arg, "offline")) {
+                opts.offline = true;
+            } else if (opts.app == null and !std.mem.startsWith(u8, arg, "-")) {
+                opts.app = arg;
+            } else return usageError();
+        }
+        return doctor.doctor(ctx, opts);
     }
 
     // A lazy layer's helper (see lazy.zig), which zigsaw starts, and nobody
@@ -1294,8 +1312,14 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
         Store.deleteTree(io, arena, try store.aliasDir(arena, id)) catch
             note("kept {s}'s alias shims, which are in use; `zigsaw prune` removes them later", .{id});
     }
-    if (try store.deleteUnusedDeployments(arena, ref.manifest))
+    // An app whose manifest is gone (`zigsaw doctor` says so) doesn't say
+    // which files are its own: prune finds them, now nothing uses them.
+    const manifest_there = if (oci.digestHex(ref.manifest)) |hex| try Store.exists(io, try store.blobPath(arena, hex)) else false;
+    if (!manifest_there) {
+        note("its manifest is gone, so its files stay until `zigsaw prune`", .{});
+    } else if (try store.deleteUnusedDeployments(arena, ref.manifest)) {
         note("kept {s}'s files, which are still in use; `zigsaw prune` removes them later", .{id});
+    }
     // Its own volume, its data, goes only if asked. Deleting it stops at the
     // junctions of the volumes it mounted (see volumes.zig), which stay.
     var kept_volumes: []const []const u8 = &.{};
@@ -1327,6 +1351,7 @@ test {
     _ = @import("cloudfiles.zig");
     _ = @import("credentials.zig");
     _ = @import("deps.zig");
+    _ = @import("doctor.zig");
     _ = @import("drive.zig");
     _ = @import("environment.zig");
     _ = @import("exports.zig");

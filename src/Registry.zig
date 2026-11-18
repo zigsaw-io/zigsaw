@@ -95,13 +95,13 @@ pub const Reference = struct {
     }
 
     /// Whether the registry is on this machine.
-    fn isLocal(ref: Reference) bool {
+    pub fn isLocal(ref: Reference) bool {
         const name = if (std.mem.lastIndexOfScalar(u8, ref.host, ':')) |c| ref.host[0..c] else ref.host;
         return std.mem.eql(u8, name, "localhost") or std.mem.eql(u8, name, "127.0.0.1") or std.mem.eql(u8, name, "[::1]");
     }
 
     /// Registries on this machine are spoken to over plain HTTP, as Docker does.
-    fn baseUrl(ref: Reference, arena: Allocator) ![]const u8 {
+    pub fn baseUrl(ref: Reference, arena: Allocator) ![]const u8 {
         // docker.io is the name people use; its API lives elsewhere.
         const api_host = if (std.mem.eql(u8, ref.host, "docker.io")) "registry-1.docker.io" else ref.host;
         return std.fmt.allocPrint(arena, "{s}://{s}", .{ if (ref.isLocal()) "http" else "https", api_host });
@@ -384,7 +384,7 @@ pub fn startUpload(r: *Registry, digest: []const u8, mount_from: ?[]const u8) !U
             .accepted => return .{ .started = .{ .location = try r.uploadLocation(res), .chunk_min = res.chunk_min } },
             // Not as the specification says, but then an ordinary upload
             // may still work.
-            else => if (r.ctx.verbose) Context.note("  mounting {s} from {s}: HTTP {d}", .{ oci.shortDigest(digest), from, @intFromEnum(res.status) }),
+            else => if (r.ctx.verbose) Context.note("  mounting {s} from {s}: HTTP {d}", .{ oci.shortDigest(digest), from, @backingInt(res.status) }),
         }
     };
     const res = try r.send(.{ .method = .POST, .url = try r.url("{s}", .{try uploadsPath(arena, r.ref.repository, null)}) });
@@ -510,7 +510,7 @@ fn putChunks(r: *Registry, location: []const u8, desc: oci.Descriptor, path: []c
                 else => |e| return e,
             };
             if (r.ctx.verbose) Context.note("  chunk {d} of {s} ({d} bytes from {d}): HTTP {d}, Range {s}", .{
-                chunks, oci.shortDigest(desc.digest), length, offset, @intFromEnum(res.status), res.range orelse "none",
+                chunks, oci.shortDigest(desc.digest), length, offset, @backingInt(res.status), res.range orelse "none",
             });
             switch (res.status) {
                 .accepted => {
@@ -572,7 +572,7 @@ fn resumeUpload(r: *Registry, at: []const u8, desc: oci.Descriptor, offset: *u64
     resumes.* += 1;
     const why = switch (failure) {
         .broke => |err| @errorName(err),
-        .answered => |status| try std.fmt.allocPrint(arena, "HTTP {d}", .{@intFromEnum(status)}),
+        .answered => |status| try std.fmt.allocPrint(arena, "HTTP {d}", .{@backingInt(status)}),
     };
     if (resumes.* > 3) return fail("uploading {s} to {f} failed {d} times ({s}); giving up", .{ desc.digest, r.ref, resumes.* - 1, why });
     // The registry may still be busy with the request that broke off (zot
@@ -585,7 +585,7 @@ fn resumeUpload(r: *Registry, at: []const u8, desc: oci.Descriptor, offset: *u64
         const asked = if (r.ctx.env.get("ZIGSAW_TEST_UPLOAD_LOST") != null) try lostUrl(arena, at) else at;
         const res = try r.send(.{ .method = .GET, .url = try r.absoluteUrl(asked) });
         if (res.status.class() != .server_error or waited >= 2000) break res;
-        if (r.ctx.verbose) Context.note("  asking {s} how much of {s} it has: HTTP {d}", .{ r.ref.host, short, @intFromEnum(res.status) });
+        if (r.ctx.verbose) Context.note("  asking {s} how much of {s} it has: HTTP {d}", .{ r.ref.host, short, @backingInt(res.status) });
         win32.Sleep(500);
     };
     if (res.status != .no_content) switch (failure) {
@@ -593,7 +593,7 @@ fn resumeUpload(r: *Registry, at: []const u8, desc: oci.Descriptor, offset: *u64
         // blobs in chunks after all.
         .answered => {
             Context.note("{s} failed a chunk of {s} ({s}) and can't say how much of it it has (HTTP {d}); uploading it in one request", .{
-                r.ref.host, short, why, @intFromEnum(res.status),
+                r.ref.host, short, why, @backingInt(res.status),
             });
             return error.ChunksRefused;
         },
@@ -601,7 +601,7 @@ fn resumeUpload(r: *Registry, at: []const u8, desc: oci.Descriptor, offset: *u64
         // start.
         .broke => {
             Context.note("upload of {s} broke off ({s}), and {s} can't say how much of it it has (HTTP {d}); starting it again", .{
-                short, why, r.ref.host, @intFromEnum(res.status),
+                short, why, r.ref.host, @backingInt(res.status),
             });
             offset.* = 0;
             return r.freshUpload(desc);
@@ -966,7 +966,7 @@ pub fn checkLogin(ctx: *Context, host: []const u8, credential: credentials.Crede
     switch (res.status) {
         .ok => return .not_asked,
         .unauthorized => {},
-        else => return fail("{s} answered {s} with HTTP {d}; is it an OCI registry?", .{ host, root, @intFromEnum(res.status) }),
+        else => return fail("{s} answered {s} with HTTP {d}; is it an OCI registry?", .{ host, root, @backingInt(res.status) }),
     }
     const challenge = try r.parseChallenge(res.www_authenticate orelse
         return fail("{s} refused {s} without saying how to authenticate", .{ host, root }));
@@ -979,7 +979,7 @@ pub fn checkLogin(ctx: *Context, host: []const u8, credential: credentials.Crede
     return switch (again.status) {
         .ok => .accepted,
         .unauthorized, .forbidden => .refused,
-        else => fail("{s} answered {s} with HTTP {d} after authentication", .{ host, root, @intFromEnum(again.status) }),
+        else => fail("{s} answered {s} with HTTP {d} after authentication", .{ host, root, @backingInt(again.status) }),
     };
 }
 
@@ -1000,7 +1000,7 @@ fn fetchToken(r: *Registry, challenge: Challenge, basic: ?[]const u8, scopes: []
 
     const res = try r.exchange(.{ .method = .GET, .url = try tokenUrl(arena, realm, challenge.service, scopes) }, basic);
     if (res.status == .unauthorized or res.status == .forbidden) return null;
-    if (res.status != .ok) return fail("getting a token from {s}: HTTP {d}", .{ realm, @intFromEnum(res.status) });
+    if (res.status != .ok) return fail("getting a token from {s}: HTTP {d}", .{ realm, @backingInt(res.status) });
     const Token = struct { token: ?[]const u8 = null, access_token: ?[]const u8 = null };
     const parsed = std.json.parseFromSliceLeaky(Token, arena, res.body, .{ .ignore_unknown_fields = true }) catch
         return fail("{s} returned a token response zigsaw can't read", .{realm});
@@ -1134,7 +1134,7 @@ const Challenge = struct {
 
 /// Explains a failed request, using the registry's error message if it sent one.
 fn failStatus(r: *Registry, res: Response, what: []const u8) error{Failed} {
-    const code = @intFromEnum(res.status);
+    const code = @backingInt(res.status);
     switch (res.status) {
         .unauthorized, .forbidden => return if (r.findCredential() catch null) |c|
             fail("{s} for {f}: access denied (HTTP {d}); the registry refused the credentials {s}, or they don't allow {s}", .{

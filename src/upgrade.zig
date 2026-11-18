@@ -32,16 +32,22 @@ const note = Context.note;
 pub const this_version = options.version;
 const default_from = "https://github.com/zigsaw-io/zigsaw/releases/latest/download";
 const archive = "zigsaw-x86_64-windows.zip";
-const reinstall = "irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1 | iex";
+pub const reinstall = "irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1 | iex";
 
 /// zigsaw.exe last, so that a zigsaw is there to run again until the end.
-const programs = [_][]const u8{ "zigsaw-shim.exe", "zigsaw-shimw.exe", "zigsaw-relay.exe", "zigsaw-host.exe", "zigsaw-notify.exe", "zigsaw.exe" };
+pub const programs = [_][]const u8{ "zigsaw-shim.exe", "zigsaw-shimw.exe", "zigsaw-relay.exe", "zigsaw-host.exe", "zigsaw-notify.exe", "zigsaw.exe" };
 
 fn from(ctx: *Context) []const u8 {
-    return std.mem.trimEnd(u8, ctx.env.get("ZIGSAW_UPGRADE_FROM") orelse default_from, "/\\");
+    return releaseFrom(ctx.env);
 }
 
-fn isUrl(where: []const u8) bool {
+/// Where releases come from: GitHub's latest, or ZIGSAW_UPGRADE_FROM, a URL
+/// or a folder.
+pub fn releaseFrom(env: *const std.process.Environ.Map) []const u8 {
+    return std.mem.trimEnd(u8, env.get("ZIGSAW_UPGRADE_FROM") orelse default_from, "/\\");
+}
+
+pub fn isUrl(where: []const u8) bool {
     return std.mem.startsWith(u8, where, "https://") or std.mem.startsWith(u8, where, "http://");
 }
 
@@ -52,7 +58,7 @@ pub fn applies(ctx: *Context) bool {
     return inStoreBin(ctx) catch false;
 }
 
-fn inStoreBin(ctx: *Context) !bool {
+pub fn inStoreBin(ctx: *Context) !bool {
     const arena = ctx.arena;
     const self_dir = std.fs.path.dirname(try win32.selfExePath(arena)).?;
     return std.os.windows.eqlIgnoreCaseWtf8(self_dir, try ctx.store.path(arena, &.{"bin"}));
@@ -320,15 +326,31 @@ fn deleteLeftovers(ctx: *Context, bin: []const u8) void {
     const io = ctx.io;
     var dir = Io.Dir.cwd().openDir(io, bin, .{ .iterate = true }) catch return;
     defer dir.close(io);
+    for (leftovers(io, ctx.arena, bin) catch return) |name| dir.deleteFile(io, name) catch {};
+}
+
+/// The names of the files in `bin` that earlier upgrades moved aside, or
+/// didn't get to put in place: `<program>.old-*` and `<program>.new-*`. The
+/// next upgrade deletes those nothing runs.
+pub fn leftovers(io: Io, arena: std.mem.Allocator, bin: []const u8) ![]const []const u8 {
+    var dir = Io.Dir.cwd().openDir(io, bin, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return &.{},
+        else => |e| return e,
+    };
+    defer dir.close(io);
+    var out: std.ArrayList([]const u8) = .empty;
     var it = dir.iterate();
-    while (it.next(io) catch null) |entry| {
+    while (try it.next(io)) |entry| {
         for (programs) |name| {
             if (!std.mem.startsWith(u8, entry.name, name)) continue;
             const rest = entry.name[name.len..];
-            if (std.mem.startsWith(u8, rest, ".old-") or std.mem.startsWith(u8, rest, ".new-"))
-                dir.deleteFile(io, entry.name) catch {};
+            if (std.mem.startsWith(u8, rest, ".old-") or std.mem.startsWith(u8, rest, ".new-")) {
+                try out.append(arena, try arena.dupe(u8, entry.name));
+                break;
+            }
         }
     }
+    return out.items;
 }
 
 test isNewer {

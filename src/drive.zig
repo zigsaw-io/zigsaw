@@ -73,7 +73,7 @@ pub fn acquire(arena: Allocator, dir: []const u8) !Drive {
 
 /// The current target of the build drive, as Windows keeps it, or null if
 /// it isn't mapped.
-fn query(arena: Allocator) !?[:0]const u16 {
+pub fn query(arena: Allocator) !?[:0]const u16 {
     var buf: [32 * 1024]u16 = undefined;
     const len = win32.QueryDosDeviceW(std.unicode.utf8ToUtf16LeStringLiteral(letter), &buf, buf.len);
     if (len == 0) {
@@ -87,7 +87,7 @@ fn query(arena: Allocator) !?[:0]const u16 {
 
 /// Whether a mapping's target, such as "\??\C:\...\tmp\zigsaw-build-1f2e",
 /// is a build root.
-fn isBuildRoot(target: []const u8) bool {
+pub fn isBuildRoot(target: []const u8) bool {
     const trimmed = std.mem.trimEnd(u8, target, "\\");
     const name = trimmed[if (std.mem.lastIndexOfScalar(u8, trimmed, '\\')) |i| i + 1 else 0..];
     return std.mem.startsWith(u8, name, dir_prefix);

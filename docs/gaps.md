@@ -189,6 +189,11 @@
   (`C:\Program Files\Git\etc\gitconfig`), which its own config included.
   What that config sets for this machine's git, such as `http.sslBackend`,
   `http.proxy` or a credential helper, doesn't reach zigsaw's.
+- **zigsaw's own requests ignore `NO_PROXY`**, as Zig's HTTP client does: with
+  `HTTP_PROXY` set, even a registry on `localhost` is asked through the proxy
+  (iteration 102's probe). Nor do they use Windows' proxy settings, or a proxy
+  script: only `HTTPS_PROXY`, `HTTP_PROXY` and `ALL_PROXY`. `zigsaw doctor`
+  says when either is in the way.
 - An app in a container that isn't exempt reaches only the ports it
   declares, on `localhost`: one given another port or host of its own
   bypasses the forward, and isn't reached. zigsaw makes each forwarded

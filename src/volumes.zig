@@ -351,7 +351,11 @@ pub fn find(store: Store, arena: Allocator, name: []const u8) !?Volume {
 /// The store's volumes, by name.
 pub fn list(store: Store, arena: Allocator) ![]const Volume {
     var out: std.ArrayList(Volume) = .empty;
-    var dir = try Io.Dir.cwd().openDir(store.io, try volumesDir(store, arena), .{ .iterate = true });
+    // None in a store that isn't there yet, as `zigsaw doctor` may look at.
+    var dir = Io.Dir.cwd().openDir(store.io, try volumesDir(store, arena), .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return out.items,
+        else => |e| return e,
+    };
     defer dir.close(store.io);
     var it = dir.iterate();
     while (try it.next(store.io)) |entry| {
@@ -1231,6 +1235,36 @@ fn failIfUnderMount(ctx: *Context, id: []const u8, import_dir: []const u8) !void
 fn settleImports(ctx: *Context, v: Volume, leftovers: enum { delete, leave }) !void {
     const io = ctx.io;
     const arena = ctx.arena;
+    const left = try importLeftovers(io, arena, v);
+    // The folder of the archive's files goes as the renames end: with it
+    // there still, the old files aren't all back, or the new ones all in.
+    if (left.betweenRenames())
+        return fail("an import into volume {s} stopped between its renames: the files it was replacing are in {s}, the archive's in {s}; move the ones you want back into {s}, and delete both folders", .{
+            v.name, left.replaced[0], left.unpacked[0], v.path,
+        });
+    if (leftovers == .leave) return;
+    for (left.unpacked) |p| try Store.deleteTree(io, arena, p);
+    for (left.replaced) |p| try Store.deleteTree(io, arena, p);
+    if (left.unpacked.len + left.replaced.len > 0) note("deleted what an import that didn't finish left in volume {s}", .{v.name});
+}
+
+/// What imports that didn't finish left in a volume's folder.
+pub const ImportLeftovers = struct {
+    /// Folders of an archive's files.
+    unpacked: []const []const u8,
+    /// Folders of the files an import was replacing.
+    replaced: []const []const u8,
+
+    /// Whether one stopped between its renames, with the volume's files in
+    /// two folders, which only the user can settle.
+    pub fn betweenRenames(l: ImportLeftovers) bool {
+        return l.unpacked.len > 0 and l.replaced.len > 0;
+    }
+};
+
+/// Only reads; the next import or export of the volume deletes them, unless
+/// `betweenRenames`.
+pub fn importLeftovers(io: Io, arena: Allocator, v: Volume) !ImportLeftovers {
     var unpacked: std.ArrayList([]const u8) = .empty;
     var replaced: std.ArrayList([]const u8) = .empty;
     for (try childrenOf(io, arena, v.path)) |child| {
@@ -1242,16 +1276,7 @@ fn settleImports(ctx: *Context, v: Volume, leftovers: enum { delete, leave }) !v
             continue;
         try left.append(arena, try std.fs.path.join(arena, &.{ v.path, child }));
     }
-    // The folder of the archive's files goes as the renames end: with it
-    // there still, the old files aren't all back, or the new ones all in.
-    if (unpacked.items.len > 0 and replaced.items.len > 0)
-        return fail("an import into volume {s} stopped between its renames: the files it was replacing are in {s}, the archive's in {s}; move the ones you want back into {s}, and delete both folders", .{
-            v.name, replaced.items[0], unpacked.items[0], v.path,
-        });
-    if (leftovers == .leave) return;
-    for (unpacked.items) |p| try Store.deleteTree(io, arena, p);
-    for (replaced.items) |p| try Store.deleteTree(io, arena, p);
-    if (unpacked.items.len + replaced.items.len > 0) note("deleted what an import that didn't finish left in volume {s}", .{v.name});
+    return .{ .unpacked = unpacked.items, .replaced = replaced.items };
 }
 
 /// The archive's files, in `import_dir`, become the volume's, and the
@@ -1379,20 +1404,9 @@ pub fn adoptAll(ctx: *Context) !bool {
     const io = ctx.io;
     const arena = ctx.arena;
     const old = try ctx.store.path(arena, &.{"data"});
-    var ids: std.ArrayList([]const u8) = .empty;
-    {
-        var dir = Io.Dir.cwd().openDir(io, old, .{ .iterate = true }) catch |err| switch (err) {
-            error.FileNotFound, error.NotDir => return false,
-            else => |e| return e,
-        };
-        defer dir.close(io);
-        var it = dir.iterate();
-        while (try it.next(io)) |entry| {
-            if (entry.kind == .directory and oci.isValidId(entry.name)) try ids.append(arena, try arena.dupe(u8, entry.name));
-        }
-    }
+    if (!try isDir(io, old)) return false;
     var moved = false;
-    for (ids.items) |id| {
+    for (try waitingToMove(ctx.store, arena)) |id| {
         adopt(ctx, id, true) catch |err| switch (err) {
             error.Failed => continue, // Reported.
             else => |e| return e,
@@ -1410,6 +1424,23 @@ pub fn adoptAll(ctx: *Context) !bool {
     }
     _ = win32.RemoveDirectoryW(try win32.wide(arena, old));
     return moved;
+}
+
+/// The apps whose data is in data\, as a zigsaw before 0.85 kept it: what
+/// `adoptAll` moves. Only reads.
+pub fn waitingToMove(store: Store, arena: Allocator) ![]const []const u8 {
+    const io = store.io;
+    var ids: std.ArrayList([]const u8) = .empty;
+    var dir = Io.Dir.cwd().openDir(io, try store.path(arena, &.{"data"}), .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return ids.items,
+        else => |e| return e,
+    };
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind == .directory and oci.isValidId(entry.name)) try ids.append(arena, try arena.dupe(u8, entry.name));
+    }
+    return ids.items;
 }
 
 /// The named volumes the app's saved mounts name, for what `rm

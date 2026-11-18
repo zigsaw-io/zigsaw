@@ -214,6 +214,9 @@ pub const Task = struct {
     /// in the OEM code page, so one with a path outside ASCII can't, and stays.
     store: ?[]const u8,
     gone: bool,
+    /// The program it starts, zigsaw-notify.exe beside a zigsaw, if it can be
+    /// read as `store` can.
+    command: ?[]const u8 = null,
 };
 
 /// Every daily check of this user's, whichever store it's for.
@@ -228,9 +231,11 @@ pub fn listTasks(ctx: *Context) ![]const Task {
         if (!std.mem.startsWith(u8, line, prefix)) continue;
         const end = std.mem.indexOfScalarPos(u8, line, 1, '"') orelse continue;
         const name = line[2..end];
-        const store = storeOfTask(arena, try schtasks(arena, &.{ "/query", "/tn", name, "/xml" }));
+        const xml = try schtasks(arena, &.{ "/query", "/tn", name, "/xml" });
+        const store = storeOfTask(arena, xml);
         const gone = if (store) |s| !try Store.exists(ctx.io, s) else false;
-        try tasks.append(arena, .{ .name = name, .store = store, .gone = gone });
+        const command = if (xml) |ran| (if (ran.code == 0) parseCommand(arena, ran.stdout) catch null else null) else null;
+        try tasks.append(arena, .{ .name = name, .store = store, .gone = gone, .command = command });
     }
     return tasks.items;
 }
@@ -239,6 +244,28 @@ fn storeOfTask(arena: Allocator, xml: ?Ran) ?[]const u8 {
     const ran = xml orelse return null;
     if (ran.code != 0) return null;
     return parseStore(arena, ran.stdout) catch null;
+}
+
+/// The program a task's XML starts, or null if it names none, or isn't all
+/// ASCII (see `Task.store`).
+fn parseCommand(arena: Allocator, xml: []const u8) !?[]const u8 {
+    const open = "<Command>";
+    const start = (std.mem.indexOf(u8, xml, open) orelse return null) + open.len;
+    const end = std.mem.indexOfPos(u8, xml, start, "</Command>") orelse return null;
+    const text = xml[start..end];
+    for (text) |c| if (!std.ascii.isAscii(c)) return null;
+    const unquoted = try std.mem.replaceOwned(u8, arena, text, "&quot;", "\"");
+    const plain = try std.mem.replaceOwned(u8, arena, unquoted, "&amp;", "&");
+    return std.mem.trim(u8, plain, "\"");
+}
+
+test parseCommand {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const xml = "<Exec><Command>C:\\Users\\A &amp; B\\zigsaw\\bin\\zigsaw-notify.exe</Command><Arguments>--store x --task y</Arguments></Exec>";
+    try std.testing.expectEqualStrings("C:\\Users\\A & B\\zigsaw\\bin\\zigsaw-notify.exe", (try parseCommand(arena, xml)).?);
+    try std.testing.expect(try parseCommand(arena, "<Exec></Exec>") == null);
 }
 
 /// The store a task's XML names, or null if it names none, or isn't all ASCII.

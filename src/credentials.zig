@@ -199,24 +199,71 @@ fn storedLogin(arena: Allocator, a: DockerAuth) !?Credential {
     return .{ .user = user, .secret = password, .source = .docker_config };
 }
 
+/// Where a login for `host` (normalized) would come from, for `zigsaw
+/// doctor`: as `lookup` finds it, but without asking a credential helper,
+/// which only names it, nor saying what the login is.
+pub const Saved = union(enum) {
+    none,
+    environment,
+    /// The user it's saved for.
+    credential_manager: []const u8,
+    docker_config,
+    /// The helper's name, as Docker's config gives it.
+    docker_helper: []const u8,
+    /// Docker's config, which can't be read.
+    docker_unreadable: []const u8,
+};
+
+pub fn savedFor(ctx: *Context, host: []const u8) !Saved {
+    if (fromEnv(ctx) != null and envAppliesTo(defaultRegistry(ctx), host)) return .environment;
+    if (try read(ctx.arena, host)) |c| return .{ .credential_manager = c.user };
+    const config = switch (try readDockerConfig(ctx)) {
+        .none => return .none,
+        .unreadable => |u| return .{ .docker_unreadable = u.path },
+        .ok => |c| c,
+    };
+    const choice = try dockerChoice(ctx.arena, config, host);
+    if (choice.helper) |name| return .{ .docker_helper = name };
+    return if (choice.stored != null) .docker_config else .none;
+}
+
+const DockerRead = union(enum) {
+    none,
+    unreadable: struct { path: []const u8, err: ?anyerror },
+    ok: DockerConfig,
+};
+
+/// Docker's config, %DOCKER_CONFIG%\config.json or else
+/// %USERPROFILE%\.docker\config.json, if there is one.
+fn readDockerConfig(ctx: *Context) !DockerRead {
+    const arena = ctx.arena;
+    const dir = ctx.env.get("DOCKER_CONFIG") orelse
+        try std.fs.path.join(arena, &.{ ctx.env.get("USERPROFILE") orelse return .none, ".docker" });
+    const config_path = try std.fs.path.join(arena, &.{ dir, "config.json" });
+    const bytes = Io.Dir.cwd().readFileAlloc(ctx.io, config_path, arena, .limited(1 << 20)) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return .none,
+        error.OutOfMemory => |e| return e,
+        else => return .{ .unreadable = .{ .path = config_path, .err = err } },
+    };
+    const config = std.json.parseFromSliceLeaky(DockerConfig, arena, bytes, .{ .ignore_unknown_fields = true }) catch
+        return .{ .unreadable = .{ .path = config_path, .err = null } };
+    return .{ .ok = config };
+}
+
 /// The login `docker login` saved for `host`, if Docker's config has one.
 /// A config or helper that can't be used is noted, and left out.
 fn fromDocker(ctx: *Context, host: []const u8) !?Credential {
     const arena = ctx.arena;
-    const dir = ctx.env.get("DOCKER_CONFIG") orelse
-        try std.fs.path.join(arena, &.{ ctx.env.get("USERPROFILE") orelse return null, ".docker" });
-    const config_path = try std.fs.path.join(arena, &.{ dir, "config.json" });
-    const bytes = Io.Dir.cwd().readFileAlloc(ctx.io, config_path, arena, .limited(1 << 20)) catch |err| switch (err) {
-        error.FileNotFound, error.NotDir => return null,
-        error.OutOfMemory => |e| return e,
-        else => {
-            note("warning: zigsaw can't read Docker's logins in {s} ({t}), and goes on without them", .{ config_path, err });
+    const config = switch (try readDockerConfig(ctx)) {
+        .none => return null,
+        .unreadable => |u| {
+            if (u.err) |err|
+                note("warning: zigsaw can't read Docker's logins in {s} ({t}), and goes on without them", .{ u.path, err })
+            else
+                note("warning: zigsaw can't read Docker's logins in {s}, and goes on without them", .{u.path});
             return null;
         },
-    };
-    const config = std.json.parseFromSliceLeaky(DockerConfig, arena, bytes, .{ .ignore_unknown_fields = true }) catch {
-        note("warning: zigsaw can't read Docker's logins in {s}, and goes on without them", .{config_path});
-        return null;
+        .ok => |c| c,
     };
     const choice = try dockerChoice(arena, config, host);
     if (choice.identity_token and ctx.verbose)

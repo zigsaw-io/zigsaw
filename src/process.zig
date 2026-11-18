@@ -289,7 +289,6 @@ pub const Child = struct {
         return .{ .job = job.handle, .process = process, .port = job.port, .memory_limit = job.memory_limit, .job_name = job.name };
     }
 
-
     /// Waits for the process to exit, ends what's left of its tree, and
     /// returns its exit code.
     pub fn wait(child: Child) !u32 {

@@ -287,6 +287,46 @@ fn recordedLow(ctx: *Context, entries: []const ledger.Entry, path: []const u8) !
     return null;
 }
 
+/// What's left outside the store that no store stands behind: changes by
+/// stores since deleted, which `zigsaw repair` takes back, and low labels on
+/// the user's folders that no record explains, which `zigsaw grants
+/// --take-back` removes. Only reads.
+pub const Leftovers = struct {
+    orphans: []const ledger.Entry,
+    unexplained: []const []const u8,
+};
+
+pub fn leftovers(ctx: *Context) !Leftovers {
+    const s = try Survey.of(ctx);
+    return .{ .orphans = s.orphans, .unexplained = s.unexplained };
+}
+
+/// A change this store recorded for an app whose runs have all ended, which
+/// no longer stands: `zigsaw repair` takes it back (see `settle`).
+pub const Lapsed = struct { id: []const u8, grant: Store.Grant };
+
+/// Those changes, of every app with any, installed or not. An app whose
+/// image can't be read is left to `zigsaw doctor`'s look at it. Only reads.
+pub fn lapsed(ctx: *Context) ![]const Lapsed {
+    const arena = ctx.arena;
+    var out: std.ArrayList(Lapsed) = .empty;
+    for (try ctx.store.listGrantIds(arena)) |id| {
+        const recorded = try ctx.store.readGrants(arena, id);
+        if (recorded.len == 0) continue;
+        // A run going holds this shared; its end settles them.
+        if (try Store.isLocked(ctx.io, try ctx.store.runsLockPath(arena, id))) continue;
+        if (try ctx.store.readRef(arena, id)) |ref| if (!try ctx.store.imageReadable(arena, ref.manifest)) continue;
+        const standing = try Standing.of(ctx, id);
+        const cwds = try ctx.store.readCwdGrants(arena, id);
+        for (recorded) |g| {
+            // A deleted path took its ACL with it.
+            if (g.kind != .loopback and !try Store.exists(ctx.io, g.path)) continue;
+            if (standing.keeps(g, containsPath(cwds, g.path)) == null) try out.append(arena, .{ .id = id, .grant = g });
+        }
+    }
+    return out.items;
+}
+
 /// One line on stderr if something's left that no store will take back.
 pub fn noteLeftovers(ctx: *Context) !void {
     const s = try Survey.of(ctx);
@@ -350,7 +390,7 @@ fn showEntries(w: *Io.Writer, title: []const u8, hint: []const u8, entries: []co
 }
 
 /// A change as `zigsaw grants` says it.
-const Line = struct {
+pub const Line = struct {
     grant: Store.Grant,
 
     pub fn format(l: Line, w: *Io.Writer) Io.Writer.Error!void {

@@ -241,6 +241,10 @@ zigsaw repair                          write every app's commands, shortcuts and
                                        associations again, as after installing a new zigsaw,
                                        and take back what apps may no longer reach, and what
                                        stores since deleted left
+zigsaw doctor [--offline] [<app-id>]   look for what would make zigsaw fail here, in this
+                                       zigsaw, its store, its apps and the network, and say
+                                       what fixes each; changes nothing. --offline leaves out
+                                       the network; an app's id tells about that app at length
 zigsaw version                         print zigsaw's version
 ```
 
@@ -925,6 +929,70 @@ unless you add `--volumes`; `prune` names them.
 Nothing a running app uses is deleted, and zigsaw commands can run at the same
 time: a run locks the files it uses, and `prune` waits for builds and pulls
 to finish.
+
+## Finding what's wrong
+
+`zigsaw doctor` looks at this zigsaw, its store, its apps and the network for what would
+make zigsaw fail, and says what fixes each thing it finds. It changes nothing, so it's
+safe to run whenever something doesn't work, and what it prints is what to put in a bug
+report.
+
+```
+> zigsaw doctor
+zigsaw 0.102.0, C:\Users\Ann\AppData\Local\zigsaw\bin\zigsaw.exe
+  ok       Windows 10.0.26300, x64; medium integrity, not as administrator
+  ok       zigsaw-shim.exe, zigsaw-shimw.exe, zigsaw-relay.exe, zigsaw-host.exe and zigsaw-notify.exe are beside it
+  ok       C:\Users\Ann\AppData\Local\zigsaw\bin is on your PATH
+  warning  node runs C:\Program Files\nodejs\node.exe, which comes before zigsaw's bin on PATH
+
+The store, C:\Users\Ann\AppData\Local\zigsaw (your default one)
+  ok       NTFS on C:\, 34 characters long
+  ok       its folders and apps' files are yours
+
+Left behind
+  warning  run 4120 of org.nodejs.node ended without cleaning up after itself
+           `zigsaw ps` clears its record
+  warning  D:\Projects is labelled low, which no record explains
+           `zigsaw grants --take-back D:\Projects` removes it
+
+Apps
+  problem  org.gnu.make 4.4.1: its config, blob sha256:ab12cd34ef56, is missing
+           `zigsaw rm org.gnu.make`, then `zigsaw build D:\recipes\make.json`, installs it again
+  ok       11 other apps: their images, files and commands are there
+
+Network
+  ok       ghcr.io answers, and asks for a token as registries do
+  ok       the latest release is 0.102.0, this one
+  warning  Windows uses the proxy proxy.corp:8080, which zigsaw doesn't read: it goes to registries without it
+           HTTPS_PROXY=http://proxy.corp:8080 has zigsaw use it too
+
+1 problem, 4 warnings.
+```
+
+Each line is `ok`, a `note`, a `warning` (something that may stop part of zigsaw working)
+or a `problem` (something that does), with what fixes it under it. `doctor` exits 1 when
+it found a problem.
+
+- **This zigsaw**: Windows' version, the integrity level zigsaw runs at, whether it runs as
+  administrator, the programs installed next to it (which Windows Security may have taken
+  away), whether the store's `bin` is on your PATH and what comes before it, and the
+  `ZIGSAW_` variables set, test ones and misspelt ones among them.
+- **The store**: where it is, its file system (lazy pulls need NTFS), a path too long for
+  some builds, low labels on it or on zigsaw, folders an elevated zigsaw made, and a
+  `B:` drive that builds can't use.
+- **Left behind**: runs that ended without cleaning up, keys they left in `HKCU`, what
+  runs were given that nothing stands behind now, what deleted stores left, low labels no
+  record explains, an import or rollback that stopped halfway, shortcuts whose command is
+  gone, and daily checks for deleted stores or with no program to start.
+- **Apps**: each installed app's image, its files, its commands, its overrides and the
+  recipe it was built from. `zigsaw doctor <app-id>` says all of it for one app.
+- **Network**: the default registry, and those installed apps came from, the latest
+  release, and proxies: zigsaw reads `HTTPS_PROXY`, `HTTP_PROXY` and `ALL_PROXY`, not
+  Windows' own proxy settings, nor `NO_PROXY`. Each request gets five seconds;
+  `--offline` leaves the network out.
+
+`doctor` doesn't move the data of a store from before zigsaw 0.85, as every other command
+does first: it says it's waiting.
 
 ## Running apps
 

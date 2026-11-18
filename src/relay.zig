@@ -193,7 +193,7 @@ fn ask(request: []const u8) Answer {
     if (!writeAll(pipes.out, request)) return .{ .status = .failed };
     var status: [1]u8 = undefined;
     if (!readAll(pipes.in, &status)) return .{ .status = .failed };
-    if (status[0] != 0) return .{ .status = @enumFromInt(status[0]) };
+    if (status[0] != 0) return .{ .status = @fromBackingInt(@intCast(status[0])) };
     var info: win32.WSAPROTOCOL_INFOW = undefined;
     if (!readAll(pipes.in, std.mem.asBytes(&info))) return .{ .status = .failed };
     const s = win32.WSASocketW(win32.FROM_PROTOCOL_INFO, win32.FROM_PROTOCOL_INFO, win32.FROM_PROTOCOL_INFO, &info, 0, win32.WSA_FLAG_OVERLAPPED);

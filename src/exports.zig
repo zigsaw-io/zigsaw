@@ -36,7 +36,11 @@ pub const Shim = struct {
 pub fn list(ctx: *Context) ![]Shim {
     const io = ctx.io;
     const arena = ctx.arena;
-    var dir = try Io.Dir.cwd().openDir(io, try binDir(ctx), .{ .iterate = true });
+    // None in a store that isn't there yet, as `zigsaw doctor` may look at.
+    var dir = Io.Dir.cwd().openDir(io, try binDir(ctx), .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return &.{},
+        else => |e| return e,
+    };
     defer dir.close(io);
     var shims: std.ArrayList(Shim) = .empty;
     var it = dir.iterate();
@@ -84,7 +88,15 @@ pub fn repair(ctx: *Context) !u32 {
     const refs = try ctx.store.listRefs(arena);
     var failed: usize = 0;
     for (refs) |ref| {
-        const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
+        // One whose image can't be read (reported) leaves the others to be
+        // repaired: `zigsaw doctor` says how to install it again.
+        const image = ctx.store.readImage(arena, ref.id, ref.manifest) catch |err| switch (err) {
+            error.Failed => {
+                failed += 1;
+                continue;
+            },
+            else => |e| return e,
+        };
         syncAs(ctx, image.manifest, image.config, .repair) catch |err| switch (err) {
             error.Failed => failed += 1, // Already reported.
             else => |e| return e,
@@ -421,7 +433,7 @@ fn pathHint(ctx: *Context, bin: []const u8) void {
 }
 
 /// Whether `dir` is one of the directories in a PATH value.
-fn onPath(path_var: []const u8, dir: []const u8) bool {
+pub fn onPath(path_var: []const u8, dir: []const u8) bool {
     const want = std.mem.trimEnd(u8, dir, "\\/");
     var it = std.mem.tokenizeScalar(u8, path_var, ';');
     while (it.next()) |entry| {

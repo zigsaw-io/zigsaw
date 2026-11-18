@@ -217,10 +217,11 @@ test parse {
     try t.expectEqual(@as(u8, 7), parse("[2001:db8::7]").?.host.ip6[15]);
     try t.expectEqualStrings("localhost", parse("localhost").?.host.name);
     for ([_][]const u8{
-        "",           "*",              "*.org",          "**.example.org", "a.*.example.org", "example.org:0",
-        "example.org:65536", "example.org:", "-a.example.org", "a-.example.org", "ex ample.org",   "exämple.org",
-        "1.2.3",      "1.2.3.4.5",      "01.2.3.4",       "256.1.1.1",      "[::1",            "[::1]x",
-        "[fe80::1%3]", "http://example.org", "example.org/path", "user@example.org", "a..b",
+        "",                  "*",                  "*.org",            "**.example.org",   "a.*.example.org", "example.org:0",
+        "example.org:65536", "example.org:",       "-a.example.org",   "a-.example.org",   "ex ample.org",
+        "exämple.org",
+        "1.2.3",             "1.2.3.4.5",          "01.2.3.4",         "256.1.1.1",        "[::1",            "[::1]x",
+        "[fe80::1%3]",       "http://example.org", "example.org/path", "user@example.org", "a..b",
     }) |bad| if (parse(bad) != null) {
         std.debug.print("parsed: {s}\n", .{bad});
         return error.TestUnexpectedResult;

@@ -296,10 +296,8 @@ pub const Upstream = struct {
         } else return .{ .status = .failed };
         var req_buf: [1024]u8 = undefined;
         const req = std.fmt.bufPrint(&req_buf, "CONNECT {s}:{d} HTTP/1.1\r\nHost: {s}:{d}\r\n{s}{s}{s}\r\n", .{
-            host,                                         port, host, port,
-            if (u.authorization != null) "Proxy-Authorization: " else "",
-            u.authorization orelse "",
-            if (u.authorization != null) "\r\n" else "",
+            host,                                                         port,                      host,                                        port,
+            if (u.authorization != null) "Proxy-Authorization: " else "", u.authorization orelse "", if (u.authorization != null) "\r\n" else "",
         }) catch {
             _ = win32.closesocket(s);
             return .{ .status = .failed };

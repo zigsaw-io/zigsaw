@@ -67,6 +67,20 @@ pub const Key = struct {
         return try std.unicode.wtf16LeToWtf8Alloc(arena, std.mem.sliceTo(units, 0));
     }
 
+    /// A DWORD value, or null if the key has no such value, or one of
+    /// another type.
+    pub fn getDword(k: Key, arena: Allocator, name: []const u8) !?win32.DWORD {
+        var value: win32.DWORD = 0;
+        var size: win32.DWORD = @sizeOf(win32.DWORD);
+        var kind: win32.DWORD = 0;
+        const status = win32.RegQueryValueExW(k.handle, try win32.wide(arena, name), null, &kind, @ptrCast(&value), &size);
+        if (status == win32.ERROR_FILE_NOT_FOUND) return null;
+        // ERROR_MORE_DATA: a longer value of another type.
+        if (status == 234) return null;
+        try check("reading", name, status);
+        return if (kind == win32.REG_DWORD and size == @sizeOf(win32.DWORD)) value else null;
+    }
+
     pub fn deleteValue(k: Key, arena: Allocator, name: []const u8) !void {
         const status = win32.RegDeleteValueW(k.handle, try win32.wide(arena, name));
         if (status != win32.ERROR_FILE_NOT_FOUND) try check("deleting", name, status);

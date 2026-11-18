@@ -239,6 +239,7 @@ pub const JobObjectExtendedLimitInformation: c_int = 9;
 pub const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x00002000;
 /// A process in the job may start one outside it, with CREATE_BREAKAWAY_FROM_JOB.
 pub const JOB_OBJECT_LIMIT_BREAKAWAY_OK: DWORD = 0x00000800;
+pub const JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK: DWORD = 0x00001000;
 pub const CREATE_BREAKAWAY_FROM_JOB: DWORD = 0x01000000;
 /// The job's processes run on the processors of `Affinity` only.
 pub const JOB_OBJECT_LIMIT_AFFINITY: DWORD = 0x00000010;
@@ -342,7 +343,7 @@ pub const JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = extern struct {
     TotalTerminatedProcesses: DWORD = 0,
 };
 pub extern "kernel32" fn QueryInformationJobObject(
-    job: HANDLE,
+    job: ?HANDLE,
     class: c_int,
     info: *anyopaque,
     length: DWORD,
@@ -509,8 +510,43 @@ pub const TOKEN_MANDATORY_LABEL = extern struct {
     Label: SID_AND_ATTRIBUTES,
 };
 
+pub const SECURITY_MANDATORY_HIGH_RID: DWORD = 0x3000;
+pub const SECURITY_MANDATORY_SYSTEM_RID: DWORD = 0x4000;
+pub const OWNER_SECURITY_INFORMATION: DWORD = 0x00000001;
 pub const LABEL_SECURITY_INFORMATION: DWORD = 0x00000010;
 pub const SYSTEM_MANDATORY_LABEL_ACE_TYPE: u8 = 0x11;
+
+// ---------------------------------------------------------------------------
+// What `zigsaw doctor` (doctor.zig) asks Windows
+
+pub const TokenElevation: c_int = 20;
+pub const TOKEN_ELEVATION = extern struct { TokenIsElevated: DWORD };
+/// For IsWow64Process2: what this process runs as, and what the machine is.
+pub const IMAGE_FILE_MACHINE_UNKNOWN: u16 = 0;
+pub const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
+pub const IMAGE_FILE_MACHINE_ARM64: u16 = 0xAA64;
+pub extern "kernel32" fn IsWow64Process2(process: HANDLE, process_machine: *u16, native_machine: ?*u16) callconv(.winapi) BOOL;
+pub extern "kernel32" fn IsProcessInJob(process: HANDLE, job: ?HANDLE, result: *BOOL) callconv(.winapi) BOOL;
+/// Whether the SID is enabled in the token (null: this thread's or process's).
+pub extern "advapi32" fn CheckTokenMembership(token: ?HANDLE, sid: PSID, is_member: *BOOL) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetVolumePathNameW(path: LPCWSTR, volume_path: [*]u16, length: DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetVolumeInformationW(
+    root: LPCWSTR,
+    name: ?[*]u16,
+    name_size: DWORD,
+    serial: ?*DWORD,
+    max_component: ?*DWORD,
+    flags: ?*DWORD,
+    file_system: ?[*]u16,
+    file_system_size: DWORD,
+) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetDriveTypeW(root: LPCWSTR) callconv(.winapi) c_uint;
+pub const FILE_PERSISTENT_ACLS: DWORD = 0x00000008;
+pub const FILE_SUPPORTS_REPARSE_POINTS: DWORD = 0x00000080;
+pub const DRIVE_REMOTE: c_uint = 4;
+/// What CreateFileW says of a file Microsoft Defender found a threat in.
+pub const ERROR_VIRUS_INFECTED: DWORD = 225;
+pub const ERROR_VIRUS_DELETED: DWORD = 226;
 pub const SYSTEM_MANDATORY_LABEL_NO_WRITE_UP: DWORD = 0x1;
 pub const SDDL_REVISION_1: DWORD = 1;
 pub const FILE_ATTRIBUTE_NORMAL: DWORD = 0x80;
@@ -834,11 +870,13 @@ pub const HKEY = *anyopaque;
 pub const LSTATUS = DWORD;
 pub const HKEY_CLASSES_ROOT: HKEY = @ptrFromInt(0x80000000);
 pub const HKEY_CURRENT_USER: HKEY = @ptrFromInt(0x80000001);
+pub const HKEY_LOCAL_MACHINE: HKEY = @ptrFromInt(0x80000002);
 pub const ERROR_SUCCESS: LSTATUS = 0;
 pub const ERROR_NO_MORE_ITEMS: LSTATUS = 259;
 pub const KEY_READ: DWORD = 0x20019;
 pub const KEY_WRITE: DWORD = 0x20006;
 pub const REG_SZ: DWORD = 1;
+pub const REG_DWORD: DWORD = 4;
 
 pub extern "advapi32" fn RegCreateKeyExW(key: HKEY, sub_key: LPCWSTR, reserved: DWORD, class: ?LPCWSTR, options: DWORD, access: DWORD, security: ?*anyopaque, result: *HKEY, disposition: ?*DWORD) callconv(.winapi) LSTATUS;
 pub extern "advapi32" fn RegOpenKeyExW(key: HKEY, sub_key: ?LPCWSTR, options: DWORD, access: DWORD, result: *HKEY) callconv(.winapi) LSTATUS;
@@ -1177,5 +1215,5 @@ pub fn lastErrorFail(what: []const u8) error{Failed} {
 /// Formats a Win32 error code with its symbolic name when std knows it.
 pub fn errorName(code: DWORD) []const u8 {
     const E = std.os.windows.Win32Error;
-    return std.enums.tagName(E, @enumFromInt(code)) orelse "unknown";
+    return std.enums.tagName(E, @fromBackingInt(@intCast(code))) orelse "unknown";
 }

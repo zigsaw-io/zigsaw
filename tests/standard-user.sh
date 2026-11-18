@@ -168,6 +168,19 @@ keeps_data() {
         [ "$(z run $BB sh -c 'cat "$USERPROFILE/kept.txt"; true' | tr -d '\r')" = kept ]
 }
 check "its data stays between runs" keeps_data
+# What zigsaw doctor makes of a standard user's own install, which it mustn't change.
+doctor_state() {
+    find "$(cygpath -u "$store")" -printf '%P|%y|%s|%T@\n' 2>/dev/null | sort
+    reg query 'HKCU\Software\Zigsaw' /s 2>&1
+}
+doctor_clean() {
+    local before out
+    before=$(doctor_state)
+    out=$(z doctor --offline 2>&1 | tr -d '\r') || { grep -E '^  problem' <<<"$out"; return 1; }
+    grep -qF 'medium integrity, not as administrator' <<<"$out" || { head -3 <<<"$out"; return 1; }
+    [ "$before" = "$(doctor_state)" ] || { echo "doctor changed the store or the registry"; return 1; }
+}
+check "doctor finds no problem here, as a standard user, and changes nothing" doctor_clean
 
 links="$APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Zigsaw"
 gets_shortcut() {

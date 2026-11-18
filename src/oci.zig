@@ -134,7 +134,7 @@ pub const Device = enum {
     pub fn parse(name: []const u8) ?Device {
         const info = @typeInfo(Device).@"enum";
         inline for (info.field_names, info.field_values) |field_name, value| {
-            if (std.ascii.eqlIgnoreCase(name, field_name)) return @enumFromInt(value);
+            if (std.ascii.eqlIgnoreCase(name, field_name)) return @fromBackingInt(@intCast(value));
         }
         return null;
     }
@@ -967,8 +967,7 @@ pub fn describePermissions(arena: std.mem.Allocator, p: Permissions) ![]const u8
     if (p.sandbox == .soft) try parts.append(arena, "whatever you can write (it asks for the soft sandbox)");
     if (p.commands orelse false) try parts.append(arena, "the commands of your zigsaw apps");
     if (p.host orelse false) try parts.append(arena, "your own programs, in your real environment (zigsaw-host)");
-    if (p.network) try parts.append(arena, "the network")
-    else if (p.hosts) |list| if (list.len > 0)
+    if (p.network) try parts.append(arena, "the network") else if (p.hosts) |list| if (list.len > 0)
         try parts.append(arena, try std.fmt.allocPrint(arena, "the network, only to {s}", .{try joinAnd(arena, list)}));
     if (p.devices) |list| {
         var known: std.ArrayList([]const u8) = .empty;
@@ -1547,7 +1546,7 @@ pub const UserFolder = enum {
     pub fn parse(name: []const u8) ?UserFolder {
         const info = @typeInfo(UserFolder).@"enum";
         inline for (info.field_names, info.field_values) |field_name, value| {
-            if (std.ascii.eqlIgnoreCase(name, field_name)) return @enumFromInt(value);
+            if (std.ascii.eqlIgnoreCase(name, field_name)) return @fromBackingInt(@intCast(value));
         }
         return null;
     }

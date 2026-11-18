@@ -131,14 +131,14 @@ fn answer(f: Forwards, c: Forwards.Channel, relay_pid: win32.DWORD) void {
         const s = switch (outcome) {
             .socket => |s| s,
             .status => |status| {
-                if (!writeAll(c.out, &.{@intFromEnum(status)})) return;
+                if (!writeAll(c.out, &.{@backingInt(status)})) return;
                 continue;
             },
         };
         defer _ = win32.closesocket(s);
         var info: win32.WSAPROTOCOL_INFOW = undefined;
         if (win32.WSADuplicateSocketW(s, relay_pid, &info) != 0) {
-            if (!writeAll(c.out, &.{@intFromEnum(net.ProxyStatus.failed)})) return;
+            if (!writeAll(c.out, &.{@backingInt(net.ProxyStatus.failed)})) return;
             continue;
         }
         if (!writeAll(c.out, &.{0}) or !writeAll(c.out, std.mem.asBytes(&info))) return;

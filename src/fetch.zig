@@ -184,6 +184,6 @@ fn download(f: *Fetcher, url: []const u8, dest: []const u8) !?[]const u8 {
     var writer = file.writer(io, &buf);
     const status = Registry.getTo(&f.client.?, url, &writer.interface) catch |err| return try std.fmt.allocPrint(arena, "{t}", .{err});
     try writer.interface.flush();
-    if (status != .ok) return try std.fmt.allocPrint(arena, "HTTP {d}", .{@intFromEnum(status)});
+    if (status != .ok) return try std.fmt.allocPrint(arena, "HTTP {d}", .{@backingInt(status)});
     return null;
 }

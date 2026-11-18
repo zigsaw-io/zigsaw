@@ -159,26 +159,66 @@ pub fn settleLeftovers(ctx: *Context, id: ?[]const u8) !void {
     const mutex = try Mutex.acquire();
     defer mutex.release();
     if (records) |k| {
-        defer k.close();
-        for (try k.subKeys(arena)) |name| {
-            const key = try unescape(arena, name);
-            const r = try Record.read(arena, key) orelse continue;
-            if (!isInStore(r.data, ctx.store.root)) continue;
-            if (id) |i| if (!std.ascii.eqlIgnoreCase(i, r.app)) continue;
-            const lock_path = try lockPath(arena, r.data);
-            if (try Store.isLocked(ctx.io, lock_path)) continue;
-            try settle(ctx, key, r, true);
-            Io.Dir.cwd().deleteFile(ctx.io, lock_path) catch {};
+        k.close();
+        for (try leftovers(ctx, id)) |l| {
+            try settle(ctx, l.key, l.record, true);
+            Io.Dir.cwd().deleteFile(ctx.io, try lockPath(arena, l.record.data)) catch {};
         }
     }
     if (asides) |k| {
         defer k.close();
-        for (try k.subKeys(arena)) |name| {
-            if (try Record.read(arena, try unescape(arena, name)) != null) continue;
-            try k.deleteTree(arena, name);
-        }
+        for (try orphanAsides(arena)) |name| try k.deleteTree(arena, name);
     }
     try tidy(arena);
+}
+
+/// A key a run of an app left in HKCU, in its place or on its way there.
+pub const Leftover = struct {
+    /// Its path under HKCU.
+    key: []const u8,
+    record: Record,
+
+    pub fn app(l: Leftover) []const u8 {
+        return l.record.app;
+    }
+
+    /// "in place", or "moving" for one a run was putting in place.
+    pub fn state(l: Leftover) []const u8 {
+        return l.record.state.text();
+    }
+};
+
+/// The keys that runs of this store's apps left in HKCU, all of them or
+/// `id`'s, that `settleLeftovers` settles: those of runs that aren't going.
+/// Only reads, without the mutex, for `zigsaw doctor`.
+pub fn leftovers(ctx: *Context, id: ?[]const u8) ![]const Leftover {
+    const arena = ctx.arena;
+    const records = try Key.open(arena, hkcu, records_key, win32.KEY_READ) orelse return &.{};
+    defer records.close();
+    var out: std.ArrayList(Leftover) = .empty;
+    for (try records.subKeys(arena)) |name| {
+        const key = try unescape(arena, name);
+        const r = try Record.read(arena, key) orelse continue;
+        if (!isInStore(r.data, ctx.store.root)) continue;
+        if (id) |i| if (!std.ascii.eqlIgnoreCase(i, r.app)) continue;
+        if (try Store.isLocked(ctx.io, try lockPath(arena, r.data))) continue;
+        try out.append(arena, .{ .key = key, .record = r });
+    }
+    return out.items;
+}
+
+/// The names of keys moved aside that nothing will put back, as no record
+/// says where: what they held is in HKCU again. `settleLeftovers` deletes
+/// them.
+pub fn orphanAsides(arena: Allocator) ![]const []const u8 {
+    const asides = try Key.open(arena, hkcu, aside_key, win32.KEY_READ) orelse return &.{};
+    defer asides.close();
+    var out: std.ArrayList([]const u8) = .empty;
+    for (try asides.subKeys(arena)) |name| {
+        if (try Record.read(arena, try unescape(arena, name)) != null) continue;
+        try out.append(arena, name);
+    }
+    return out.items;
 }
 
 // ---------------------------------------------------------------------------
