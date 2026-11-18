@@ -358,7 +358,38 @@
   changed would make other digests from the same files; CI pins Zig 0.17.0,
   whose deflate makes 0.16.0's bytes, and a unit test pins them.
 - Build steps are kept off the network by convention (proxy variables), not
-  enforced: a tool that ignores them can still download.
+  enforced, unless the recipe says `"contained": true` and Windows runs
+  builds in a container: a tool that ignores them can still download. That
+  leaves out every build on Windows Server 2025 (CI's runners), which denies
+  containers `NUL` and their own paths, and the recipes whose toolchains
+  don't run in a container yet (iteration 103):
+  - **Ninja** (CMake's and Meson's builds) names its pipes
+    `\\.\pipe\ninja_pid…`, and a container may only make pipes under
+    `\\.\pipe\LOCAL\`. A copy of Ninja's prebuilt program with the name
+    changed to the same length (`LOCAL\n%lu_%p_nja`) built zstd in a
+    container to the same image as without one; shipping it changes CMake's
+    image, and so everything that pins it.
+  - **llvm-mingw's programs** (Clang, lld, objdump) start by asking Windows
+    for their own long path, which looks at every folder above them, and a
+    container can't (as kpathsea's). Reached through a junction in `B:`,
+    Clang compiles, but links with the lld beside its real path, which
+    fails the same way. That's every SDK built with it: GTK, Qt, PostgreSQL,
+    GDAL.
+  - **Python 3.13 and later** make the folders of `tempfile.mkdtemp` private
+    to the user (`mkdir` with mode `0o700`), which leaves a container out of
+    the folder it just made: Meson fails at its first compiler check.
+  - **Gradle** stops with `java.io.IOException: Access is denied` while it
+    makes its services; not looked into further.
+  - **TeX Live's installer** (`install-tl`, on its own Perl) stops: it
+    can't open `HKEY_CURRENT_USER` to write, which a container may not.
+- BusyBox's sh, started by zigsaw in an AppContainer, doesn't wait for a
+  program it runs as the last thing of `sh -c`: it looks for its parent in
+  Windows' list of processes, which in a container doesn't show zigsaw, and
+  exits at once, so the job ends the program. Builds add `exit $?` after
+  each contained command; `zigsaw run --sandbox=appcontainer` of BusyBox's
+  `sh -c "<program>"` still loses the program (iteration 103).
+- BusyBox-w32's `wget -T <seconds>` crashes (segmentation fault), in a
+  container or not.
 - Builds need `B:` free, and run one at a time.
 - The `make` builds have, BusyBox's, runs one command at a time: its `-j`
   isn't implemented. OpenSSL's and gettext's recipes compile ahead of it in

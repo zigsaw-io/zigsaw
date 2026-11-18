@@ -521,10 +521,12 @@ zig's C compiler:
 - **No network**, unless a module sets `"network": true`. Sources are the
   pinned inputs; a module that downloads makes an image that can't be
   expected to reproduce, so its config records it and installing it warns.
-  This is a convention, not a wall: build steps get proxy variables pointing
-  nowhere, which tools such as curl, wget, npm and pip honour. What a
-  package manager would fetch comes from a [vendor step](#vendor-steps)
-  instead.
+  Build steps get proxy variables pointing nowhere, which tools such as
+  curl, wget, npm and pip honour. That's a convention, not a wall, unless
+  the recipe says `"contained": true`: then, where Windows can, its build
+  commands run in a container that has no network at all (see
+  [Builds in a container](#builds-in-a-container)). What a package manager
+  would fetch comes from a [vendor step](#vendor-steps) instead.
 
 `zigsaw build --keep-build-dir` keeps the build's directory afterwards, to
 look at what a failed build left; `zigsaw prune` deletes it later.
@@ -668,6 +670,54 @@ directory, such as `cargo vendor`, `go mod vendor` or `pip download`
 ([Zig](#zig)). It relies on the tool
 fetching the same files every time, which a lockfile gives; the pinned hash
 catches it if not.
+
+## Builds in a container
+
+A recipe whose build has been seen to work without any network says so:
+
+```json
+"contained": true,
+```
+
+Its build commands then run in an AppContainer of zigsaw's, `zigsaw.build`,
+which holds no network capability. Windows refuses its processes the
+internet, names to look up, and this machine's servers. They may write only
+the build root, and read only the build's tools and what Windows lets every
+container read. A tool that ignores the proxy variables can't download
+anything there.
+
+- **Only build commands.** Vendor steps and modules with `"network": true`
+  run outside the container, with the network, as before.
+- **Where Windows can.** A build first runs zigsaw in the container, to see
+  that it can open `NUL` and find its own path, which compilers need. Windows
+  Server 2025, which CI runs on, denies both, so there the commands run
+  without the container, and the build says so. The answer is kept in the
+  store for that zigsaw on that Windows build, and `zigsaw doctor` shows it.
+- **The same image either way.** The image doesn't record which way it was
+  built. A recipe says `"contained"` once a build in the container has made
+  the image it makes without one, the published one. One thing differs
+  there: Windows sets a container's `TEMP` and `TMP` itself, to
+  `B:\home\AppData\Local\Packages\zigsaw.build\AC\Temp`, so a build that
+  writes its temporary folder's path into what it makes isn't for the
+  container.
+- `zigsaw build --sandbox=appcontainer` runs any recipe's commands in the
+  container, and fails where Windows can't: that's how to try a recipe.
+  `--sandbox=soft` runs none there.
+
+What has been seen to work there, and what doesn't yet (see
+[gaps](gaps.md)):
+
+| Toolchain | In a container |
+|---|---|
+| zig's `cc`, `c++`, `ar`, `zig build` | works |
+| Rust, with the cc crate's C | works |
+| Go | works |
+| BusyBox's and GNU make, configure scripts | works |
+| PHP's extension SDK, Perl | works |
+| CMake and Meson with Ninja | no: Ninja names its pipes where a container can't make any |
+| llvm-mingw's Clang and lld, and the SDKs built with them (GTK, Qt, PostgreSQL, GDAL) | no: LLVM's programs look at every folder above their own, which a container can't |
+| Meson's Python | no: Python 3.13 and later make private temporary folders without the container in them |
+| Gradle and Maven | no: Gradle stops with "Access is denied" |
 
 ## Going on from the last build
 

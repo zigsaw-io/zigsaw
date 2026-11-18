@@ -6,6 +6,7 @@ const appcontainer = @import("appcontainer.zig");
 const services = @import("services.zig");
 const builder = @import("builder.zig");
 const compose = @import("compose.zig");
+const container = @import("container.zig");
 const catalog = @import("catalog.zig");
 const credentials = @import("credentials.zig");
 const doctor = @import("doctor.zig");
@@ -50,7 +51,7 @@ const usage =
     \\
     \\commands:
     \\  build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir]
-    \\        [--memory=<size>] [--cpus=<n>]
+    \\        [--memory=<size>] [--cpus=<n>] [--sandbox=auto|appcontainer|soft]
     \\        [<recipe.json> | <dir>]   build an app from a recipe, or from the zigsaw.json of a
     \\                                  project's directory (by default the current one), and
     \\                                  install it and its commands. A zigsaw.json that lists
@@ -69,7 +70,11 @@ const usage =
     \\                                  ZIGSAW_KEPT_BUILDS_SIZE (20GB, 500MB, 0) to change that.
     \\                                  --memory and --cpus hold each of the build's commands,
     \\                                  with all it starts, to that much memory and that many
-    \\                                  processors, as they do a run (see below)
+    \\                                  processors, as they do a run (see below).
+    \\                                  A recipe that says "contained": true has its build
+    \\                                  commands run in a container without the network, where
+    \\                                  Windows can (not Server 2025); --sandbox=appcontainer
+    \\                                  runs any recipe's so, or fails, and soft none
     \\  search [<words>...]             find apps in the default registry's catalog
     \\  info <image>                    show what an app in a registry is, needs and may reach
     \\  ls <image>                      list the files of an app in a registry without pulling
@@ -372,6 +377,13 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         return doctor.doctor(ctx, opts);
     }
 
+    // What a build asks of a copy of zigsaw in its container (see
+    // container.zig), which may read nothing else: no store.
+    if (std.mem.eql(u8, command, "build-check")) {
+        if (rest.len != 1) return usageError();
+        return container.selfCheck(ctx.arena, ctx.io, rest[0]);
+    }
+
     // A lazy layer's helper (see lazy.zig), which zigsaw starts, and nobody
     // else: the store it's for by its full path, whatever ZIGSAW_HOME says.
     if (std.mem.eql(u8, command, "lazy-helper")) {
@@ -412,6 +424,10 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
                 const value = arg["--cpus=".len..];
                 const n = override.parseCpus(value) orelse return fail(cpus_expects, .{value});
                 opts.limits.cpus = if (n == 0) null else n;
+            } else if (std.mem.startsWith(u8, arg, "--sandbox=")) {
+                const value = arg["--sandbox=".len..];
+                opts.sandbox = std.meta.stringToEnum(container.Sandbox, value) orelse
+                    return fail("--sandbox expects auto, appcontainer or soft; got \"{s}\"", .{value});
             } else if (recipe_path == null and !std.mem.startsWith(u8, arg, "-")) {
                 recipe_path = arg;
             } else return usageError();

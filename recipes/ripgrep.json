@@ -7,6 +7,7 @@
   "license": "Unlicense OR MIT",
   "command": "rg.exe",
   "permissions": { "filesystem": ["cwd:ro"] },
+  "contained": true,
   "sdk": {
     "rust": "org.rust-lang.rust:1.99.1@sha256:3bd7b93d9579ed8de3aefb358a3da033dc0caf3a5b67f176f79c15f970782e09",
     "zig": "org.ziglang.zig:0.17.0@sha256:93ec2b6b36708ae80ffac87872e70dafaee350cd2d49a95dd2fa5847d0a10449",

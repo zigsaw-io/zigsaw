@@ -36,7 +36,10 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
+const acl = @import("acl.zig");
 const aliases = @import("aliases.zig");
+const appcontainer = @import("appcontainer.zig");
+const container = @import("container.zig");
 const checkpoint = @import("checkpoint.zig");
 const compose = @import("compose.zig");
 const Tree = @import("Tree.zig");
@@ -85,6 +88,9 @@ pub const Options = struct {
     listed: ?*ps.Entry = null,
     /// What `zigsaw stop` sets to ask the build to end (see stop.zig).
     asker: ?*stop.Asker = null,
+    /// Whether build commands run in a container without the network (see
+    /// container.zig). No input of the build either.
+    sandbox: container.Sandbox = .auto,
     /// The images a project built of its other apps, which the recipe may
     /// name unpinned (see compose.zig). Without it, a recipe that does is
     /// looked for in the projects above its directory.
@@ -109,7 +115,7 @@ pub fn build(ctx: *Context, recipe_path: []const u8, opts: Options) !install.Ima
     // pinned before anything reads the recipe, so that its inputs, its
     // kept build and its image have their digests.
     var pins: []const []const u8 = &.{};
-    if (compose.namesSiblings(r)) if (opts.siblings orelse try compose.buildFor(ctx, source, r, opts.limits)) |built| {
+    if (compose.namesSiblings(r)) if (opts.siblings orelse try compose.buildFor(ctx, source, r, opts.limits, opts.sandbox)) |built| {
         const pinned = try compose.pin(arena, r, built, recipe_path);
         r = pinned.recipe;
         pins = pinned.pins;
@@ -269,6 +275,7 @@ fn buildImage(ctx: *Context, r: recipe.Recipe, recipe_path: []const u8, source: 
         root.?.limits = opts.limits;
         root.?.listed = opts.listed;
         root.?.asker = opts.asker;
+        try root.?.containIf(ctx, r, tools.list.items, opts.sandbox);
         if (root.?.msvc) |tc| {
             try build_info.host.map.put(arena, "msvc", tc.tools_version);
             try build_info.host.map.put(arena, "windows-sdk", tc.sdk_version);
@@ -545,8 +552,62 @@ const BuildRoot = struct {
     listed: ?*ps.Entry = null,
     /// See `Options.asker`.
     asker: ?*stop.Asker = null,
+    /// The container build commands run in, without the network, or null
+    /// to run them as zigsaw's children (see `contain`).
+    security: ?win32.SECURITY_CAPABILITIES = null,
+    /// The container's TEMP, in the build's profile, which starts afresh
+    /// after a vendor step (see `contain`).
+    container_temp: ?[]const u8 = null,
 
     const letter = drive.letter;
+
+    /// Runs the build commands in the container (see `contain`) when the
+    /// recipe says they can run there, or --sandbox=appcontainer says to,
+    /// and Windows lets them (see container.zig); else they run as zigsaw's
+    /// children, kept off the network by proxy variables only.
+    fn containIf(b: *BuildRoot, ctx: *Context, r: recipe.Recipe, tools: []const Tool, sandbox: container.Sandbox) !void {
+        const wanted = switch (sandbox) {
+            .soft => false,
+            .appcontainer => true,
+            .auto => r.contained,
+        };
+        if (!wanted) return;
+        if (r.host.len > 0) return fail("--sandbox=appcontainer: {s} builds with the machine's {s}, which a container can't reach", .{ r.id, r.host[0] });
+        try b.contain(ctx, tools);
+        if (try container.check(ctx, b.path, &b.security.?)) |why| {
+            b.security = null;
+            if (sandbox == .appcontainer)
+                return fail("--sandbox=appcontainer: this Windows doesn't run build commands in a container ({s})", .{why});
+            note("note: this Windows doesn't run build commands in a container ({s}), so they run without one, kept off the network only by proxy variables", .{why});
+            return;
+        }
+        note("build commands run in a container, without the network", .{});
+    }
+
+    /// Readies the build's AppContainer, `zigsaw.build`, which holds its own
+    /// capability and no network one: grants it the build root, and the
+    /// tools' deployments to read and run. A profile no app has, so no app's
+    /// exemption from loopback isolation reaches it: a build reaches neither
+    /// the internet nor this machine's servers, only its own processes'.
+    fn contain(b: *BuildRoot, ctx: *Context, tools: []const Tool) !void {
+        const arena = ctx.arena;
+        const profile = try appcontainer.Profile.ensure(arena, "build");
+        // Windows makes a container's TEMP and TMP its folder under
+        // LOCALAPPDATA, which is in the build's profile (see run.zig's
+        // setUpAppContainer); made before each module's commands, since
+        // the profile starts afresh after a vendor step.
+        const real_profile: environment.Profile = try .init(arena, b.path);
+        b.container_temp = try std.fs.path.join(arena, &.{ real_profile.local, "Packages", profile.name, "AC", "Temp" });
+        try Io.Dir.cwd().createDirPath(ctx.io, b.container_temp.?);
+        const start = Io.Timestamp.now(ctx.io, .awake);
+        // What zigsaw granted package SIDs before goes, as for runs.
+        _ = try acl.grant(arena, b.path, profile.capability, .full, .package_sids);
+        for (tools) |t| _ = try acl.grant(arena, t.dir, profile.capability, .read_execute, .package_sids);
+        if (ctx.verbose) note("granted {s} the build root and {d} tools ({d} ms)", .{ profile.name, tools.len, start.untilNow(ctx.io, .awake).toMilliseconds() });
+        const caps = try arena.alloc(win32.SID_AND_ATTRIBUTES, 1);
+        caps[0] = .{ .Sid = profile.capability, .Attributes = win32.SE_GROUP_ENABLED };
+        b.security = .{ .AppContainerSid = profile.sid, .Capabilities = caps.ptr, .CapabilityCount = 1 };
+    }
 
     fn init(ctx: *Context, r: recipe.Recipe, tools: []const Tool, from_last: ?*Resume) !BuildRoot {
         const io = ctx.io;
@@ -915,6 +976,7 @@ const BuildRoot = struct {
         const cwd = try std.fmt.allocPrint(arena, "{s}\\src\\{s}", .{ letter, m.name });
 
         const label = if (step == .vendor) " vendor" else "";
+        if (step == .build and !m.network) if (b.container_temp) |t| try Io.Dir.cwd().createDirPath(ctx.io, t);
         for (commands, 1..) |command, n| {
             if (n <= how.from) continue;
             if (b.asker) |a| if (a.isSet()) return fail("module {s}: stopped by `zigsaw stop` before {t} command {d}", .{ m.name, step, n });
@@ -922,13 +984,25 @@ const BuildRoot = struct {
             const start = ctx.now();
             // Named, so that `zigsaw ps` may look into it.
             const job_name = if (b.listed != null) try ps.jobName(ctx.io, arena) else null;
+            // Vendor steps and modules with "network" have the network, so
+            // run outside the container.
+            const contained = step == .build and !m.network and b.security != null;
+            // BusyBox's sh runs a program that is the last thing it does by
+            // starting it and exiting with its exit code once it ends; unless
+            // its parent, by Windows' list of processes, is gone, when it
+            // exits at once. In a container that list doesn't show zigsaw,
+            // so sh would exit as `zig ar` started, and the job end it, with
+            // nothing written. A command after the last keeps sh waiting, and
+            // `exit $?` keeps its exit code.
+            const shell_command = if (contained and shell.kind != .cmd) try std.fmt.allocPrint(arena, "{s}\nexit $?", .{command}) else command;
             var child = try process.start(arena, .{
                 .exe = shell.exe,
-                .command_line = try shell.commandLine(arena, command),
+                .command_line = try shell.commandLine(arena, shell_command),
                 .env_block = block,
                 .cwd = cwd,
                 .limits = b.limits,
                 .job_name = job_name,
+                .security = if (contained) &b.security.? else null,
             });
             if (b.asker) |a| child.stop = a.stop();
             if (b.listed) |l| {
@@ -938,6 +1012,7 @@ const BuildRoot = struct {
                 l.record.of = @intCast(commands.len);
                 l.record.command = command;
                 l.record.job = child.job_name;
+                l.record.sandbox = if (contained) "appcontainer" else null;
                 l.record.memory_limit = b.limits.memory;
                 l.record.cpus = b.limits.fewerCpus();
                 l.update(ctx);

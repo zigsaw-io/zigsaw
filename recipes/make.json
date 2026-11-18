@@ -13,6 +13,7 @@
     "make": { "command": "bin/make.exe" },
     "gmake": { "command": "bin/make.exe" }
   },
+  "contained": true,
   "sdk": {
     "zig": "org.ziglang.zig:0.17.0@sha256:93ec2b6b36708ae80ffac87872e70dafaee350cd2d49a95dd2fa5847d0a10449",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"

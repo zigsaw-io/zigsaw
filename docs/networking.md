@@ -25,7 +25,8 @@ What was so when this was designed:
 - Under `soft` and `low`, nothing is enforced: the app reaches whatever you
   can.
 - Build steps get proxy variables that point nowhere, by convention. Vendor
-  steps have the network.
+  steps have the network. (Since iteration 103, a recipe's build commands
+  may run in a container without the network; see [Builds](#builds).)
 - zigsaw's own requests honour `HTTP_PROXY` and `HTTPS_PROXY`. Runs didn't
   pass them on, because a run's environment is built from scratch. An app
   behind a proxy that's set by variables couldn't get out.
@@ -424,15 +425,29 @@ them).
 
 ### Builds
 
-Unchanged. Enforcing no network would mean running build steps in an
-AppContainer, and several toolchains don't work there yet: Go's and
-initdb's `NUL` on Server 2025, and kpathsea's long names, among others.
+Built in iteration 103, for recipes that say `"contained": true`: their
+build commands run in an AppContainer of zigsaw's, `zigsaw.build`, with no
+network capability, and no exemption from loopback isolation, so they reach
+neither the internet nor this machine's servers (see
+[recipes](recipes.md#builds-in-a-container)). Vendor steps and modules with
+`"network"` still run outside it, with the network.
+
+Two limits:
+
+- **Not on Windows Server 2025**, which denies containers `NUL` and their
+  own paths: a build asks first, and there the commands run as before, kept
+  off the network only by proxy variables. CI's runners are such machines,
+  so CI checks the fallback, and a Windows 11 machine the container.
+- **Not every toolchain.** Ninja, llvm-mingw's programs, Python's private
+  temporary folders and Gradle fail in a container (see
+  [gaps](gaps.md)), so recipes that build with them don't say
+  `"contained"`, and keep the convention.
 
 ### Not in this design
 
 - Serving other machines.
 - DNS.
-- Allow lists for builds and vendor steps, which don't run in a container,
+- Allow lists for builds and vendor steps, which don't run in a container with the network,
   and for protocols other than HTTP's (SOCKS, a raw connection to a remote
   host's port).
 

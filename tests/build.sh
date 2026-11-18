@@ -37,7 +37,7 @@ export MSYS_NO_PATHCONV=1
 # has (BusyBox's image), and with zig's image where a group builds with it.
 groups=(
     "base: runtimes images extensions aliases projects apps resume prettier msvc sevenzip" # 2
-    "zig: commands sqlite"                                                     # 7
+    "zig: commands contained sqlite"                                           # 7
     "cmake-meson: cmake llvm meson make"                                       # 7
     "langs: rust go dotnet java php"                                           # 9
 )
@@ -1244,6 +1244,106 @@ refused_link() {
     no_build_root
 }
 check "a link left in the prefix fails the build" refused_link
+fi
+
+# --- Builds in a container ----------------------------------------------------------
+
+if section contained; then
+need_zig
+# A recipe of BusyBox commands that says "contained", with <extra> recipe
+# settings: <id> <commands> [<module extra>] [<recipe extra>].
+contained_recipe() {
+    printf '{ "id": "%s", "version": "1", "command": "x.txt", "exports": {}, "sdk": { "busybox": "%s@%s" }, %s\n  "modules": [{ "name": "m", %s "build": [%s] }] }\n' \
+        "$1" $BB "$bb_digest" "${4:-\"contained\": true,}" "${3:-}" "$2"
+}
+# What a build command finds when it asks the server below, its proxy
+# variables unset, as a tool that ignores them would: written to the image.
+ask='"unset HTTP_PROXY HTTPS_PROXY ALL_PROXY; if wget -q -O got http://127.0.0.1:18100/hello.txt; then echo reached; else echo refused; fi > \"$PREFIX/x.txt\""'
+mkdir -p "$work\\www2" && echo served >"$work\\www2\\hello.txt"
+"$ZIGSAW_HOME\\deploy\\$(own_layer $BB)\\busybox.exe" httpd -f -p 127.0.0.1:18100 -h "$work\\www2" &
+httpd2=$!
+found() { tr -d '\r' <"$ZIGSAW_HOME\\deploy\\$(own_layer "$1")\\x.txt"; }
+contained_recipe test.build.contained "$ask" >"$work\\contained.json"
+contained_recipe test.build.plain "$ask" '' ' ' >"$work\\plain.json"
+contained_recipe test.build.online "$ask" '"network": true,' >"$work\\contained-online.json"
+
+# Whether this Windows runs builds in a container: not Server 2025, which
+# denies containers NUL and their own paths (see container.zig).
+probe_out=$(z build --sandbox=appcontainer "$work\\plain.json" 2>&1)
+if grep -q "doesn't run build commands in a container" <<<"$probe_out"; then
+    can_contain=false
+    echo "      (this Windows doesn't run builds in a container: $(grep -o '(.*)' <<<"$probe_out" | head -1); the rows check that builds go on without one)"
+else
+    can_contain=true
+fi
+
+fallback() {
+    local out
+    out=$(z build --rebuild "$work\\contained.json" 2>&1) || { echo "$out" | tail -3; return 1; }
+    grep -q "note: this Windows doesn't run build commands in a container (.*), so they run without one" <<<"$out" &&
+        [ "$(found test.build.contained)" = reached ]
+}
+forced_fails() { z build --rebuild --sandbox=appcontainer "$work\\plain.json" 2>&1 | grep -q "^error: --sandbox=appcontainer: this Windows doesn't run build commands in a container"; }
+doctor_says() { z doctor --offline 2>&1 | grep -q "$1"; }
+if $can_contain; then
+    contained_build() {
+        local out
+        out=$(z build "$work\\contained.json" 2>&1) || { echo "$out" | tail -3; return 1; }
+        grep -q 'build commands run in a container, without the network' <<<"$out" && [ "$(found test.build.contained)" = refused ]
+    }
+    check "a recipe that says \"contained\" builds in a container, where a tool that ignores the proxy reaches no server" contained_build
+    plain_forced() { z build --rebuild --sandbox=appcontainer "$work\\plain.json" >/dev/null 2>&1 && [ "$(found test.build.plain)" = refused ]; }
+    check "--sandbox=appcontainer builds any recipe so" plain_forced
+    check "doctor says contained builds run in a container" doctor_says 'recipes that say "contained" run in a container'
+    # What a Windows that can't answers, as Server 2025's runners do: the
+    # store keeps the answer for this zigsaw and Windows build.
+    container_cache="$ZIGSAW_HOME\\cache\\build-container.txt"
+    container_key=$(head -1 "$container_cache" | tr -d '\r')
+    printf '%s\nNUL: error 5\n' "$container_key" >"$container_cache"
+fi
+check "where Windows can't, a contained recipe builds without the container, and says so" fallback
+check "--sandbox=appcontainer fails there, saying why" forced_fails
+check "doctor says that Windows doesn't run them in one" doctor_says "doesn't run build commands in a container"
+$can_contain && printf '%s\nok\n' "$container_key" >"$container_cache"
+soft_reaches() { z build --rebuild --sandbox=soft "$work\\contained.json" >/dev/null 2>&1 && [ "$(found test.build.contained)" = reached ]; }
+check "--sandbox=soft builds it without the container: proxy variables only ask tools to stay off" soft_reaches
+# Rebuilt: the sandbox isn't one of a build's inputs, so the image the
+# forced build made would be taken again.
+plain_reaches() { z build --rebuild "$work\\plain.json" >/dev/null 2>&1 && [ "$(found test.build.plain)" = reached ]; }
+check "a recipe that doesn't say \"contained\" builds without it" plain_reaches
+online_reaches() { z build "$work\\contained-online.json" >/dev/null 2>&1 && [ "$(found test.build.online)" = reached ]; }
+check "a module with \"network\" runs outside the container" online_reaches
+
+# Commands keep their exit codes, and a program that is the last thing a
+# command runs finishes (BusyBox's sh doesn't wait for it in a container
+# unless zigsaw adds a command after it), as do writes outside the root fail.
+contained_recipe test.build.contained.exit '"exit 3"' >"$work\\contained-exit.json"
+check "a contained command's exit code is the build's" sh -c "\"\$0\" build '$work\\contained-exit.json' 2>&1 | grep -q 'build command 1 exited with code 3'" "$zigsaw"
+printf '{ "id": "test.build.contained.zig", "version": "1", "command": "x.txt", "exports": {}, "contained": true, "sdk": { "zig": "org.ziglang.zig@%s", "busybox": "%s@%s" },\n  "modules": [{ "name": "m", "build": ["printf \\"int main(void) { return 0; }\\" > a.c", "zig cc -target x86_64-windows-gnu -O2 -c a.c -o a.o", "zig ar rcs liba.a a.o", "test -f liba.a", "zig cc -target x86_64-windows-gnu -O2 -s a.c -o \\"$PREFIX/a.exe\\"", "echo built > \\"$PREFIX/x.txt\\""] }] }\n' \
+    "$zig_digest" $BB "$bb_digest" >"$work\\contained-zig.json"
+zig_contained() { z build "$work\\contained-zig.json" >/dev/null 2>&1 && [ -n "$(found test.build.contained.zig)" ]; }
+check "zig cc and zig ar, each the last of its command, write what they make" zig_contained
+zig_digest_contained=$(manifest_of test.build.contained.zig)
+same_image_soft() { [ "$(z build --rebuild --sandbox=soft "$work\\contained-zig.json" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2)" = "$zig_digest_contained" ]; }
+check "the image is the same as one built without the container" same_image_soft
+# A vendor step, outside the container, makes the build's profile afresh,
+# the container's TEMP in it too, which Go's build needs.
+contained_vendor_recipe() {
+    contained_recipe test.build.contained.vendored '"[ -d \"$TEMP\" ] && echo t > \"$TEMP/t\" && cp deps/v.txt \"$PREFIX/x.txt\""' \
+        "\"vendor\": { \"commands\": [\"mkdir -p deps && echo vendored > deps/v.txt\"], \"dir\": \"deps\"$1 },"
+}
+contained_vendor_recipe '' >"$work\\contained-unpinned.json"
+contained_vendor_hash=$(z build "$work\\contained-unpinned.json" 2>&1 | grep -A1 'Pin what its commands made' | grep -o '"sha256": "[0-9a-f]*"' | cut -d'"' -f4)
+contained_vendor_recipe ", \"sha256\": \"$contained_vendor_hash\"" >"$work\\contained-vendored.json"
+contained_vendored() { z build "$work\\contained-vendored.json" >/dev/null 2>&1 && [ "$(found test.build.contained.vendored)" = vendored ]; }
+check "after a vendor step, contained commands have their TEMP" contained_vendored
+if $can_contain; then
+    contained_recipe test.build.contained.escape "\"echo x > '$(cygpath -m "$work")/escaped.txt' || echo denied > \\\"\$PREFIX/x.txt\\\"\"" >"$work\\contained-escape.json"
+    escape_denied() { z build "$work\\contained-escape.json" >/dev/null 2>&1 && [ "$(found test.build.contained.escape)" = denied ] && [ ! -e "$work\\escaped.txt" ]; }
+    check "a contained command can't write outside the build root" escape_denied
+fi
+kill $httpd2 2>/dev/null
+check "builds in a container leave B: free and no build root" free_afterwards
 fi
 
 # --- CMake --------------------------------------------------------------------------

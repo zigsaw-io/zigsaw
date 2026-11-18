@@ -14,6 +14,7 @@
     "filesystem": ["cwd", "desktop", "documents", "downloads"]
   },
   "runtimes": { "electron": "org.electronjs.Electron:44.11.2@sha256:b427ce53d6f9cac8eef3aeabf60a6baa3e64bacd593431d49c51b6dd0b6ffd51" },
+  "contained": true,
   "sdk": {
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },

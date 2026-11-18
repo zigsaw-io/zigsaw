@@ -21,6 +21,7 @@ const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const builder = @import("builder.zig");
+const container = @import("container.zig");
 const deps = @import("deps.zig");
 const install = @import("install.zig");
 const oci = @import("oci.zig");
@@ -328,7 +329,7 @@ pub fn buildAll(ctx: *Context, p: Project, opts: builder.Options) !void {
 /// apps it uses, as a build of the project would, without installing them.
 /// Null if no project lists it. It builds with `builder.build`, which calls
 /// it, so its errors are named: Zig can't infer them round that loop.
-pub fn buildFor(ctx: *Context, source: []const u8, r: recipe.Recipe, limits: process.Limits) anyerror!?*const Built {
+pub fn buildFor(ctx: *Context, source: []const u8, r: recipe.Recipe, limits: process.Limits, sandbox: container.Sandbox) anyerror!?*const Built {
     const arena = ctx.arena;
     const p = try findFor(ctx, source) orelse return null;
     const self = for (p.members, 0..) |m, i| {
@@ -350,7 +351,7 @@ pub fn buildFor(ctx: *Context, source: []const u8, r: recipe.Recipe, limits: pro
         if (!needed[i]) continue;
         const m = p.members[i];
         note("{s} uses {s}, which its project builds first; it isn't installed", .{ r.id, m.recipe.id });
-        const image = try builder.build(ctx, m.path, .{ .limits = limits, .siblings = built });
+        const image = try builder.build(ctx, m.path, .{ .limits = limits, .sandbox = sandbox, .siblings = built });
         try built.put(arena, .{ .id = image.config.id, .version = image.config.version, .digest = image.manifest_digest });
     }
     return built;

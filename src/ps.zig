@@ -52,7 +52,8 @@ pub const Record = struct {
     /// The name of the event `zigsaw stop` sets to ask it to end (see
     /// stop.zig); null if it can't be asked.
     stop: ?[]const u8 = null,
-    /// Runs and execs only: soft, low or appcontainer, and all, none or list.
+    /// Runs and execs: soft, low or appcontainer, and all, none or list.
+    /// Builds: appcontainer while the command runs in the container.
     sandbox: ?[]const u8 = null,
     network: ?[]const u8 = null,
     memory_limit: ?u64 = null,
@@ -489,7 +490,7 @@ pub fn ps(ctx: *Context, opts: Options) !void {
             .{ try std.fmt.allocPrint(arena, "{d}", .{r.pid}), .left },
             .{ r.id, .left },
             .{ if (r.version.len > 0) r.version else "-", .left },
-            .{ if (r.kind == .build) "build" else r.sandbox orelse "?", .left },
+            .{ if (r.kind == .build) (if (r.sandbox != null) "build, appcontainer" else "build") else r.sandbox orelse "?", .left },
             .{ if (s.job) |j| try std.fmt.allocPrint(arena, "{d}", .{j.pids.len}) else "-", .right },
             .{ memory_text, .right },
             .{ if (s.job) |j| try std.fmt.allocPrint(arena, "{f}", .{Cpu{ .t = j.cpu }}) else "-", .right },

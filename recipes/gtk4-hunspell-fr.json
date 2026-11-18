@@ -9,6 +9,7 @@
   "env": { "XDG_DATA_DIRS": "${app}\\share" },
   "extends": { "point": "org.gtk.Gtk4", "version": "1" },
   "exports": {},
+  "contained": true,
   "sdk": { "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d" },
   "modules": [
     {

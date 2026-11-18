@@ -29,6 +29,7 @@
   "shortcuts": {
     "Kanboard": { "command": "kanboard", "description": "Serve Kanboard and open it in your browser", "icon": "kanboard\\favicon.ico" }
   },
+  "contained": true,
   "sdk": {
     "composer": "org.getcomposer.composer:2.10.3@sha256:a29589eec81f4de9d3cbe97c9b3669a515a13f870c4e96d1110edc79a8abb8e8",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"

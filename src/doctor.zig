@@ -26,6 +26,7 @@ const acl = @import("acl.zig");
 const associations = @import("associations.zig");
 const cloudfiles = @import("cloudfiles.zig");
 const credentials = @import("credentials.zig");
+const container = @import("container.zig");
 const drive = @import("drive.zig");
 const exports = @import("exports.zig");
 const folders = @import("folders.zig");
@@ -169,6 +170,7 @@ const Doctor = struct {
             }
             try d.check("your folders", d.userFolders());
             try d.check("the build drive", d.buildDrive());
+            if (d.store_there) try d.check("contained builds", d.containedBuilds());
             if (d.store_there) {
                 try d.check("data waiting to move", d.dataToMove());
                 try d.check("runs going", d.runsGoing());
@@ -475,6 +477,17 @@ const Doctor = struct {
             try d.r.add(.warning, "{s} is {s}, which zigsaw builds need: builds with build commands fail until it's freed", .{ drive.letter, target });
             try d.r.fix("`subst {s} /d` frees it, if subst made it", .{drive.letter});
         }
+    }
+
+    /// What builds found of running their commands in a container without
+    /// the network (see container.zig). Doctor doesn't ask itself, which
+    /// would make the container's profile; nothing if no build has asked.
+    fn containedBuilds(d: *Doctor) !void {
+        const seen = try container.recall(d.ctx) orelse return;
+        const asked = if (seen.current) "" else "; another zigsaw or Windows build found that, and the next such build asks again";
+        if (seen.verdict) |why| {
+            try d.r.add(.note, "this Windows doesn't run build commands in a container ({s}): recipes that say \"contained\" build with only proxy variables keeping them off the network{s}", .{ why, asked });
+        } else try d.r.add(.ok, "build commands of recipes that say \"contained\" run in a container, without the network{s}", .{asked});
     }
 
     /// Apps' data still in data\, as a zigsaw before 0.85 kept it: the next

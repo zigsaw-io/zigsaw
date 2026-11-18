@@ -236,6 +236,7 @@
   "runtimes": {
     "git": "org.git_scm.MinGit:2.56.0.windows.4@sha256:7560cb36755ae988ab2c83f39cd23f5b2ae59b0f08741e07c6be10aed585f918"
   },
+  "contained": true,
   "sdk": {
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },

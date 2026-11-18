@@ -9,6 +9,7 @@
   "env": { "PHP_EXT_APCU": "${app}", "PHP_INI_SCAN_DIR": "${app}\\conf.d" },
   "extends": { "point": "net.php.php", "version": "API20250925,NTS,VS17" },
   "exports": {},
+  "contained": true,
   "sdk": { "phpsdk": "net.php.php.Sdk:8.5.12-1@sha256:2e0bfb6e3555a368c25ec5b318f508fed836f8a032ed35b0560e642aa102ae2a" },
   "modules": [
     {

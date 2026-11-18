@@ -173,6 +173,12 @@ pub const Recipe = struct {
     /// What to leave out of the app's layer: "/path" from the top of the
     /// prefix, or a file name pattern ("*.pdb") that matches anywhere.
     cleanup: []const []const u8 = &.{},
+    /// The build commands have been seen to make the same image in a
+    /// container without the network: zigsaw runs them in one where Windows
+    /// can (see container.zig). Not with host toolchains, which the container
+    /// can't reach; and only build commands, not vendor steps or modules with
+    /// "network".
+    contained: bool = false,
     /// Toolchains of the machine the build uses: only "msvc" (see msvc.zig).
     /// The image records their versions, and isn't expected to reproduce on
     /// other machines.
@@ -250,6 +256,10 @@ pub fn parse(arena: std.mem.Allocator, file_name: []const u8, bytes: []const u8)
         return fail("{s}: host toolchain \"{s}\" isn't one zigsaw knows; only \"msvc\" is", .{ file_name, toolchain });
     if (r.host.len > 0 and !r.hasBuildCommands())
         return fail("{s}: \"host\" toolchains are for build commands, and no module has any", .{file_name});
+    if (r.contained and r.host.len > 0)
+        return fail("{s}: a \"contained\" build can't use \"host\" toolchains, which its container can't reach", .{file_name});
+    if (r.contained and !r.hasBuildCommands())
+        return fail("{s}: \"contained\" is for build commands, and no module has any", .{file_name});
     try validatePrefetch(arena, file_name, r);
     return r;
 }
@@ -567,6 +577,11 @@ test "recipe checks" {
         \\{ "id": "x", "version": "1", "command": "a.exe", "host": ["gcc"], "modules": [{ "name": "m", "build": ["x"] }] }
         ,
         \\{ "id": "x", "version": "1", "command": "a.exe", "host": ["msvc"], "modules": [{ "name": "m", "sources": [{ "path": "a.exe" }] }] }
+        ,
+        // Contained builds: build commands, and no host toolchains.
+        \\{ "id": "x", "version": "1", "command": "a.exe", "contained": true, "host": ["msvc"], "modules": [{ "name": "m", "build": ["x"] }] }
+        ,
+        \\{ "id": "x", "version": "1", "command": "a.exe", "contained": true, "modules": [{ "name": "m", "sources": [{ "path": "a.exe" }] }] }
         ,
         // Aliases: plain names, for commands in the image itself or in one
         // of its runtimes.

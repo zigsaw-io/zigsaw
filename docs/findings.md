@@ -3134,6 +3134,66 @@ somewhere to go from a version pulled by digest.
   file that changed without a request leaving the helper, and without the count of bytes
   fetched for reads moving.
 
+## Builds in a container (iteration 103)
+
+Build commands run in an AppContainer, `zigsaw.build`, with no network capability, its
+own capability granted the build root (full) and the tools' deployments (read), on
+Windows 11 26300, in a store on an NTFS drive (D:). Compared with ghcr.io's images.
+
+**What the container does**, with a BusyBox recipe:
+
+| | soft | in the container |
+|---|---|---|
+| `B:`, a DOS device of the logon session made with `DefineDosDeviceW` | seen | seen, its root's attributes too |
+| `wget` to a server on this machine, proxy variables unset | reaches it | refused (dropped, 21 s) |
+| writing a folder outside the build root | writes | `Permission denied` |
+| the user's real profile | listed | not found |
+| `TEMP` and `TMP` | the build's profile's | Windows' own choice: `B:\home\AppData\Local\Packages\zigsaw.build\AC\Temp`, still in the root |
+
+**Which recipes make the published image there** (`--sandbox=appcontainer`):
+
+| Recipe | Toolchain | In the container |
+|---|---|---|
+| SQLite, make, ZLS, 7-Zip, draw.io, VSCodium, Kanboard, hunspell's dictionaries | zig, BusyBox | same digest |
+| Ghostscript | zig, configure, make | same digest |
+| ripgrep, bat, cargo-c | Rust (with the cc crate's C) | same digest |
+| fzf | Go | same digest |
+| Perl | BusyBox | same digest |
+| PHP's apcu, igbinary, redis, ssh2, xdebug | PHP's extension SDK | same digest |
+| zstd | CMake, Ninja | fails: `ninja: fatal: CreateNamedPipe: Access is denied`; with Ninja's pipe name patched to `\\.\pipe\LOCAL\…`, the same image as without the container, three times |
+| gettext, pgvector, llvm-mingw's own test | llvm-mingw | fails: `<program>: Permission denied` from every LLVM program |
+| Meson's pkgconf | Meson on Python 3.14 | fails: `PermissionError` writing in a folder `tempfile` just made |
+| PlantUML | Gradle | fails: `java.io.IOException: Access is denied` |
+| TeX Live | its own Perl's `install-tl` | fails: `Cannot open HKCU for writing` |
+
+- **Containers can't see zigsaw.** BusyBox-w32's sh, asked to run a program last
+  (`sh -c "zig ar rcs libz.a *.o"`), starts it and, unless its parent has gone, waits for
+  it. It looks for its parent in a Toolhelp snapshot, which in an AppContainer doesn't
+  list zigsaw, outside the container; so it exits 0 at once, and the job ends `zig ar`
+  with nothing written. Shells that make starts in the container see their parent.
+  zigsaw adds `exit $?` after each contained command. A run under
+  `--sandbox=appcontainer` loses such a program the same way (see gaps).
+- **Ninja** names the pipes it reads its commands' output from
+  `\\.\pipe\ninja_pid%lu_sp%p`, and a container may make pipes only under
+  `\\.\pipe\LOCAL\`. `\\.\pipe\LOCAL\n%lu_%p_nja` is the same length, and works with or
+  without a container.
+- **LLVM's programs** ask Windows for their own path's long form
+  (`GetLongPathNameW`, in `InitLLVM`), which reads every folder above them: `D:\zs`
+  grants a container nothing (acprobe's `self-long-name`, as kpathsea's). Started through
+  junctions in the build root (`B:\tools\<id>`), Clang compiles (its `-cc1` runs in its own
+  process), but its install folder is its real path, and lld, started from there, fails.
+  Granting a container the folders above the store can't work for the default store:
+  `C:\Users` and a drive's root aren't the user's to change.
+- **A restricted token doesn't keep a process off the network.** `\Device\Afd` grants
+  Everyone read and write and RESTRICTED only read, so a token restricted to the user,
+  the logon SID, Users, Authenticated Users, INTERACTIVE and RESTRICTED looked as if
+  it couldn't make sockets. It can: `socket()` and `connect()` to 1.1.1.1 work, opens
+  under the device aren't checked against its ACL. `NUL` is denied it, and names
+  don't resolve.
+- **On Windows Server 2025** (CI's runners, run 44226304142), acprobe's every row is
+  denied in a container: `NUL`, the program's own path with its drive letter, its long
+  name, the Mount Manager, the drive root.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.
