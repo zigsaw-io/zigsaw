@@ -287,7 +287,9 @@ no_french() {
 check "--noextension leaves one out" no_french
 # The SVG from GdkPixbuf's check above, as an app's icon.
 mkdir -p "$work\\icons" && cp "$work\\t.svg" "$work\\icons\\t.svg"
-sed -e "s/@BUSYBOX@/$(manifest_of net.frippery.busybox)/" "$root\\tests\\gtk\\icons.json.in" >"$work\\icons\\icons.json"
+# BusyBox as GTK's SDK pins it: a store with the SDK has that, installed or not.
+sed -e "s/@BUSYBOX@/$(grep -o '"busybox": *"[^"]*"' "$root\\recipes\\gtk4-sdk.json" | grep -o 'sha256:[0-9a-f]*')/" \
+    "$root\\tests\\gtk\\icons.json.in" >"$work\\icons\\icons.json"
 z build "$work\\icons\\icons.json" >"$work\\icons.log" 2>&1 || echo "building test.gtk.icons failed: $(tail -1 "$work\\icons.log")"
 # Once, under AppContainer on Server 2025, it printed nothing; a failure
 # shows the run's exit status too.

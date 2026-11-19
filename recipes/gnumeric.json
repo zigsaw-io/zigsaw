@@ -27,12 +27,12 @@
     ".csv": { "command": "gnumeric", "description": "Comma-separated values", "icon": "share/icons/gnumeric.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:02b9871c241590b8f970e921a820999c37f4114421a0f43e1111e33349b23c8e",
-    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:a700ac8af113fef63a04507bb98f9ed68e1307e6e876228de19c13d212c7d7cd"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:4ac2ac501d9a3c1ff3288d3a29d000caeb1659931d7e74c68b2f87aa438514eb",
+    "gtk3": "org.gtk.Gtk3:3.24.52@sha256:b47da49ceab7a554108eafc1dad7dacd63d8590115b5500b90b61575753f7c3b"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:fcb101c71406354cbabb72722d713fd0c38e73cce4d71cfdcc60d869c29640db",
-    "gtk3sdk": "org.gtk.Gtk3.Sdk:3.24.52@sha256:de76c5d8de614de7632cb0e7fae80d0d52875be2a790caaaaa9903eedeb30d48",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:34efa61b7ef0f4345db8be8be3d8b34b00b3a476259a33f52b9f79f5159fa817",
+    "gtk3sdk": "org.gtk.Gtk3.Sdk:3.24.52@sha256:da90d858047396e965a23c434c73cea3df67d5681cc9b4c9010eb7fd411a4951",
     "cmake": "org.cmake.cmake:4.4.5@sha256:0d8b18ea81b08ab99795400ad9099d16060ee374907f08a2b6a15a4abf14d4ca",
     "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85"
   },
@@ -117,8 +117,6 @@
       ],
       "build": [
         "sh zigsaw/mtimes.sh",
-        "sed -i 's/^%: %.in Makefile$/.SUFFIXES: .in\\n.in:/' Makefile.in",
-        "grep -q '^\\.in:$' Makefile.in",
         "sh ./configure --prefix=\"$PREFIX\" ac_executable_extensions=.exe > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
         "make",
         "make install",
@@ -135,13 +133,11 @@
           "sha256": "500eaff50628faa75adb3cd560236a4db498d9e7c52c036b78fa9a57f21805b3",
           "strip": 1
         },
-        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
-        { "path": "gnumeric/pdpmake.sh", "dest": "zigsaw/pdpmake.sh" }
+        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" }
       ],
       "build": [
         "sh zigsaw/mtimes.sh",
         "find . -name '*.h.in' -exec touch -t 200001010000.02 {} +",
-        "sh zigsaw/pdpmake.sh",
         "sdk=$(pkg-config --variable=prefix glib-2.0) && sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --disable-dependency-tracking --disable-introspection --disable-gtk-doc --with-config-backend=keyfile --without-long-double --with-lasem=no --with-libiconv-prefix=\"$sdk\" --with-libintl-prefix=\"$sdk\" CPPFLAGS=\"-I$sdk/include\" LDFLAGS=\"$LDFLAGS -L$sdk/lib\" ac_executable_extensions=.exe lt_cv_deplibs_check_method=pass_all > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
         "grep -q 'Configuration backend:\tkeyfile' configure.log",
         "make -j\"$(nproc)\"",
@@ -157,13 +153,11 @@
           "sha256": "89331121321b9bad72d37af5a6d13a0a636f0fbb0880f0ea1f2cf8b7ab9ae631",
           "strip": 1
         },
-        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" },
-        { "path": "gnumeric/pdpmake.sh", "dest": "zigsaw/pdpmake.sh" }
+        { "path": "gtk4-sdk/autotools-mtimes.sh", "dest": "zigsaw/mtimes.sh" }
       ],
       "build": [
         "sh zigsaw/mtimes.sh",
         "find . -name '*.h.in' -exec touch -t 200001010000.02 {} +",
-        "sh zigsaw/pdpmake.sh",
         "sed -i 's/^SUBDIRS = \\(.*\\) templates doc tools schemas test introspection$/SUBDIRS = \\1 templates/' Makefile.in",
         "grep -q '^SUBDIRS = .* icons @COMPONENT_DIR@ templates$' Makefile.in",
         "sed -i 's/ plan-perfect applix openoffice / plan-perfect openoffice /' plugins/Makefile.in",

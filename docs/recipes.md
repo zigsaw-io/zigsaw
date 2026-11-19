@@ -1241,13 +1241,41 @@ instead (the recipe changes its `realpath` calls with `sed`), so they stay on `B
 
 ## GNU make
 
-BusyBox's `make` is pdpmake, POSIX make with a few extensions, which runs
-most autotools builds but not Makefiles written for GNU make
-(`$(patsubst)`, `$(foreach)`, `define`, `$(call)`), such as PostgreSQL's
-pgxs. [`org.gnu.make`](recipes/make.json) is GNU make 4.4.1, built with
-zig from the files `build_w32.bat` compiles, with no configure. Builds that
-list it get `make` (and `gmake`) as an [alias](#building-from-source), ahead
-of BusyBox's applet.
+Recipes build with GNU make. [`org.gnu.make`](recipes/make.json) is GNU
+make 4.4.1, built with zig from the files `build_w32.bat` compiles, with no
+configure. A build gets `make` (and `gmake`) as an
+[alias](#building-from-source), ahead of BusyBox's applet, in either of two
+ways:
+
+- **From an SDK that brings it.** GTK's SDK has GNU make among its
+  runtimes, and a build gets an SDK's runtimes with their aliases, so a
+  recipe that lists GTK's SDK has GNU make without naming it. It's pinned
+  all the same, by the SDK's digest.
+- **From its own pin**, in `"sdk"`, next to BusyBox's:
+
+  ```json
+  "sdk": {
+    "make": "org.gnu.make:4.4.1@sha256:9add04a45e601e7e5b8e0127184c2faead3783527f4dbbdb3a46ca1118fa9da7",
+    "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:..."
+  }
+  ```
+
+zigsaw adds no tool to a build by itself, which would be an input the
+recipe doesn't pin. So a build without GNU make still has BusyBox's `make`,
+which is pdpmake: POSIX make with a few extensions. It runs one job at a
+time (`-j` does nothing), has neither pattern rules nor `$(shell ...)`, and
+can give an empty macro on its command line a garbage value
+([gaps](gaps.md)). `zigsaw build` says so in a note when a module's
+commands run `make` and there's no GNU make:
+
+```
+note: module plain runs make, which here is BusyBox's: one job at a time (-j does nothing), and no pattern rules or $(shell); for GNU make, add org.gnu.make to "sdk"
+```
+
+The published recipes all build with GNU make, but for PostgreSQL's SDK
+(OpenSSL), Ghostscript and GDAL's SDK, whose turn is next:
+[`scripts/check-make.sh`](scripts/check-make.sh), in the Reproduce
+workflow, fails a published recipe whose commands run `make` without it.
 
 On Windows, GNU make runs recipes in the first `sh.exe` on PATH, or in
 cmd.exe without one. The image's `bin` has an `sh.exe`
@@ -1256,9 +1284,9 @@ line, so recipes run in BusyBox's sh. GNU make also starts a line without
 shell syntax itself, as on Unix, where `echo` and `mkdir` are programs; on
 Windows they're BusyBox's applets, so
 [`posix-shell.patch`](recipes/make/posix-shell.patch) has every line go
-through the shell when it's a POSIX one. The builder looks for an `sh.exe`
-on the build's PATH before `busybox.exe`, so with this image it runs the
-build commands through it too, one process more per command.
+through the shell when it's a POSIX one. The builder runs a recipe's own
+commands with `busybox.exe` itself, found on the build's PATH before any
+`sh.exe`, so the forwarder starts only make's recipe lines.
 
 ## GTK
 
@@ -1450,10 +1478,9 @@ for cairo and no AVX-512 for CRoaring in GTK. What's left:
 - OpenSSL's `Configure` needs a Perl that makes Unix paths for its
   `mingw64` target; Strawberry Perl makes Windows ones, so its build loads
   [a small module](recipes/gtk4-sdk/openssl-unixspec.pm) into each Perl it
-  runs that gives `File::Spec` Unix paths with drive letters. BusyBox's
-  `make` runs one job at a time, so the recipe compiles OpenSSL's objects
-  with `xargs -P` from `make -n`'s list, and `make` only archives them:
-  75 seconds instead of 16 minutes. OpenSSL is static, linked into
+  runs that gives `File::Spec` Unix paths with drive letters. It builds
+  with [GNU make](#gnu-make)'s `-j`; with BusyBox's `make`, one job at a
+  time, it took 16 minutes. OpenSSL is static, linked into
   glib-networking's module. Its `libcrypto.pc` names the Windows libraries
   it needs (`ws2_32`, `gdi32`, `crypt32`) in `Libs.private`, which only
   `pkg-config --static` reads; with a static library only, the recipe
@@ -1475,18 +1502,21 @@ for cairo and no AVX-512 for CRoaring in GTK. What's left:
   (`PYTHONHASHSEED=0`), as its script for the libraries Rust needs dedupes
   them with a `set` and would write them in another order each build.
 - hunspell and enchant build with their release's `configure` and
-  BusyBox's make, which took most of the rest. Autoconf looks for `sed`,
+  [GNU make](#gnu-make), which the SDK has among its runtimes, so the apps
+  built with it have it too. Autoconf looks for `sed`,
   `grep` and `pkg-config` as files on PATH, where BusyBox's applets and the
   `.exe` aliases aren't, so the modules name them (`SED=sed` and so on).
   libtool would link C++ with `-nostdlib` and the runtime libraries it reads
   from `c++ -v`, which miss compiler-rt's builtins, so the recipe drops
   `-nostdlib` and Clang's `c++` links its own; and the recipe skips
   libtool's check of libraries with `objdump`
-  (`lt_cv_deplibs_check_method=pass_all`). Release tarballs
-  give `configure`, `aclocal.m4` and `Makefile.in` the same time to the
-  second as their sources, and BusyBox's make remakes a target whose
-  prerequisite is as new as it, where GNU make doesn't, so
-  [a script](recipes/gtk4-sdk/autotools-mtimes.sh) orders their times first.
+  (`lt_cv_deplibs_check_method=pass_all`). zigsaw unpacks a source without
+  setting its files' times, so each has the time it was written, in the
+  archive's order, and a prerequisite written a second after `aclocal.m4` or
+  `configure` is newer than them: make, GNU's as well as BusyBox's, would
+  run aclocal or autoconf, which builds don't have (gettext's did, without
+  it). So [a script](recipes/gtk4-sdk/autotools-mtimes.sh) orders their
+  times first.
   enchant's library exports what upstream's `-export-symbols-regex` gives,
   which libtool turns into a `.def` file with llvm-mingw's `nm`
   (`NM=nm`); its providers export
@@ -1503,20 +1533,11 @@ for cairo and no AVX-512 for CRoaring in GTK. What's left:
   `--export-all-symbols` and `.def` files libtool makes with `nm`, which
   zig's build had to work around. Its manuals, man pages and
   translations come built in the release, and the build leaves them be.
-  BusyBox's `make` runs one command at a time, as for OpenSSL above, so the
-  recipe's first module writes a `$(MAKE)` for the other two, `pmake.sh`.
-  In each directory, when make gets to automake's `all-am`, the wrapper
-  runs the compile commands `make -n` lists, `$(nproc)` at a time, and make
-  then links what they made. By then the directory's `BUILT_SOURCES` exist,
-  gnulib's replacement headers among them: an object compiled earlier could
-  include another header of the same name. The wrapper first makes the
-  `.dirstamp` files that objects in subdirectories depend on, or make
-  would find them newer and compile those objects again. gettext installs
-  with BusyBox's `install` (`INSTALL="install -c"`), as configure finds
-  none and falls back to automake's `install-sh`, a script run for each of
-  its 2,200 files. A build command writes the wrapper, and isn't a file of
-  the recipe's, because an image records the files its recipe adds to a
-  build.
+  It lists [GNU make](#gnu-make) in its `"sdk"` and builds with `-j`, where
+  BusyBox's `make` needed a wrapper that compiled ahead of it. gettext
+  installs with BusyBox's `install` (`INSTALL="install -c"`), as configure
+  finds none and falls back to automake's `install-sh`, a script run for
+  each of its 2,200 files.
 - Pango's Windows font map gets a one-line patch so that it finds a font
   for text that asks for color glyphs (see above).
 - GTK's input method for Windows (`gtkimcontextime.c`) listens to the
@@ -1655,7 +1676,7 @@ It's offered for `.gnumeric`, `.xlsx`, `.xls`, `.ods` and `.csv` files,
 and may use the user's Desktop, Documents and Downloads.
 
 libgsf, goffice and Gnumeric build with their releases' `configure` and
-BusyBox's make, like hunspell and enchant above, with more:
+[GNU make](#gnu-make), from GTK's SDK, like hunspell and enchant above, with more:
 
 - Autoconf's `configure` takes PATH apart at `:` unless told otherwise, as
   BusyBox's sh gives it one where it can't tell `;` is the separator, and
@@ -1663,11 +1684,6 @@ BusyBox's make, like hunspell and enchant above, with more:
   no `pkg-config` or `windres` by itself. `PATH_SEPARATOR=;` and
   `ac_executable_extensions=.exe` fix both, the latter on `configure`'s
   command line (BusyBox's sh upper-cases the names of variables it's given).
-- BusyBox's make has neither GNU make's pattern rules nor `$(shell ...)`:
-  [a script](recipes/gnumeric/pdpmake.sh) turns intltool's rules for
-  translated files into a POSIX suffix rule and its lists of languages into
-  POSIX `!=` assignments (without which no translation was installed), and
-  names the source in rules where GNU make's `$<` would have.
 - intltool's scripts start `#!/usr/bin/perl`, which BusyBox's sh runs with
   the `perl` on PATH, where a drive letter in the line wouldn't run.
 - Strawberry Perl reads files as text on Windows unless told otherwise,

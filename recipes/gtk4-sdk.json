@@ -20,7 +20,8 @@
     "meson": { "command": "${meson}/python.exe", "args": ["${meson}\\meson\\meson.py"] },
     "ninja": { "command": "${meson}/ninja.exe" },
     "sh": { "command": "${busybox}/busybox.exe", "args": ["sh"] },
-    "make": { "command": "${busybox}/busybox.exe", "args": ["make"] },
+    "make": { "command": "${make}/bin/make.exe" },
+    "gmake": { "command": "${make}/bin/make.exe" },
     "glib-compile-resources": { "command": "bin/glib-compile-resources.exe" },
     "glib-compile-schemas": { "command": "bin/glib-compile-schemas.exe" },
     "gtk4-builder-tool": { "command": "bin/gtk4-builder-tool.exe" },
@@ -42,12 +43,13 @@
   "runtimes": {
     "meson": "com.mesonbuild.meson:1.12.1@sha256:f0b0932603e2dd7596a352f663e1011b63917ec648a68ebcddc7efef48380885",
     "llvm": "com.github.mstorsjo.llvm-mingw:20261104@sha256:7af21d46909fd905b0d054c92d6ddd82a7909b27cc1240f7dc1f1a4d90841bf7",
+    "make": "org.gnu.make:4.4.1@sha256:9add04a45e601e7e5b8e0127184c2faead3783527f4dbbdb3a46ca1118fa9da7",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [
     {
       "name": "base",
-      "sources": [{ "image": "org.gtk.Gtk4.Sdk.Base:4.24.1@sha256:68eb757ec84c8226a9f45ac33e20b711b2b843368cdfee5265bd82d6196b02b4" }]
+      "sources": [{ "image": "org.gtk.Gtk4.Sdk.Base:4.24.1@sha256:78fd3abd613735cdcf34c5c2daa60715e8d5660767f483faa8e5f51199b4c246" }]
     },
     {
       "name": "hicolor-icon-theme",
@@ -108,9 +110,7 @@
       ],
       "build": [
         "perl Configure mingw64 no-shared no-asm no-tests no-docs no-apps no-module --prefix=\"$PREFIX\" --libdir=lib",
-        "make build_generated $(sed -n '/^GENERATED=/,/[^\\\\]$/p' Makefile | tr ' ' '\\n' | grep '[.][ch]$')",
-        "make -n build_libs | grep -e ' -c -o ' | tr '\\n' '\\0' | xargs -0 -P \"$(nproc)\" -n 1 sh -c",
-        "make build_sw",
+        "make -j\"$(nproc)\" build_sw",
         "make install_dev",
         "sed -i -e 's/^Libs: -L${libdir} -lcrypto$/Libs: -L${libdir} -lcrypto -lws2_32 -lgdi32 -lcrypt32/' -e '/^Libs.private: /d' \"$PREFIX/lib/pkgconfig/libcrypto.pc\"",
         "grep -qx 'Libs: -L${libdir} -lcrypto -lws2_32 -lgdi32 -lcrypt32' \"$PREFIX/lib/pkgconfig/libcrypto.pc\""
@@ -290,11 +290,10 @@
         "sed -i 's/ -shared -nostdlib / -shared /' libtool",
         "printf '%s\\n' EXPORTS init_enchant_provider > zigsaw/provider.def",
         "make -C libgnu -j\"$(nproc)\"",
-        "sed -i 's/^nodist_doc_DATA = enchant.html$/nodist_doc_DATA =/' lib/Makefile && ! grep -q '^nodist_doc_DATA = .' lib/Makefile",
-        "make -C lib -j\"$(nproc)\"",
+        "make -C lib -j\"$(nproc)\" nodist_doc_DATA=",
         "grep -q '^ *enchant_broker_init' lib/.libs/libenchant-2-2.dll.def && ! grep -v -e '^EXPORTS' -e '^ *enchant_' lib/.libs/libenchant-2-2.dll.def | grep -q .",
         "make -C providers -j\"$(nproc)\" LDFLAGS=\"$LDFLAGS -export-symbols B:/src/enchant/zigsaw/provider.def\"",
-        "make -C lib install",
+        "make -C lib install nodist_doc_DATA=",
         "make -C providers install",
         "make install-pkgconfigDATA",
         "cp zigsaw/enchant.ordering \"$PREFIX/share/enchant-2/enchant.ordering\""

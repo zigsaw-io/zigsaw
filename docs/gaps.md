@@ -391,12 +391,13 @@
 - BusyBox-w32's `wget -T <seconds>` crashes (segmentation fault), in a
   container or not.
 - Builds need `B:` free, and run one at a time.
-- The `make` builds have, BusyBox's, runs one command at a time: its `-j`
-  isn't implemented. OpenSSL's and gettext's recipes compile ahead of it in
-  parallel; Gnumeric's and goffice's builds, and hunspell's and enchant's in
-  GTK's SDK, still compile one file at a time. Under BusyBox, configure finds
-  no `install` either, and installs each file with a shell script, unless a
-  recipe gives it one (gettext's does).
+- A build that has no GNU make ([recipes](recipes.md#gnu-make)) runs
+  BusyBox's, which runs one command at a time: its `-j` isn't implemented.
+  Three published recipes still do, until their turn: PostgreSQL's SDK
+  (whose OpenSSL compiles ahead of make, in parallel), Ghostscript (16
+  minutes, one file at a time) and GDAL's SDK (libiconv). Under BusyBox,
+  configure finds no `install` either, and installs each file with a shell
+  script, unless a recipe gives it one (gettext's does).
 - Builds with MSVC depend on the machine's Visual Studio, so they don't
   reproduce elsewhere, and CI doesn't check them. Only x64 MSVC builds are
   set up.
@@ -965,9 +966,10 @@
   recursive `make` may get garbage as its value, and fail with something like `make:
   don't know how to make P\x01\x02\xDBp\x02`, or quietly use it. How often depends on the
   name's length and the heap ([findings](findings.md#an-empty-macro-in-busyboxs-make)).
-  No published recipe does this with BusyBox's `make` any more. In a recipe of your own,
+  No published recipe does this with BusyBox's `make`: enchant, which did, builds with GNU
+  make now, which has no such bug. In a recipe of your own, build with GNU make (`org.gnu.make`), or
   empty the macro in the `Makefile` with `sed` instead, as a value of only blanks has the
-  same problem, or build with GNU make (`org.gnu.make`).
+  same problem.
 - zlib 1.4 reached only the images whose recipes build it. PHP takes php.net's prebuilt 1.3.2,
   and GDAL, Qt, Node, MinGit and Pillow carry their own copies, which the upstream report can't
   see ([findings](findings.md#zlib-inside-images)).

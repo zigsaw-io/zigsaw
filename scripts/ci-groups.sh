@@ -47,6 +47,8 @@ gtk_paths=(
     recipes/gtk4-msvc.json recipes/no-publish/pinta.json recipes/no-publish/dotnet
     # What gtk-suites seeds its store with besides GTK's family.
     recipes/busybox.json recipes/llvm-mingw.json recipes/meson.json recipes/mingit.json
+    # GNU make, which GTK's SDK and gettext build with.
+    recipes/make.json recipes/make/
     "${common_paths[@]}"
 )
 qt_paths=(

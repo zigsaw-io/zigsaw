@@ -1,0 +1,17 @@
+{
+  "id": "test.build.makeuser",
+  "version": "1",
+  "command": "made.txt",
+  "exports": {},
+  "sdk": { "sdk": "test.build.makesdk@@SDK@" },
+  "modules": [
+    {
+      "name": "gnu",
+      "build": [
+        "printf 'all:\\n\\t@echo $(patsubst %%.c,%%.o,one.c) by $(firstword $(MAKE_VERSION))\\n' >Makefile",
+        "make >\"$PREFIX/made.txt\"",
+        "make --version | head -1 >>\"$PREFIX/made.txt\""
+      ]
+    }
+  ]
+}

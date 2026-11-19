@@ -33,7 +33,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
 | cargo-c (for building librsvg) | `com.github.lu-zero.cargo-c` | 0.10.25 | `cargo-cbuild`, `cargo-cinstall` |
 | GNU gettext, with libiconv (built from source, for GTK's SDK) | `org.gnu.gettext` | 1.0 | `gettext`, `ngettext`, `msgfmt`, `msgmerge`, `msginit`, `msgcat`, `msgunfmt`, `xgettext`, `iconv` |
 | GTK SDK's first half: GTK and the stack below it (built from source, for GTK's SDK) | `org.gtk.Gtk4.Sdk.Base` | 4.24.1 | |
-| GTK SDK (built from source, with introspection data; with llvm-mingw, Meson and BusyBox) | `org.gtk.Gtk4.Sdk` | 4.24.1 | `cc`, `c++`, `ar`, `windres`, `nm`, `pkg-config`, `meson`, `ninja`, `sh`, `make`, `glib-compile-resources`, `glib-compile-schemas`, `gtk4-builder-tool`, `msgfmt`, `msgmerge`, `xgettext`, `g-ir-scanner`, `g-ir-compiler` |
+| GTK SDK (built from source, with introspection data; with llvm-mingw, Meson, GNU make and BusyBox) | `org.gtk.Gtk4.Sdk` | 4.24.1 | `cc`, `c++`, `ar`, `windres`, `nm`, `pkg-config`, `meson`, `ninja`, `sh`, `make`, `gmake`, `glib-compile-resources`, `glib-compile-schemas`, `gtk4-builder-tool`, `msgfmt`, `msgmerge`, `xgettext`, `g-ir-scanner`, `g-ir-compiler` |
 | GTK, with libadwaita, libsoup, librsvg and enchant (from its SDK) | `org.gtk.Gtk4` | 4.24.1 | `gtk4-demo`, `gtk4-widget-factory`, `gtk4-node-editor`, `gtk4-print-editor`, `gtk4-query-settings`, `adwaita-1-demo`, `gio`, `pango-view`, `pango-list` |
 | Vietnamese dictionary for GTK apps (extends GTK's runtime) | `org.gtk.Gtk4.Hunspell.vi_VN` | 1.0.45 | |
 | French dictionary for GTK apps (extends GTK's runtime) | `org.gtk.Gtk4.Hunspell.fr_FR` | 7.0 | |

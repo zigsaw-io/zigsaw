@@ -24,6 +24,7 @@ zls.json
 perl.json
 cargo-c.json
 llvm-mingw.json
+make.json
 gettext.json
 gtk4-sdk-base.json
 gtk4-sdk.json
@@ -72,7 +73,6 @@ ghostscript.json
 texlive.json
 gdal-sdk.json
 gdal.json
-make.json
 postgresql-sdk.json
 postgresql.json
 postgresql-pgvector.json

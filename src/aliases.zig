@@ -73,7 +73,7 @@ pub fn resolve(ctx: *Context, providers: []const Provider, missing: Missing) ![]
     return out.items;
 }
 
-fn find(resolved: []const Resolved, name: []const u8) ?Resolved {
+pub fn find(resolved: []const Resolved, name: []const u8) ?Resolved {
     for (resolved) |r| if (std.ascii.eqlIgnoreCase(r.name, name)) return r;
     return null;
 }

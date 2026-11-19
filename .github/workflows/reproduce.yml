@@ -64,6 +64,9 @@ jobs:
       - name: The published recipes' pins, on the registry
         run: bash scripts/check-pins.sh
 
+      - name: Recipes that run make build with GNU make
+        run: bash scripts/check-make.sh
+
       - name: The upstream checker, and its table against the recipes
         run: bash tests/upstream.sh
 

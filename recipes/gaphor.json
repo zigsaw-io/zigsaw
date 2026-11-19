@@ -26,12 +26,12 @@
     ".gaphor": { "command": "gaphor", "description": "Gaphor model", "icon": "share/icons/org.gaphor.Gaphor.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:02b9871c241590b8f970e921a820999c37f4114421a0f43e1111e33349b23c8e",
-    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:ff491f9fff29970a10a1b28c4323ebaa6954dc939fa2b912e3ef68b98ee9cf92"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:4ac2ac501d9a3c1ff3288d3a29d000caeb1659931d7e74c68b2f87aa438514eb",
+    "pygobject": "org.gnome.PyGObject:3.58.1@sha256:fd4da23710a3f7d87efbacccdab58841c15a01af64a615282564757549a38b80"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:fcb101c71406354cbabb72722d713fd0c38e73cce4d71cfdcc60d869c29640db",
-    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:0820d5c5884ba1749ca4c1fb13eb772424e664f8a057bacc957a7467f5ba1a76",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:34efa61b7ef0f4345db8be8be3d8b34b00b3a476259a33f52b9f79f5159fa817",
+    "pygobjectsdk": "org.gnome.PyGObject.Sdk:3.58.1@sha256:9c70f4269939a90022d83f59fdefddb171edd874e0bb81e057987fca19e56446",
     "cmake": "org.cmake.cmake:4.4.5@sha256:0d8b18ea81b08ab99795400ad9099d16060ee374907f08a2b6a15a4abf14d4ca"
   },
   "cleanup": [

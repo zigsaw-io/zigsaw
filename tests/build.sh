@@ -1491,7 +1491,11 @@ check "make.json builds GNU make's image" z build "$root\\recipes\\make.json"
 mkdir -p "$work\\make" && cp "$(cygpath -u "$root")"/tests/build/make/{Makefile,sub.mk,*.c} "$(cygpath -u "$work")/make/" &&
     sed -e "s/@MAKE@/$(manifest_of org.gnu.make)/" -e "s/@ZIG@/$zig_digest/" -e "s/@BUSYBOX@/$bb_digest/" \
         "$root\\tests\\build\\make\\make.json.in" >"$work\\make\\make.json"
-check "a GNU Makefile builds with make's, zig's and BusyBox's images" z build "$work\\make\\make.json"
+make_builds() {
+    z build "$work\\make\\make.json" >"$work\\make\\build.txt" 2>&1 || { tail -20 "$work\\make\\build.txt"; return 1; }
+    ! grep -q "which here is BusyBox's" "$work\\make\\build.txt" || { echo "a note about BusyBox's make, with GNU make's"; return 1; }
+}
+check "a GNU Makefile builds with make's, zig's and BusyBox's images, with no note" make_builds
 make_runs() {
     local out dir="$ZIGSAW_HOME\\deploy\\$(own_layer $MAKEAPP)"
     out=$(z run $MAKEAPP | tr -d '\r')
@@ -1503,6 +1507,29 @@ shell works
 the sub-make ran" ] || { echo "got: $out"; return 1; }
 }
 check "it runs, and the recipes ran in sh" make_runs
+# GNU make by default: an SDK that brings it as a runtime (as GTK's does)
+# gives it to the recipes that list only the SDK; BusyBox's make alone is
+# noted.
+mkdir -p "$work\\make-sdk" && cp "$(cygpath -u "$root")"/tests/build/make-sdk/README "$(cygpath -u "$work")/make-sdk/" &&
+    sed -e "s/@MAKE@/$(manifest_of org.gnu.make)/" -e "s/@BUSYBOX@/$bb_digest/" \
+        "$root\\tests\\build\\make-sdk\\sdk.json.in" >"$work\\make-sdk\\sdk.json" &&
+    sed -e "s/@BUSYBOX@/$bb_digest/" "$root\\tests\\build\\make-sdk\\plain.json.in" >"$work\\make-sdk\\plain.json"
+check "an SDK with GNU make as a runtime builds" z build "$work\\make-sdk\\sdk.json"
+sed -e "s/@SDK@/$(manifest_of test.build.makesdk)/" "$root\\tests\\build\\make-sdk\\user.json.in" >"$work\\make-sdk\\user.json"
+make_from_sdk() {
+    local out
+    z build "$work\\make-sdk\\user.json" >"$work\\make-sdk\\user.txt" 2>&1 || { tail -20 "$work\\make-sdk\\user.txt"; return 1; }
+    ! grep -q "which here is BusyBox's" "$work\\make-sdk\\user.txt" || { echo "a note about BusyBox's make"; return 1; }
+    out=$(cat "$ZIGSAW_HOME\\deploy\\$(own_layer test.build.makeuser)\\made.txt" | tr -d '\r')
+    [ "$out" = "one.o by 4.4.1
+GNU Make 4.4.1" ] || { echo "got: $out"; return 1; }
+}
+check "a recipe that lists only that SDK gets GNU make as make" make_from_sdk
+make_noted() {
+    z build --rebuild "$work\\make-sdk\\plain.json" >"$work\\make-sdk\\plain.txt" 2>&1 || { tail -20 "$work\\make-sdk\\plain.txt"; return 1; }
+    grep -q "note: module plain runs make, which here is BusyBox's" "$work\\make-sdk\\plain.txt" || { cat "$work\\make-sdk\\plain.txt"; return 1; }
+}
+check "BusyBox's make alone builds, with a note saying so" make_noted
 fi
 
 # --- MSVC, if Visual Studio is installed ----------------------------------------------

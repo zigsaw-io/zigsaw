@@ -639,7 +639,11 @@ const BuildRoot = struct {
         // Of two tools with an alias of the same name, the first's wins, as
         // on PATH.
         const resolved = try aliases.resolve(ctx, providers.items, .fail);
-        const bin = try std.fs.path.join(arena, &.{ path, "bin" });
+        if (aliases.find(resolved, "make") == null) for (r.modules) |m| if (m.shell == .sh and runsMake(m)) {
+            note("note: module {s} runs make, which here is BusyBox's: one job at a time (-j does nothing), and no pattern rules or $(shell); for GNU make, add org.gnu.make to \"sdk\"", .{m.name});
+            break;
+        };
+        const bin =try std.fs.path.join(arena, &.{ path, "bin" });
         // In a kept root, a shim that's as it was is left as it is, with
         // its time: build tools note the programs they found, and Meson's
         // build files are out of date once `strip` is newer than them.
@@ -1052,7 +1056,10 @@ const BuildRoot = struct {
         switch (m.shell) {
             .cmd => return .{ .exe = try std.fmt.allocPrint(arena, "{s}\\System32\\cmd.exe", .{system_root}), .kind = .cmd },
             .sh => {
-                for ([_]struct { []const u8, Shell.Kind }{ .{ "sh.exe", .sh }, .{ "busybox.exe", .busybox } }) |candidate| {
+                // BusyBox's own first: GNU make's image has an sh.exe that
+                // starts it (for make's recipe lines), and between zigsaw and
+                // every command it would only add a process.
+                for ([_]struct { []const u8, Shell.Kind }{ .{ "busybox.exe", .busybox }, .{ "sh.exe", .sh } }) |candidate| {
                     for (b.path_dirs) |dir| {
                         const exe = try std.fs.path.join(arena, &.{ dir, candidate[0] });
                         if (try Store.exists(ctx.io, exe)) return .{ .exe = exe, .kind = candidate[1] };
@@ -1311,6 +1318,37 @@ fn unpackSources(ctx: *Context, m: recipe.Module, recipe_path: []const u8, proje
 fn containsIgnoreCase(names: []const []const u8, name: []const u8) bool {
     for (names) |n| if (std.ascii.eqlIgnoreCase(n, name)) return true;
     return false;
+}
+
+/// Whether a module's commands (or its vendor step's) run `make`, as a word
+/// of the shell's: after the start or a blank, `;`, `&`, `|` or `(`, and
+/// before the end or one of those or `)`. `cmake`, `automake`, `makeinfo`
+/// and `s/make/` aren't make. A guess from the text, for a note.
+fn runsMake(m: recipe.Module) bool {
+    for (m.build) |c| if (namesMake(c)) return true;
+    if (m.vendor) |v| for (v.commands) |c| if (namesMake(c)) return true;
+    return false;
+}
+
+fn namesMake(command: []const u8) bool {
+    const word = "make";
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, command, at, word)) |i| : (at = i + 1) {
+        const before_ok = i == 0 or std.mem.indexOfScalar(u8, " \t\n;&|(", command[i - 1]) != null;
+        const end = i + word.len;
+        const after_ok = end == command.len or std.mem.indexOfScalar(u8, " \t\n;&|)", command[end]) != null;
+        if (before_ok and after_ok) return true;
+    }
+    return false;
+}
+
+test "runsMake: make as a command, not inside another word" {
+    for ([_][]const u8{ "make", "make -C x", "x && make install", "(cd a; make)", "make\nmake install", "a|make" }) |c|
+        try std.testing.expect(namesMake(c));
+    for ([_][]const u8{ "cmake --build out", "automake", "makeinfo x", "make-foo", "sed s/make/x/", "gmake", "$(MAKE) all", "pmake.sh", "" }) |c|
+        try std.testing.expect(!namesMake(c));
+    try std.testing.expect(runsMake(.{ .name = "m", .build = &.{ "sh ./configure", "make -j4" } }));
+    try std.testing.expect(!runsMake(.{ .name = "m", .build = &.{"cmake --build out"} }));
 }
 
 const Shell = struct {

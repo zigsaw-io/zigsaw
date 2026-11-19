@@ -17,16 +17,11 @@
   },
   "sdk": {
     "llvm": "com.github.mstorsjo.llvm-mingw:20261104@sha256:7af21d46909fd905b0d054c92d6ddd82a7909b27cc1240f7dc1f1a4d90841bf7",
+    "make": "org.gnu.make:4.4.1@sha256:9add04a45e601e7e5b8e0127184c2faead3783527f4dbbdb3a46ca1118fa9da7",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "cleanup": ["/share/doc/gettext/examples", "/share/info", "/share/gettext/archive.dir.tar.gz", "/share/gettext/javaversion.class", "*.la"],
   "modules": [
-    {
-      "name": "pmake",
-      "build": [
-        "printf '%s\\n' '# $(MAKE) for the modules below: BusyBox make runs one command at a time (no -j). In a' '# directory at all-am, once its BUILT_SOURCES (gnulib headers) are made, or at an all that' '# is all-am alone, the compiles make would run first run $(nproc) at a time, after the' '# .dirstamp files that objects in subdirectories depend on (made later, they are newer).' 'case ${MAKEFLAGS%% *} in -*n*) exec make \"$@\" ;; esac' 'case \" $* \" in' '*\" all-am \"*) ;;' '*\" all \"*) grep -qx \"all: all-am\" Makefile || exec make \"$@\" ;;' '*) exec make \"$@\" ;;' 'esac' 'n=$(make -n \"$@\")' 'printf \"%s\\n\" \"$n\" | grep -o \"[^ >]*/[.]dirstamp\" | sort -u | while read -r f; do mkdir -p \"${f%/*}\" && : >>\"$f\"; done' 'printf \"%s\\n\" \"$n\" | grep -e \" -c -o \" | tr \"\\n\" \"\\0\" | xargs -0 -r -P \"$(nproc)\" -n 1 sh -c || :' 'exec make \"$@\"' > pmake.sh"
-      ]
-    },
     {
       "name": "libiconv",
       "env": { "SED": "sed", "GREP": "grep", "EGREP": "grep -E", "FGREP": "grep -F", "EGREP_TRADITIONAL": "grep -E", "AWK": "awk", "AR": "ar", "RANLIB": "ranlib", "RM": "rm -f", "CFLAGS": "-O2", "WINDRES": "windres" },
@@ -41,7 +36,7 @@
       "build": [
         "sh zigsaw/mtimes.sh",
         "sh ./configure --disable-dependency-tracking --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-nls lt_cv_deplibs_check_method=pass_all gl_cv_cc_visibility=no > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
-        "make MAKE=\"sh B:/src/pmake/pmake.sh\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",
+        "make -j\"$(nproc)\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",
         "make install > install.log 2>&1 || { tail -60 install.log; exit 1; }"
       ]
     },
@@ -59,7 +54,7 @@
       "build": [
         "sh zigsaw/mtimes.sh",
         "sh ./configure -C --disable-dependency-tracking --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --enable-relocatable --disable-java --disable-csharp --disable-openmp --disable-curses --disable-libasprintf --without-emacs --without-git --without-cvs --without-bzip2 --without-xz --enable-threads=windows --with-libiconv-prefix=B:/prefix lt_cv_deplibs_check_method=pass_all gl_cv_cc_visibility=no > configure.log 2>&1 || { tail -40 configure.log; for f in config.log */config.log; do echo \"== $f\"; tail -60 $f; done; exit 1; }",
-        "make MAKE=\"sh B:/src/pmake/pmake.sh\" MAKEINFO=true HELP2MAN=true > make.log 2>&1 || { tail -80 make.log; exit 1; }",
+        "make -j\"$(nproc)\" MAKEINFO=true HELP2MAN=true > make.log 2>&1 || { tail -80 make.log; exit 1; }",
         "make install INSTALL=\"install -c\" MAKEINFO=true HELP2MAN=true > install.log 2>&1 || { tail -60 install.log; exit 1; }"
       ]
     }

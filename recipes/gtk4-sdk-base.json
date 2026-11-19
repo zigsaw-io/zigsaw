@@ -123,7 +123,7 @@
     },
     {
       "name": "gettext",
-      "sources": [{ "image": "org.gnu.gettext:1.0@sha256:c66da37d250322f977bfbd290bfe5c26c339367dcc3d94a3791e993713c938bb" }]
+      "sources": [{ "image": "org.gnu.gettext:1.0@sha256:9eb87582fe33a001b0afb233b4f84c34362109b884ecfe71d3b6d1e626403ecf" }]
     },
     {
       "name": "glib",

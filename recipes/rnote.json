@@ -21,11 +21,11 @@
     ".xopp": { "command": "rnote", "description": "Xournal++ document" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:02b9871c241590b8f970e921a820999c37f4114421a0f43e1111e33349b23c8e"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:4ac2ac501d9a3c1ff3288d3a29d000caeb1659931d7e74c68b2f87aa438514eb"
   },
   "sdk": {
     "rust": "org.rust-lang.rust:1.99.1@sha256:3bd7b93d9579ed8de3aefb358a3da033dc0caf3a5b67f176f79c15f970782e09",
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:fcb101c71406354cbabb72722d713fd0c38e73cce4d71cfdcc60d869c29640db"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:34efa61b7ef0f4345db8be8be3d8b34b00b3a476259a33f52b9f79f5159fa817"
   },
   "cleanup": [
     "/share/applications",

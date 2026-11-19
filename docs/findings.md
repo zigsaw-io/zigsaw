@@ -3194,6 +3194,47 @@ Windows 11 26300, in a store on an NTFS drive (D:). Compared with ghcr.io's imag
   denied in a container: `NUL`, the program's own path with its drive letter, its long
   name, the Mount Manager, the drive root.
 
+## GNU make in builds (iteration 104)
+
+gettext, GTK's SDK and Gnumeric moved from BusyBox's make, with its workarounds
+(gettext's `pmake.sh`, Gnumeric's `pdpmake.sh`, OpenSSL's `make -n | xargs -P`,
+intltool's suffix rule, enchant's sed), to GNU make 4.4.1 with `-j"$(nproc)"`. Built on
+this machine (Windows 11 26300, 16 logical CPUs, store on D:), then compared with
+ghcr.io.
+
+- **The same files.** Every image of the round has the layers it had on ghcr.io: gettext's,
+  Gnumeric's (translations included, 62 languages each for its two catalogs), and GTK's
+  SDK's own layer, OpenSSL, hunspell and enchant among it. The SDK's one new layer is
+  GNU make's image (`c399a41e`, 222 KB), now among its runtimes. The fourteen digests
+  change only because the configs pin new SDKs. Builds of the published recipes with GNU
+  make and with BusyBox's make and the workarounds made the same bytes.
+- **Times, against iterations 63 and 72** (the same machine):
+
+  | Image | Before | GNU make |
+  |---|---|---|
+  | gettext | 29 min | 25.7 min |
+  | GTK's SDK base (no make of its own; rebuilt for gettext) | 14 min | 15 min |
+  | GTK's SDK | 13 to 14 min | 14.9 min |
+  | Rnote | 13 to 13.5 min | 13.3 min |
+  | Gnumeric | 21 to 21.5 min | 13.4 min |
+
+  Gnumeric is the gain: its goffice, libgsf and Gnumeric compile in parallel now (its
+  `make` step 4 min 36 s). gettext's `make` step took 12 min 22 s, `pmake.sh`'s about 10:
+  `-j` works, but its SUBDIRS walk and libtool's links come one after another, and the
+  wrapper had compiled ahead across them. GTK's SDK spends its time in Meson modules and
+  librsvg's cargo (4.5 min); OpenSSL, the one long make build in it, was parallel already
+  with `xargs` (86 s now, 75 s before).
+- **`-j` and the jobserver work on Windows in a build.** A probe recipe of eight 2-second
+  jobs took 2 s with `make -j8`, and 3 s in a sub-make started with `$(MAKE)`.
+- **Release tarballs still need their times ordered.** Without
+  `autotools-mtimes.sh`, gettext's build ran `missing aclocal-1.18` from its
+  Makefile's `aclocal.m4` rule. zigsaw doesn't set unpacked files' times, so each has the
+  time it was written, in the archive's order, and some prerequisites are a second newer
+  than `aclocal.m4`; GNU make remakes such a target as BusyBox's does. The script stays.
+- **The shell order changes no image.** The builder runs commands with `busybox.exe`, found
+  before GNU make's `sh.exe` forwarder; pgvector and pg_cron, built through the
+  forwarder until now, rebuild to their published digests (`f511961e`, `5d080db7`).
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

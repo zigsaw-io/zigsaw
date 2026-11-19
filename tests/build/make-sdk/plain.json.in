@@ -1,0 +1,13 @@
+{
+  "id": "test.build.makeplain",
+  "version": "1",
+  "command": "made.txt",
+  "exports": {},
+  "sdk": { "busybox": "net.frippery.busybox@@BUSYBOX@" },
+  "modules": [
+    {
+      "name": "plain",
+      "build": ["printf 'all:\\n\\t@echo made\\n' >Makefile && make >\"$PREFIX/made.txt\""]
+    }
+  ]
+}

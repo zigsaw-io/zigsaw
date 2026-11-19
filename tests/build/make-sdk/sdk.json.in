@@ -1,0 +1,12 @@
+{
+  "id": "test.build.makesdk",
+  "version": "1",
+  "summary": "An SDK that brings GNU make as a runtime, as GTK's does: recipes that list it get GNU make as make",
+  "command": "${make}\\bin\\make.exe",
+  "runtimes": {
+    "make": "org.gnu.make@@MAKE@",
+    "busybox": "net.frippery.busybox@@BUSYBOX@"
+  },
+  "exports": {},
+  "modules": [{ "name": "readme", "sources": [{ "path": "README" }] }]
+}

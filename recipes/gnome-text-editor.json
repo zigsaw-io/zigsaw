@@ -21,10 +21,10 @@
     ".log": { "command": "gnome-text-editor", "description": "Log file", "icon": "share/icons/org.gnome.TextEditor.ico" }
   },
   "runtimes": {
-    "gtk": "org.gtk.Gtk4:4.24.1@sha256:02b9871c241590b8f970e921a820999c37f4114421a0f43e1111e33349b23c8e"
+    "gtk": "org.gtk.Gtk4:4.24.1@sha256:4ac2ac501d9a3c1ff3288d3a29d000caeb1659931d7e74c68b2f87aa438514eb"
   },
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:fcb101c71406354cbabb72722d713fd0c38e73cce4d71cfdcc60d869c29640db",
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:34efa61b7ef0f4345db8be8be3d8b34b00b3a476259a33f52b9f79f5159fa817",
     "cmake": "org.cmake.cmake:4.4.5@sha256:0d8b18ea81b08ab99795400ad9099d16060ee374907f08a2b6a15a4abf14d4ca"
   },
   "cleanup": [

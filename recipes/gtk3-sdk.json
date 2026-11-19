@@ -10,7 +10,7 @@
   "env": { "GI_GIR_PATH": "${app}\\share\\gir-1.0" },
   "exports": {},
   "sdk": {
-    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:fcb101c71406354cbabb72722d713fd0c38e73cce4d71cfdcc60d869c29640db"
+    "gtksdk": "org.gtk.Gtk4.Sdk:4.24.1@sha256:34efa61b7ef0f4345db8be8be3d8b34b00b3a476259a33f52b9f79f5159fa817"
   },
   "modules": [
     {
