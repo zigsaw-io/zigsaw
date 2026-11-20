@@ -795,13 +795,13 @@ fn swap(h: *Helper, arena: Allocator) !bool {
     // The layer's folder in lazy\ goes before the deployment is free, so
     // that a run finds nothing left to serve; its helper lock is beside it.
     Store.deleteTree(io, arena, try lazy.dirPath(store, arena, h.hex)) catch |err|
-        note("warning: couldn't delete the layer's folder in lazy\\ ({t}); `zigsaw prune` will retry", .{err});
+        note("warning: couldn't delete the layer's folder in lazy\\ ({t}); `zigsaw uninstall --unused` will retry", .{err});
     const work = std.fs.path.dirname(h.unpacked.?).?;
     Store.deleteTree(io, arena, work) catch {};
     if (h.unpacked_lock) |l| l.release(io);
     Io.Dir.cwd().deleteFile(io, try Store.lockPathFor(arena, work)) catch {};
     cloudfiles.unregister(arena, trash) catch {};
     Store.deleteTree(io, arena, trash) catch |err|
-        note("warning: couldn't delete the placeholders in {s} ({t}); `zigsaw prune` will retry", .{ trash, err });
+        note("warning: couldn't delete the placeholders in {s} ({t}); `zigsaw uninstall --unused` will retry", .{ trash, err });
     return true;
 }

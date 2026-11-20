@@ -615,7 +615,7 @@ shared() {
     grep -q "$layer" "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $DRAWIO | cut -d: -f2)" || { echo "draw.io's image hasn't the runtime's layer"; return 1; }
     grep -q "$layer" "$ZIGSAW_HOME\\blobs\\sha256\\$(manifest_of $HELLO | cut -d: -f2)" || { echo "the test app's image hasn't the runtime's layer"; return 1; }
     [ -f "$ZIGSAW_HOME\\deploy\\${layer#sha256:}\\electron.exe" ] || { echo "no deployment of the runtime's layer"; return 1; }
-    "$zigsaw" rm --delete-data $HELLO >/dev/null 2>&1 || { echo "rm failed"; return 1; }
+    "$zigsaw" uninstall --delete-data $HELLO >/dev/null 2>&1 || { echo "rm failed"; return 1; }
     [ -f "$ZIGSAW_HOME\\deploy\\${layer#sha256:}\\electron.exe" ] || { echo "rm took the runtime from draw.io"; return 1; }
     exports_png soft
 }
@@ -682,7 +682,7 @@ through_windows() {
     out=$(reg query "$key\\shell\\open\\command" 2>&1)
     grep -qF "$ZIGSAW_HOME\\open\\$CODIUM\\urls\\codium-url.exe" <<<"$out" || { echo "the run rewrote it: $out"; result=1; }
     # Whatever came of that, the real registry goes back as it was.
-    ZIGSAW_CLASSES_KEY='Software\Classes' "$zigsaw" rm "$CODIUM" >/dev/null 2>&1 || { echo "rm failed"; result=1; }
+    ZIGSAW_CLASSES_KEY='Software\Classes' "$zigsaw" uninstall "$CODIUM" >/dev/null 2>&1 || { echo "rm failed"; result=1; }
     ! reg query "$key" >/dev/null 2>&1 || { echo "rm left it"; result=1; }
     "$zigsaw" build "$root\\recipes\\vscodium.json" >"$work\\build.log" 2>&1
     return $result
@@ -695,9 +695,9 @@ fi
 
 cd "$root" || exit 1
 acprobe_rm "$zigsaw"
-for id in "${installed[@]}"; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
-"$zigsaw" rm --delete-data test.reach.tool >/dev/null 2>&1
-"$zigsaw" rm --delete-data $HELLO >/dev/null 2>&1
+for id in "${installed[@]}"; do "$zigsaw" uninstall --delete-data "$id" >/dev/null 2>&1; done
+"$zigsaw" uninstall --delete-data test.reach.tool >/dev/null 2>&1
+"$zigsaw" uninstall --delete-data $HELLO >/dev/null 2>&1
 $had_chromium_key || reg delete 'HKCU\Software\Chromium' /f >/dev/null 2>&1
 for d in "${absent_before[@]}"; do rm -rf "$d"; done
 reg delete "HKCU\\$classes" /f >/dev/null 2>&1

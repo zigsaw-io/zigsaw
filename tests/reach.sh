@@ -340,7 +340,7 @@ narrowed() {
 check "an update takes back what it no longer declares, and only that" narrowed
 removed() {
     local out
-    out=$("$zigsaw" rm "$URL" 2>&1)
+    out=$("$zigsaw" uninstall "$URL" 2>&1)
     has "$out" "no longer opens reachtest68:" || return 1
     ! reg_has reachtest68 || { echo "the scheme stays"; return 1; }
     ! reg_has "$prog" || { echo "the app's key stays"; return 1; }
@@ -354,7 +354,7 @@ not_default() {
     local out
     out=$(ZIGSAW_CLASSES_KEY='' "$zigsaw" build "$root\\tests\\reach\\url2.json" 2>&1)
     has "$out" "opens    nothing: only the default store" || return 1
-    ZIGSAW_CLASSES_KEY='' "$zigsaw" rm "$URL" >/dev/null 2>&1
+    ZIGSAW_CLASSES_KEY='' "$zigsaw" uninstall "$URL" >/dev/null 2>&1
 }
 check "a store other than the default one registers nothing" not_default
 
@@ -383,7 +383,7 @@ injected() {
 }
 check "a quote in a link doesn't give the app another argument" injected
 real_removed() {
-    ZIGSAW_CLASSES_KEY='Software\Classes' "$zigsaw" rm --delete-data "$REAL" >/dev/null 2>&1 || return 1
+    ZIGSAW_CLASSES_KEY='Software\Classes' "$zigsaw" uninstall --delete-data "$REAL" >/dev/null 2>&1 || return 1
     ! reg query "$real_key" >/dev/null 2>&1 || { echo "the scheme stays"; return 1; }
     ! reg query "$registered_key" /v "Zigsaw.$REAL" >/dev/null 2>&1 || { echo "still on Windows' list"; return 1; }
     ! reg query 'HKCU\Software\Zigsaw' >/dev/null 2>&1 || { echo "HKCU\\Software\\Zigsaw stays"; return 1; }

@@ -207,10 +207,10 @@ check "the same recipe builds the same image" same_image "$work\\app.json" "$app
 check "--sandbox=appcontainer runs it from the runtime" sh -c "\"\$0\" run --sandbox=appcontainer $APP y | grep -q '^args: y'" "$zigsaw"
 
 removed_runtime_app() {
-    z rm $BB >/dev/null 2>&1 && z prune >/dev/null 2>&1 && runs && expect_count deployments 2
+    z uninstall $BB >/dev/null 2>&1 && z uninstall --unused >/dev/null 2>&1 && runs && expect_count deployments 2
 }
 check "removing the runtime's app leaves the app working, and prune keeps the layer" removed_runtime_app
-check "prune keeps the runtime's image for builds" sh -c "\"\$0\" prune --dry-run 2>&1 | grep -q 'kept 1 image(s) that builds use'" "$zigsaw"
+check "prune keeps the runtime's image for builds" sh -c "\"\$0\" uninstall --unused --dry-run 2>&1 | grep -q 'kept 1 image(s) that builds use'" "$zigsaw"
 check "rebuilding uses the kept image" same_image "$work\\app.json" "$app_digest"
 
 app_recipe "$BB" >"$work\\unpinned.json"
@@ -360,7 +360,7 @@ sandboxed_ext() {
     done
 }
 check "the low and appcontainer sandboxes can read an extension's files" sandboxed_ext
-removed_ext() { z rm test.ext.a >/dev/null 2>&1 && expect_dirs "$xc;$xb;$(dir_of $XRT)\\base" $XRT; }
+removed_ext() { z uninstall test.ext.a >/dev/null 2>&1 && expect_dirs "$xc;$xb;$(dir_of $XRT)\\base" $XRT; }
 check "an extension removed doesn't join any more" removed_ext
 printf '{ "id": "test.ext.bad", "version": "1", "command": "marker.txt", "exports": {}, "extends": { "point": "%s", "version": "1" }, "runtimes": { "rt": "%s@%s" },\n  "modules": [{ "name": "m", "sources": [{ "path": "marker-a.txt", "dest": "marker.txt" }] }] }\n' $XRT $XRT "$xrt_digest" >"$work\\ext\\bad.json"
 check "an extension with runtimes is refused" sh -c "\"\$0\" build '$work\\ext\\bad.json' 2>&1 | grep -q 'an extension can.t have runtimes'" "$zigsaw"
@@ -438,12 +438,12 @@ no_aliases_left() {
 check "a version without aliases leaves no alias shims after its run" no_aliases_left
 rm_aliases() {
     z build "$work\\alias\\app.json" >/dev/null 2>&1 && z run $AAPP -c true && [ -e "$ZIGSAW_HOME\\aliases\\$AAPP\\greet.exe" ] &&
-        z rm $AAPP >/dev/null 2>&1 && [ ! -e "$ZIGSAW_HOME\\aliases\\$AAPP" ]
+        z uninstall $AAPP >/dev/null 2>&1 && [ ! -e "$ZIGSAW_HOME\\aliases\\$AAPP" ]
 }
 check "rm removes the app's alias shims" rm_aliases
 prune_aliases() {
     mkdir -p "$ZIGSAW_HOME\\aliases\\test.gone" && echo x >"$ZIGSAW_HOME\\aliases\\test.gone\\x.shim" &&
-        z prune >/dev/null 2>&1 && [ ! -e "$ZIGSAW_HOME\\aliases\\test.gone" ]
+        z uninstall --unused >/dev/null 2>&1 && [ ! -e "$ZIGSAW_HOME\\aliases\\test.gone" ]
 }
 check "prune removes alias shims of apps that aren't installed" prune_aliases
 
@@ -624,7 +624,7 @@ inc_module_changed() { echo a3 >"$inc\\a.in" && sed -i 's/"make", /"make", "true
 check "the module's commands changed: it starts afresh" inc_module_changed
 inc_untouched() { [ "$(cd "$(cygpath -u "$inc")" && find . | LC_ALL=C sort | grep -v -e '^\./c\.in$')" = "$(grep -v -e '^\./c\.in$' <<<"$inc_before")" ]; }
 check "the project's directory has no build output" inc_untouched
-inc_prune_note() { z prune --dry-run 2>&1 | grep -q 'kept the builds of [0-9]* recipe(s)'; }
+inc_prune_note() { z uninstall --unused --dry-run 2>&1 | grep -q 'kept the builds of [0-9]* recipe(s)'; }
 check "prune keeps kept builds, unless --downloads" inc_prune_note
 fi
 
@@ -1089,7 +1089,7 @@ aliased() {
     [ "$got" = "hello from an alias: a  b c" ] || { echo "greet said: $got"; return 1; }
 }
 check "a tool's alias runs its command with its arguments, then the caller's" aliased
-check "prune keeps tools' caches, and says so" sh -c "\"\$0\" prune --dry-run 2>&1 | grep -q 'kept the caches of 2 build tool(s)'" "$zigsaw"
+check "prune keeps tools' caches, and says so" sh -c "\"\$0\" uninstall --unused --dry-run 2>&1 | grep -q 'kept the caches of 2 build tool(s)'" "$zigsaw"
 
 # Builds are reused when nothing they depend on changed.
 reused() {
@@ -1126,8 +1126,8 @@ other_build() {
         [ "$(zo build "$work\\c\\hello.json" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2)" = "$hello_digest" ]
 }
 check "the same recipe builds the same image in another store, at another path" other_build
-for id in $HELLO org.ziglang.zig $BB; do zo rm --delete-data $id >/dev/null 2>&1; done
-zo prune --downloads >/dev/null 2>&1
+for id in $HELLO org.ziglang.zig $BB; do zo uninstall --delete-data $id >/dev/null 2>&1; done
+zo uninstall --unused --downloads >/dev/null 2>&1
 rm -rf "$(dirname "$other_store")"
 
 sh_recipe test.build.broken '"true", "exit 3", "echo never"' >"$work\\broken.json"
@@ -1142,7 +1142,7 @@ kept() {
     local dir
     dir=$(z build --keep-build-dir "$work\\broken.json" 2>&1 | grep -o 'kept the build directory: .*' | cut -d' ' -f5-)
     [ -n "$dir" ] && [ -d "$dir\\src\\m" ] && [ -d "$dir\\prefix" ] && drive_free &&
-        z prune >/dev/null 2>&1 && [ ! -e "$dir" ]
+        z uninstall --unused >/dev/null 2>&1 && [ ! -e "$dir" ]
 }
 check "--keep-build-dir keeps the build root, until prune" kept
 
@@ -1934,9 +1934,9 @@ fi
 # Removing the apps also deletes their AppContainer profiles. The images
 # builds use stay until prune --downloads, and only zigsaw can delete their
 # protected deployments. Every installed app has refs\<id>.json.
-for id in $(ls "$ZIGSAW_HOME\\refs" | sed 's/\.json$//'); do z rm --delete-data "$id" >/dev/null 2>&1; done
+for id in $(ls "$ZIGSAW_HOME\\refs" | sed 's/\.json$//'); do z uninstall --delete-data "$id" >/dev/null 2>&1; done
 check "every app is removed" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\refs')\" ]"
-z prune --downloads --volumes >/dev/null 2>&1
+z uninstall --unused --downloads --volumes >/dev/null 2>&1
 check "prune --downloads deletes tools' caches" sh -c "[ -z \"\$(ls '$ZIGSAW_HOME\\cache\\tools')\" ]"
 cd / && rm -rf "$ZIGSAW_HOME" "$work"
 check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"

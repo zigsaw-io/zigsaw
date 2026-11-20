@@ -1,5 +1,6 @@
-//! The catalog of the apps a registry has, so that they can be found:
-//! `zigsaw search` reads it, and `zigsaw push --catalog` makes it, from the
+//! The catalog of the apps a remote has, so that they can be found:
+//! `zigsaw search` and `zigsaw remote-ls` read it, each remote's, and
+//! `zigsaw build-update-repo` makes it, from the
 //! images the registry has, as their configs describe them (name, summary,
 //! commands, shortcuts, the kinds of file they open, permissions).
 //!
@@ -17,6 +18,7 @@ const Registry = @import("Registry.zig");
 const Store = @import("Store.zig");
 const oci = @import("oci.zig");
 const remote = @import("remote.zig");
+const remotes = @import("remotes.zig");
 const repeat = @import("testing.zig").repeat;
 const fail = Context.fail;
 const note = Context.note;
@@ -93,8 +95,9 @@ pub const Entry = struct {
 // ---------------------------------------------------------------------------
 // Making it
 
-/// `zigsaw push --catalog`: makes the default registry's catalog list the
-/// apps `ids` names, as the registry has them at their "latest" tag.
+/// `zigsaw build-update-repo`: makes the catalog of the first remote, or the
+/// one the command names, list the apps `ids` names, as it has them at their
+/// "latest" tag.
 pub fn push(ctx: *Context, ids: []const []const u8) !void {
     const arena = ctx.arena;
     var entries: std.ArrayList(Entry) = .empty;
@@ -141,12 +144,12 @@ pub const Loaded = struct {
     source: []const u8,
 };
 
-/// The default registry's catalog: the registry's, or the copy kept from it
-/// if the registry has the same one, or can't be reached.
-pub fn load(ctx: *Context) !Loaded {
+/// A remote's catalog: the registry's, or the copy kept from it if the
+/// registry has the same one, or can't be reached.
+pub fn load(ctx: *Context, url: []const u8) !Loaded {
     const io = ctx.io;
     const arena = ctx.arena;
-    const target = try remote.resolve(ctx, name ++ ":latest");
+    const target = try remote.resolveAt(ctx, url, name ++ ":latest");
     const cache_dir = try ctx.store.path(arena, &.{ "cache", "catalog" });
     try Io.Dir.cwd().createDirPath(io, cache_dir);
     const base = try std.fs.path.join(arena, &.{ cache_dir, try fileName(arena, target.text) });
@@ -174,7 +177,7 @@ fn fetch(ctx: *Context, target: remote.Target, cached_digest: ?[]const u8, cache
     try registry.init(ctx, target.ref, "pull");
     defer registry.deinit();
     const fetched = registry.fetchManifest() catch |err| {
-        note("{s} has no catalog of its apps, or it can't be read; `zigsaw push --catalog` makes one", .{registryOf(target)});
+        note("{s} has no catalog of its apps, or it can't be read; `zigsaw build-update-repo` makes one", .{registryOf(target)});
         return err;
     };
     const manifest = try remote.parseManifest(arena, target.ref, fetched.bytes);
@@ -238,37 +241,64 @@ fn writeFile(io: Io, p: []const u8, bytes: []const u8) !void {
 // Searching it
 
 /// `zigsaw search`: the apps every word is in (ignoring case), in their id,
-/// name, summary, commands, shortcuts or kinds of file; all of them without
-/// words. Returns 1 if none is.
-pub fn search(ctx: *Context, words: []const []const u8) !u32 {
+/// name, summary, commands, shortcuts or kinds of file, in every remote's
+/// catalog; all of them without words. `zigsaw remote-ls`: all of one
+/// remote's, or every remote's. Returns 1 if none is.
+pub fn search(ctx: *Context, words: []const []const u8, only: ?remotes.Remote) !u32 {
     const arena = ctx.arena;
-    const loaded = try load(ctx);
-    const Match = struct { entry: Entry, rank: u8 };
+    const all = if (only) |r| try arena.dupe(remotes.Remote, &.{r}) else try remotes.all(ctx);
+    if (all.len == 0) return fail("there's no remote to look in: `zigsaw remote-add <name> <registry>/<path>` adds one", .{});
+    const Match = struct { entry: Entry, rank: u8, remote: []const u8 };
     var matches: std.ArrayList(Match) = .empty;
-    for (loaded.catalog.apps) |e| if (try rankOf(arena, e, words)) |rank| try matches.append(arena, .{ .entry = e, .rank = rank });
+    var read: usize = 0;
+    for (all) |r| {
+        // One remote without a catalog leaves the others to look in.
+        const loaded = load(ctx, r.url) catch |err| switch (err) {
+            error.Failed => if (all.len > 1) continue else return err,
+            else => |e| return e,
+        };
+        read += 1;
+        for (loaded.catalog.apps) |e| if (try rankOf(arena, e, words)) |rank| try matches.append(arena, .{ .entry = e, .rank = rank, .remote = r.name });
+    }
+    if (read == 0) return fail("no remote's catalog could be read", .{});
     if (matches.items.len == 0) {
-        note("no app in {s}'s catalog matches {s}", .{ loaded.catalog.registry, try std.mem.join(arena, " ", words) });
+        const where = if (all.len == 1) try std.fmt.allocPrint(arena, "{s}'s catalog", .{all[0].name}) else "any remote's catalog";
+        if (words.len == 0) note("no app in {s}", .{where}) else note("no app in {s} matches {s}", .{ where, try std.mem.join(arena, " ", words) });
         return 1;
     }
     std.mem.sort(Match, matches.items, {}, struct {
         fn lessThan(_: void, a: Match, b: Match) bool {
             if (a.rank != b.rank) return a.rank < b.rank;
-            return std.ascii.lessThanIgnoreCase(a.entry.id, b.entry.id);
+            const order = std.ascii.orderIgnoreCase(a.entry.id, b.entry.id);
+            if (order != .eq) return order == .lt;
+            return std.mem.lessThan(u8, a.remote, b.remote);
         }
     }.lessThan);
 
+    // Which remote each is in, when there's more than one to say.
+    const by_remote = all.len > 1;
     var id_width: usize = "ID".len;
     var version_width: usize = "VERSION".len;
+    var remote_width: usize = "REMOTE".len;
     for (matches.items) |m| {
         id_width = @max(id_width, m.entry.id.len);
         version_width = @max(version_width, m.entry.version.len);
+        remote_width = @max(remote_width, m.remote.len);
     }
     var buf: [4096]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;
-    try w.print("{s} {s} DESCRIPTION\n", .{ try pad(arena, "ID", id_width), try pad(arena, "VERSION", version_width) });
-    for (matches.items) |m|
-        try w.print("{s} {s} {s}\n", .{ try pad(arena, m.entry.id, id_width), try pad(arena, m.entry.version, version_width), try m.entry.describe(arena) });
+    try w.print("{s} {s} {s}DESCRIPTION\n", .{
+        try pad(arena, "ID", id_width),
+        try pad(arena, "VERSION", version_width),
+        if (by_remote) try std.fmt.allocPrint(arena, "{s} ", .{try pad(arena, "REMOTE", remote_width)}) else "",
+    });
+    for (matches.items) |m| try w.print("{s} {s} {s}{s}\n", .{
+        try pad(arena, m.entry.id, id_width),
+        try pad(arena, m.entry.version, version_width),
+        if (by_remote) try std.fmt.allocPrint(arena, "{s} ", .{try pad(arena, m.remote, remote_width)}) else "",
+        try m.entry.describe(arena),
+    });
     try w.flush();
     return 0;
 }

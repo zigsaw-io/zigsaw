@@ -1,10 +1,11 @@
-//! `zigsaw pull` and `zigsaw push`: installing apps from OCI registries and
-//! publishing them there. An image's manifest travels byte for byte, so its
-//! digest is the same everywhere.
+//! `zigsaw install` and `zigsaw build-export`: installing apps from OCI
+//! registries and publishing them there. An image's manifest travels byte for
+//! byte, so its digest is the same everywhere.
 //!
 //! An image can be named in full, `<registry>/<repository>[:tag][@digest]`,
 //! or by app id alone, `<app-id>[:tag][@digest]`, for the image of that app in
-//! the default registry: `org.nodejs.node` is ghcr.io/zigsaw-io/org.nodejs.node.
+//! a remote (see remotes.zig): the one the command names, or else the first.
+//! `org.nodejs.node` is ghcr.io/zigsaw-io/org.nodejs.node in `zigsaw`.
 //! A name may stand for a multi-platform index: then it's the index's image
 //! for Windows on x64 (see `resolveImage`).
 
@@ -21,6 +22,7 @@ const install = @import("install.zig");
 const lazy = @import("lazy.zig");
 const oci = @import("oci.zig");
 const prompt = @import("prompt.zig");
+const remotes = @import("remotes.zig");
 const repeat = @import("testing.zig").repeat;
 const signature = @import("signature.zig");
 const sigstore = @import("sigstore.zig");
@@ -28,8 +30,9 @@ const trust = @import("trust.zig");
 const fail = Context.fail;
 const note = Context.note;
 
-/// Where images named by app id live, unless ZIGSAW_REGISTRY says otherwise.
+/// Where the remote `zigsaw` is, which a store has until told otherwise.
 pub const default_registry = "ghcr.io/zigsaw-io";
+/// Where the first remote is instead, for CI and tests.
 pub const registry_var = "ZIGSAW_REGISTRY";
 
 /// An image as the user named it, resolved to a full reference.
@@ -42,12 +45,20 @@ pub const Target = struct {
 };
 
 pub fn resolve(ctx: *Context, text: []const u8) !Target {
-    const registry = ctx.env.get(registry_var) orelse default_registry;
+    // A full reference needs no remote.
+    if (std.mem.indexOfScalar(u8, text, '/') != null) return resolveAt(ctx, "", text);
+    const registry = try remotes.defaultUrl(ctx) orelse
+        return fail("no remote to find {s} in: `zigsaw remote-add <name> <registry>/<path>` adds one", .{text});
+    return resolveAt(ctx, registry, text);
+}
+
+/// As `resolve`, with an app named by id alone at `registry`.
+pub fn resolveAt(ctx: *Context, registry: []const u8, text: []const u8) !Target {
     const short = expandShort(ctx.arena, registry, text) catch
         return fail("\"{s}\" isn't an app id, or an image reference like ghcr.io/owner/app:tag", .{text});
     const full = if (short) |s| s.text else text;
     const ref = Registry.Reference.parse(full) catch return if (short != null)
-        fail("{s} (from {s}) isn't a valid image reference; check {s}", .{ full, text, registry_var })
+        fail("{s} (from {s}) isn't a valid image reference; check the remote's location (`zigsaw remotes`)", .{ full, text })
     else
         fail("\"{s}\" isn't an image reference like ghcr.io/owner/app:tag or localhost:5000/app@sha256:...", .{text});
     return .{ .text = full, .ref = ref, .app_id = if (short) |s| s.app_id else null };
@@ -95,7 +106,7 @@ pub const Consent = enum {
     given,
 };
 
-/// Downloads an image into the store, ready to install. `zigsaw pull` is this
+/// Downloads an image into the store, ready to install. `zigsaw install` is this
 /// followed by `install.install`.
 pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?install.Image {
     const arena = ctx.arena;
@@ -114,7 +125,7 @@ pub fn fetch(ctx: *Context, image_text: []const u8, opts: FetchOptions) !?instal
     // Before anything of the image is downloaded. A build's images aren't checked:
     // its recipe pins them by digest, which says exactly what they are.
     if (opts.consent != .not_asked) switch (try checkSignature(ctx, &registry, ref, fetched.index, fetched.digest)) {
-        .no_key => note("{f}: no key here for its registry, so its signature wasn't checked (`zigsaw trust add` gives one)", .{ref}),
+        .no_key => note("{f}: no key here for its registry, so its signature wasn't checked (`zigsaw remote-modify --sign-key=<file> <remote>` gives one)", .{ref}),
         .signed => |by| note("{f}: signed, by {s}", .{ ref, by }),
         .missing => note("warning: {f} isn't signed, though zigsaw knows whose signature counts for it. Whoever made it isn't known; in a later release, this will be refused", .{ref}),
         .wrong => |why| return fail("{f}: {s}. Nothing was installed", .{ ref, why }),
@@ -355,7 +366,7 @@ pub fn pushSignature(ctx: *Context, image_text: []const u8, payload: []const u8,
 fn payloadFor(ctx: *Context, target: Target, payload: []const u8) !signature.Payload {
     const named = signature.parsePayload(ctx.arena, payload) catch |err| switch (err) {
         error.OutOfMemory => |e| return e,
-        error.NotAPayload => return fail("that isn't what `zigsaw signature payload` prints", .{}),
+        error.NotAPayload => return fail("that isn't what `zigsaw build-sign --print-payload` prints", .{}),
     };
     const repository = try std.fmt.allocPrint(ctx.arena, "{s}/{s}", .{ target.ref.host, target.ref.repository });
     if (!std.ascii.eqlIgnoreCase(named.repository, repository))
@@ -391,10 +402,10 @@ pub fn pushBundle(ctx: *Context, image_text: []const u8, payload_text: []const u
     const repository = try std.fmt.allocPrint(arena, "{s}/{s}", .{ target.ref.host, target.ref.repository });
     // Pull checks a signature of exactly this, so that's what must have been signed.
     if (!std.mem.eql(u8, payload, try signature.makePayload(arena, repository, named.digest)))
-        return fail("that isn't what `zigsaw signature payload` prints for {s}", .{repository});
+        return fail("that isn't what `zigsaw build-sign --print-payload` prints for {s}", .{repository});
 
     const roots = try sigstore.trustRoots(arena);
-    var why: []const u8 = "nobody's keyless signature counts for it (`zigsaw trust add --keyless` gives one)";
+    var why: []const u8 = "nobody's keyless signature counts for it (`zigsaw remote-modify --keyless=<identity> <remote>` gives one)";
     const by = for (try trust.forImage(ctx, repository)) |signer| switch (signer) {
         .key => {},
         .keyless => |identity| switch (try sigstore.verify(arena, roots, bundle, payload, identity)) {
@@ -516,6 +527,7 @@ pub fn agreeTo(ctx: *Context, manifest: oci.Manifest, cfg: oci.AppConfig, instal
         try writeAddedAccess(arena, w, added);
     } else {
         try info.writeName(w, cfg);
+        try info.writeDownload(ctx, w, manifest);
         try info.writeContents(ctx, w, manifest, cfg);
     }
     Context.printStderr("{s}", .{out.written()});
@@ -785,8 +797,8 @@ pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8, opts: PushOp
     const target = try resolve(ctx, image_text orelse id);
     var ref = target.ref;
     if (target.app_id) |named| if (!std.ascii.eqlIgnoreCase(named, id))
-        return fail("{s} is the image of {s}; push {s} to its own, or give a full image reference", .{ image_text.?, named, id });
-    if (ref.digest != null) return fail("push to a tag, not a digest: {s}", .{target.text});
+        return fail("{s} is the image of {s}; export {s} to its own, or give a full image reference", .{ image_text.?, named, id });
+    if (ref.digest != null) return fail("export to a tag, not a digest: {s}", .{target.text});
     ref.tag = ref.tag orelse if (Registry.Reference.isValidTag(installed.version))
         installed.version
     else
@@ -797,7 +809,7 @@ pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8, opts: PushOp
     for (image.manifest.layers) |l| {
         const hex = oci.digestHex(l.digest).?;
         if (try lazy.isLazy(ctx.store, arena, hex) and !try Store.exists(ctx.io, try ctx.store.blobPath(arena, hex)))
-            return fail("{s} is still being downloaded (`zigsaw list` says how far): push it once it's in", .{id});
+            return fail("{s} is still being downloaded (`zigsaw list` says how far): export it once it's in", .{id});
     }
     const mounts = try mountSources(arena, ref, installed.source, image.manifest, image.config);
 
@@ -848,7 +860,7 @@ fn pushSources(ctx: *Context, registry: *Registry, installed: Store.Ref) !void {
         try uploadIfMissing(ctx, registry, desc, p, null);
         try layers.append(arena, desc);
     }
-    if (missing > 0) note("  {d} of its sources aren't in the download cache (local files, or deleted by prune --downloads), so they aren't pushed", .{missing});
+    if (missing > 0) note("  {d} of its sources aren't in the download cache (local files, or deleted by uninstall --unused --downloads), so they aren't pushed", .{missing});
     if (layers.items.len == 0) return;
 
     const config: oci.SourcesConfig = .{ .id = installed.id, .version = installed.version, .image = installed.manifest };
@@ -898,7 +910,7 @@ const Mounts = struct {
 ///   its ref records it), if that's on the target's registry.
 /// - Otherwise each runtime's layer in the runtime's own repository there,
 ///   in the default layout: next to the target, named by the runtime's id,
-///   where `zigsaw push <runtime id>` puts it.
+///   where `zigsaw build-export <runtime id>` puts it.
 fn mountSources(arena: std.mem.Allocator, target: Registry.Reference, pulled_from: ?[]const u8, manifest: oci.Manifest, config: oci.AppConfig) !Mounts {
     var m: Mounts = .{};
     if (pulled_from) |text| if (Registry.Reference.parse(text)) |pulled| {

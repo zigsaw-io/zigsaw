@@ -197,9 +197,9 @@ check "build --memory takes a size" refuses "--memory expects a size" z build --
 
 # The image a build used stays until prune --downloads, and only zigsaw can
 # delete its protected deployment.
-z rm --delete-data $BUILT >/dev/null 2>&1
-z rm --delete-data $BB >/dev/null 2>&1
-z prune --downloads --volumes >/dev/null 2>&1
+z uninstall --delete-data $BUILT >/dev/null 2>&1
+z uninstall --delete-data $BB >/dev/null 2>&1
+z uninstall --unused --downloads --volumes >/dev/null 2>&1
 cd /
 rm -rf "$(cygpath -u "$ZIGSAW_HOME")" "$(cygpath -u "$work")"
 echo

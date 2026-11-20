@@ -114,7 +114,7 @@ verbose() {
 check "-v shows cmd.exe, the script and the command line" verbose
 
 # Installed apps are protected against deletion, so remove them through zigsaw.
-"$zigsaw" rm --delete-data $APP >/dev/null 2>&1
+"$zigsaw" uninstall --delete-data $APP >/dev/null 2>&1
 rm -rf "$tmp"
 echo
 echo "$failures check(s) failed."

@@ -40,5 +40,5 @@ acprobe_report() {
 }
 
 acprobe_rm() {
-    "$1" rm --delete-data $ACPROBE_ID >/dev/null 2>&1
+    "$1" uninstall --delete-data $ACPROBE_ID >/dev/null 2>&1
 }

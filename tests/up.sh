@@ -46,7 +46,7 @@ WEB=test.up.web
 proj="$work\\proj"
 logs_dir="$ZIGSAW_HOME\\logs"
 # Whatever happens, nothing here is left running.
-trap '"$zigsaw" kill $BB $OTHER $DB $WEB >/dev/null 2>&1; ZIGSAW_HOME="$store2" "$zigsaw" kill $BB >/dev/null 2>&1; wait; reg delete "HKCU\\$suite_key" /f >/dev/null 2>&1' EXIT
+trap '"$zigsaw" kill --now $BB $OTHER $DB $WEB >/dev/null 2>&1; ZIGSAW_HOME="$store2" "$zigsaw" kill --now $BB >/dev/null 2>&1; wait; reg delete "HKCU\\$suite_key" /f >/dev/null 2>&1' EXIT
 
 failures=0
 check() {
@@ -131,7 +131,7 @@ for sb in soft low appcontainer; do
     check "  its log has the app's output" eventually 10 has "out-$sb" "$(log_of $BB "$run")"
     check "  its stderr too" has "err-$sb" "$(log_of $BB "$run")"
     check "  and says what the run is" has "zigsaw: $BB $bb_version, run $run, started" "$(log_of $BB "$run")"
-    check "stop asks it to end, and it does" says "stopped $run ($BB)" z stop --time=20 "$run"
+    check "stop asks it to end, and it does" says "stopped $run ($BB)" z kill --time=20 "$run"
     check "  by Ctrl+C, to the console it has with no window" has "asked to stop: sent Ctrl+C to its console" "$(log_of $BB "$run")"
     check "  its zigsaw goes on, and says how the run ended" has "zigsaw: $BB ended with exit code" "$(log_of $BB "$run")"
 done
@@ -139,7 +139,7 @@ check "the runs' zigsaws cleaned up: no record is left" test "$(records)" = 0
 
 run=$(number "$(z run -d $BB sleep 300 2>/dev/null)")
 if [ -n "$run" ]; then
-    check "kill ends a detached run" says "killed $run ($BB)" z kill "$run"
+    check "kill ends a detached run" says "killed $run ($BB)" z kill --now "$run"
     check "  its zigsaw says so in the log" eventually 10 has "ended with exit code 1" "$(log_of $BB "$run")"
 fi
 check "run -d: an app that isn't installed fails at once" refuses "no.such.app is not installed" z run -d no.such.app
@@ -147,7 +147,7 @@ check "  as a wrong option does" refuses "--sandbox must be soft, low or appcont
 out=$(z run -d --sandbox=low --device=camera $BB sleep 300 2>&1)
 check "  what it says before the run starts reaches this terminal" says "gets no camera under the low sandbox" echo "$out"
 run=$(number "$out")
-[ -n "$run" ] && z kill "$run" >/dev/null 2>&1
+[ -n "$run" ] && z kill --now "$run" >/dev/null 2>&1
 
 # --- zigsaw logs ------------------------------------------------------------------------
 
@@ -167,21 +167,21 @@ if [ -n "$run" ]; then
     check "  but not one still written" test -f "$(log_of $BB "$run")"
     check "an app with two detached runs going: name one" refuses "has 2 detached runs going" z logs $BB
     check "  by its number" says "third" z logs "$run"
-    z kill $BB >/dev/null 2>&1
+    z kill --now $BB >/dev/null 2>&1
 fi
 "$zigsaw" run $OTHER sleep 300 </dev/null >/dev/null 2>&1 &
 check "logs of a run that isn't detached: refused" eventually 10 refuses "isn't detached" z logs $OTHER
-z kill $OTHER >/dev/null 2>&1
+z kill --now $OTHER >/dev/null 2>&1
 wait
 check "logs of an app with no log: refused" refuses "$DB has no log" z logs $DB
 check "logs of a run that never was: refused" refuses "no run 4 is going" z logs 4
 run=$(number "$(z run -d $OTHER sh -c "echo other-out; exit 0" 2>/dev/null)")
 eventually 10 gone "$run"
 check "rm deletes the app's logs" test -f "$(log_of $OTHER "$run")"
-z rm $OTHER >/dev/null 2>&1
+z uninstall $OTHER >/dev/null 2>&1
 check "  (gone)" test ! -f "$(log_of $OTHER "$run")"
 printf 'x\n' >"$logs_dir\\test.up.gone.123.log"
-z prune >/dev/null 2>&1
+z uninstall --unused >/dev/null 2>&1
 check "prune deletes those of apps that aren't installed" test ! -f "$logs_dir\\test.up.gone.123.log"
 
 # --- up -d and down ----------------------------------------------------------------------
@@ -293,21 +293,21 @@ printf '{ "run": [{ "app": "%s:%s@%s", "args": ["sleep", "300"] }] }\n' "$BB" "$
 cd "$pin" || exit 1
 check "a zigsaw.json with only \"run\" is a project: build has nothing to do" says "lists no \"apps\" to build" z build
 out=$(z up -d 2>&1)
-check "an app pinned at the digest installed isn't pulled" lacks "pulled first" echo "$out"
+check "an app pinned at the digest installed isn't installed again" lacks "installed first" echo "$out"
 check "  and starts" says "started $BB" echo "$out"
 check "  down stops it" says "($BB)" z down
 out=$(ZIGSAW_HOME="$store2" z up -d --yes 2>&1)
-check "one the store doesn't have is pulled first, from its registry" says "$BB isn't installed as \"run\" pins it, so it's pulled first" echo "$out"
+check "one the store doesn't have is installed first, from its registry" says "$BB isn't installed as \"run\" pins it, so it's installed first" echo "$out"
 check "  and starts" says "started $BB" echo "$out"
 check "  down stops it" says "($BB)" env ZIGSAW_HOME="$store2" "$zigsaw" down
 
 cd "$work" || exit 1
-ZIGSAW_HOME="$store2" z rm --delete-data $BB >/dev/null 2>&1
-ZIGSAW_HOME="$store2" z prune --downloads --volumes >/dev/null 2>&1
-z rm --delete-data $DB >/dev/null 2>&1
-z rm --delete-data $WEB >/dev/null 2>&1
-z rm --delete-data $BB >/dev/null 2>&1
-z prune --downloads --volumes >/dev/null 2>&1
+ZIGSAW_HOME="$store2" z uninstall --delete-data $BB >/dev/null 2>&1
+ZIGSAW_HOME="$store2" z uninstall --unused --downloads --volumes >/dev/null 2>&1
+z uninstall --delete-data $DB >/dev/null 2>&1
+z uninstall --delete-data $WEB >/dev/null 2>&1
+z uninstall --delete-data $BB >/dev/null 2>&1
+z uninstall --unused --downloads --volumes >/dev/null 2>&1
 cd /
 rm -rf "$(cygpath -u "$ZIGSAW_HOME")" "$(cygpath -u "$store2")" "$(cygpath -u "$work")"
 echo

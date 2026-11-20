@@ -148,7 +148,7 @@ check "  its junction stays after the run" is_link "$(data_of $BB)\\state"
 check "  and the volume's label, recorded" sh -c "$(declare -f label_of low_label granted); ZIGSAW_HOME='$ZIGSAW_HOME'; low_label '$(vol keep)' && granted $BB 'low $(vol keep)'"
 check "  list shows it" says "--volume=keep:state" z list
 deleted_keeps() {
-    says "kept volume keep" z rm --delete-data $BB && test -f "$(vol keep)\\a" && absent "$(data_of $BB)" || return 1
+    says "kept volume keep" z uninstall --delete-data $BB && test -f "$(vol keep)\\a" && absent "$(data_of $BB)" || return 1
     z build "$root/recipes/busybox.json" >/dev/null 2>&1 && z override --volume=keep:state $BB >/dev/null 2>&1 &&
         reads $BB low state/a x
 }
@@ -192,7 +192,7 @@ check "  has the file" test -f "$work\\bind\\f"
 check "  and is unlabelled, and unlinked, after it" sh -c "$(declare -f label_of no_label is_link absent); no_label '$work\\bind' && absent '$(data_of $BB)\\b'"
 saved_bind() {
     z override --volume="$work\\bind:b" $BB >/dev/null 2>&1 && z run $BB true >/dev/null 2>&1 &&
-        granted $BB "low $work\\bind" && z grants $BB | grep -qF "$work\\bind" || return 1
+        granted $BB "low $work\\bind" && z permissions $BB | grep -qF "$work\\bind" || return 1
     z override --novolume=b $BB >/dev/null 2>&1 && no_label "$work\\bind" && ! granted $BB "low $work\\bind"
 }
 check "a saved one is a grant like --filesystem's, until --novolume" saved_bind
@@ -246,9 +246,9 @@ z run $WHOLE sh -c 'echo mine > "$USERPROFILE/../own.txt"' >/dev/null 2>&1
 check "an app's data is its own volume, in the store" test -f "$(vol $WHOLE)\\own.txt"
 check "  ls lists it, by the app's id" sh -c "\"$zigsaw\" volume ls | grep -F $WHOLE | grep -qF '$WHOLE as its data'"
 check "  inspect says whose it is" says "the app's own" z volume inspect $WHOLE
-check "  volume rm refuses it while the app is installed" refuses "rm --delete-data $WHOLE" z volume rm $WHOLE
+check "  volume rm refuses it while the app is installed" refuses "uninstall --delete-data $WHOLE" z volume rm $WHOLE
 check "  no store keeps data\\ any more" absent "$ZIGSAW_HOME\\data"
-check "prune --data says it's --volumes now" refuses "--volumes" z prune --data
+check "prune --data says it's --volumes now" refuses "--volumes" z uninstall --unused --data
 # An id without a dot could be a volume's name: the app's own has it.
 sed "s/\"net.frippery.busybox\"/\"plainapp\"/" "$root/recipes/busybox.json" >"$work\\plain.json"
 z override --volume=plainapp:p $OTHER >/dev/null 2>&1 && z run $OTHER true >/dev/null 2>&1
@@ -258,7 +258,7 @@ z override --novolume=p $OTHER >/dev/null 2>&1 && z volume rm plainapp >/dev/nul
 check "  once it's free, the app's own volume has that name" sh -c "\"$zigsaw\" run plainapp true </dev/null && \"$zigsaw\" volume ls | grep -qF 'plainapp as its data'"
 check "  which no other app mounts" refuses "own volume, which only it mounts" z run --volume=plainapp:p $OTHER true
 check "  nor volume create takes" refuses "there's a volume plainapp already" z volume create plainapp
-z rm --delete-data plainapp >/dev/null 2>&1
+z uninstall --delete-data plainapp >/dev/null 2>&1
 
 # --- A volume in its place: a mount at the root ----------------------------
 
@@ -294,7 +294,7 @@ named_root() {
 check "a named volume there: ls says whose data it is" named_root
 check "  volume rm refuses it" refuses "take that away first" z volume rm whole
 root_rm_keeps() {
-    says "kept volume whole" z rm --delete-data $WHOLE && test -f "$(vol whole)\\n.txt" && absent "$(data_of $WHOLE)"
+    says "kept volume whole" z uninstall --delete-data $WHOLE && test -f "$(vol whole)\\n.txt" && absent "$(data_of $WHOLE)"
 }
 check "rm --delete-data keeps the volume, and takes the link" root_rm_keeps
 
@@ -328,7 +328,7 @@ if [ -n "${SECOND_DRIVE:-}" ]; then
 else
     echo "skip  a mount at . on another drive: SECOND_DRIVE isn't set"
 fi
-z rm --delete-data $REG >/dev/null 2>&1
+z uninstall --delete-data $REG >/dev/null 2>&1
 reg delete "$REG_KEY" /f >/dev/null 2>&1
 
 # --- Data from before 0.85 -------------------------------------------------
@@ -563,7 +563,7 @@ keys_exported() {
 }
 check "  export puts them back in its data first, and so in the archive" keys_exported
 moved_in() {
-    z rm --delete-data $REG >/dev/null 2>&1 && absent "$(data_of $REG)" || return 1
+    z uninstall --delete-data $REG >/dev/null 2>&1 && absent "$(data_of $REG)" || return 1
     says "for when that app is installed" z volume import $REG "$x\\reg.tar" || return 1
     z build "$root\\tests\\volumes\\registry.json" >/dev/null 2>&1 &&
         [ "$(z run $REG sh -c "reg query '$REG_KEY' /v v" | tr -d '\r' | grep -o 'exported')" = exported ]
@@ -576,17 +576,17 @@ at_root() {
 }
 check "data mounted from a folder of yours is neither exported nor imported by the app's id" at_root
 z override --novolume=. $REG >/dev/null 2>&1
-z rm --delete-data $REG >/dev/null 2>&1
+z uninstall --delete-data $REG >/dev/null 2>&1
 reg delete "$REG_KEY" /f >/dev/null 2>&1
 check "a name that is neither a volume's nor an app's refuses" refuses "an app's own volume has the app's id" z volume import 'a b' "$x\\exp.tar"
 for v in exp imp imp0 impgz imppipe impgnu impbsd inner hollow hollow2; do z volume rm $v >/dev/null 2>&1; done
 
 # --- Pruning ---------------------------------------------------------------
 
-z rm $WHOLE >/dev/null 2>&1
+z uninstall $WHOLE >/dev/null 2>&1
 check "rm keeps the app's own volume" test -f "$(vol $WHOLE)\\legacy.txt"
-check "zigsaw prune names the volumes nothing mounts" says "--volumes deletes them" z prune --dry-run
-check "  an uninstalled app's data among them" sh -c "\"$zigsaw\" prune --dry-run 2>&1 | grep -F 'nothing mounts' | grep -qF '$WHOLE ('"
+check "zigsaw uninstall --unused names the volumes nothing mounts" says "--volumes deletes them" z uninstall --unused --dry-run
+check "  an uninstalled app's data among them" sh -c "\"$zigsaw\" uninstall --unused --dry-run 2>&1 | grep -F 'nothing mounts' | grep -qF '$WHOLE ('"
 dry_prune() { z volume prune --dry-run 2>&1 | grep -q 'would remove volume v-low' && test -d "$(vol v-low)"; }
 check "volume prune --dry-run removes nothing" dry_prune
 prunes() {
@@ -595,12 +595,12 @@ prunes() {
 }
 check "volume prune removes them: not one an override mounts, nor an installed app's data" prunes
 prune_volumes() {
-    z volume create spare >/dev/null 2>&1 && says "1 volume" z prune --volumes && absent "$(vol spare)" && test -d "$(vol $BB)"
+    z volume create spare >/dev/null 2>&1 && says "1 volume" z uninstall --unused --volumes && absent "$(vol spare)" && test -d "$(vol $BB)"
 }
 check "prune --volumes does the same" prune_volumes
 
-z rm $BB >/dev/null 2>&1
-z rm $OTHER >/dev/null 2>&1
+z uninstall $BB >/dev/null 2>&1
+z uninstall $OTHER >/dev/null 2>&1
 check "rm takes back what the runs were granted" sh -c "$(declare -f has_ace label_of no_label); no_label '$(vol pop)' && ! has_ace '$(vol pop)' 'S-1-15-'"
 cd /
 rm -rf "$(cygpath -u "$ZIGSAW_HOME")" "$(cygpath -u "$work")"

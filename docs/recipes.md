@@ -75,7 +75,7 @@ comes in a few ranged requests; the blob built is checked against its
 digest, as a download is, and downloaded whole if it isn't the one. How much
 that saves depends on how much changes: 3 changed files of Qt's SDK, 0.4%
 of its layer fetched; llvm-mingw from 20261006 to 20261020, whose programs
-all change and whose headers don't, 83%. `zigsaw ls` and `zigsaw cat` read
+all change and whose headers don't, 83%. `zigsaw remote-info --show-files` and `--file` read
 an eStargz layer's files where they are, without pulling it.
 
 `name`, `summary`, `homepage` and `license` describe the app for
@@ -370,7 +370,7 @@ MinGit's `env`, and nothing is copied into Meld's image:
 A runtime's permissions don't carry over: the app's own apply. What a runtime
 says it can't run under does: an app can't run where its runtime can't, so a
 recipe that asks for such a sandbox doesn't build, and a run told to use one
-warns with the runtime's reason, as `zigsaw info` shows it.
+warns with the runtime's reason, as `zigsaw remote-info` shows it.
 [Electron's runtime](#apps-on-electrons-runtime) is one.
 
 ## Extension points
@@ -529,7 +529,7 @@ zig's C compiler:
   would fetch comes from a [vendor step](#vendor-steps) instead.
 
 `zigsaw build --keep-build-dir` keeps the build's directory afterwards, to
-look at what a failed build left; `zigsaw prune` deletes it later.
+look at what a failed build left; `zigsaw uninstall --unused` deletes it later.
 
 Three things about zig's C compiler, for executables that reproduce:
 
@@ -773,8 +773,8 @@ store's together may take 10 GB: when a build ends, it records how much its
 own takes, and if they take more, it deletes the others that no build has
 used for longest, and says which. `ZIGSAW_KEPT_BUILDS_SIZE` changes that
 room (`20GB`, `500MB`, a number of bytes; `0` keeps only the build that
-just ended). A build that's going on keeps its own. `zigsaw prune` says how
-much they take, and `zigsaw prune --downloads` deletes them all.
+just ended). A build that's going on keeps its own. `zigsaw uninstall --unused` says how
+much they take, and `zigsaw uninstall --unused --downloads` deletes them all.
 
 The root is the store's `tmp\zigsaw-build-<key>`, where a build that keeps
 nothing has its root too, under a random name as long: some tools see
@@ -1010,7 +1010,7 @@ in the other order:
 - **`up` builds every app of the project if one it runs isn't installed from
   the project's recipe**, or with `--build`, as `zigsaw build` would, then
   starts each app as `zigsaw run --detach` does. An app that serves something
-  (its services, as `zigsaw info` lists them) is up once something answers on
+  (its services, as `zigsaw remote-info` lists them) is up once something answers on
   each service's port, on 127.0.0.1 or ::1, within two minutes; only then does
   the next start. One that ends first, or doesn't answer in time, fails `up`,
   which shows the end of its log and stops what it started. Under the
@@ -1451,7 +1451,7 @@ permission), and inside it Meson finds the compiler and the rest through
 the runtimes' aliases. With the store's `bin` on PATH:
 
 ```
-zigsaw pull org.gtk.Gtk4.Sdk
+zigsaw install org.gtk.Gtk4.Sdk
 cd C:\work\hello
 cc hello.c -o hello.exe $(pkg-config --cflags --libs gtk4)
 meson setup out && meson compile -C out
@@ -1908,7 +1908,7 @@ With the store's `bin` on PATH, the SDK's `cmake` builds a Qt project, with
 its Ninja, llvm-mingw's `c++` and `windres`, and finds Qt:
 
 ```
-zigsaw pull io.qt.Qt6.Sdk
+zigsaw install io.qt.Qt6.Sdk
 cd C:\work\hello
 cmake -S . -B out -DCMAKE_BUILD_TYPE=Release
 cmake --build out
@@ -3027,7 +3027,7 @@ loads them in that order, an extension after those it `needs` (redis after
 igbinary, whose DLL it links with):
 
 ```
-zigsaw pull net.php.php.Xdebug
+zigsaw install net.php.php.Xdebug
 php -r "var_dump(extension_loaded('xdebug'));"
 zigsaw run --noextension=net.php.php.Xdebug net.php.php ...
 zigsaw override --noextension=net.php.php.Xdebug <app>
@@ -3184,7 +3184,7 @@ Windows, downloads each one, checks it against the database, and writes
 archive's URL and sha256, the database's, the installer's, the version
 (`2026.<the repository's revision>`) and the exports. Once tlnet has
 replaced an archive, its URL serves other bytes, and builds take the pinned
-one from the sources pushed next to the image (`zigsaw push --sources`,
+one from the sources pushed next to the image (`zigsaw build-export --sources`,
 which `scripts/publish.sh` does) instead. So, to update TeX Live: run the script, build, and publish from
 the store that built it, which has every pinned file (publishing pushes
 them), even after tlnet has moved on.

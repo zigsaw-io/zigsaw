@@ -118,8 +118,8 @@ if [ -z "${PACKAGE_DIR:-}" ]; then
     check "and as zig build -Dstrip's of the copy" cmp "$work\\incremental\\zigsaw.exe" "$work\\copy-strip\\bin\\zigsaw.exe"
 fi
 
-z rm --delete-data $APP >/dev/null 2>&1
-z prune --downloads --volumes >/dev/null 2>&1
+z uninstall --delete-data $APP >/dev/null 2>&1
+z uninstall --unused --downloads --volumes >/dev/null 2>&1
 rm -rf "$ZIGSAW_HOME" "$work"
 echo
 echo "$failures check(s) failed."

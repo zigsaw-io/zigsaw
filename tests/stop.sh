@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end checks for `zigsaw stop` and `zigsaw kill` (src/stop.zig): runs
+# End-to-end checks for `zigsaw kill` and `zigsaw kill --now` (src/stop.zig): runs
 # in each sandbox asked to end by Ctrl+C, a run that won't, one sharing its
 # console with another program, a stop typed in the run's own terminal, kill,
 # several runs at once, a run inside another, and builds.
@@ -45,7 +45,7 @@ BUILT=test.stop.built
 hold_dir="$work\\hold"
 mkdir -p "$hold_dir"
 # Whatever happens, nothing here is left running.
-trap 'touch "$hold_dir\\all.stop" 2>/dev/null; "$zigsaw" kill $BB $OTHER $BUILT >/dev/null 2>&1; wait; reg delete "HKCU\\$suite_key" /f >/dev/null 2>&1' EXIT
+trap 'touch "$hold_dir\\all.stop" 2>/dev/null; "$zigsaw" kill --now $BB $OTHER $BUILT >/dev/null 2>&1; wait; reg delete "HKCU\\$suite_key" /f >/dev/null 2>&1' EXIT
 
 failures=0
 check() {
@@ -133,7 +133,7 @@ for sb in soft low appcontainer; do
     in_term $sb "$zq run --sandbox=$sb $BB sleep 300"
     if up $BB; then
         run=$(run_of $BB)
-        timed took z stop --time=20 $BB
+        timed took z kill --time=20 $BB
         check "$sb: stop asks the run to end, and it does" says "stopped $run ($BB)" echo "$out"
         check "  by Ctrl+C, at once" test "$took" -lt 10
         ended $sb
@@ -146,7 +146,7 @@ done
 # A native shell started it: it gets Ctrl+C too, as from the key, and goes on.
 in_term shell "cmd /d /c $zq run --sandbox=low $BB sleep 300 & echo shell-went-on"
 if up $BB; then
-    check "a run its shell started: stopped by Ctrl+C" says "stopped" z stop --time=20 $BB
+    check "a run its shell started: stopped by Ctrl+C" says "stopped" z kill --time=20 $BB
     ended shell
     check "  and the shell goes on" has "shell-went-on" "$work\\shell.txt"
 fi
@@ -156,7 +156,7 @@ fi
 in_term ignores "$zq run --sandbox=low $BB sh -c \"trap '' INT; while :; do sleep 1; done\""
 if up $BB; then
     run=$(run_of $BB)
-    timed took z stop --time=2 $BB
+    timed took z kill --time=2 $BB
     check "an app that ignores Ctrl+C is killed after --time" says "killed $run ($BB) after 2 s" echo "$out"
     check "  not before" test "$took" -ge 2
     ended ignores
@@ -166,18 +166,18 @@ fi
 in_term other "cmd /d /c start /b ping -n 60 127.0.0.1 >nul & $zq run --sandbox=low $BB sleep 300"
 if up $BB; then
     run=$(run_of $BB)
-    check "another program on the run's console: stop kills it after --time" says "killed $run ($BB) after 2 s" z stop --time=2 $BB
+    check "another program on the run's console: stop kills it after --time" says "killed $run ($BB) after 2 s" z kill --time=2 $BB
     ended other
     check "  the run says what was in the way" has "didn't send Ctrl+C: PING.EXE" "$work\\other.txt"
 fi
 
-# `zigsaw stop` typed in the run's own terminal: no Ctrl+C, so the batch file
+# `zigsaw kill` typed in the run's own terminal: no Ctrl+C, so the batch file
 # that typed it isn't asked "Terminate batch job (Y/N)?" and goes on.
-printf '@start /b %s run --sandbox=low %s sleep 300\r\n@ping -n 3 127.0.0.1 >nul\r\n@%s stop --time=2 %s\r\n@echo here-stop-exit=%%errorlevel%%\r\n' \
+printf '@start /b %s run --sandbox=low %s sleep 300\r\n@ping -n 3 127.0.0.1 >nul\r\n@%s kill --time=2 %s\r\n@echo here-stop-exit=%%errorlevel%%\r\n' \
     "$zq" $BB "$zq" $BB >"$work\\here.cmd"
 in_term here "cmd /d /c $work\\here.cmd"
 ended here
-check "stop in the run's own terminal sends no Ctrl+C" has "the \`zigsaw stop\` is on its console" "$work\\here.txt"
+check "stop in the run's own terminal sends no Ctrl+C" has "the \`zigsaw kill\` is on its console" "$work\\here.txt"
 check "  kills it after --time, and the script goes on" has "here-stop-exit=0" "$work\\here.txt"
 check "  unasked whether to end" lacks "Terminate batch job" "$work\\here.txt"
 
@@ -186,7 +186,7 @@ check "  unasked whether to end" lacks "Terminate batch job" "$work\\here.txt"
 in_term kill "$zq run --sandbox=low --ephemeral $BB sleep 300"
 if up $BB; then
     run=$(run_of $BB)
-    timed took z kill $BB
+    timed took z kill --now $BB
     check "kill ends a run" says "killed $run ($BB)" echo "$out"
     check "  at once" test "$took" -lt 5
     ended kill
@@ -201,10 +201,10 @@ fi
 "$zigsaw" run --sandbox=soft $OTHER sh -c "$(waits c)" </dev/null >/dev/null 2>&1 &
 sleep 1
 up $OTHER
-check "kill <app-id> ends every run of the app" test "$(z kill $BB | grep -ac "^killed [0-9]* ($BB)")" = 2
+check "kill <app-id> ends every run of the app" test "$(z kill --now $BB | grep -ac "^killed [0-9]* ($BB)")" = 2
 check "  and no other" says "$OTHER" z ps
 other_run=$(run_of $OTHER)
-check "kill <run> ends that run" says "killed $other_run ($OTHER)" z kill "$other_run"
+check "kill <run> ends that run" says "killed $other_run ($OTHER)" z kill --now "$other_run"
 wait
 check "  none is left" says "nothing is running" z ps
 
@@ -218,7 +218,7 @@ inner_env=(--env=ZIGSAW_HOME="$ZIGSAW_HOME" --env=ZIGSAW_GRANTS_KEY="$ZIGSAW_GRA
 if up $OTHER; then
     outer_run=$(run_of $BB)
     inner_run=$(run_of $OTHER)
-    out=$(z kill "$outer_run")
+    out=$(z kill --now "$outer_run")
     check "kill of a run ends the runs inside it" says "killed $inner_run ($OTHER) (in run $outer_run)" echo "$out"
     check "  and it" says "killed $outer_run ($BB)" echo "$out"
     check "  each zigsaw ended its own record" test "$(records)" = 0
@@ -227,11 +227,11 @@ wait
 
 # --- What's refused -----------------------------------------------------------------
 
-check "stop needs a run or an app" refuses "usage:" z stop
-check "kill too" refuses "usage:" z kill
-check "nothing running by that name: says so" refuses "nothing running is no.such.app" z stop no.such.app
-check "--time takes seconds" refuses "--time takes a number of seconds" z stop --time=soon $BB
-check "kill has no --time" refuses "usage:" z kill --time=1 $BB
+check "stop needs a run or an app" refuses "usage:" z kill
+check "kill too" refuses "usage:" z kill --now
+check "nothing running by that name: says so" refuses "nothing running is no.such.app" z kill no.such.app
+check "--time takes seconds" refuses "--time takes a number of seconds" z kill --time=soon $BB
+check "kill has no --time" refuses "usage:" z kill --now --time=1 $BB
 
 # --- Builds --------------------------------------------------------------------------
 
@@ -243,24 +243,24 @@ in_term build "$zq build --rebuild $work\\built\\recipe.json"
 if up $BUILT; then
     for i in $(seq 50); do z ps $BUILT 2>/dev/null | grep -aq "waits 2/3" && break; sleep 0.2; done
     run=$(run_of $BUILT)
-    check "stop asks a build to end" says "stopped $run ($BUILT)" z stop --time=20 $BUILT
+    check "stop asks a build to end" says "stopped $run ($BUILT)" z kill --time=20 $BUILT
     ended build
-    check "  it fails, saying why" has "stopped by \`zigsaw stop\` during build command 2" "$work\\build.txt"
+    check "  it fails, saying why" has "stopped by \`zigsaw kill\` during build command 2" "$work\\build.txt"
     check "  and runs nothing more" lacks "[waits 3/3]" "$work\\build.txt"
 fi
 
 "$zigsaw" build --rebuild "$work\\built\\recipe.json" </dev/null >"$work\\build2.txt" 2>&1 &
 if up $BUILT; then
     run=$(run_of $BUILT)
-    check "kill ends a build" says "killed $run ($BUILT)" z kill $BUILT
+    check "kill ends a build" says "killed $run ($BUILT)" z kill --now $BUILT
     wait
     check "  its record goes with ps" says "nothing is running" z ps
     check "  none is left" test "$(records)" = 0
 fi
 
-z rm --delete-data $OTHER >/dev/null 2>&1
-z rm --delete-data $BB >/dev/null 2>&1
-z prune --downloads --volumes >/dev/null 2>&1
+z uninstall --delete-data $OTHER >/dev/null 2>&1
+z uninstall --delete-data $BB >/dev/null 2>&1
+z uninstall --unused --downloads --volumes >/dev/null 2>&1
 cd /
 rm -rf "$(cygpath -u "$ZIGSAW_HOME")" "$(cygpath -u "$work")"
 echo

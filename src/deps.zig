@@ -6,7 +6,7 @@
 //! A pinned image comes from the store if it's there, whether it was built
 //! there or pulled (builds reproduce, so both give the same digest), and from
 //! its registry otherwise. Images that builds use are kept like cached
-//! downloads, until `zigsaw prune --downloads`.
+//! downloads, until `zigsaw uninstall --unused --downloads`.
 
 const std = @import("std");
 const Context = @import("Context.zig");
@@ -99,7 +99,7 @@ fn failUnpinned(ctx: *Context, recipe: []const u8, kind: Kind, alias: []const u8
         };
         break :digest remote.manifestDigest(ctx, reference) catch |err| switch (err) {
             error.OutOfMemory => |e| return e,
-            else => return fail("{s}: {t} {s} \"{s}\" must be pinned with \"@sha256:...\", and zigsaw can't find the digest: build or pull the image first", .{ recipe, kind, alias, reference }),
+            else => return fail("{s}: {t} {s} \"{s}\" must be pinned with \"@sha256:...\", and zigsaw can't find the digest: build or install the image first", .{ recipe, kind, alias, reference }),
         };
     };
     const key = if (kind == .source) "image" else alias;

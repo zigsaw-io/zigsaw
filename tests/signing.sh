@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end checks for images' signatures: what pull, update and info do with a good
-# one, a wrong one, and none, against a local registry, with keys `zigsaw trust` adds.
+# one, a wrong one, and none, against a local registry, with keys remotes are given.
 # Signatures are made by tests/p256sign.zig, in the form cosign's are, which
 # tests/oci.sh checks with the real thing. `upgrade`'s are in tests/install.sh.
 # Keyless ones, images' and releases', are made by tests/fake-sigstore.sh, and checked
@@ -63,19 +63,31 @@ recipe() { # <version>
 publish() { # <version> [<tag>]: the image's digest goes in $digest
     recipe "$1"
     za build "$work\\app.json" >/dev/null 2>&1 || return 1
-    za push "$APP" "$repo:${2:-$1}" >/dev/null 2>&1 || return 1
+    za build-export "$APP" "$repo:${2:-$1}" >/dev/null 2>&1 || return 1
     digest=$(grep -o 'sha256:[0-9a-f]*' "$work\\publisher\\refs\\$APP.json" | head -1)
 }
 "$signer" key one "$work\\one.pub"
 "$signer" key other "$work\\other.pub"
 sign_as() { # <word> <image>
     local p="$work\\payload-$RANDOM" s="$work\\sig-$RANDOM"
-    za signature payload "$2" >"$p" || return 1
+    za build-sign --print-payload "$2" >"$p" || return 1
     "$signer" sign "$1" "$p" >"$s" || return 1
-    za signature push "$2" "$p" "$s"
+    za build-sign "$2" "$p" "$s"
 }
 # Another's image, for keys in the right place and images in the wrong one.
-fingerprint() { ZIGSAW_HOME="$work\\fp" "$zigsaw" trust add "example.test/fp-$1" "$work\\$1.pub" 2>&1 | grep -o 'key [0-9a-f]*' | cut -d' ' -f2; }
+fingerprint() { ZIGSAW_HOME="$work\\fp" "$zigsaw" remote-add --sign-key="$work\\$1.pub" "fp-$1" "example.test/fp-$1" 2>&1 | grep -o 'key [0-9a-f]*' | cut -d' ' -f2; }
+# remote_t <store> <location> [<remote-modify options>...]: the remote t there,
+# added if the store hasn't it, then changed so.
+remote_t() {
+    local store=$1 location=$2
+    shift 2
+    in_store "$store" remote-add --if-not-exists t "$location" >/dev/null 2>&1 || return 1
+    [ $# -eq 0 ] || in_store "$store" remote-modify "$@" t
+}
+# signers_of <store> <remote>: who signs its images, as `zigsaw remotes` says, a line each.
+signers_of() {
+    in_store "$1" remotes | tr -d '\r' | awk -v r="$2" '/^[^ ]/ { on = ($1 == r) } on && /^  signed by / { sub(/^  signed by /, ""); print }'
+}
 one_fp=$(fingerprint one)
 
 # Copies a manifest, and what it refers to, to another repository and tag, with curl,
@@ -99,59 +111,63 @@ digest1=$digest
 
 # --- Keys -----------------------------------------------------------------------
 
-added_keys() { in_store "$1" trust | tr -d '\r' | grep -v ', built in$'; }
+added_keys() { in_store "$1" remotes | tr -d '\r' | grep '^  signed by ' | grep -v ', built in$'; }
 built_in_only() {
-    [ "$(in_store plain trust | tr -d '\r' | grep -c '^ghcr.io/zigsaw-io  key [0-9a-f]*, built in$')" = 2 ] && [ -z "$(added_keys plain)" ]
+    [ "$(signers_of plain zigsaw | grep -c '^key [0-9a-f]*, built in$')" = 2 ] && [ -z "$(added_keys plain)" ] &&
+        in_store plain remotes | tr -d '\r' | grep -q '^zigsaw  ghcr.io/zigsaw-io  (the default)$'
 }
-check "a store begins with zigsaw-io's two keys, for its images only" built_in_only
+check "a store begins with the remote zigsaw and zigsaw-io's two keys, for its images only" built_in_only
 key_refused() {
     printf 'not a key\n' >"$work\\notkey.pub"
-    ! in_store trusting trust add "$registry/$namespace" "$work\\notkey.pub" 2>/dev/null
+    ! in_store refusing remote-add --sign-key="$work\\notkey.pub" t "$registry/$namespace" 2>/dev/null || return 1
+    # All or nothing: no remote without the key.
+    ! in_store refusing remotes | grep -q '^t '
 }
-check "trust add refuses what isn't a P-256 public key" key_refused
+check "remote-add refuses what isn't a P-256 public key, adding no remote" key_refused
 key_added() {
-    in_store trusting trust add "$registry/$namespace/" "$work\\one.pub" 2>/dev/null &&
-        in_store trusting trust | grep -q "^$registry/$namespace  key $one_fp\$"
+    in_store trusting remote-add --sign-key="$work\\one.pub" t "$registry/$namespace/" 2>/dev/null &&
+        in_store trusting remotes | tr -d '\r' | grep -qE "^t +$registry/$namespace$" &&
+        [ "$(signers_of trusting t)" = "key $one_fp" ]
 }
 check "  and lists one it took, with the slash at the end gone" key_added
-twice() { in_store trusting trust add "$registry/$namespace" "$work\\one.pub" 2>&1 | grep -q 'already has' && [ "$(added_keys trusting | wc -l)" = 1 ]; }
+twice() { in_store trusting remote-modify --sign-key="$work\\one.pub" t 2>&1 | grep -q 'already has' && [ "$(added_keys trusting | wc -l)" = 1 ]; }
 check "  once" twice
 
 # --- Nothing to go by --------------------------------------------------------------
 
 unkeyed() {
     local out
-    out=$(in_store plain pull --yes "$repo:1" 2>&1) || { echo "$out"; return 1; }
+    out=$(in_store plain install --yes "$repo:1" 2>&1) || { echo "$out"; return 1; }
     grep -q 'no key here for its registry' <<<"$out" || { echo "$out"; return 1; }
     [ "$(installed plain)" = 1 ]
 }
 check "with no key for its registry, an image installs, saying it wasn't checked" unkeyed
-info_unkeyed() { in_store plain info "$repo:1" 2>/dev/null | grep -q 'signature *not checked'; }
+info_unkeyed() { in_store plain remote-info "$repo:1" 2>/dev/null | grep -q 'signature *not checked'; }
 check "  and info says so" info_unkeyed
 
 # --- Missing ---------------------------------------------------------------------
 
 store_with_key() { # <name> [word]
-    in_store "$1" trust add "$registry/$namespace" "$work\\${2:-one}.pub" >/dev/null 2>&1
+    remote_t "$1" "$registry/$namespace" --sign-key="$work\\${2:-one}.pub" >/dev/null 2>&1
 }
 missing_warns() {
     store_with_key m1
     local out
-    out=$(in_store m1 pull --yes "$repo:1" 2>&1) || { echo "$out"; return 1; }
+    out=$(in_store m1 install --yes "$repo:1" 2>&1) || { echo "$out"; return 1; }
     grep -q "warning: .* isn't signed" <<<"$out" || { echo "$out"; return 1; }
     [ "$(installed m1)" = 1 ]
 }
 check "with a key and no signature, it warns and installs, for now" missing_warns
-info_missing() { in_store m1 info "$repo:1" 2>/dev/null | grep -q 'signature *none'; }
+info_missing() { in_store m1 remote-info "$repo:1" 2>/dev/null | grep -q 'signature *none'; }
 check "  and info says so" info_missing
-check_missing() { ! in_store m1 signature check "$repo:1" 2>/dev/null; }
+check_missing() { ! in_store m1 build-sign --check "$repo:1" 2>/dev/null; }
 check "  and signature check fails" check_missing
 
 # --- Good ------------------------------------------------------------------------
 
 payload_names() {
     local p
-    p=$(za signature payload "$repo:1") || return 1
+    p=$(za build-sign --print-payload "$repo:1") || return 1
     [ "$p" = "{\"critical\":{\"identity\":{\"docker-reference\":\"$repo\"},\"image\":{\"docker-manifest-digest\":\"$digest1\"},\"type\":\"cosign container image signature\"},\"optional\":null}" ] || { echo "$p"; return 1; }
 }
 check "signature payload says what cosign's does" payload_names
@@ -167,26 +183,26 @@ check "  and the image's digest is as it was" same_digest
 good_pull() {
     store_with_key g1
     local out
-    out=$(in_store g1 pull --yes "$repo:1" 2>&1) || { echo "$out"; return 1; }
+    out=$(in_store g1 install --yes "$repo:1" 2>&1) || { echo "$out"; return 1; }
     grep -q "signed, by key $one_fp" <<<"$out" || { echo "$out"; return 1; }
     ! grep -q 'warning' <<<"$out" || { echo "$out"; return 1; }
     [ "$(installed g1)" = 1 ]
 }
 check "pull installs an image with a good signature, and says whose" good_pull
-good_info() { in_store g1 info "$repo:1" 2>/dev/null | grep -q "signature *signed, by key $one_fp"; }
+good_info() { in_store g1 remote-info "$repo:1" 2>/dev/null | grep -q "signature *signed, by key $one_fp"; }
 check "  and info says so" good_info
-check "  and signature check passes" in_store g1 signature check "$repo:1"
+check "  and signature check passes" in_store g1 build-sign --check "$repo:1"
 by_digest() {
     store_with_key g2
-    in_store g2 pull --yes "$repo@$digest1" 2>&1 | grep -q "signed, by key $one_fp"
+    in_store g2 install --yes "$repo@$digest1" 2>&1 | grep -q "signed, by key $one_fp"
 }
 check "  by digest too" by_digest
 second_key() {
     sign_as other "$repo:1" >/dev/null 2>&1 || return 1
     store_with_key k2 other
-    in_store k2 pull --yes "$repo:1" 2>&1 | grep -q 'signed, by key' || return 1
+    in_store k2 install --yes "$repo:1" 2>&1 | grep -q 'signed, by key' || return 1
     store_with_key k1 one
-    in_store k1 pull --yes "$repo:1" 2>&1 | grep -q "signed, by key $one_fp"
+    in_store k1 install --yes "$repo:1" 2>&1 | grep -q "signed, by key $one_fp"
 }
 check "a second signature joins the first, and either key's good" second_key
 
@@ -194,7 +210,7 @@ check "a second signature joins the first, and either key's good" second_key
 
 refused() { # <store> <what it should say>
     local out
-    out=$(in_store "$1" pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    out=$(in_store "$1" install --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
     grep -q "$2" <<<"$out" || { echo "$out"; return 1; }
     grep -q 'Nothing was installed' <<<"$out" || { echo "$out"; return 1; }
     [ "$(blobs_in "$1")" = 0 ] || { echo "it downloaded $(blobs_in "$1") blob(s)"; return 1; }
@@ -209,7 +225,7 @@ wrong_key() {
     refused w1 'not by any key that counts'
 }
 check "a signature by another key is refused, with nothing downloaded" wrong_key
-wrong_info() { in_store w1 info "$image" 2>/dev/null | grep -q 'signature *WRONG'; }
+wrong_info() { in_store w1 remote-info "$image" 2>/dev/null | grep -q 'signature *WRONG'; }
 check "  and info says so" wrong_info
 
 publish 3 && digest3=$digest
@@ -237,19 +253,19 @@ publish 4 && digest4=$digest
 image="$repo:4"
 tampered() {
     local p="$work\\tp" changed="$work\\tp2" s="$work\\ts"
-    za signature payload "$image" >"$p" || return 1
+    za build-sign --print-payload "$image" >"$p" || return 1
     "$signer" sign one "$p" >"$s" || return 1
     # What's signed, changed: still about this image, as far as it says.
     sed 's/"optional":null/"optional":{"a":"b"}/' "$p" >"$changed"
-    za signature push "$image" "$changed" "$s" >/dev/null 2>&1 || { echo "pushing failed"; return 1; }
+    za build-sign "$image" "$changed" "$s" >/dev/null 2>&1 || { echo "pushing failed"; return 1; }
     store_with_key w4 one
     refused w4 'not by any key that counts'
 }
 check "a payload that isn't what was signed is refused" tampered
 refuses_other_payload() {
     local p="$work\\op" s="$work\\os"
-    za signature payload "$repo:1" >"$p" && "$signer" sign one "$p" >"$s" || return 1
-    ! za signature push "$registry/$other_repo:1" "$p" "$s" 2>/dev/null
+    za build-sign --print-payload "$repo:1" >"$p" && "$signer" sign one "$p" >"$s" || return 1
+    ! za build-sign "$registry/$other_repo:1" "$p" "$s" 2>/dev/null
 }
 check "signature push won't put a repository's payload beside another's image" refuses_other_payload
 
@@ -257,18 +273,18 @@ check "signature push won't put a repository's payload beside another's image" r
 
 sibling() {
     local out
-    in_store p1 trust add "$registry/$namespace/ap" "$work\\one.pub" >/dev/null 2>&1
-    out=$(in_store p1 pull --yes "$repo:1" 2>&1) || { echo "$out"; return 1; }
+    remote_t p1 "$registry/$namespace/ap" --sign-key="$work\\one.pub" >/dev/null 2>&1
+    out=$(in_store p1 install --yes "$repo:1" 2>&1) || { echo "$out"; return 1; }
     grep -q 'no key here for its registry' <<<"$out"
 }
-check "a key is for whole path components: .../ap doesn't reach .../app" sibling
+check "a remote's key is for whole path components: .../ap doesn't reach .../app" sibling
 removed() {
-    in_store w1 trust rm "$registry/$namespace" >/dev/null 2>&1 || return 1
+    in_store w1 remote-modify --no-sign-key t >/dev/null 2>&1 || return 1
     [ -z "$(added_keys w1)" ] || return 1
-    in_store w1 pull --yes "$repo:2" 2>&1 | grep -q 'no key here for its registry'
+    in_store w1 install --yes "$repo:2" 2>&1 | grep -q 'no key here for its registry'
 }
-check "trust rm takes a key away, and the image it refused now goes unchecked" removed
-rm_nothing() { ! in_store plain trust rm "$registry/$namespace" 2>/dev/null; }
+check "--no-sign-key takes a key away, and the image it refused now goes unchecked" removed
+rm_nothing() { ! in_store plain remote-modify --no-sign-key zigsaw 2>/dev/null; }
 check "  and it says when there was nothing to take" rm_nothing
 
 # --- An update --------------------------------------------------------------------
@@ -278,7 +294,7 @@ moving() {
     publish 5 moved || return 1
     sign_as one "$moved" >/dev/null 2>&1 || return 1
     store_with_key u1
-    in_store u1 pull --yes "$moved" >/dev/null 2>&1 && [ "$(installed u1)" = 5 ]
+    in_store u1 install --yes "$moved" >/dev/null 2>&1 && [ "$(installed u1)" = 5 ]
 }
 check "installed from a tag, with a good signature" moving
 to_unsigned() {
@@ -325,9 +341,9 @@ proxy_port=$((20000 + RANDOM % 20000))
 proxy_pid=$!
 sleep 1
 bad_day() {
-    in_store e1 trust add "localhost:$proxy_port/$namespace" "$work\\one.pub" >/dev/null 2>&1
+    remote_t e1 "localhost:$proxy_port/$namespace" --sign-key="$work\\one.pub" >/dev/null 2>&1
     local out
-    out=$(in_store e1 pull --yes "localhost:$proxy_port/$namespace/app:1" 2>&1) && { echo "it installed: $out"; return 1; }
+    out=$(in_store e1 install --yes "localhost:$proxy_port/$namespace/app:1" 2>&1) && { echo "it installed: $out"; return 1; }
     ! grep -q "isn't signed" <<<"$out" || { echo "it took that for unsigned: $out"; return 1; }
     grep -q '500' <<<"$out" || { echo "$out"; return 1; }
     [ -z "$(installed e1)" ]
@@ -347,10 +363,10 @@ indexed() {
     curl -sf -o NUL -X PUT -H 'Content-Type: application/vnd.oci.image.index.v1+json' --data-binary "@$(cygpath -m "$i")" "http://$registry/v2/$namespace/indexed/manifests/idx" || { echo "pushing the index failed"; return 1; }
     printf '{"critical":{"identity":{"docker-reference":"%s"},"image":{"docker-manifest-digest":"%s"},"type":"cosign container image signature"},"optional":null}' "$registry/$namespace/indexed" "$index" >"$p"
     "$signer" sign one "$p" >"$s" || return 1
-    za signature push "$registry/$namespace/indexed:idx" "$p" "$s" >/dev/null 2>&1 || { echo "pushing the signature failed"; return 1; }
+    za build-sign "$registry/$namespace/indexed:idx" "$p" "$s" >/dev/null 2>&1 || { echo "pushing the signature failed"; return 1; }
     store_with_key x1 one
     local out
-    out=$(in_store x1 pull --yes "$registry/$namespace/indexed:idx" 2>&1) || { echo "$out"; return 1; }
+    out=$(in_store x1 install --yes "$registry/$namespace/indexed:idx" 2>&1) || { echo "$out"; return 1; }
     grep -q "signed, by key $one_fp" <<<"$out" || { echo "$out"; return 1; }
 }
 check "a signature of a multi-platform index covers its image" indexed
@@ -382,25 +398,29 @@ fake_sign() { # <file> <identity> [<issuer>]: the bundle on stdout
 }
 sign_keyless() { # <identity> <image> [<store>]
     local p="$work\\kp-$RANDOM" b="$work\\kb-$RANDOM"
-    zk signature payload "$2" >"$p" || return 1
+    zk build-sign --print-payload "$2" >"$p" || return 1
     fake_sign "$p" "$1" >"$b" || return 1
-    zk_in "${3:-publisher}" signature push-bundle "$2" "$p" "$b"
+    zk_in "${3:-publisher}" build-sign --bundle "$2" "$p" "$b"
 }
-trust_keyless() { # <store> [<identity>]
-    zk_in "$1" trust add "$registry/$namespace" --keyless "${2:-$main_id}" >/dev/null 2>&1
+trust_keyless() { # <store> [<identity>]: the remote t, whose images a keyless signature by it is checked for
+    zk_in "$1" remote-add --if-not-exists t "$registry/$namespace" >/dev/null 2>&1 &&
+        zk_in "$1" remote-modify --keyless="${2:-$main_id}" t >/dev/null 2>&1
+}
+zk_signers_of() { # As signers_of, with the keyless zigsaw.
+    zk_in "$1" remotes | tr -d '\r' | awk -v r="$2" '/^[^ ]/ { on = ($1 == r) } on && /^  signed by / { sub(/^  signed by /, ""); print }'
 }
 
 built_in_keyless() {
-    zk_in plain trust | tr -d '\r' | grep -q "^ghcr.io/zigsaw-io  keyless $main_id, built in\$" &&
-        zk_in plain trust | tr -d '\r' | grep -q "^zigsaw's releases  keyless $workflow/release.yml@refs/tags/v<version>, built in\$"
+    zk_signers_of plain zigsaw | grep -qx "keyless $main_id, built in" &&
+        zk_signers_of plain "zigsaw's" | grep -qx "keyless $workflow/release.yml@refs/tags/v<version>, built in"
 }
 check "zigsaw-io's images are signed keyless by Reproduce on main, its releases by Release" built_in_keyless
 keyless_added() {
-    ! zk_in kt trust add "$registry/$namespace" --keyless "$main_id" --issuer http://insecure.test 2>/dev/null || return 1
-    trust_keyless kt && zk_in kt trust | tr -d '\r' | grep -q "^$registry/$namespace  keyless $main_id\$" || return 1
-    zk_in kt trust add "$registry/$namespace" --keyless "$main_id" 2>&1 | grep -q 'already has'
+    ! zk_in kt remote-add --keyless="$main_id" --issuer=http://insecure.test t "$registry/$namespace" 2>/dev/null || return 1
+    trust_keyless kt && [ "$(zk_signers_of kt t)" = "keyless $main_id" ] || return 1
+    zk_in kt remote-modify --keyless="$main_id" t 2>&1 | grep -q 'already has'
 }
-check "trust add --keyless takes an identity, once, and an issuer only by https" keyless_added
+check "--keyless takes an identity, once, and an issuer only by https" keyless_added
 trust_keyless publisher
 
 publish 8 && digest8=$digest
@@ -416,27 +436,27 @@ check "signature push-bundle puts a keyless one beside the image, under a tag of
 keyless_pull() {
     trust_keyless kg
     local out
-    out=$(zk_in kg pull --yes "$image" 2>&1) || { echo "$out"; return 1; }
+    out=$(zk_in kg install --yes "$image" 2>&1) || { echo "$out"; return 1; }
     grep -q "signed, by $main_id" <<<"$out" || { echo "$out"; return 1; }
     [ "$(installed kg)" = 8 ]
 }
 check "pull installs it, and says who signed" keyless_pull
-keyless_info() { zk_in kg info "$image" 2>/dev/null | grep -q "signature *signed, by $main_id"; }
+keyless_info() { zk_in kg remote-info "$image" 2>/dev/null | grep -q "signature *signed, by $main_id"; }
 check "  and info says so" keyless_info
-check "  and signature check passes" zk_in kg signature check "$image"
+check "  and signature check passes" zk_in kg build-sign --check "$image"
 keyless_key_only() {
     # As a signature by a key that doesn't count is.
     store_with_key ku one
     local out
-    out=$(in_store ku pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    out=$(in_store ku install --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
     grep -q "nobody's keyless signature counts for it" <<<"$out"
 }
 check "  a store with only a key for it refuses it: nobody it trusts signed it" keyless_key_only
 not_sigstores() {
     # zigsaw as released has only Sigstore's root, which never vouched for these.
-    zk_in kr trust add "$registry/$namespace" --keyless "$main_id" >/dev/null 2>&1
+    trust_keyless kr
     local out
-    out=$(in_store kr pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    out=$(in_store kr install --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
     grep -q "a log zigsaw doesn't know" <<<"$out"
 }
 check "  a zigsaw without the test's root refuses it" not_sigstores
@@ -452,11 +472,11 @@ push_refuses_other() {
 check "push-bundle refuses a bundle by someone who doesn't count, and pushes nothing" push_refuses_other
 other_workflow() {
     # Pushed by a publisher who trusts that workflow; pulled by one who doesn't.
-    zk_in kp trust add "$registry/$namespace" --keyless "$other_id" >/dev/null 2>&1
+    trust_keyless kp "$other_id"
     sign_keyless "$other_id" "$image" kp >/dev/null 2>&1 || { echo "pushing failed"; return 1; }
     trust_keyless kw
     local out
-    out=$(zk_in kw pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    out=$(zk_in kw install --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
     grep -q "it's signed by $other_id, not $main_id" <<<"$out" || { echo "$out"; return 1; }
     grep -q 'Nothing was installed' <<<"$out" && [ "$(blobs_in kw)" = 0 ]
 }
@@ -464,8 +484,8 @@ check "a keyless signature by another workflow is refused, with nothing download
 key_beside_keyless() {
     # The same image, signed with a key too: either signature counts.
     sign_as one "$image" >/dev/null 2>&1 || return 1
-    zk_in kw trust add "$registry/$namespace" "$work\\one.pub" >/dev/null 2>&1
-    zk_in kw pull --yes "$image" 2>&1 | grep -q "signed, by key $one_fp"
+    zk_in kw remote-modify --sign-key="$work\\one.pub" t >/dev/null 2>&1
+    zk_in kw install --yes "$image" 2>&1 | grep -q "signed, by key $one_fp"
 }
 check "  and a good key's signature beside it still counts" key_beside_keyless
 
@@ -476,15 +496,15 @@ replayed_keyless() {
     copy_manifest "$namespace/app" "$(bundle_tag "$digest8")" "$namespace/app" "$(bundle_tag "$digest10")" || { echo "copying failed"; return 1; }
     trust_keyless kx
     local out
-    out=$(zk_in kx pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    out=$(zk_in kx install --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
     grep -q "signature of another file" <<<"$out"
 }
 check "a good keyless signature of another image is refused" replayed_keyless
 keyless_rm() {
-    zk_in kx trust rm "$registry/$namespace" "$main_id" >/dev/null 2>&1 || return 1
-    zk_in kx pull --yes "$image" 2>&1 | grep -q 'no key here for its registry'
+    zk_in kx remote-modify --no-sign-key="$main_id" t >/dev/null 2>&1 || return 1
+    zk_in kx install --yes "$image" 2>&1 | grep -q 'no key here for its registry'
 }
-check "trust rm takes a keyless one away by its identity" keyless_rm
+check "--no-sign-key takes a keyless one away by its identity" keyless_rm
 
 # Rekor v2: no time of the log's, a timestamp authority's instead, and a proof that
 # the log holds the entry, as cosign makes them with a v2 signing config.
@@ -498,16 +518,16 @@ check "a keyless signature logged in Rekor v2: push-bundle takes it" pushed_v2
 v2_pull() {
     trust_keyless k2
     local out
-    out=$(zk_in k2 pull --yes "$image" 2>&1) || { echo "$out"; return 1; }
+    out=$(zk_in k2 install --yes "$image" 2>&1) || { echo "$out"; return 1; }
     grep -q "signed, by $main_id" <<<"$out" || { echo "$out"; return 1; }
     [ "$(installed k2)" = 11 ]
 }
 check "  pull installs it, and says who signed" v2_pull
-check "  and signature check passes" zk_in k2 signature check "$image"
+check "  and signature check passes" zk_in k2 build-sign --check "$image"
 v2_not_sigstores() {
-    zk_in k2r trust add "$registry/$namespace" --keyless "$main_id" >/dev/null 2>&1
+    trust_keyless k2r
     local out
-    out=$(in_store k2r pull --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
+    out=$(in_store k2r install --yes "$image" 2>&1) && { echo "it installed: $out"; return 1; }
     grep -q "a log zigsaw doesn't know" <<<"$out"
 }
 check "  a zigsaw without the test's root refuses it" v2_not_sigstores
@@ -570,7 +590,7 @@ release_other_key() {
 }
 check "  nor signed by a key that isn't a release's" release_other_key
 
-for s in "$work"/*/; do [ -f "${s}refs/$APP.json" ] && ZIGSAW_HOME="$(cygpath -w "$s")" "$zigsaw" rm --delete-data "$APP" >/dev/null 2>&1; done
+for s in "$work"/*/; do [ -f "${s}refs/$APP.json" ] && ZIGSAW_HOME="$(cygpath -w "$s")" "$zigsaw" uninstall --delete-data "$APP" >/dev/null 2>&1; done
 reg delete "HKCU\\$ZIGSAW_GRANTS_KEY" /f >/dev/null 2>&1
 reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1
 cd / && rm -rf "$work" 2>/dev/null

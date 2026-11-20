@@ -259,7 +259,7 @@ const Doctor = struct {
             var info: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = .{};
             if (win32.QueryInformationJobObject(null, win32.JobObjectExtendedLimitInformation, &info, @sizeOf(@TypeOf(info)), null) != 0 and
                 !mayBreakAway(info.BasicLimitInformation.LimitFlags))
-                try d.r.add(.note, "this terminal's job keeps what zigsaw starts: detached runs (`run -d`) and lazy pulls end with it", .{});
+                try d.r.add(.note, "this terminal's job keeps what zigsaw starts: detached runs (`run -d`) and lazy installs end with it", .{});
         }
     }
 
@@ -344,7 +344,7 @@ const Doctor = struct {
         }
         if (env.get(remote.registry_var)) |registry| {
             if (!validRegistry(d.ctx.arena, registry)) {
-                try d.r.add(.problem, "{s}={s} isn't a registry and a path in it, as ghcr.io/zigsaw-io is: apps named by id can't be pulled", .{ remote.registry_var, registry });
+                try d.r.add(.problem, "{s}={s} isn't a registry and a path in it, as ghcr.io/zigsaw-io is: apps named by id can't be installed", .{ remote.registry_var, registry });
                 try d.r.fix("set it as <registry>[/<path>], or unset it for {s}", .{remote.default_registry});
             }
         }
@@ -374,7 +374,7 @@ const Doctor = struct {
         if (shape.space)
             try d.r.add(.note, "its path has a space, which some builds split paths at (pkg-config's output, in GTK's)", .{});
         if (vol.remote)
-            try d.r.add(.warning, "it's on a network drive: low and appcontainer runs, volume mounts and lazy pulls may not work there", .{});
+            try d.r.add(.warning, "it's on a network drive: low and appcontainer runs, volume mounts and lazy installs may not work there", .{});
         if (!vol.acls) {
             try d.r.add(.problem, "{s} keeps no permissions: apps' files can't be protected, and low and appcontainer runs can't be sandboxed", .{vol.file_system});
             try d.r.fix("a store on an NTFS drive (ZIGSAW_HOME)", .{});
@@ -382,9 +382,9 @@ const Doctor = struct {
             try d.r.add(.warning, "{s} has no links: volumes can't be mounted in apps' data", .{vol.file_system});
         }
         if (vol.acls and !std.ascii.eqlIgnoreCase(vol.file_system, "NTFS"))
-            try d.r.add(.note, "lazy pulls (`--lazy`) download whole layers on {s}: Windows' Cloud Files, which they use, needs NTFS", .{vol.file_system});
+            try d.r.add(.note, "lazy installs (`--lazy`) download whole layers on {s}: Windows' Cloud Files, which they use, needs NTFS", .{vol.file_system});
         if (d.store_there and cloudfiles.isSyncRoot(ctx.gpa, full))
-            try d.r.add(.warning, "it's in a folder a sync app keeps (OneDrive's, say): lazy pulls can't keep their files there", .{});
+            try d.r.add(.warning, "it's in a folder a sync app keeps (OneDrive's, say): lazy installs can't keep their files there", .{});
     }
 
     /// Low labels on the store or this zigsaw: what's started from either
@@ -405,7 +405,7 @@ const Doctor = struct {
             if (d.rid < win32.SECURITY_MANDATORY_MEDIUM_RID)
                 try d.r.fix("icacls \"{s}\" /setintegritylevel medium, from a terminal that isn't low, takes it away", .{labelled})
             else
-                try d.r.fix("`zigsaw grants --take-back {s}` takes it away", .{labelled});
+                try d.r.fix("`zigsaw permission-remove {s}` takes it away", .{labelled});
         }
     }
 
@@ -561,7 +561,7 @@ const Doctor = struct {
         }
         for (left.unexplained) |p| {
             try d.r.add(.warning, "{s} is labelled low, which no record explains", .{p});
-            try d.r.fix("`zigsaw grants --take-back {s}` removes it", .{p});
+            try d.r.fix("`zigsaw permission-remove {s}` removes it", .{p});
         }
     }
 
@@ -589,7 +589,7 @@ const Doctor = struct {
     fn swaps(d: *Doctor) !void {
         for (try snapshot.interruptedSwaps(d.store.?, d.ctx.arena)) |id| {
             try d.r.add(.warning, "a rollback of {s} stopped halfway, with its data set aside in snapshots\\", .{id});
-            try d.r.fix("its next run, rollback or `zigsaw rm` puts it right", .{});
+            try d.r.fix("its next run, rollback or `zigsaw uninstall` puts it right", .{});
         }
     }
 
@@ -683,20 +683,20 @@ const Doctor = struct {
             .ok => |b| b,
             else => |st| {
                 try d.r.add(.problem, "{s}: its manifest, blob {s}, is {s}", .{ what, short(ref.manifest), st.word() });
-                try d.r.fix("`zigsaw rm {s}`, then {s}, installs it again", .{ ref.id, again });
+                try d.r.fix("`zigsaw uninstall {s}`, then {s}, installs it again", .{ ref.id, again });
                 return;
             },
         };
         const manifest = std.json.parseFromSliceLeaky(oci.Manifest, arena, manifest_bytes, .{ .ignore_unknown_fields = true }) catch {
             try d.r.add(.problem, "{s}: its manifest, blob {s}, isn't one zigsaw can read", .{ what, short(ref.manifest) });
-            try d.r.fix("`zigsaw rm {s}`, then {s}, installs it again", .{ ref.id, again });
+            try d.r.fix("`zigsaw uninstall {s}`, then {s}, installs it again", .{ ref.id, again });
             return;
         };
         switch (try blobState(s, arena, manifest.config.digest)) {
             .ok => {},
             else => |st| {
                 try d.r.add(.problem, "{s}: its config, blob {s}, is {s}", .{ what, short(manifest.config.digest), st.word() });
-                try d.r.fix("`zigsaw rm {s}`, then {s}, installs it again", .{ ref.id, again });
+                try d.r.fix("`zigsaw uninstall {s}`, then {s}, installs it again", .{ ref.id, again });
                 return;
             },
         }
@@ -713,12 +713,12 @@ const Doctor = struct {
             }
             if (try lazy.isLazy(s, arena, hex)) {
                 const how = try lazy.describe(s, arena, .{ .config = manifest.config, .layers = &.{l} }) orelse "(fetching)";
-                try d.r.add(.note, "{s}: a lazy pull of layer {s} goes on {s}", .{ what, short(l.digest), how });
+                try d.r.add(.note, "{s}: a lazy install of layer {s} goes on {s}", .{ what, short(l.digest), how });
             } else if (try Store.exists(ctx.io, try s.blobPath(arena, hex))) {
                 try d.r.add(.note, "{s}: layer {s} isn't unpacked; its next run unpacks it", .{ what, short(l.digest) });
             } else {
                 try d.r.add(.problem, "{s}: layer {s} is neither unpacked nor in the store", .{ what, short(l.digest) });
-                try d.r.fix("`zigsaw rm {s}`, then {s}, installs it again", .{ ref.id, again });
+                try d.r.fix("`zigsaw uninstall {s}`, then {s}, installs it again", .{ ref.id, again });
             }
         }
         if (detail and unpacked == manifest.layers.len) try d.r.add(.ok, "its files are unpacked: {d} layer{s}", .{ unpacked, plural(unpacked) });
@@ -922,7 +922,7 @@ const Doctor = struct {
         switch (try credentials.savedFor(ctx, host)) {
             .none => {},
             .environment => try d.r.add(.ok, "a login for {s} is in ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD", .{host}),
-            .credential_manager => |user| try d.r.add(.ok, "a login for {s} is saved, as {s} (`zigsaw login`)", .{ host, user }),
+            .credential_manager => |user| try d.r.add(.ok, "a login for {s} is saved, as {s} (`zigsaw remote-modify --login`)", .{ host, user }),
             .docker_config => try d.r.add(.ok, "a login for {s} is in Docker's config.json", .{host}),
             .docker_helper => |name| try d.r.add(.ok, "a login for {s} may be with docker-credential-{s}, as Docker's config says", .{ host, name }),
             .docker_unreadable => |p| try d.r.add(.warning, "Docker's config, {s}, can't be read: zigsaw goes on without the logins in it", .{p}),
@@ -1144,11 +1144,11 @@ fn short(digest: []const u8) []const u8 {
 
 /// How the app is installed again: from its recipe, or its image.
 fn reinstallText(arena: Allocator, ref: Store.Ref) ![]const u8 {
-    const src = ref.source orelse return std.fmt.allocPrint(arena, "`zigsaw pull {s}`", .{ref.id});
+    const src = ref.source orelse return std.fmt.allocPrint(arena, "`zigsaw install {s}`", .{ref.id});
     return if (isRecipePath(src))
         std.fmt.allocPrint(arena, "`zigsaw build {s}`", .{src})
     else
-        std.fmt.allocPrint(arena, "`zigsaw pull {s}`", .{src});
+        std.fmt.allocPrint(arena, "`zigsaw install {s}`", .{src});
 }
 
 /// Whether a ref's source is a recipe's path, not an image's reference.

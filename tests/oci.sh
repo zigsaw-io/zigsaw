@@ -87,7 +87,7 @@ done
 mkdir -p "$work\\cwd" && cd "$work\\cwd" || exit 1
 printf 'hello from zigsaw\n' >hello.txt
 image=$registry/oci/busybox
-digest=$(z push net.frippery.busybox "$image:1" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2)
+digest=$(z build-export net.frippery.busybox "$image:1" 2>&1 | grep -o 'manifest sha256:[0-9a-f]*' | cut -d' ' -f2)
 [ -n "$digest" ] || echo "pushing BusyBox's image to $image:1 failed"
 
 # --- ORAS -----------------------------------------------------------------------
@@ -153,37 +153,37 @@ other_key() {
     ! r $COSIGN "${offline[@]}" -- verify --key other/cosign.pub --insecure-ignore-tlog --allow-http-registry "$image:1"
 }
 check "  but not with another key" other_key
-check "zigsaw still pulls the signed image" env ZIGSAW_HOME="$work\\pulled" "$zigsaw" pull --yes "$image:1"
+check "zigsaw still pulls the signed image" env ZIGSAW_HOME="$work\\pulled" "$zigsaw" install --yes "$image:1"
 
 # zigsaw's signatures are cosign's: made by the real thing, and read by it.
 signed="$registry/oci/signed"
 cosign_program=$(find "$(cygpath -u "$ZIGSAW_HOME\\deploy")" -maxdepth 2 -iname cosign.exe | head -1)
 signs_blob() {
-    z push net.frippery.busybox "$signed:1" >/dev/null 2>&1 || return 1
-    z signature payload "$signed:1" >"$work\\cwd\\signed.payload" || return 1
+    z build-export net.frippery.busybox "$signed:1" >/dev/null 2>&1 || return 1
+    z build-sign --print-payload "$signed:1" >"$work\\cwd\\signed.payload" || return 1
     # As scripts/sign-lib.sh's sign_blob does: with a key, and nothing logged.
     COSIGN_PASSWORD=zigsaw-test "$cosign_program" sign-blob --key "$work\\cwd\\cosign.key" --new-bundle-format=false \
         --use-signing-config=false --tlog-upload=false --yes --output-signature "$work\\cwd\\signed.sig" "$work\\cwd\\signed.payload" >/dev/null 2>&1 || return 1
-    z signature push "$signed:1" "$work\\cwd\\signed.payload" "$work\\cwd\\signed.sig"
+    z build-sign "$signed:1" "$work\\cwd\\signed.payload" "$work\\cwd\\signed.sig"
 }
 check "the real cosign signs zigsaw's payload with a key, and zigsaw pushes it" signs_blob
 cosign_reads() { r $COSIGN "${offline[@]}" -- verify --key cosign.pub --insecure-ignore-tlog --allow-http-registry "$signed:1"; }
 check "  stock cosign verify reads what zigsaw pushed" cosign_reads
 zigsaw_reads() {
     local out
-    ZIGSAW_HOME="$work\\checks" "$zigsaw" trust add "$registry/oci" cosign.pub >/dev/null 2>&1 || return 1
-    out=$(ZIGSAW_HOME="$work\\checks" "$zigsaw" pull --yes "$signed:1" 2>&1) || { echo "$out"; return 1; }
+    ZIGSAW_HOME="$work\\checks" "$zigsaw" remote-add --sign-key=cosign.pub oci "$registry/oci" >/dev/null 2>&1 || return 1
+    out=$(ZIGSAW_HOME="$work\\checks" "$zigsaw" install --yes "$signed:1" 2>&1) || { echo "$out"; return 1; }
     grep -q 'signed, by key' <<<"$out" || { echo "$out"; return 1; }
 }
 check "  and zigsaw's own check passes it" zigsaw_reads
 other_refused() {
     local out
-    ZIGSAW_HOME="$work\\checks2" "$zigsaw" trust add "$registry/oci" other/cosign.pub >/dev/null 2>&1 || return 1
-    out=$(ZIGSAW_HOME="$work\\checks2" "$zigsaw" pull --yes "$signed:1" 2>&1) && { echo "it installed"; return 1; }
+    ZIGSAW_HOME="$work\\checks2" "$zigsaw" remote-add --sign-key=other/cosign.pub oci "$registry/oci" >/dev/null 2>&1 || return 1
+    out=$(ZIGSAW_HOME="$work\\checks2" "$zigsaw" install --yes "$signed:1" 2>&1) && { echo "it installed"; return 1; }
     grep -q 'not by any key that counts' <<<"$out"
 }
 check "  and with another cosign key, refuses it" other_refused
-ZIGSAW_HOME="$work\\checks" "$zigsaw" rm --delete-data net.frippery.busybox >/dev/null 2>&1
+ZIGSAW_HOME="$work\\checks" "$zigsaw" uninstall --delete-data net.frippery.busybox >/dev/null 2>&1
 
 # A release, with programs that only have to be the same bytes.
 fake_release() { # <dir> <what the programs hold>
@@ -260,10 +260,10 @@ check_gap "  skopeo copies into an OCI layout there" sh -c "\"\$0\" run --sandbo
 check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
 cd "$root" || exit 1
-ZIGSAW_HOME="$work\\pulled" "$zigsaw" rm --delete-data net.frippery.busybox >/dev/null 2>&1
-for id in $installed_here; do z rm --delete-data "$id" >/dev/null 2>&1; done
+ZIGSAW_HOME="$work\\pulled" "$zigsaw" uninstall --delete-data net.frippery.busybox >/dev/null 2>&1
+for id in $installed_here; do z uninstall --delete-data "$id" >/dev/null 2>&1; done
 if [ -n "$temp_store" ]; then
-    z prune --downloads --volumes >/dev/null 2>&1
+    z uninstall --unused --downloads --volumes >/dev/null 2>&1
     rm -rf "$temp_store"
 fi
 rm -rf "$work"

@@ -280,9 +280,9 @@ cd "$root" || exit 1
 reg delete "HKCU\\$classes" /f >/dev/null 2>&1
 reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1
 rm -rf "$docs"
-for id in $installed_here; do z rm --delete-data "$id" >/dev/null 2>&1; done
+for id in $installed_here; do z uninstall --delete-data "$id" >/dev/null 2>&1; done
 if [ -n "$temp_store" ]; then
-    z prune --downloads --volumes >/dev/null 2>&1
+    z uninstall --unused --downloads --volumes >/dev/null 2>&1
     rm -rf "$temp_store"
 fi
 rm -rf "$work"

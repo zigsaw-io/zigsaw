@@ -64,7 +64,7 @@ ze() { ZIGSAW_HOME="$(store e)" ZIGSAW_TEST_LAZY_REFUSE=1 "$zigsaw" "$@"; }
 cleanup() {
     # rm stops a lazy layer's helper; one whose app is gone already, by its pid.
     for s in b c d e f g h i j a; do
-        ZIGSAW_HOME="$(store $s)" "$zigsaw" rm $APP >/dev/null 2>&1
+        ZIGSAW_HOME="$(store $s)" "$zigsaw" uninstall $APP >/dev/null 2>&1
         p=$(helper_pid $s) && [ -n "$p" ] && taskkill /F /PID "$p" >/dev/null 2>&1
         [ -n "${hex2:-}" ] && p=$(helper2_pid $s) && [ -n "$p" ] && taskkill /F /PID "$p" >/dev/null 2>&1
     done
@@ -107,7 +107,7 @@ printf 'never read but once\n' >"$(cygpath -u "$fixture")/never.txt"
 printf 'what a first run reads\n' >"$(cygpath -u "$fixture")/first.txt"
 printf '{ "id": "%s", "version": "1", "command": "busybox.exe", "exports": {}, "layer": "estargz", "prefetch": ["first.txt"],\n  "permissions": { "sandbox": "soft" },\n  "modules": [{ "name": "files", "sources": [\n    { "url": "https://frippery.org/files/busybox/busybox-w64-FRP-6075-g169694ebd.exe", "sha256": "07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075", "dest": "busybox.exe" },\n    { "path": "big.bin" }, { "path": "small.txt" }, { "path": "never.txt" }, { "path": "first.txt" } ] }] }\n' $APP >"$(cygpath -u "$fixture")/app.json"
 za build "$fixture\\app.json" >"$work\\build.txt" 2>&1 || { echo "building the fixture failed:"; tail -3 "$work\\build.txt"; exit 1; }
-za push $APP "$repo:1" >/dev/null 2>&1 || { echo "pushing the fixture failed"; exit 1; }
+za build-export $APP "$repo:1" >/dev/null 2>&1 || { echo "pushing the fixture failed"; exit 1; }
 manifest=$(grep -o 'sha256:[0-9a-f]*' "$(store a)\\refs\\$APP.json" | head -1 | cut -d: -f2)
 hex=$(tr -d ' \r\n' <"$(store a)\\blobs\\sha256\\$manifest" | grep -o '"digest":"sha256:[0-9a-f]\{64\}"' | tail -1 | grep -o '[0-9a-f]\{64\}')
 deploy_of() { echo "$(store "$1")\\deploy\\$hex"; }
@@ -125,7 +125,7 @@ check "a recipe's prefetch puts its files first in the layer, then the prefetch 
 
 # --- Pulled lazily -----------------------------------------------------------
 touch "$(cygpath -u "$gate")"
-pull_out=$(zb pull --yes --lazy "$repo:1" 2>&1)
+pull_out=$(zb install --yes --lazy "$repo:1" 2>&1)
 if grep -q "can't have Cloud Files placeholders" <<<"$pull_out"; then
     echo "note  this work directory's volume can't have placeholders ($work): set LAZY_WORK to one on NTFS"
     exit 1
@@ -203,7 +203,7 @@ check "a fetch that fails makes the run say which file, and why" told_why
 taskkill /F /PID "$(helper_pid b)" >/dev/null 2>&1
 push_refused() {
     local out
-    out=$(zb push $APP "$repo-copy:1" 2>&1) && { echo "it pushed"; return 1; }
+    out=$(zb build-export $APP "$repo-copy:1" 2>&1) && { echo "it pushed"; return 1; }
     grep -q 'still being downloaded' <<<"$out" || { echo "$out"; return 1; }
 }
 check "push refuses an app still being downloaded" push_refused
@@ -254,10 +254,10 @@ check "list says nothing of it any more" bash -c "! ZIGSAW_HOME='$(store b)' '$z
 
 # --- rm, and a job that keeps what it starts ---------------------------------
 touch "$(cygpath -u "$gate")"
-zc pull --yes --lazy "$repo:1" >/dev/null 2>&1
+zc install --yes --lazy "$repo:1" >/dev/null 2>&1
 removed() {
     local pid; pid=$(helper_pid c)
-    zc rm $APP >/dev/null 2>&1 || return 1
+    zc uninstall $APP >/dev/null 2>&1 || return 1
     [ ! -e "$(deploy_of c)" ] && [ ! -e "$(lazy_of c)" ] || { echo "something is left"; return 1; }
     [ -z "$pid" ] || [ "$pid" = 0 ] || ! tasklist /fi "PID eq $pid" /nh 2>/dev/null | grep -q " $pid "
 }
@@ -265,7 +265,7 @@ check "rm while it's lazy stops the helper, and leaves no placeholders or downlo
 
 # As separate arguments: injob takes its command line as it comes, and Git
 # Bash would escape quotes in one. (No spaces in these paths.)
-injob_out=$(ZIGSAW_HOME="$(store d)" ZIGSAW_TEST_LAZY_GATE="$gate" "$jobprobe" injob "$zigsaw" pull --yes --lazy "$repo:1" 2>&1)
+injob_out=$(ZIGSAW_HOME="$(store d)" ZIGSAW_TEST_LAZY_GATE="$gate" "$jobprobe" injob "$zigsaw" install --yes --lazy "$repo:1" 2>&1)
 check "pull --lazy in a job that keeps what it starts says the download lasts as long as it" grep -q "in a job that keeps what it starts" <<<"$injob_out"
 check "the job's end ended the helper" helper_gone d
 # Stdout only, as above: outside that job may still be inside another.
@@ -279,7 +279,7 @@ check "the next run, outside it, starts the helper again" restarted_outside
 rm -f "$(store d)\\refs\\$APP.json"
 pruned() {
     local pid; pid=$(helper_pid d)
-    zd prune >/dev/null 2>&1 || return 1
+    zd uninstall --unused >/dev/null 2>&1 || return 1
     [ ! -e "$(deploy_of d)" ] || { echo "the placeholders are still there"; return 1; }
     [ ! -e "$(lazy_of d)" ] || { echo "lazy\\ still has the layer"; return 1; }
     [ -z "$pid" ] || [ "$pid" = 0 ] || ! tasklist /fi "PID eq $pid" /nh 2>/dev/null | grep -q " $pid "
@@ -289,7 +289,7 @@ check "prune deletes placeholders no installed app uses, and stops their helper"
 # --- Where placeholders can't be ---------------------------------------------
 fell_back() {
     local out
-    out=$(ze pull --yes --lazy "$repo:1" 2>&1) || { echo "$out" | tail -2; return 1; }
+    out=$(ze install --yes --lazy "$repo:1" 2>&1) || { echo "$out" | tail -2; return 1; }
     grep -q "downloaded whole" <<<"$out" || { echo "$out"; return 1; }
     [ -e "$(store e)\\blobs\\sha256\\$hex" ] && [ ! -e "$(lazy_of e)" ] && plain_file "$(deploy_of e)\\never.txt"
 }
@@ -303,8 +303,8 @@ zf() { ZIGSAW_HOME="$(store f)" ZIGSAW_TEST_LAZY_GATE="$gate" "$zigsaw" "$@"; }
 zg() { ZIGSAW_HOME="$(store g)" ZIGSAW_TEST_LAZY_GATE="$gate" "$zigsaw" "$@"; }
 zh() { ZIGSAW_HOME="$(store h)" ZIGSAW_TEST_LAZY_GATE="$gate" "$zigsaw" "$@"; }
 for s in f g h; do
-    za push $APP "$repo-$s:latest" >/dev/null 2>&1 || { echo "pushing version 1 failed"; exit 1; }
-    ZIGSAW_HOME="$(store $s)" "$zigsaw" pull --yes "$repo-$s:latest" >/dev/null 2>&1 || { echo "pulling version 1 into $s failed"; exit 1; }
+    za build-export $APP "$repo-$s:latest" >/dev/null 2>&1 || { echo "pushing version 1 failed"; exit 1; }
+    ZIGSAW_HOME="$(store $s)" "$zigsaw" install --yes "$repo-$s:latest" >/dev/null 2>&1 || { echo "pulling version 1 into $s failed"; exit 1; }
 done
 fixture2="$work\\fixture2"
 cp -r "$(cygpath -u "$fixture")" "$(cygpath -u "$fixture2")"
@@ -312,7 +312,7 @@ printf 'hello lazy, version 2\n' >"$(cygpath -u "$fixture2")/small.txt"
 head -c 1048576 /dev/urandom >"$(cygpath -u "$fixture2")/new.bin"
 sed -i 's/"version": "1"/"version": "2"/; s/{ "path": "first.txt" } ]/{ "path": "first.txt" }, { "path": "new.bin" } ]/' "$(cygpath -u "$fixture2")/app.json"
 za build "$fixture2\\app.json" >"$work\\build2.txt" 2>&1 || { echo "building version 2 failed:"; tail -3 "$work\\build2.txt"; exit 1; }
-for s in f g h; do za push $APP "$repo-$s:latest" >/dev/null 2>&1 || { echo "pushing version 2 failed"; exit 1; }; done
+for s in f g h; do za build-export $APP "$repo-$s:latest" >/dev/null 2>&1 || { echo "pushing version 2 failed"; exit 1; }; done
 manifest2=$(grep -o 'sha256:[0-9a-f]*' "$(store a)\\refs\\$APP.json" | head -1 | cut -d: -f2)
 hex2=$(tr -d ' \r\n' <"$(store a)\\blobs\\sha256\\$manifest2" | grep -o '"digest":"sha256:[0-9a-f]\{64\}"' | tail -1 | grep -o '[0-9a-f]\{64\}')
 deploy2_of() { echo "$(store "$1")\\deploy\\$hex2"; }
@@ -417,14 +417,14 @@ check "bytes copied wrong fail the blob's digest, and it's fetched again" bad_co
 # small.txt is another, then has it asked for before any run does. (Store a
 # builds each version again, which its build cache answers.)
 zj() { ZIGSAW_HOME="$(store j)" ZIGSAW_TEST_LAZY_GATE="$gate" "$zigsaw" "$@"; }
-za build "$fixture\\app.json" >/dev/null 2>&1 && za push $APP "$repo-j:latest" >/dev/null 2>&1 || { echo "pushing version 1 again failed"; exit 1; }
+za build "$fixture\\app.json" >/dev/null 2>&1 && za build-export $APP "$repo-j:latest" >/dev/null 2>&1 || { echo "pushing version 1 again failed"; exit 1; }
 touch "$(cygpath -u "$gate")"
-zj pull --yes --lazy "$repo-j:latest" >/dev/null 2>&1
+zj install --yes --lazy "$repo-j:latest" >/dev/null 2>&1
 zj run $APP cat "$(deploy_of j)\\small.txt" >/dev/null 2>&1
 for i in $(seq 1 20); do grep -qxF "$hex small.txt" "$(learned_of j)" 2>/dev/null && break; sleep 0.25; done
 rm -f "$(cygpath -u "$gate")"
 for i in $(seq 1 80); do [ -d "$(lazy_of j)" ] || break; sleep 0.25; done
-za build "$fixture2\\app.json" >/dev/null 2>&1 && za push $APP "$repo-j:latest" >/dev/null 2>&1 || { echo "pushing version 2 again failed"; exit 1; }
+za build "$fixture2\\app.json" >/dev/null 2>&1 && za build-export $APP "$repo-j:latest" >/dev/null 2>&1 || { echo "pushing version 2 again failed"; exit 1; }
 touch "$(cygpath -u "$gate")"
 ahead_out=$(zj update --yes --lazy $APP 2>&1)
 # The helper's requests so far, once two looks a second apart agree: its
@@ -464,9 +464,9 @@ read_ahead() {
 }
 check "and a run then reads it without a request to the registry" read_ahead
 forgotten() {
-    zj rm $APP >/dev/null 2>&1 || { echo "rm failed"; return 1; }
+    zj uninstall $APP >/dev/null 2>&1 || { echo "rm failed"; return 1; }
     [ -e "$(learned_of j)" ] || { echo "rm deleted the list"; return 1; }
-    zj prune >/dev/null 2>&1 || { echo "prune failed"; return 1; }
+    zj uninstall --unused >/dev/null 2>&1 || { echo "prune failed"; return 1; }
     [ ! -e "$(learned_of j)" ] || { echo "prune left the list"; return 1; }
 }
 check "rm leaves what runs read of the app, and prune forgets it" forgotten
@@ -480,7 +480,7 @@ rm -f "$(cygpath -u "$gate")"
 # registry cuts a request that's read so slowly.)
 touch "$(cygpath -u "$gate")"
 zi() { ZIGSAW_HOME="$(store i)" ZIGSAW_TEST_LAZY_GATE="$gate" ZIGSAW_TEST_LAZY_SLOW="${LAZY_SLOW:-1048576}" ZIGSAW_TEST_LAZY_WAIT="${LAZY_WAIT:-0}" "$zigsaw" "$@"; }
-zi pull --yes --lazy "$repo:1" >/dev/null 2>&1
+zi install --yes --lazy "$repo:1" >/dev/null 2>&1
 slow_progress() {
     local out; out=$(zi run $APP head -c 10 "$(deploy_of i)\\big.bin" 2>/dev/null | od -An -tx1 | tr -d ' \n')
     [ "$out" = "$(head -c 10 "$(cygpath -u "$fixture")/big.bin" | od -An -tx1 | tr -d ' \n')" ] || { echo "head read '$out'"; return 1; }
@@ -492,9 +492,9 @@ rm -f "$(cygpath -u "$gate")"
 
 if [ -n "${LAZY_DEV_DRIVE:-}" ]; then
     dev="$LAZY_DEV_DRIVE\\lazy-$$"
-    dev_out=$(ZIGSAW_HOME="$dev" "$zigsaw" pull --yes --lazy "$repo:1" 2>&1)
+    dev_out=$(ZIGSAW_HOME="$dev" "$zigsaw" install --yes --lazy "$repo:1" 2>&1)
     check "on a real Dev Drive too" grep -q "can't have Cloud Files placeholders.*downloaded whole" <<<"$dev_out"
-    ZIGSAW_HOME="$dev" "$zigsaw" rm $APP >/dev/null 2>&1
+    ZIGSAW_HOME="$dev" "$zigsaw" uninstall $APP >/dev/null 2>&1
     rm -rf "$(cygpath -u "$dev")"
 fi
 

@@ -1,4 +1,4 @@
-//! `zigsaw ls` and `zigsaw cat`: the files of an app's image in a registry,
+//! `zigsaw remote-info --show-files` and `--file`: the files of an app's image in a registry,
 //! and one file's contents, read through the indexes of its layers (see
 //! `format.Format.indexed`) without pulling them: a few Range requests per
 //! layer, or the store's copy of a blob it has.
@@ -87,9 +87,9 @@ fn listTo(ctx: *Context, registry: *Registry, app: remote.Info, all: []const Lay
     for (all) |l| {
         if (!l.format.indexed()) {
             if (headings)
-                try w.print("{s} {s}: {s}, which can't be listed without pulling it\n", .{ l.id, l.version, l.format.label() })
+                try w.print("{s} {s}: {s}, which can't be listed without downloading it\n", .{ l.id, l.version, l.format.label() })
             else
-                return fail("{s}'s layer is {s}, which can't be listed without pulling it", .{ app.target.text, l.format.label() });
+                return fail("{s}'s layer is {s}, which can't be listed without downloading it", .{ app.target.text, l.format.label() });
             continue;
         }
         const opened = try Opened.open(ctx, registry, l);
@@ -149,12 +149,12 @@ pub fn cat(ctx: *Context, image_text: []const u8, path: []const u8) !void {
         return;
     }
     if (skipped.items.len > 0)
-        return fail("{s} has no {s} in the layers zigsaw can read without pulling; {s} can't be", .{ app.target.text, path, try oci.joinAnd(arena, skipped.items) });
+        return fail("{s} has no {s} in the layers zigsaw can read without downloading them; {s} can't be", .{ app.target.text, path, try oci.joinAnd(arena, skipped.items) });
     return fail("{s} has no file {s}", .{ app.target.text, path });
 }
 
 /// After a write to stdout failed: quiet if whoever read it stopped, as in
-/// `zigsaw cat ... | head`.
+/// `zigsaw remote-info --file=... | head`.
 fn stdoutFailed(stdout: *const Io.File.Writer) error{Failed} {
     const err = stdout.err orelse return fail("writing to stdout failed", .{});
     if (err == error.BrokenPipe) return error.Failed;

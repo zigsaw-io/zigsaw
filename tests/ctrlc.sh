@@ -54,8 +54,8 @@ CTRLC_BUILD_RECIPE="$work\\build.json" "$root/zig-out/test/zigsaw-ctrlc.exe" "$z
 status=$?
 
 if $own_store; then
-    for app in org.nodejs.node test.ctrlc.build net.frippery.busybox; do "$zigsaw" rm --delete-data $app >/dev/null 2>&1; done
-    "$zigsaw" prune --downloads >/dev/null 2>&1
+    for app in org.nodejs.node test.ctrlc.build net.frippery.busybox; do "$zigsaw" uninstall --delete-data $app >/dev/null 2>&1; done
+    "$zigsaw" uninstall --unused --downloads >/dev/null 2>&1
     rm -rf "$ZIGSAW_HOME"
 fi
 rm -rf "$work"

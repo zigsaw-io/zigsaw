@@ -2,7 +2,7 @@
 
 The recipes in [recipes/](../recipes/) are published as images in
 `ghcr.io/zigsaw-io`, tagged with their version and `latest`, and listed in
-its catalog (`zigsaw search`), so these install with `zigsaw pull <id>`
+its catalog (`zigsaw search`), so these install with `zigsaw install <id>`
 (those in `recipes/no-publish/` aren't: see
 [Apps you build yourself](#apps-you-build-yourself)):
 
@@ -233,7 +233,7 @@ Layers are gzip-compressed, so a pull downloads much less than it unpacks:
 
 The recipes in [recipes/no-publish/](../recipes/no-publish/) make images that
 mustn't be published, as the licences of what's in them don't allow it.
-`zigsaw pull` can't find them: each machine builds them, in this order.
+`zigsaw install` can't find them: each machine builds them, in this order.
 
 | App | Id | Version | Commands |
 |---|---|---|---|
@@ -269,7 +269,7 @@ drives and asks for a permission it can't be given.
 
 [ungoogled-chromium](recipes.md#chromium-and-electron) isn't published, as its
 Windows build has codecs that patents cover (H.264, AAC): each machine makes
-the image from upstream's zip, so `zigsaw pull` can't find it. Its image asks
+the image from upstream's zip, so `zigsaw install` can't find it. Its image asks
 for `soft`, as Windows doesn't let Chromium's sandbox start otherwise. It keeps
 its settings in its data, its registry key too, and asks where to save each
 download. It's offered for `http` and `https` in Settings' Default apps, where

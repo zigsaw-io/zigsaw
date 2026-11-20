@@ -14,6 +14,13 @@ arena: std.mem.Allocator,
 env: *std.process.Environ.Map,
 store: Store,
 verbose: bool = false,
+/// Where apps named by id alone are, for this command: the location of the
+/// remote its user named (`zigsaw install <remote> <app-id>`), or null for
+/// the first remote's (see remotes.zig).
+remote: ?[]const u8 = null,
+/// Whether `store` is open: commands that don't touch the store leave it
+/// undefined.
+store_open: bool = false,
 
 /// Logs an error for the user and returns `error.Failed`, which `main` exits on
 /// without printing anything further.

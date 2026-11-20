@@ -1,9 +1,9 @@
-//! `zigsaw stop` and `zigsaw kill`: ending the runs and builds `zigsaw ps`
+//! `zigsaw kill` and `zigsaw kill --now`: ending the runs and builds `zigsaw ps`
 //! lists.
 //!
 //! The run's zigsaw asks; the stopper ends. Each run and build makes a
 //! named event (`Asker`), which its record names, and waits on it besides
-//! its app (process.Child.stop). `zigsaw stop` sets it: the run's zigsaw,
+//! its app (process.Child.stop). `zigsaw kill` sets it: the run's zigsaw,
 //! which has the job and shares the app's console, then posts WM_CLOSE to
 //! the app's windows and sends Ctrl+C to its console, and goes on waiting.
 //! What hasn't ended after `--time`, `stop` ends as `kill` does: a run by
@@ -11,12 +11,12 @@
 //! ever (the app's keys in HKCU, an --ephemeral data directory, its record);
 //! a build by its zigsaw, whose kept build root the next build goes on from.
 //! Runs inside another (see ps.nest) end first, for the same reason, and so
-//! do the commands `zigsaw exec` started in it, each by its exec's own job.
+//! do the commands `zigsaw enter` started in it, each by its exec's own job.
 //!
 //! Windows sends Ctrl+C to every process on a console, as the key does. So
 //! it's sent only when everything else on the run's console is the run's
 //! own or what started the run (its shell, which takes it as the key): never
-//! to a program that only shares the terminal. Nor when the `zigsaw stop`
+//! to a program that only shares the terminal. Nor when the `zigsaw kill`
 //! is on that console: its shell would get it too, and a script waiting on
 //! a program dies of Ctrl+C in Git Bash. The stopper says who it is in
 //! running\<pid>.stopping before it sets the event.
@@ -50,12 +50,12 @@ pub const CtrlC = union(enum) {
     not_on_console,
     /// Something else is on the console, which Ctrl+C would reach too.
     blocked: struct { pid: u32, name: []const u8 },
-    /// The `zigsaw stop` is on it, with whatever started it.
+    /// The `zigsaw kill` is on it, with whatever started it.
     stopper_here,
     failed,
 };
 
-/// A stop event of this zigsaw's, for a run or a build: what `zigsaw stop`
+/// A stop event of this zigsaw's, for a run or a build: what `zigsaw kill`
 /// sets to ask it to end.
 pub const Asker = struct {
     event: win32.HANDLE,
@@ -73,7 +73,7 @@ pub const Asker = struct {
     /// zigsaw at low integrity) or the name is taken, which only -v says.
     pub fn create(ctx: *const Context, label: []const u8) ?*Asker {
         return createIn(ctx.store, ctx.arena, label) catch |err| {
-            if (ctx.verbose) note("note: `zigsaw stop` can't ask this to end: {t}", .{err});
+            if (ctx.verbose) note("note: `zigsaw kill` can't ask this to end: {t}", .{err});
             return null;
         };
     }
@@ -105,12 +105,12 @@ pub const Asker = struct {
         return .{ .event = a.event, .context = a, .ask = askFromWait };
     }
 
-    /// Whether `zigsaw stop` has asked.
+    /// Whether `zigsaw kill` has asked.
     pub fn isSet(a: *const Asker) bool {
         return win32.WaitForSingleObject(a.event, 0) == win32.WAIT_OBJECT_0;
     }
 
-    /// The PID of the `zigsaw stop` that asked, if it said.
+    /// The PID of the `zigsaw kill` that asked, if it said.
     fn stopper(a: *const Asker) ?u32 {
         const bytes = Io.Dir.cwd().readFileAlloc(a.io, a.stopping_path, a.arena, .limited(64)) catch return null;
         return std.fmt.parseInt(u32, std.mem.trim(u8, bytes, " \r\n"), 10) catch null;
@@ -140,7 +140,7 @@ pub fn describe(arena: Allocator, asked: Asked) ![]const u8 {
     const ctrl_c: []const u8 = switch (asked.ctrl_c) {
         .sent => "sent Ctrl+C to its console",
         .blocked => |b| try std.fmt.allocPrint(arena, "didn't send Ctrl+C: {s} ({d}) is on its console too, and isn't the run's", .{ b.name, b.pid }),
-        .stopper_here => "didn't send Ctrl+C: the `zigsaw stop` is on its console, and its shell would get it too",
+        .stopper_here => "didn't send Ctrl+C: the `zigsaw kill` is on its console, and its shell would get it too",
         .failed => "couldn't send Ctrl+C",
         .no_console, .not_on_console => "",
     };
@@ -364,7 +364,7 @@ fn named(opts: Options, r: ps.Record) bool {
     return std.mem.indexOfScalar(u32, opts.pids, r.pid) != null;
 }
 
-/// `zigsaw stop` and `zigsaw kill`.
+/// `zigsaw kill` and `zigsaw kill --now`.
 pub fn stop(ctx: *Context, opts: Options) !u32 {
     // Ctrl+C may come to this console too.
     _ = win32.SetConsoleCtrlHandler(&process.ignoreCtrlC, win32.TRUE);

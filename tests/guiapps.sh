@@ -261,7 +261,7 @@ check "SumatraPDF gets the windowless shim, a shortcut, and .pdf, .epub" gui_ins
 check "VLC gets the windowless shim, a shortcut, and .mp4, .mkv, .mp3" gui_installed $VLC vlc 'VLC media player' .mp4 .mkv .mp3
 
 cd "$root" || exit 1
-for id in "${installed[@]}"; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
+for id in "${installed[@]}"; do "$zigsaw" uninstall --delete-data "$id" >/dev/null 2>&1; done
 $had_7zip_key || reg delete 'HKCU\Software\7-Zip' /f >/dev/null 2>&1
 for d in "${absent_before[@]}"; do rm -rf "$d"; done
 reg delete "HKCU\\$classes" /f >/dev/null 2>&1

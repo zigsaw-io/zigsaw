@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end checks for `zigsaw push` and `zigsaw pull` against a real
+# End-to-end checks for `zigsaw build-export` and `zigsaw install` against a real
 # registry: apps round-trip between two stores through it, byte for byte,
 # builds take sources that are gone from their URLs from next to images, and
 # `search` and `info` find apps through the registry's catalog.
@@ -73,22 +73,22 @@ za build "$root/recipes/busybox.json" >/dev/null 2>&1 || { echo "building busybo
 digest=$(za list | awk '$1 == "net.frippery.busybox" { print $3 }')
 
 tags_list() { curl -s "http://${registry/localhost/127.0.0.1}/v2/${repo#*/}/busybox/tags/list" | grep -q FRP-6075-g169694ebd; }
-second_push() { [ "$(za -v push net.frippery.busybox "$repo/busybox" 2>&1 | grep -c ' upload ')" -eq 0 ]; }
+second_push() { [ "$(za -v build-export net.frippery.busybox "$repo/busybox" 2>&1 | grep -c ' upload ')" -eq 0 ]; }
 pulled_runs() { [ "$(zb run net.frippery.busybox echo pulled | tr -d '\r')" = pulled ]; }
 same_digest() { [ "$(zb list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]; }
-missing_tag() { zb pull --yes "$repo/busybox:nope" 2>&1 | grep -q 'not found'; }
+missing_tag() { zb install --yes "$repo/busybox:nope" 2>&1 | grep -q 'not found'; }
 # Container images, as found on real registries, are refused, not installed.
-refused() { zb pull --yes "$1" 2>&1 | grep -qE 'not a zigsaw app|none for windows/amd64'; }
+refused() { zb install --yes "$1" 2>&1 | grep -qE 'not a zigsaw app|none for windows/amd64'; }
 
-check "push" za push net.frippery.busybox "$repo/busybox"
+check "push" za build-export net.frippery.busybox "$repo/busybox"
 check "the tag defaults to the app's version" tags_list
 check "pushing again uploads nothing" second_push
-check "pull into an empty store" zb pull --yes "$repo/busybox:FRP-6075-g169694ebd"
+check "pull into an empty store" zb install --yes "$repo/busybox:FRP-6075-g169694ebd"
 check "the pulled app runs" pulled_runs
 check "the pulled image has the pushed digest" same_digest
 full_digest=$(grep -o 'sha256:[0-9a-f]*' "$store_a\\refs\\net.frippery.busybox.json")
-check "pull by digest" zb pull --yes "$repo/busybox@$full_digest"
-check "a digest that doesn't match is refused" fails zb pull --yes "$repo/busybox@sha256:$(printf '0%.0s' {1..64})"
+check "pull by digest" zb install --yes "$repo/busybox@$full_digest"
+check "a digest that doesn't match is refused" fails zb install --yes "$repo/busybox@sha256:$(printf '0%.0s' {1..64})"
 check "a missing tag is reported" missing_tag
 check "the pulled app's commands are installed" test -f "$store_b\\bin\\busybox.exe"
 
@@ -105,13 +105,13 @@ sgz_built() {
     grep -q '"containerd.io/snapshot/stargz/toc.digest": "sha256:' "$store_a\\blobs\\sha256\\$manifest"
 }
 sgz_pushed() {
-    za push $SGZ "$repo/estargz" >/dev/null 2>&1 || return 1
+    za build-export $SGZ "$repo/estargz" >/dev/null 2>&1 || return 1
     curl -sf -H "Accept: application/vnd.oci.image.manifest.v1+json" "http://${registry/localhost/127.0.0.1}/v2/${repo#*/}/estargz/manifests/1" |
         grep -q '"containerd.io/snapshot/stargz/toc.digest"'
 }
 sgz_pulled() {
     local out
-    out=$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" -v pull --yes "$repo/estargz:1" 2>&1) || { echo "$out" | tail -2; return 1; }
+    out=$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" -v install --yes "$repo/estargz:1" 2>&1) || { echo "$out" | tail -2; return 1; }
     grep -q ' unpack ' <<<"$out" && ! grep -q ' inflate ' <<<"$out" || { echo "$out"; return 1; }
     [ "$(ZIGSAW_HOME="$work\\sgz" "$zigsaw" list | awk -v id=$SGZ '$1 == id { print $3 }')" = "$(za list | awk -v id=$SGZ '$1 == id { print $3 }')" ]
 }
@@ -122,7 +122,7 @@ sgz_own_files_only() {
     deployed=$(cd "$(cygpath -u "$work\\sgz")/deploy" && find . -type f ! -name '*.lock')
     [[ "$deployed" =~ ^\./[0-9a-f]{64}/busybox\.exe$ ]] || { echo "$deployed"; return 1; }
 }
-sgz_info() { ZIGSAW_HOME="$work\\sgz" "$zigsaw" info "$repo/estargz:1" 2>&1 | grep -q '^ *layer  *eStargz$'; }
+sgz_info() { ZIGSAW_HOME="$work\\sgz" "$zigsaw" remote-info "$repo/estargz:1" 2>&1 | grep -q '^ *layer  *eStargz$'; }
 check "eStargz: the layer's descriptor has its TOC's digest" sgz_built
 check "  pushed, the registry's manifest has it" sgz_pushed
 check "  pulled, the same image, unpacked without inflating" sgz_pulled
@@ -133,10 +133,10 @@ check "  info says the layer is eStargz" sgz_info
 # Its files, listed and read from the registry by Range requests, without
 # pulling the layer: a fresh store keeps only the config.
 zp() { ZIGSAW_HOME="$work\\peek" "$zigsaw" "$@"; }
-sgz_ls() { zp ls "$repo/estargz:1" | grep -qE '^ +[0-9]+  busybox\.exe$'; }
-sgz_cat() { [ "$(zp cat "$repo/estargz:1" busybox.exe | sha256sum | cut -d' ' -f1)" = 07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075 ]; }
+sgz_ls() { zp remote-info --show-files "$repo/estargz:1" | grep -qE '^ +[0-9]+  busybox\.exe$'; }
+sgz_cat() { [ "$(zp remote-info --file=busybox.exe "$repo/estargz:1" | sha256sum | cut -d' ' -f1)" = 07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075 ]; }
 sgz_peek_blobs() { [ "$(ls "$(cygpath -u "$work\\peek")/blobs/sha256" | wc -l)" -eq 1 ]; }
-gzip_cat() { zp cat "$repo/busybox:FRP-6075-g169694ebd" busybox.exe 2>&1 | grep -q "busybox's (gzip) can't be"; }
+gzip_cat() { zp remote-info --file=busybox.exe "$repo/busybox:FRP-6075-g169694ebd" 2>&1 | grep -q "busybox's (gzip) can't be"; }
 check "  ls lists its files without pulling it" sgz_ls
 check "  cat writes a file, checked, without pulling it" sgz_cat
 check "  the store has only the image's config" sgz_peek_blobs
@@ -156,10 +156,10 @@ own_layer() { # <store>: the blob path of the installed eStargz app's own layer
     echo "$1\\blobs\\sha256\\$(grep -o '"digest": *"sha256:[0-9a-f]*"' "$1\\blobs\\sha256\\$manifest" | tail -1 | grep -o '[0-9a-f]\{64\}')"
 }
 sgz_v2_pushed() {
-    zbad pull --yes "$repo/estargz:1" >/dev/null 2>&1 || return 1
+    zbad install --yes "$repo/estargz:1" >/dev/null 2>&1 || return 1
     # A byte in the middle of the old layer, in busybox.exe's member.
     python -I -c 'import sys; p = sys.argv[1]; b = bytearray(open(p, "rb").read()); b[len(b) // 2] ^= 0xff; open(p, "wb").write(b)' "$(own_layer "$work\\sgzbad")" || return 1
-    za build "$work\\estargz2.json" >/dev/null 2>&1 && za push $SGZ "$repo/estargz:1" >/dev/null 2>&1
+    za build "$work\\estargz2.json" >/dev/null 2>&1 && za build-export $SGZ "$repo/estargz:1" >/dev/null 2>&1
 }
 sgz_delta() {
     local out size fetched
@@ -218,7 +218,7 @@ check "  a damaged old blob: the blob built is refused, then downloaded whole" s
 check_reaches_more() {
     local out
     sed 's/"version": "2"/"version": "3", "permissions": { "network": true }/' "$work\\estargz2.json" >"$work\\estargz3.json"
-    za build "$work\\estargz3.json" >/dev/null 2>&1 && za push $SGZ "$repo/estargz:1" >/dev/null 2>&1 || return 1
+    za build "$work\\estargz3.json" >/dev/null 2>&1 && za build-export $SGZ "$repo/estargz:1" >/dev/null 2>&1 || return 1
     out=$(sgzcheck $SGZ 2>/dev/null) || return 1
     grep -q "^$SGZ 2 -> 3 (" <<<"$out" && grep -q '^  permits  *.*network' <<<"$out" || { echo "$out"; return 1; }
     # The app stays on version 2, which the build above replaced in store a.
@@ -238,7 +238,7 @@ check "update --check: exit 1 when a registry doesn't answer" check_unreachable
 # request), into the same blob.
 resumed() {
     local out
-    out=$(ZIGSAW_TEST_DOWNLOAD_BREAK=100000 ZIGSAW_HOME="$work\\resume" "$zigsaw" -v pull --yes "$repo/busybox:FRP-6075-g169694ebd" 2>&1) || { echo "$out" | tail -2; return 1; }
+    out=$(ZIGSAW_TEST_DOWNLOAD_BREAK=100000 ZIGSAW_HOME="$work\\resume" "$zigsaw" -v install --yes "$repo/busybox:FRP-6075-g169694ebd" 2>&1) || { echo "$out" | tail -2; return 1; }
     grep -q 'resuming sha256:[0-9a-f]* at 100000 bytes' <<<"$out" || { echo "$out" | tail -3; return 1; }
     [ "$(ZIGSAW_HOME="$work\\resume" "$zigsaw" list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]
 }
@@ -256,13 +256,13 @@ manifest_proxy=$!
 sleep 1
 reset_in_layer() {
     local out
-    out=$(ZIGSAW_HOME="$work\\reset-layer" "$zigsaw" -v pull --yes "127.0.0.1:5002/${repo#*/}/busybox:FRP-6075-g169694ebd" 2>&1) || { echo "$out" | tail -2; return 1; }
+    out=$(ZIGSAW_HOME="$work\\reset-layer" "$zigsaw" -v install --yes "127.0.0.1:5002/${repo#*/}/busybox:FRP-6075-g169694ebd" 2>&1) || { echo "$out" | tail -2; return 1; }
     grep -q 'resuming sha256:[0-9a-f]* at [0-9]* bytes, after ConnectionResetByPeer' <<<"$out" || { echo "$out" | tail -3; return 1; }
     [ "$(ZIGSAW_HOME="$work\\reset-layer" "$zigsaw" list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]
 }
 reset_in_manifest() {
     local out code
-    out=$(ZIGSAW_HOME="$work\\reset-manifest" "$zigsaw" pull --yes "127.0.0.1:5003/${repo#*/}/busybox:FRP-6075-g169694ebd" 2>&1)
+    out=$(ZIGSAW_HOME="$work\\reset-manifest" "$zigsaw" install --yes "127.0.0.1:5003/${repo#*/}/busybox:FRP-6075-g169694ebd" 2>&1)
     code=$?
     [ "$code" = 1 ] && grep -q 'ConnectionResetByPeer' <<<"$out" || { echo "exit $code: $out" | tail -3; return 1; }
 }
@@ -275,20 +275,20 @@ wait "$blob_proxy" "$manifest_proxy" 2>/dev/null
 # ZIGSAW_UPLOAD_CHUNK_SIZE says), and one that breaks off goes on from where
 # the registry got to.
 pulls_back() { # <repository>: into a fresh store, the pushed digest
-    ZIGSAW_HOME="$work\\chunks" "$zigsaw" pull --yes "$1:FRP-6075-g169694ebd" >/dev/null 2>&1 &&
+    ZIGSAW_HOME="$work\\chunks" "$zigsaw" install --yes "$1:FRP-6075-g169694ebd" >/dev/null 2>&1 &&
         [ "$(ZIGSAW_HOME="$work\\chunks" "$zigsaw" list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]
 }
 in_chunks() {
     local out
-    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 za -v push net.frippery.busybox "$repo/busybox-chunks" 2>&1) || { echo "$out"; return 1; }
+    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 za -v build-export net.frippery.busybox "$repo/busybox-chunks" 2>&1) || { echo "$out"; return 1; }
     grep -q "sent .* in [0-9]* chunks" <<<"$out" || { echo "$out"; return 1; }
     pulls_back "$repo/busybox-chunks"
 }
 broken_chunk() {
     local out
-    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 ZIGSAW_TEST_UPLOAD_BREAK=3 za push net.frippery.busybox "$repo/busybox-broken" 2>&1) || { echo "$out"; return 1; }
+    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 ZIGSAW_TEST_UPLOAD_BREAK=3 za build-export net.frippery.busybox "$repo/busybox-broken" 2>&1) || { echo "$out"; return 1; }
     grep -qE "broke off .*(at [0-9]* of [0-9]* bytes; resuming|starting it again)" <<<"$out" || { echo "$out"; return 1; }
-    ZIGSAW_HOME="$work\\chunks" "$zigsaw" rm net.frippery.busybox >/dev/null 2>&1
+    ZIGSAW_HOME="$work\\chunks" "$zigsaw" uninstall net.frippery.busybox >/dev/null 2>&1
     pulls_back "$repo/busybox-broken"
 }
 # A chunk that doesn't start where the registry got to
@@ -302,24 +302,24 @@ broken_chunk() {
 # otherwise in one request.
 failed_chunk() {
     local out
-    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 ZIGSAW_TEST_UPLOAD_SKIP=2 za push net.frippery.busybox "$repo/busybox-skip" 2>&1) || { echo "$out"; return 1; }
+    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 ZIGSAW_TEST_UPLOAD_SKIP=2 za build-export net.frippery.busybox "$repo/busybox-skip" 2>&1) || { echo "$out"; return 1; }
     grep -qE "failed \(HTTP 416\) at [0-9]* of [0-9]* bytes; resuming" <<<"$out" || { echo "$out"; return 1; }
-    ZIGSAW_HOME="$work\\chunks" "$zigsaw" rm net.frippery.busybox >/dev/null 2>&1
+    ZIGSAW_HOME="$work\\chunks" "$zigsaw" uninstall net.frippery.busybox >/dev/null 2>&1
     pulls_back "$repo/busybox-skip"
 }
 lost_chunk() {
     local out
-    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 ZIGSAW_TEST_UPLOAD_SKIP=2 ZIGSAW_TEST_UPLOAD_LOST=1 za push net.frippery.busybox "$repo/busybox-lost" 2>&1) || { echo "$out"; return 1; }
+    out=$(ZIGSAW_UPLOAD_CHUNK_SIZE=65536 ZIGSAW_TEST_UPLOAD_SKIP=2 ZIGSAW_TEST_UPLOAD_LOST=1 za build-export net.frippery.busybox "$repo/busybox-lost" 2>&1) || { echo "$out"; return 1; }
     grep -q "failed a chunk of .* (HTTP 416) and can't say how much of it it has (HTTP 404); uploading it in one request" <<<"$out" || { echo "$out"; return 1; }
-    ZIGSAW_HOME="$work\\chunks" "$zigsaw" rm net.frippery.busybox >/dev/null 2>&1
+    ZIGSAW_HOME="$work\\chunks" "$zigsaw" uninstall net.frippery.busybox >/dev/null 2>&1
     pulls_back "$repo/busybox-lost"
 }
 lost_upload() { # <repository> <expected note> <test hooks...>
     local repository=$1 note=$2 out
     shift 2
-    out=$(env ZIGSAW_UPLOAD_CHUNK_SIZE=65536 "$@" ZIGSAW_HOME="$store_a" "$zigsaw" push net.frippery.busybox "$repository" 2>&1) || { echo "$out"; return 1; }
+    out=$(env ZIGSAW_UPLOAD_CHUNK_SIZE=65536 "$@" ZIGSAW_HOME="$store_a" "$zigsaw" build-export net.frippery.busybox "$repository" 2>&1) || { echo "$out"; return 1; }
     grep -q "$note" <<<"$out" || { echo "$out"; return 1; }
-    ZIGSAW_HOME="$work\\chunks" "$zigsaw" rm net.frippery.busybox >/dev/null 2>&1
+    ZIGSAW_HOME="$work\\chunks" "$zigsaw" uninstall net.frippery.busybox >/dev/null 2>&1
     pulls_back "$repository"
 }
 check "push in chunks, which pull back as pushed" in_chunks
@@ -355,24 +355,24 @@ plain_image() {
     curl -sf -X PUT -H 'Content-Type: application/octet-stream' --data-binary @"$tar" "$location" >/dev/null || { echo "uploading the plain layer failed"; return 1; }
     sed -e 's/layer\.v1\.tar+gzip/layer.v1.tar/' -e "s/$old_hex/$hex/" -e "s/\"size\": $old_size\$/\"size\": $size/" "$manifest" >"$tar.json"
     curl -sf -X PUT -H 'Content-Type: application/vnd.oci.image.manifest.v1+json' --data-binary @"$tar.json" "$api/manifests/plain" >/dev/null || { echo "uploading the manifest failed"; return 1; }
-    ZIGSAW_HOME="$work\\plain" "$zigsaw" pull --yes "$repo/busybox:plain" >/dev/null 2>&1 || { echo "pull failed"; return 1; }
+    ZIGSAW_HOME="$work\\plain" "$zigsaw" install --yes "$repo/busybox:plain" >/dev/null 2>&1 || { echo "pull failed"; return 1; }
     [ "$(ZIGSAW_HOME="$work\\plain" "$zigsaw" run net.frippery.busybox echo plain | tr -d '\r')" = plain ] || { echo "it doesn't run"; return 1; }
-    ZIGSAW_HOME="$work\\plain" "$zigsaw" push net.frippery.busybox "$repo/busybox-plain" >/dev/null 2>&1 || { echo "push failed"; return 1; }
+    ZIGSAW_HOME="$work\\plain" "$zigsaw" build-export net.frippery.busybox "$repo/busybox-plain" >/dev/null 2>&1 || { echo "push failed"; return 1; }
 }
 check "an image with a plain tar layer pulls, runs and pushes" plain_image
 
 # `update` follows the tag an app was pulled by, and leaves a digest alone.
-za push net.frippery.busybox "$repo/busybox:latest" >/dev/null 2>&1
-zb pull --yes "$repo/busybox:latest" >/dev/null 2>&1
+za build-export net.frippery.busybox "$repo/busybox:latest" >/dev/null 2>&1
+zb install --yes "$repo/busybox:latest" >/dev/null 2>&1
 update_up_to_date() { zb update --yes net.frippery.busybox 2>&1 | grep -q 'up to date'; }
 update_moved_tag() {
     sed 's/"version": "[^"]*"/"version": "reg-2"/' "$root/recipes/busybox.json" >"$work\\busybox-2.json" &&
         za build "$work\\busybox-2.json" >/dev/null 2>&1 &&
-        za push net.frippery.busybox "$repo/busybox:latest" >/dev/null 2>&1 &&
+        za build-export net.frippery.busybox "$repo/busybox:latest" >/dev/null 2>&1 &&
         zb update --yes net.frippery.busybox >/dev/null 2>&1 &&
         zb list | grep -q '^net.frippery.busybox  *reg-2 '
 }
-update_pinned() { zb pull --yes "$repo/busybox@$full_digest" >/dev/null 2>&1 && zb update --yes net.frippery.busybox 2>&1 | grep -q pinned; }
+update_pinned() { zb install --yes "$repo/busybox@$full_digest" >/dev/null 2>&1 && zb update --yes net.frippery.busybox 2>&1 | grep -q pinned; }
 check "update: an unmoved tag is up to date" update_up_to_date
 check "update: a moved tag is pulled again" update_moved_tag
 check "update: an app pulled by digest is pinned" update_pinned
@@ -401,16 +401,16 @@ put_index linux-only "$(entry "$reg2" linux arm64)" >/dev/null
 zi() { ZIGSAW_HOME="$work\\idx" "$zigsaw" "$@"; }
 index_pull() {
     local out
-    out=$(zi pull --yes "$repo/busybox:multi" 2>&1) || { echo "$out"; return 1; }
+    out=$(zi install --yes "$repo/busybox:multi" 2>&1) || { echo "$out"; return 1; }
     grep -q "is a multi-platform index" <<<"$out" || { echo "$out"; return 1; }
     [ "$(zi list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]
 }
 index_pinned() {
-    zi pull --yes "$repo/busybox@$index_digest" >/dev/null 2>&1 &&
+    zi install --yes "$repo/busybox@$index_digest" >/dev/null 2>&1 &&
         [ "$(zi list | awk '$1 == "net.frippery.busybox" { print $3 }')" = "$digest" ]
 }
-index_info() { zi info "$repo/busybox:multi" | grep -q "index .*$index_digest"; }
-linux_only() { zi pull --yes "$repo/busybox:linux-only" 2>&1 | grep -q 'with images for linux/arm64; none for windows/amd64'; }
+index_info() { zi remote-info "$repo/busybox:multi" | grep -q "index .*$index_digest"; }
+linux_only() { zi install --yes "$repo/busybox:linux-only" 2>&1 | grep -q 'with images for linux/arm64; none for windows/amd64'; }
 check "pull from a multi-platform index takes its image for windows/amd64" index_pull
 check "  update: an unchanged index is up to date" sh -c "ZIGSAW_HOME='$work\\idx' \"\$0\" update --yes net.frippery.busybox 2>&1 | grep -q 'up to date'" "$zigsaw"
 check "  pull by the index's digest" index_pinned
@@ -420,19 +420,19 @@ check "an index without an image for windows/amd64 is refused, naming its platfo
 # App ids name images in the default registry, here the test registry.
 sza() { ZIGSAW_REGISTRY="$repo" ZIGSAW_HOME="$store_a" "$zigsaw" "$@"; }
 szb() { ZIGSAW_REGISTRY="$repo" ZIGSAW_HOME="$store_b" "$zigsaw" "$@"; }
-check "push by app id" sza push net.frippery.busybox
+check "push by app id" sza build-export net.frippery.busybox
 short_pull() {
-    szb pull --yes net.frippery.busybox:FRP-6075-g169694ebd >/dev/null 2>&1 &&
+    szb install --yes net.frippery.busybox:FRP-6075-g169694ebd >/dev/null 2>&1 &&
         grep -q "\"source\": \"$repo/net.frippery.busybox:FRP-6075-g169694ebd\"" "$store_b\\refs\\net.frippery.busybox.json"
 }
 check "pull by app id; the ref records the full reference" short_pull
-check "pull by app id defaults to :latest" sh -c "ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_a' \"\$0\" push net.frippery.busybox net.frippery.busybox:latest && ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_b' \"\$0\" pull --yes net.frippery.busybox" "$zigsaw"
+check "pull by app id defaults to :latest" sh -c "ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_a' \"\$0\" build-export net.frippery.busybox net.frippery.busybox:latest && ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_b' \"\$0\" install --yes net.frippery.busybox" "$zigsaw"
 other_app_image() {
-    za push net.frippery.busybox "$repo/org.example.other:1" >/dev/null 2>&1 &&
-        szb pull --yes org.example.other:1 2>&1 | grep -q 'holds net.frippery.busybox, not org.example.other'
+    za build-export net.frippery.busybox "$repo/org.example.other:1" >/dev/null 2>&1 &&
+        szb install --yes org.example.other:1 2>&1 | grep -q 'holds net.frippery.busybox, not org.example.other'
 }
 check "pull by app id refuses an image of another app" other_app_image
-check "push by app id refuses another app's image" sh -c "ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_a' \"\$0\" push net.frippery.busybox org.example.other:2 2>&1 | grep -q 'is the image of org.example.other'" "$zigsaw"
+check "push by app id refuses another app's image" sh -c "ZIGSAW_REGISTRY='$repo' ZIGSAW_HOME='$store_a' \"\$0\" build-export net.frippery.busybox org.example.other:2 2>&1 | grep -q 'is the image of org.example.other'" "$zigsaw"
 
 # The catalog: push --catalog lists apps as the registry has them at their
 # latest tag, and search and info read it. A second app has a name, a summary
@@ -442,8 +442,8 @@ sed -e "s/\"net.frippery.busybox\"/\"$CAT\"/" \
     -e 's|"command": "busybox.exe",|&\n  "name": "Catalog Shell",\n  "summary": "A shell for the catalog checks",\n  "license": "GPL-2.0-only",\n  "homepage": "https://example.com/catalog",\n  "permissions": { "filesystem": ["documents"] },\n  "associations": { ".zct": { "command": "busybox", "description": "Zigsaw catalog test" } },|' \
     "$root/recipes/busybox.json" >"$work\\catalog-app.json"
 za build "$work\\catalog-app.json" >/dev/null 2>&1 || echo "building $CAT failed"
-sza push $CAT >/dev/null 2>&1 && sza push $CAT $CAT:latest >/dev/null 2>&1
-catalog_pushed() { sza push --catalog net.frippery.busybox $CAT 2>&1 | grep -q 'pushed the catalog of 2 app(s)'; }
+sza build-export $CAT >/dev/null 2>&1 && sza build-export $CAT $CAT:latest >/dev/null 2>&1
+catalog_pushed() { sza build-update-repo net.frippery.busybox $CAT 2>&1 | grep -q 'pushed the catalog of 2 app(s)'; }
 search_all() {
     local out
     out=$(szb search) && grep -q '^net.frippery.busybox .*commands: busybox' <<<"$out" &&
@@ -457,14 +457,14 @@ search_kind() { szb search .zct | grep -q "^$CAT "; }
 no_match() { ! szb search no-such-app-anywhere >/dev/null 2>&1; }
 info_catalog_app() {
     local out
-    out=$(szb info $CAT) && grep -q 'Catalog Shell' <<<"$out" && grep -q 'permits *your Documents' <<<"$out" &&
+    out=$(szb remote-info $CAT) && grep -q 'Catalog Shell' <<<"$out" && grep -q 'permits *your Documents' <<<"$out" &&
         grep -q 'license *GPL-2.0-only' <<<"$out" && grep -q 'opens *.zct' <<<"$out" && grep -q 'installed *no' <<<"$out"
 }
-info_any_image() { szb info "$repo/busybox:FRP-6075-g169694ebd" | grep -q '^net.frippery.busybox FRP-6075-g169694ebd'; }
-unknown_app() { ! sza push --catalog net.frippery.busybox org.example.none >/dev/null 2>&1; }
+info_any_image() { szb remote-info "$repo/busybox:FRP-6075-g169694ebd" | grep -q '^net.frippery.busybox FRP-6075-g169694ebd'; }
+unknown_app() { ! sza build-update-repo net.frippery.busybox org.example.none >/dev/null 2>&1; }
 told_first() {
     local out told installed
-    out=$(szb pull --yes $CAT 2>&1) || return 1
+    out=$(szb install --yes $CAT 2>&1) || return 1
     told=$(grep -n 'permits *your Documents' <<<"$out" | cut -d: -f1)
     installed=$(grep -n '^installed' <<<"$out" | cut -d: -f1)
     [ -n "$told" ] && [ -n "$installed" ] && [ "$told" -lt "$installed" ] && ! grep -q '^  permits' <<<"$(sed -n "$installed,\$p" <<<"$out")"
@@ -489,6 +489,51 @@ check "info shows any image, in the catalog or not" info_any_image
 check "push --catalog refuses an app the registry doesn't have" unknown_app
 check "pull tells what the app may reach before downloading it" told_first
 check "search uses the catalog kept from earlier when the registry can't be reached" offline
+# Remotes (0.105): the test registry as one, by name, in a store of its own
+# without ZIGSAW_REGISTRY, and a second remote with no catalog.
+zr() { ZIGSAW_HOME="$work\\remotes" "$zigsaw" "$@"; }
+says() { # <text> <command...>: the command's output, either stream, has the text
+    local text=$1 out
+    shift
+    out=$("$@" 2>&1)
+    grep -qF -- "$text" <<<"$out" || { echo "$out"; return 1; }
+}
+remote_install() {
+    zr remote-add test "$repo" >/dev/null 2>&1 || return 1
+    zr install --yes test net.frippery.busybox:FRP-6075-g169694ebd >/dev/null 2>&1 || return 1
+    grep -q "\"source\": \"$repo/net.frippery.busybox:FRP-6075-g169694ebd\"" "$work\\remotes\\refs\\net.frippery.busybox.json" &&
+        zr info net.frippery.busybox | grep -qF "origin     $repo/net.frippery.busybox:FRP-6075-g169694ebd, in the remote test"
+}
+check "install <remote> <app-id> installs it from that remote" remote_install
+check "  a remote that isn't there fails, naming none" says 'no remote is named "nope"' zr install --yes nope net.frippery.busybox
+check "  a full image's name takes no remote" says "needs no remote" zr install --yes test "$repo/net.frippery.busybox:1"
+remote_info_named() { zr remote-info test $CAT | grep -q 'Catalog Shell'; }
+check "remote-info <remote> <app-id> shows it" remote_info_named
+remote_listed() { zr remote-ls test | grep -q "^$CAT "; }
+check "remote-ls <remote> lists its catalog" remote_listed
+two_remotes() {
+    local out
+    zr remote-delete zigsaw >/dev/null 2>&1 && zr remote-add empty "$repo-empty" >/dev/null 2>&1 || return 1
+    out=$(zr search shell 2>&1) || { echo "$out"; return 1; }
+    grep -q "^ID  *VERSION  *REMOTE  *DESCRIPTION" <<<"$out" && grep -qE "^$CAT +[^ ]+ +test +Catalog Shell" <<<"$out" &&
+        grep -q 'has no catalog of its apps' <<<"$out" || { echo "$out"; return 1; }
+}
+check "search with two remotes names each app's, and goes on past one with no catalog" two_remotes
+first_remote() { zr remote-info $CAT | grep -q 'Catalog Shell'; }
+check "  an app named alone comes from the first remote" first_remote
+exported() {
+    za remote-add --if-not-exists two "$repo-two" >/dev/null 2>&1 &&
+        za build-export net.frippery.busybox two >/dev/null 2>&1 &&
+        za build-export net.frippery.busybox "$repo-two/net.frippery.busybox:latest" >/dev/null 2>&1 &&
+        za build-update-repo two net.frippery.busybox >/dev/null 2>&1 || return 1
+    zr remote-add two "$repo-two" >/dev/null 2>&1 && zr remote-ls two | grep -q '^net.frippery.busybox '
+}
+check "build-export and build-update-repo go to the remote named" exported
+check "remote-delete refuses a remote apps came from" says "net.frippery.busybox was installed from test" zr remote-delete test
+forced() { zr remote-delete --force test >/dev/null 2>&1 && ! zr remotes | grep -q '^test '; }
+check "  unless --force" forced
+zr uninstall --delete-data net.frippery.busybox >/dev/null 2>&1
+
 check "an app can't have the id catalog" sh -c "sed 's/\"net.frippery.busybox\"/\"catalog\"/' '$root/recipes/busybox.json' > '$work\\catalog-id.json' && ! ZIGSAW_HOME='$store_a' \"\$0\" build '$work\\catalog-id.json' >/dev/null 2>&1" "$zigsaw"
 
 # Consent: pull asks before it downloads any layer, and update asks when the
@@ -499,22 +544,22 @@ cat_manifest=$(grep -o 'sha256:[0-9a-f]*' "$store_a\\refs\\$CAT.json" | cut -d: 
 cat_layer=$(grep -o 'sha256:[0-9a-f]*' "$store_a\\blobs\\sha256\\$cat_manifest" | tail -1 | cut -d: -f2)
 unanswered() {
     local out
-    out=$(zn pull $CAT </dev/null 2>&1) && { echo "installed"; return 1; }
+    out=$(zn install $CAT </dev/null 2>&1) && { echo "installed"; return 1; }
     grep -q 'permits *your Documents' <<<"$out" && grep -q 'Install it? \[Y/n\]' <<<"$out" &&
         grep -q "^error: $CAT .* wasn't installed: nothing answered whether to go on. Run it at a console, or add --yes" <<<"$out" || { echo "$out" | tail -1; return 1; }
     ! zn list | grep -q "^$CAT " && [ ! -e "$work\\consent\\blobs\\sha256\\$cat_layer" ]
 }
 declined() {
     local out
-    out=$(echo n | zn pull $CAT 2>&1) && { echo "installed"; return 1; }
+    out=$(echo n | zn install $CAT 2>&1) && { echo "installed"; return 1; }
     grep -q "^error: $CAT [^ ]* wasn't installed$" <<<"$out" && ! zn list | grep -q "^$CAT "
 }
-agreed() { printf 'maybe\ny\n' | zn pull $CAT 2>&1 | grep -q 'answer y or n' && zn list | grep -q "^$CAT "; }
+agreed() { printf 'maybe\ny\n' | zn install $CAT 2>&1 | grep -q 'answer y or n' && zn list | grep -q "^$CAT "; }
 # Version cat-2 adds the network and Downloads, read-only; cat-3 is the same.
 sed -e 's/"version": "[^"]*"/"version": "cat-2"/' -e 's/"filesystem": \["documents"\]/"network": true, "filesystem": ["documents", "downloads:ro"]/' \
     "$work\\catalog-app.json" >"$work\\catalog-2.json"
 sed 's/"version": "cat-2"/"version": "cat-3"/' "$work\\catalog-2.json" >"$work\\catalog-3.json"
-publish_cat() { za build "$1" >/dev/null 2>&1 && sza push $CAT $CAT:latest >/dev/null 2>&1; }
+publish_cat() { za build "$1" >/dev/null 2>&1 && sza build-export $CAT $CAT:latest >/dev/null 2>&1; }
 more_access() {
     local out
     publish_cat "$work\\catalog-2.json" || { echo "publishing cat-2 failed"; return 1; }
@@ -531,7 +576,7 @@ same_access() {
 }
 less_access() {
     local out
-    out=$(zn pull $CAT:FRP-6075-g169694ebd </dev/null 2>&1) || { echo "$out" | tail -1; return 1; }
+    out=$(zn install $CAT:FRP-6075-g169694ebd </dev/null 2>&1) || { echo "$out" | tail -1; return 1; }
     ! grep -q 'it?' <<<"$out" && grep -q "now permits your Documents; it permitted the network; your Documents; your Downloads (read-only)" <<<"$out"
 }
 check "pull asks first; with nothing to answer it, nothing is downloaded" unanswered
@@ -545,7 +590,7 @@ check "a pull over the installed version asks only about what's new" less_access
 # from in its image's repository, and a build whose pinned source can't be
 # had from its URL takes it from there, by its sha256. Each build below is in
 # a fresh store, against a local web server: busybox's httpd.
-pushed_sources() { sza push --sources net.frippery.busybox 2>&1 | grep -q 'pushed its 1 source file(s) next to it, as sha256-[0-9a-f]*.sources'; }
+pushed_sources() { sza build-export --sources net.frippery.busybox 2>&1 | grep -q 'pushed its 1 source file(s) next to it, as sha256-[0-9a-f]*.sources'; }
 check "push --sources keeps busybox's source next to its image" pushed_sources
 bb_exe=$(find "$(cygpath -u "$store_a")/deploy" -name busybox.exe | head -1)
 mkdir -p "$work\\www"
@@ -639,7 +684,7 @@ za build "$work\\vendor.json" >/dev/null 2>&1
 vendored_digest=$(grep -o 'sha256:[0-9a-f]*' "$store_a\\refs\\$VENDORED.json")
 vendor_from_sources() {
     local out
-    sza push --sources $VENDORED >/dev/null 2>&1 || { echo "push --sources failed"; return 1; }
+    sza build-export --sources $VENDORED >/dev/null 2>&1 || { echo "push --sources failed"; return 1; }
     out=$(ZIGSAW_REGISTRY="$repo" ZIGSAW_HOME="$work\\fresh-vendor" "$zigsaw" build "$work\\vendor-failing.json" 2>&1) || { echo "$out" | tail -2; return 1; }
     grep -q "module m's vendored files: its vendor commands failed; fetching sha256 ${vendor_hash:0:12}" <<<"$out" &&
         grep -q "manifest $vendored_digest" <<<"$out"
@@ -648,9 +693,9 @@ check "a vendor step whose commands fail takes what they make from next to the i
 
 # A large app: its 100 MB layer streams both ways.
 za build "$root\\recipes\\node.json" >/dev/null 2>&1 || { echo "building node failed"; exit 1; }
-node_chunks() { ZIGSAW_UPLOAD_CHUNK_SIZE=16777216 za -v push org.nodejs.node "$repo/node" 2>&1 | grep -q "sent .* in 3 chunks"; }
+node_chunks() { ZIGSAW_UPLOAD_CHUNK_SIZE=16777216 za -v build-export org.nodejs.node "$repo/node" 2>&1 | grep -q "sent .* in 3 chunks"; }
 check "push node (100 MB, 38 MB compressed), in 16 MiB chunks" node_chunks
-check "pull node" zb pull --yes "$repo/node:24.22.2"
+check "pull node" zb install --yes "$repo/node:24.22.2"
 check "the pulled node runs" zb run org.nodejs.node -e 'process.exit(0)'
 
 # An app with a runtime: the runtime's layer travels in the app's image, and
@@ -658,8 +703,8 @@ check "the pulled node runs" zb run org.nodejs.node -e 'process.exit(0)'
 za build "$root\\recipes\\prettier.json" >/dev/null 2>&1 || { echo "building prettier (on node) failed"; exit 1; }
 store_d="$work\\d"
 zd() { ZIGSAW_HOME="$store_d" "$zigsaw" "$@"; }
-check "push an app with a runtime" za push io.prettier.prettier "$repo/prettier"
-check "pull it into an empty store" zd pull --yes "$repo/prettier:3.9.10"
+check "push an app with a runtime" za build-export io.prettier.prettier "$repo/prettier"
+check "pull it into an empty store" zd install --yes "$repo/prettier:3.9.10"
 check "it runs on the runtime its image brought" sh -c "ZIGSAW_HOME='$store_d' \"\$0\" run io.prettier.prettier --version | grep -q '^3.9.10'" "$zigsaw"
 check "the runtime isn't installed as an app" sh -c "! ZIGSAW_HOME='$store_d' \"\$0\" list | grep -q '^org.nodejs.node '" "$zigsaw"
 
@@ -669,8 +714,8 @@ check "the runtime isn't installed as an app" sh -c "! ZIGSAW_HOME='$store_d' \"
 mounted_runtime() {
     local node_layer out
     node_layer=$(grep -o 'sha256:[0-9a-f]*' "$store_a\\blobs\\sha256\\$(grep -o 'sha256:[0-9a-f]*' "$store_a\\refs\\org.nodejs.node.json" | cut -d: -f2)" | tail -1)
-    sza push org.nodejs.node >/dev/null 2>&1 || { echo "pushing node failed"; return 1; }
-    out=$(sza -v push io.prettier.prettier 2>&1) || { echo "$out" | tail -1; return 1; }
+    sza build-export org.nodejs.node >/dev/null 2>&1 || { echo "pushing node failed"; return 1; }
+    out=$(sza -v build-export io.prettier.prettier 2>&1) || { echo "$out" | tail -1; return 1; }
     grep -q "^mounted $node_layer ([0-9]* bytes) from ${repo#*/}/org.nodejs.node$" <<<"$out" && ! grep -q " upload $node_layer" <<<"$out"
 }
 check "pushing an app by id mounts its runtime's layer from the runtime's repository" mounted_runtime
@@ -678,7 +723,7 @@ check "pushing an app by id mounts its runtime's layer from the runtime's reposi
 # all of it is mounted from where it came from.
 remounted() {
     local out
-    out=$(zd -v push io.prettier.prettier "$repo/prettier-copy" 2>&1) || { echo "$out" | tail -1; return 1; }
+    out=$(zd -v build-export io.prettier.prettier "$repo/prettier-copy" 2>&1) || { echo "$out" | tail -1; return 1; }
     ! grep -q ' upload ' <<<"$out" && [ "$(grep -c ' mount sha256:' <<<"$out")" -eq 3 ] || { echo "$out" | grep -E 'upload|mount' | tail -3; return 1; }
 }
 check "pushing a pulled app to another repository mounts all of it" remounted
@@ -688,7 +733,7 @@ check "ghcr.io: token, container image refused" refused ghcr.io/oras-project/ora
 # A file of Qt's eStargz runtime, read through ghcr.io's redirect to its
 # storage by Range requests.
 ghcr_cat() {
-    [ "$(ZIGSAW_HOME="$work\\peek" "$zigsaw" cat ghcr.io/zigsaw-io/io.qt.qt6@sha256:5b3217abb8c7486dfbc80e8204cd1796f725e227a1f1997bf4f9b6f83120d200 bin/Qt6QuickControls2Native.dll |
+    [ "$(ZIGSAW_HOME="$work\\peek" "$zigsaw" remote-info --file=bin/Qt6QuickControls2Native.dll ghcr.io/zigsaw-io/io.qt.qt6@sha256:5b3217abb8c7486dfbc80e8204cd1796f725e227a1f1997bf4f9b6f83120d200 |
         sha256sum | cut -d' ' -f1)" = 6f3cde26e753c28f70729ac1624a119d1539af18393860f45516ca98c5641e6d ]
 }
 check "ghcr.io: cat a file of an eStargz layer by Range requests" ghcr_cat
@@ -700,41 +745,47 @@ check "Docker Hub: anonymous token despite credentials for ghcr.io" docker_hub
 if [ -n "${AUTH_REGISTRY:-}" ]; then
     auth_repo="$AUTH_REGISTRY/zigsaw-test-$RANDOM/busybox"
     auth_tag="$auth_repo:FRP-6075-g169694ebd"
-    # Logins are per user, not per store: start and end logged out.
-    za logout "$AUTH_REGISTRY" >/dev/null 2>&1
+    # Logins are per user, not per store, each through a remote on the
+    # registry: start and end logged out.
+    za remote-add --if-not-exists auth "$AUTH_REGISTRY/zigsaw-test" >/dev/null 2>&1
+    za_logout() { za remote-modify --logout auth >/dev/null 2>&1; }
+    za_logout
     # A fresh store, so the pulls below really fetch from the login registry.
     store_c="$work\c"
     zc() { ZIGSAW_HOME="$store_c" "$zigsaw" "$@"; }
-    asks_for_login() { "$@" 2>&1 | grep -q "zigsaw login $AUTH_REGISTRY"; }
+    # A store with a remote there names it; one without says to add one.
+    asks_for_login() { "$@" 2>&1 | grep -qE "\`zigsaw remote-(modify --login auth|add --login <name> $AUTH_REGISTRY/<path>)\`"; }
     # The right credentials, in the environment: they only go to the default registry.
     env_login() { ZIGSAW_REGISTRY_USERNAME="$AUTH_USER" ZIGSAW_REGISTRY_PASSWORD="$AUTH_PASSWORD" "$@"; }
     env_default() { ZIGSAW_REGISTRY="$AUTH_REGISTRY/zigsaw-test" env_login "$@"; }
     env_refused() {
         ZIGSAW_REGISTRY="$AUTH_REGISTRY/zigsaw-test" ZIGSAW_REGISTRY_USERNAME="$AUTH_USER" ZIGSAW_REGISTRY_PASSWORD=wrong \
-            za push net.frippery.busybox "$auth_repo" 2>&1 | grep -q 'refused the credentials in ZIGSAW_REGISTRY_USERNAME'
+            za build-export net.frippery.busybox "$auth_repo" 2>&1 | grep -q 'refused the credentials in ZIGSAW_REGISTRY_USERNAME'
     }
-    check "login registry: the environment's credentials don't go to another registry" asks_for_login env_login za push net.frippery.busybox "$auth_repo"
-    check "login registry: they go to the default registry" env_default za push net.frippery.busybox "$auth_repo"
+    check "login registry: the environment's credentials don't go to another registry" asks_for_login env_login za build-export net.frippery.busybox "$auth_repo"
+    check "login registry: they go to the default registry" env_default za build-export net.frippery.busybox "$auth_repo"
     check "login registry: a wrong password there is refused" env_refused
-    check "login registry: pull without credentials asks for a login" asks_for_login zc pull --yes "$auth_tag"
+    check "login registry: pull without credentials asks for a login" asks_for_login zc install --yes "$auth_tag"
 
     # From here on, nothing in the environment applies.
     no_env() { (unset ZIGSAW_REGISTRY_USERNAME ZIGSAW_REGISTRY_PASSWORD ZIGSAW_REGISTRY && "$@"); }
-    login_refused() { echo wrong | za login --username="$AUTH_USER" --password-stdin "$AUTH_REGISTRY" 2>&1 | grep -q 'refused the credentials; nothing was saved'; }
-    login_saved() { printf '%s\n' "$AUTH_PASSWORD" | za login --username="$AUTH_USER" --password-stdin "$AUTH_REGISTRY"; }
-    login_used() { no_env zc -v pull --yes "$auth_tag" 2>&1 | grep -q "credentials for $AUTH_REGISTRY: $AUTH_USER, saved by .zigsaw login."; }
-    logged_out() { za logout "$AUTH_REGISTRY" 2>&1 | grep -q 'removed the login'; }
+    login_refused() { echo wrong | za remote-modify --login --username="$AUTH_USER" --password-stdin auth 2>&1 | grep -q 'refused the credentials; nothing was saved'; }
+    login_saved() { printf '%s\n' "$AUTH_PASSWORD" | za remote-modify --login --username="$AUTH_USER" --password-stdin auth; }
+    login_used() { no_env zc -v install --yes "$auth_tag" 2>&1 | grep -q "credentials for $AUTH_REGISTRY: $AUTH_USER, saved by zigsaw in Windows Credential Manager"; }
+    logged_out() { za remote-modify --logout auth 2>&1 | grep -q 'removed the login'; }
+    login_listed() { za remotes | tr -d '\r' | grep -q "^  login     $AUTH_USER\$"; }
     check "login: a wrong password is refused" login_refused
-    check "login: a refused login isn't saved" asks_for_login no_env za push net.frippery.busybox "$auth_repo"
+    check "login: a refused login isn't saved" asks_for_login no_env za build-export net.frippery.busybox "$auth_repo"
     check "login: the right password is saved" login_saved
-    check "login: push with the saved login" no_env za push net.frippery.busybox "$auth_repo"
-    check "login: pull with the saved login" no_env zc pull --yes "$auth_tag"
+    check "login: push with the saved login" no_env za build-export net.frippery.busybox "$auth_repo"
+    check "login: pull with the saved login" no_env zc install --yes "$auth_tag"
     check "login: -v says where the credentials came from" login_used
+    check "login: remotes shows it, for each remote on the registry" login_listed
     # Its config and layer, mounted from where they were pulled from.
-    login_mounts() { [ "$(no_env zc -v push net.frippery.busybox "$auth_repo-copy" 2>&1 | grep -c ' mount sha256:')" -eq 2 ]; }
+    login_mounts() { [ "$(no_env zc -v build-export net.frippery.busybox "$auth_repo-copy" 2>&1 | grep -c ' mount sha256:')" -eq 2 ]; }
     check "login: a pulled app pushed to another repository there is mounted" login_mounts
-    check "logout" logged_out
-    check "logout: pull asks for a login again" asks_for_login no_env zc pull --yes "$auth_tag"
+    check "--logout" logged_out
+    check "--logout: install asks for a login again" asks_for_login no_env zc install --yes "$auth_tag"
 
     # Docker's logins: a config.json of the test's own, and a credential
     # helper that answers from the environment (tests/credhelper.zig).
@@ -748,7 +799,7 @@ if [ -n "${AUTH_REGISTRY:-}" ]; then
     pulls_with() { # <origin> <command...>: pulls, with the credentials from there
         local origin=$1 out
         shift
-        out=$("$@" -v pull --yes "$auth_tag" 2>&1) || { echo "$out"; return 1; }
+        out=$("$@" -v install --yes "$auth_tag" 2>&1) || { echo "$out"; return 1; }
         grep -qF "credentials for $AUTH_REGISTRY: $AUTH_USER, $origin" <<<"$out" || { echo "$out"; return 1; }
     }
     auth=$(printf '%s:%s' "$AUTH_USER" "$AUTH_PASSWORD" | base64 -w0)
@@ -762,21 +813,21 @@ if [ -n "${AUTH_REGISTRY:-}" ]; then
         docker_config "{\"credsStore\": \"zigsaw-test\", \"auths\": {\"$AUTH_REGISTRY\": {}}}" &&
             with_helper "$AUTH_REGISTRY" pulls_with "from docker-credential-zigsaw-test" no_env zc
     }
-    docker_helper_none() { docker_config '{"credsStore": "zigsaw-test"}' && with_helper other.example asks_for_login no_env zc pull --yes "$auth_tag"; }
+    docker_helper_none() { docker_config '{"credsStore": "zigsaw-test"}' && with_helper other.example asks_for_login no_env zc install --yes "$auth_tag"; }
     zigsaw_login_wins() {
         local wrong
         wrong=$(printf '%s:wrong' "$AUTH_USER" | base64 -w0)
         docker_config "{\"auths\": {\"$AUTH_REGISTRY\": {\"auth\": \"$wrong\"}}}" && login_saved >/dev/null 2>&1 || return 1
-        pulls_with "saved by \`zigsaw login\`" no_env zc
+        pulls_with "saved by zigsaw in Windows Credential Manager" no_env zc
         local status=$?
-        za logout "$AUTH_REGISTRY" >/dev/null 2>&1
+        za_logout
         return $status
     }
     docker_refused() {
         local wrong
         wrong=$(printf '%s:wrong' "$AUTH_USER" | base64 -w0)
         docker_config "{\"auths\": {\"$AUTH_REGISTRY\": {\"auth\": \"$wrong\"}}}" &&
-            no_env zc pull --yes "$auth_tag" 2>&1 | grep -q "refused the credentials in Docker's config.json"
+            no_env zc install --yes "$auth_tag" 2>&1 | grep -q "refused the credentials in Docker's config.json"
     }
     check "docker: a login in config.json's auths" docker_auths
     check "  under a URL there" docker_url_key
@@ -786,16 +837,16 @@ if [ -n "${AUTH_REGISTRY:-}" ]; then
     check "docker: a login zigsaw saved comes first" zigsaw_login_wins
     check "docker: a wrong password in config.json is refused, saying where it came from" docker_refused
     docker_config '{}'
-    za logout "$AUTH_REGISTRY" >/dev/null 2>&1
+    za_logout
 fi
 
 check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
 # Installed apps are protected against deletion, so remove them through
 # zigsaw, and the images builds use with prune --downloads.
-for store in "$work\a" "$work\b" "$work\c" "$work\d" "$work\idx" "$work\chunks" "$work\plain" "$work\fresh1" "$work\fresh2" "$work\fresh-none" "$work\fresh-vendor" "$work\consent" "$work\par1" "$work\par2" "$work\sgz"; do
-    for id in net.frippery.busybox org.nodejs.node io.prettier.prettier test.registry.vendored test.registry.catalog test.registry.parallel $SGZ; do ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
-    ZIGSAW_HOME="$store" "$zigsaw" prune --downloads >/dev/null 2>&1
+for store in "$work\a" "$work\b" "$work\c" "$work\d" "$work\remotes" "$work\idx" "$work\chunks" "$work\plain" "$work\fresh1" "$work\fresh2" "$work\fresh-none" "$work\fresh-vendor" "$work\consent" "$work\par1" "$work\par2" "$work\sgz"; do
+    for id in net.frippery.busybox org.nodejs.node io.prettier.prettier test.registry.vendored test.registry.catalog test.registry.parallel $SGZ; do ZIGSAW_HOME="$store" "$zigsaw" uninstall --delete-data "$id" >/dev/null 2>&1; done
+    ZIGSAW_HOME="$store" "$zigsaw" uninstall --unused --downloads >/dev/null 2>&1
 done
 rm -rf "$work"
 echo

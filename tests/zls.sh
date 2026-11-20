@@ -171,9 +171,9 @@ check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep
 
 cd "$root" || exit 1
 acprobe_rm "$zigsaw"
-for id in $installed_here; do z rm --delete-data "$id" >/dev/null 2>&1; done
+for id in $installed_here; do z uninstall --delete-data "$id" >/dev/null 2>&1; done
 if [ -n "$temp_store" ]; then
-    z prune --downloads --volumes >/dev/null 2>&1
+    z uninstall --unused --downloads --volumes >/dev/null 2>&1
     rm -rf "$temp_store"
 fi
 rm -rf "$work"

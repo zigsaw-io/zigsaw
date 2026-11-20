@@ -97,7 +97,7 @@ check "caller's ZIGSAW_HOME doesn't matter" other_home
 # the sources next to BusyBox's image). Removed again, so that its shims don't
 # count below.
 set_up "building busybox" "$zigsaw" build "$root/recipes/busybox.json"
-set_up "removing busybox" "$zigsaw" rm net.frippery.busybox
+set_up "removing busybox" "$zigsaw" uninstall net.frippery.busybox
 sed -e "s/\"net.frippery.busybox\"/\"$OTHER\"/" \
     -e 's/"command": "busybox.exe",/"command": "busybox.exe", "exports": { "node": { "command": "busybox.exe" }, "other-tool": { "command": "busybox.exe" } },/' \
     "$root/recipes/busybox.json" >"$work\\other.json"
@@ -167,7 +167,7 @@ rebuilt() {
 }
 check "rebuilding drops removed exports, and keeps commands its runs installed" rebuilt
 check "list shows exports" sh -c "\"\$0\" list | grep '^$NODE ' | grep -q 'node, npm'" "$zigsaw"
-check "rm removes the app's shims only" sh -c "\"\$0\" rm $NODE >/dev/null 2>&1 && [ ! -e '$bin\\node.exe' ] && [ ! -e '$bin\\zigsaw-hello.exe' ] && [ -e '$bin\\other-tool.exe' ]" "$zigsaw"
+check "rm removes the app's shims only" sh -c "\"\$0\" uninstall $NODE >/dev/null 2>&1 && [ ! -e '$bin\\node.exe' ] && [ ! -e '$bin\\zigsaw-hello.exe' ] && [ -e '$bin\\other-tool.exe' ]" "$zigsaw"
 
 # Overrides reach shims: other-tool is busybox, which the appcontainer and
 # low sandboxes keep from writing outside its own directories.
@@ -332,14 +332,14 @@ rm -f "$lnk"
 "$zigsaw" build "$root\\tests\\gui\\app.json" >/dev/null 2>&1
 powershell -NoProfile -Command "\$l = (New-Object -ComObject WScript.Shell).CreateShortcut('$links\\Other.lnk'); \$l.TargetPath = 'C:\\Windows\\notepad.exe'; \$l.Save()"
 removed_by_rm() {
-    "$zigsaw" rm "$GUI" 2>&1 | grep -q 'removed shortcuts Zigsaw GUI Test' || return 1
+    "$zigsaw" uninstall "$GUI" 2>&1 | grep -q 'removed shortcuts Zigsaw GUI Test' || return 1
     [ ! -e "$lnk" ] && [ -e "$links\\Other.lnk" ]
 }
 check "rm removes the app's shortcuts, and only those" removed_by_rm
 rm -f "$links\\Other.lnk"
 empty_folder_gone() {
     "$zigsaw" build "$root\\tests\\gui\\app.json" >/dev/null 2>&1 && [ -e "$lnk" ] || return 1
-    "$zigsaw" rm "$GUI" >/dev/null 2>&1 && [ ! -e "$links" ]
+    "$zigsaw" uninstall "$GUI" >/dev/null 2>&1 && [ ! -e "$links" ]
 }
 check "removing the last shortcut removes the folder" empty_folder_gone
 not_default_store() {
@@ -412,16 +412,16 @@ check "a store other than the default one registers nothing" not_default_classes
 # Someone else's entry for the extension stays.
 reg add "HKCU\\$classes\\.zigsawtest\\OpenWithProgids" /v Other.App /t REG_SZ /d "" /f >/dev/null
 unregistered_by_rm() {
-    "$zigsaw" rm "$GUI" 2>&1 | grep -q 'no longer opens .zigsawtest' || return 1
+    "$zigsaw" uninstall "$GUI" 2>&1 | grep -q 'no longer opens .zigsawtest' || return 1
     ! reg_has "$prog" && ! reg_has ".zigsawtest\\OpenWithProgids" "$prog" && reg_has ".zigsawtest\\OpenWithProgids" Other.App && [ ! -e "$ZIGSAW_HOME\\open\\$GUI" ]
 }
 check "rm removes what it registered, with its shims, and only that" unregistered_by_rm
-"$zigsaw" rm --delete-data "$GUI" >/dev/null 2>&1
+"$zigsaw" uninstall --delete-data "$GUI" >/dev/null 2>&1
 
 check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
-"$zigsaw" rm "$NODE" >/dev/null 2>&1
-"$zigsaw" rm "$OTHER" >/dev/null 2>&1
+"$zigsaw" uninstall "$NODE" >/dev/null 2>&1
+"$zigsaw" uninstall "$OTHER" >/dev/null 2>&1
 # The global packages, in case the store isn't ours.
 for pkg in zigsaw-hello other-tool; do
     rm -rf "$ZIGSAW_HOME\\volumes\\$NODE\\npm\\node_modules\\$pkg"

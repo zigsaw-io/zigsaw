@@ -284,7 +284,7 @@ for name in $published_recipes; do
 
     # Verbose, so the log shows where blob downloads were redirected.
     pull_log="$logs\\$id.pull.log"
-    if ! zp -v pull --yes "$id:$version" >"$pull_log" 2>&1; then
+    if ! zp -v install --yes "$id:$version" >"$pull_log" 2>&1; then
         # Registries answer "not found" for a missing tag, and refuse an
         # anonymous token for a package that doesn't exist (or is private).
         if grep -qE "not found|doesn't exist, or needs credentials" "$pull_log"; then
@@ -342,7 +342,7 @@ for name in $published_recipes; do
         check "$id: the loader binds all its programs' imports" all_bound "$pull_store" "$published"
     fi
     latest_is_version() {
-        zp -v pull --yes "$id" >>"$pull_log" 2>&1 || { last_line "$pull_log"; return 1; }
+        zp -v install --yes "$id" >>"$pull_log" 2>&1 || { last_line "$pull_log"; return 1; }
         local latest
         latest=$(ref_digest "$pull_store" "$id")
         [ "$latest" = "$published" ] || { echo "latest is $latest, $version is $published"; return 1; }
@@ -392,11 +392,11 @@ fi
 check "no run labelled or granted the repository" sh -c "! icacls '$root' | grep -q -e 'Mandatory Label' -e 'S-1-15-'"
 
 # Installed apps are protected against deletion, so remove them through zigsaw.
-for id in "${ids[@]}"; do zp rm --delete-data "$id" >/dev/null 2>&1; done
-zp prune --downloads >/dev/null 2>&1
+for id in "${ids[@]}"; do zp uninstall --delete-data "$id" >/dev/null 2>&1; done
+zp uninstall --unused --downloads >/dev/null 2>&1
 if [ -z "${BUILD_HOME:-}" ]; then
-    for id in "${ids[@]}"; do zb rm --delete-data "$id" >/dev/null 2>&1; done
-    zb prune --downloads >/dev/null 2>&1
+    for id in "${ids[@]}"; do zb uninstall --delete-data "$id" >/dev/null 2>&1; done
+    zb uninstall --unused --downloads >/dev/null 2>&1
 fi
 rm -rf "$work"
 echo

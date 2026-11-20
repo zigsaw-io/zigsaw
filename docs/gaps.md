@@ -40,7 +40,7 @@
   run's command line doesn't take back a grant that stands for that run:
   an AppContainer run can still reach the path by its name. A run that
   didn't end (zigsaw was killed, or its console closed) leaves its grants
-  until the app's next run ends, `zigsaw repair` or `zigsaw rm`.
+  until the app's next run ends, `zigsaw repair` or `zigsaw uninstall`.
 - Stores know each other's labels only from zigsaw 0.70 on, and only once a
   store's app has changed its grants since, or `zigsaw repair` ran there: until
   then, taking a label back in one can take it from an app of the other. Each
@@ -49,7 +49,7 @@
   for a `zigsaw repair`, which `zigsaw list` says when it sees it. An app's
   AppContainer profile left by a deleted store stays in your profile, harmless.
   A deleted store's programs that lost their low label keep their medium one.
-- `zigsaw grants` looks for unexplained labels only on your six folders and your
+- `zigsaw permissions` looks for unexplained labels only on your six folders and your
   profile, not on the rest of your drives, and only for one of a path's own:
   something inside `Documents`, labelled by itself, isn't listed.
 - An installed app's files can't be deleted by hand, by anyone, as they're
@@ -82,7 +82,7 @@
   a low-integrity process can't write: the app's own low runs label it low
   again while they go, but another app's can only replace it (delete and
   write it again, or rename over it), not write into it, as 7-Zip
-  overwriting it would. After `zigsaw rm` the app's own can't either.
+  overwriting it would. After `zigsaw uninstall` the app's own can't either.
 - A zigsaw running at low integrity, as a shim a low run starts does, takes
   back nothing when the app's runs end; the next zigsaw that isn't does. If
   zigsaw's own program is labelled low, as a low run from a folder holding
@@ -108,7 +108,7 @@
   command that serves it lasts, and an app given a port of its own (`-p`,
   `--listen`) bypasses its service.
 - Under `--sandbox=appcontainer`, an app's internal port is picked once and
-  kept until `zigsaw rm`: a program that takes it later keeps the app from
+  kept until `zigsaw uninstall`: a program that takes it later keeps the app from
   listening there, which the app reports in its own way.
 - A zigsaw older than 0.50 ignores an image's services and leaves
   `${listen:...}` and `${port:...}` as they are: PostgreSQL's and Kanboard's
@@ -139,7 +139,7 @@
   unelevated account and folders it made, though zigsaw manages for those.
 - An MSVC build in an account nobody has signed in to can leave its build folder
   behind, with a warning: Windows' WebCache process starts during the build, under
-  the build's profile, and stays. `zigsaw prune` deletes the folder once that's
+  the build's profile, and stays. `zigsaw uninstall --unused` deletes the folder once that's
   gone. Where someone's signed in, the process is running already, under their
   real profile.
 - Apps trust the roots in Windows' certificate stores
@@ -148,7 +148,7 @@
 - PHP's curl, Composer, Perl and libpq read Windows' roots from the file
   zigsaw writes of them when the run starts (`${roots}`): a root added to
   Windows during a run reaches their later runs only. Once Windows' roots
-  change, `zigsaw prune` deletes the file a running app's run was given,
+  change, `zigsaw uninstall --unused` deletes the file a running app's run was given,
   unless it's open just then: an app that reads it again later, as PHP's
   curl does for each request, then fails until it's started again. A
   zigsaw older than
@@ -200,7 +200,7 @@
   connection itself, one at a time, waiting up to 2 s for each.
 - A host path an earlier zigsaw granted an app's AppContainer, to the
   container's own SID, keeps other apps' low runs out until that app's last
-  run ends, `zigsaw repair` or `zigsaw rm`, which take that SID's access
+  run ends, `zigsaw repair` or `zigsaw uninstall`, which take that SID's access
   away from every path the app's runs were granted. In the store, runs
   clear such grants from what they use.
 - Apps that locate folders with `SHGetKnownFolderPath` instead of environment
@@ -315,9 +315,9 @@
 - zigsaw has no Authenticode signature: SmartScreen and Defender know nothing of the
   signatures here.
 - An image pulled with no key for its registry isn't checked, and says so, on every
-  registry but `ghcr.io/zigsaw-io` until `zigsaw trust add` names one. Keys are ECDSA
+  registry but `ghcr.io/zigsaw-io` until `zigsaw remote-add --sign-key` or `--keyless` names one. Keys are ECDSA
   P-256 only, and a signature in cosign's newer bundle format, which is its default, isn't
-  read: sign with `--new-bundle-format=false`, or as `zigsaw signature` does.
+  read: sign with `--new-bundle-format=false`, or as `zigsaw build-sign` does.
 - Docker's logins are used only as user names and passwords (or tokens
   used as passwords): an identity token, which Docker keeps for a registry
   after a web login, isn't, as using one takes OAuth2's refresh flow.
@@ -874,7 +874,7 @@
   real Recent folder, Explorer's `RecentDocs` list, its jump list and Quick
   access, as for a program installed the usual way: Explorer writes them for
   it, outside the app's profile ([findings](findings.md#electron-as-a-runtime)).
-  `zigsaw rm` doesn't take them out.
+  `zigsaw uninstall` doesn't take them out.
 - From PowerShell, `drawio -x ...` returns before the export is done, as
   PowerShell doesn't wait for a program with windows unless its output is
   piped (`| Out-Host`); cmd, Git Bash and `zigsaw run` wait.
@@ -935,7 +935,7 @@
 - VSCodium's image published in iteration 67 (`4c45eaf4`) writes
   `HKCU\Software\Classes\vscodium` on each run under `soft`, naming its
   deployment: an image's patch can't reach it. Updating to the next image, with
-  zigsaw 0.68 or later, takes the key over; `zigsaw rm` or `zigsaw repair` removes
+  zigsaw 0.68 or later, takes the key over; `zigsaw uninstall` or `zigsaw repair` removes
   one no installed app declares. A zigsaw before 0.68 ignores `schemes`,
   `commands`, `host` and `unsupported`: the new image runs there without links
   and without the commands, as it asks for nothing they'd need.
@@ -973,7 +973,7 @@
 - zlib 1.4 reached only the images whose recipes build it. PHP takes php.net's prebuilt 1.3.2,
   and GDAL, Qt, Node, MinGit and Pillow carry their own copies, which the upstream report can't
   see ([findings](findings.md#zlib-inside-images)).
-- `zigsaw grants` and what uses its check can print `error: reading the integrity label
+- `zigsaw permissions` and what uses its check can print `error: reading the integrity label
   of <folder>` for one of your folders whose label it can't read, and then go on as if
   nothing happened. Only tests have been seen doing this, with a folder that didn't
   exist.

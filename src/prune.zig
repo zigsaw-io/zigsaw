@@ -1,4 +1,4 @@
-//! `zigsaw prune`: deletes what no installed app needs: the blobs and
+//! `zigsaw uninstall --unused`: deletes what no installed app needs: the blobs and
 //! deployments of versions that were replaced or removed, and leftovers in
 //! tmp\. Each app's previous version keeps its blobs, for `rollback`, though
 //! not its deployments, and the copy of the app's data as it left it. On request, also cached downloads, build tools'

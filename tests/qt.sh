@@ -79,7 +79,7 @@ install_again() {
     [ -f "$ZIGSAW_HOME\\refs\\$1.json" ] && source=$(grep -o '"source": *"[^"]*"' "$ZIGSAW_HOME\\refs\\$1.json" | cut -d'"' -f4)
     case $source in
     "" | *.json) z build "$root\\recipes\\$2" ;;
-    *) z pull --yes "$source" ;;
+    *) z install --yes "$source" ;;
     esac
 }
 
@@ -294,9 +294,9 @@ check "its QML loads without errors, and it opens its database" notes_qml
 check "it keeps its notes in its data directory" test -f "$ZIGSAW_HOME\\volumes\\$NOTES\\home\\AppData\\Roaming\\Awesomeness\\notes.db"
 
 cd "$root" || exit 1
-$installed_notes && z rm --delete-data $NOTES >/dev/null 2>&1
-$installed_flameshot && z rm --delete-data $FLAMESHOT >/dev/null 2>&1
-z rm --delete-data $APP >/dev/null 2>&1
+$installed_notes && z uninstall --delete-data $NOTES >/dev/null 2>&1
+$installed_flameshot && z uninstall --delete-data $FLAMESHOT >/dev/null 2>&1
+z uninstall --delete-data $APP >/dev/null 2>&1
 rm -rf "$work"
 echo
 echo "$failures check(s) failed."

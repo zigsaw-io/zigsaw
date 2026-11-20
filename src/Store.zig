@@ -156,7 +156,7 @@ fn discard(s: Store, arena: Allocator, p: []const u8) !void {
     const trash = try s.tmpPath(arena, "trash");
     try Io.Dir.rename(.cwd(), p, .cwd(), trash, s.io);
     deleteTree(s.io, arena, trash) catch |err|
-        note("warning: couldn't delete all of {s} ({t}); `zigsaw prune` will retry", .{ trash, err });
+        note("warning: couldn't delete all of {s} ({t}); `zigsaw uninstall --unused` will retry", .{ trash, err });
 }
 
 // ---------------------------------------------------------------------------

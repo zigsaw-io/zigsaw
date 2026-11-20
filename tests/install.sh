@@ -152,7 +152,7 @@ refuses_with_apps() {
     grep -q "still installed: $APP" <<<"$out" && [ -f "$bin\\zigsaw.exe" ]
 }
 check "uninstalling is refused while apps are installed" refuses_with_apps
-"$bin\\zigsaw.exe" rm --delete-data $APP >/dev/null 2>&1
+"$bin\\zigsaw.exe" uninstall --delete-data $APP >/dev/null 2>&1
 uninstalls() {
     local out
     out=$(install -Uninstall 2>&1) || { echo "$out"; return 1; }
@@ -339,7 +339,7 @@ check "upgrade: it replaces every program while zigsaw is running an app, moving
 check "  the app's shim names the upgraded zigsaw, and runs through it" "$bin\\install-wait.exe" 1
 wait $waiter
 check "  the app that was running ended normally" test $? -eq 0
-no_task_elsewhere() { ! "$bin\\zigsaw.exe" grants 2>/dev/null | grep -q 'scheduled task'; }
+no_task_elsewhere() { ! "$bin\\zigsaw.exe" permissions 2>/dev/null | grep -q 'scheduled task'; }
 check "  in a store that isn't the default one, it starts no daily check" no_task_elsewhere
 cleans_up() {
     local out
@@ -349,7 +349,7 @@ cleans_up() {
     install >/dev/null 2>&1 && ! ls "$(cygpath -u "$bin")" | grep -q '\.old-'
 }
 check "  what was moved aside goes with the next install" cleans_up
-"$bin\\zigsaw.exe" rm --delete-data $APP >/dev/null 2>&1
+"$bin\\zigsaw.exe" uninstall --delete-data $APP >/dev/null 2>&1
 
 # --- The daily check, for the default store ------------------------------------
 # A LOCALAPPDATA of its own: what's the default store here isn't the user's.

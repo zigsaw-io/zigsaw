@@ -214,12 +214,12 @@ fn pullMissing(ctx: *Context, p: compose.Project, entries: []const compose.RunEn
         if (e.member != null) continue;
         const ref = try ctx.store.readRef(arena, e.id);
         const pinned = e.pinned orelse {
-            if (ref == null) return fail("{s}: run {s}: it isn't installed, and isn't one of the project's apps: pull it, or pin it here, as \"{s}:<version>@sha256:<digest>\"", .{ p.file, e.id, e.id });
+            if (ref == null) return fail("{s}: run {s}: it isn't installed, and isn't one of the project's apps: install it, or pin it here, as \"{s}:<version>@sha256:<digest>\"", .{ p.file, e.id, e.id });
             continue;
         };
         const digest = pinned[std.mem.indexOfScalar(u8, pinned, '@').? + 1 ..];
         if (ref) |r| if (std.mem.eql(u8, r.manifest, digest)) continue;
-        note("{s} isn't installed as \"run\" pins it, so it's pulled first", .{e.id});
+        note("{s} isn't installed as \"run\" pins it, so it's installed first", .{e.id});
         const fetched = (try remote.fetch(ctx, pinned, .{ .consent = consent })).?;
         if (!std.mem.eql(u8, fetched.manifest_digest, digest))
             return fail("{s}: run {s}: {s} is a multi-platform index; pin its image for windows/amd64: \"{s}@{s}\"", .{

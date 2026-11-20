@@ -687,7 +687,7 @@ fn standsIn(saved: []const []const u8, target: []const u8) bool {
     return false;
 }
 
-/// Takes away every junction the app's mounts made, for `zigsaw rm`: a later
+/// Takes away every junction the app's mounts made, for `zigsaw uninstall`: a later
 /// install's runs make them again. With grants.lock held.
 pub fn unmountAll(ctx: *Context, id: []const u8) !void {
     for (try rootLast(ctx.arena, try ctx.store.readMounts(ctx.arena, id))) |t| _ = try unmount(ctx, id, t);
@@ -882,7 +882,7 @@ pub fn remove(ctx: *Context, names: []const []const u8) !void {
         const v = try find(ctx.store, arena, name) orelse return fail("there's no volume {s}; `zigsaw volume ls` lists them", .{name});
         const users = try usersOf(ctx, saved, v);
         if (users.len > 0 and users[0].own)
-            return fail("{s} is the data of an app that's installed: `zigsaw rm --delete-data {s}` removes both", .{ name, name });
+            return fail("{s} is the data of an app that's installed: `zigsaw uninstall --delete-data {s}` removes both", .{ name, name });
         if (users.len > 0) return fail("{s} is mounted by {s}: take that away first, with `zigsaw override --novolume={s} {s}`", .{
             name, try describeMounts(arena, users), users[0].mount.target, users[0].id orelse "--global",
         });
@@ -902,7 +902,7 @@ pub fn remove(ctx: *Context, names: []const []const u8) !void {
 /// What `prune` deleted, or would.
 pub const Pruned = struct { count: usize = 0, bytes: u64 = 0 };
 
-/// `zigsaw volume prune [--dry-run]`, and `zigsaw prune --volumes`: deletes
+/// `zigsaw volume prune [--dry-run]`, and `zigsaw uninstall --unused --volumes`: deletes
 /// the volumes in the store that nothing mounts and no run uses: those no
 /// saved mount names, and the data of apps that aren't installed. Never one
 /// kept elsewhere: those are folders of yours.
@@ -931,7 +931,7 @@ pub fn prune(ctx: *Context, dry_run: bool) !Pruned {
 }
 
 /// The volumes in the store that nothing mounts, with their sizes, for what
-/// `zigsaw prune` says it kept.
+/// `zigsaw uninstall --unused` says it kept.
 pub fn unmounted(ctx: *Context) !struct { names: []const []const u8, bytes: u64 } {
     const arena = ctx.arena;
     const saved = try allSaved(ctx);

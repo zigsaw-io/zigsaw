@@ -839,7 +839,7 @@ test "real bundles from Sigstore's public instance are good, against the root bu
     const a = arena.allocator();
     const roots = &.{try parseTrustRoot(a, built_in_root)};
     try testing.expectEqual(Verdict.good, try verify(a, roots, real_blob_bundle, real_blob, probe));
-    // An image's payload, as `zigsaw signature payload` printed it, with no newline.
+    // An image's payload, as `zigsaw build-sign --print-payload` printed it, with no newline.
     try testing.expectEqual(Verdict.good, try verify(a, roots, real_payload_bundle, real_payload, probe));
 }
 

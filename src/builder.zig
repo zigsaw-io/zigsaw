@@ -86,7 +86,7 @@ pub const Options = struct {
     /// What `zigsaw ps` lists of the build, which says each command as it
     /// starts; `build` keeps it.
     listed: ?*ps.Entry = null,
-    /// What `zigsaw stop` sets to ask the build to end (see stop.zig).
+    /// What `zigsaw kill` sets to ask the build to end (see stop.zig).
     asker: ?*stop.Asker = null,
     /// Whether build commands run in a container without the network (see
     /// container.zig). No input of the build either.
@@ -643,7 +643,7 @@ const BuildRoot = struct {
             note("note: module {s} runs make, which here is BusyBox's: one job at a time (-j does nothing), and no pattern rules or $(shell); for GNU make, add org.gnu.make to \"sdk\"", .{m.name});
             break;
         };
-        const bin =try std.fs.path.join(arena, &.{ path, "bin" });
+        const bin = try std.fs.path.join(arena, &.{ path, "bin" });
         // In a kept root, a shim that's as it was is left as it is, with
         // its time: build tools note the programs they found, and Meson's
         // build files are out of date once `strip` is newer than them.
@@ -744,7 +744,7 @@ const BuildRoot = struct {
             note("kept the build directory: {s}", .{b.path});
         } else {
             Store.deleteTree(ctx.io, ctx.arena, b.path) catch |err|
-                note("warning: couldn't delete all of {s} ({t}); `zigsaw prune` will retry", .{ b.path, err });
+                note("warning: couldn't delete all of {s} ({t}); `zigsaw uninstall --unused` will retry", .{ b.path, err });
         }
     }
 
@@ -983,7 +983,7 @@ const BuildRoot = struct {
         if (step == .build and !m.network) if (b.container_temp) |t| try Io.Dir.cwd().createDirPath(ctx.io, t);
         for (commands, 1..) |command, n| {
             if (n <= how.from) continue;
-            if (b.asker) |a| if (a.isSet()) return fail("module {s}: stopped by `zigsaw stop` before {t} command {d}", .{ m.name, step, n });
+            if (b.asker) |a| if (a.isSet()) return fail("module {s}: stopped by `zigsaw kill` before {t} command {d}", .{ m.name, step, n });
             note("[{s}{s} {d}/{d}] {s}", .{ m.name, label, n, commands.len, command });
             const start = ctx.now();
             // Named, so that `zigsaw ps` may look into it.
@@ -1036,7 +1036,7 @@ const BuildRoot = struct {
             if (report.memory_limit_reached) |bytes|
                 note("[{s}{s} {d}/{d}] reached the build's memory limit of {f} (--memory), and was refused more", .{ m.name, label, n, commands.len, override.Size{ .bytes = bytes } });
             // What the kept build root keeps, the next build goes on from.
-            if (code != 0 and report.stopped) return fail("module {s}: stopped by `zigsaw stop` during {t} command {d}:\n  {s}", .{ m.name, step, n, command });
+            if (code != 0 and report.stopped) return fail("module {s}: stopped by `zigsaw kill` during {t} command {d}:\n  {s}", .{ m.name, step, n, command });
             if (code != 0) switch (on_failure) {
                 .fail => {
                     if (how.continued) note("module {s} went on from what its last build left; if that's what's wrong, `zigsaw build --clean={s}` starts it afresh", .{ m.name, m.name });
@@ -1076,7 +1076,7 @@ const BuildRoot = struct {
 /// deletes such a root, as does the recipe's next build.
 fn releaseKept(ctx: *Context, kept: checkpoint.Kept) void {
     kept.release(ctx.arena) catch |err|
-        note("warning: couldn't delete all of {s} ({t}); `zigsaw prune` will retry", .{ kept.root, err });
+        note("warning: couldn't delete all of {s} ({t}); `zigsaw uninstall --unused` will retry", .{ kept.root, err });
 }
 
 /// What a build takes from the recipe's kept build (see checkpoint.zig): the

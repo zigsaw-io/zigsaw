@@ -7,7 +7,7 @@ second in [iteration 65](iteration-65.md): the formats behind one interface
 in zigsaw ([`src/format.zig`](../src/format.zig)), `"layer": "estargz"`, and
 Qt's images on it. The third in [iteration 66](iteration-66.md): Range
 downloads, updates that build the new blob from the old one, and
-`zigsaw ls` and `zigsaw cat`.
+`zigsaw remote-info --show-files` and `--file`.
 The formats themselves are written and read by
 [stargazer](https://github.com/zigsaw-io/stargazer), a library of seekable
 layer formats in [`stargazer/`](../stargazer) (a git submodule, MIT
@@ -32,7 +32,7 @@ What was so when this was designed:
   `deploy\<digest>\` with 4 workers. The inflated tar costs as much disk as
   the layer's files.
 - An update downloads every layer whose digest changed, whole, however
-  little in it changed. The old blob stays in `blobs\` until `zigsaw prune`.
+  little in it changed. The old blob stays in `blobs\` until `zigsaw uninstall --unused`.
 
 ## What eStargz is
 
@@ -256,8 +256,8 @@ releases.
 ### Reading one file
 
 Built in iteration 66 as two commands rather than `info` flags:
-`zigsaw ls <image>` lists the files of an image's indexed layers, and
-`zigsaw cat <image> <path>` writes one, checked against its chunk and file
+`zigsaw remote-info --show-files <image>` lists the files of an image's indexed layers, and
+`zigsaw remote-info --file=<path> <image>` writes one, checked against its chunk and file
 digests, looking in the app's own layer first, then its runtimes'. Each
 reads the tail (footer and TOC) and the file's members: Qt's runtime is
 listed in one request of 1 MiB, and a 10 KB file of it read in two, through
@@ -319,7 +319,7 @@ A gzip layer is named as one that can't be read without pulling.
 |---|---|
 | 64 | stargazer 0.1: TOC model, eStargz reader and writer, CLI, C ABI v0, fuzzing, Go conformance, CI on three OSes. zigsaw: `layer.gunzip` reads every member, the submodule cloned by https in CI. Sizes and times on Qt's layers |
 | 65 | the format interface in zigsaw, tar and gzip behind it unchanged; `"layer": "estargz"`, descriptor annotations, pulls without an inflated tar; Qt's chain on eStargz, five images published again |
-| 66 | Range downloads (and resuming a broken download); stargazer 0.2's update plans; updates that build the blob from the store's; `zigsaw ls` and `zigsaw cat`; llvm-mingw on eStargz |
+| 66 | Range downloads (and resuming a broken download); stargazer 0.2's update plans; updates that build the blob from the store's; `zigsaw remote-info --show-files` and `--file`; llvm-mingw on eStargz |
 | 77 | stargazer 0.3's chunk reads; `pull --lazy`, Cloud Files placeholders served by a helper until the blob is in; TeX Live on eStargz |
 | 78 | stargazer 0.4's prioritized files; recipes' `prefetch`, and `scripts/record-prefetch.sh`; a helper that fetches in parallel and once; Qt's chain re-pinned to llvm-mingw on eStargz, with lists |
 | 96 | lists nobody writes: a lazy layer's helper writes down what runs read of it, by image, and the image's next lazy layer has those files asked for ahead of any run; no format or recipe change |

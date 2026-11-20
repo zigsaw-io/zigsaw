@@ -102,7 +102,7 @@ install_again() {
     [ -f "$ZIGSAW_HOME\\refs\\$1.json" ] && source=$(grep -o '"source": *"[^"]*"' "$ZIGSAW_HOME\\refs\\$1.json" | cut -d'"' -f4)
     case $source in
     "" | *.json) z build "$root\\recipes\\$2" ;;
-    *) z pull --yes "$source" ;;
+    *) z install --yes "$source" ;;
     esac
 }
 # build_image <id> <recipe>: builds the recipe, or installs the image again
@@ -374,8 +374,8 @@ cd "$root" || exit 1
 reg delete "HKCU\\$classes" /f >/dev/null 2>&1
 reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1
 rm -rf "$docs"
-for id in $installed_here; do z rm --delete-data "$id" >/dev/null 2>&1; done
-z rm --delete-data $APP >/dev/null 2>&1
+for id in $installed_here; do z uninstall --delete-data "$id" >/dev/null 2>&1; done
+z uninstall --delete-data $APP >/dev/null 2>&1
 acprobe_rm "$zigsaw"
 rm -rf "$work"
 echo

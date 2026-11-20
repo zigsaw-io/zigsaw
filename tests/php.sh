@@ -417,8 +417,8 @@ kanboard_start low
 check "but under low it refuses its data directory, which PHP takes for read-only (known gap)" kanboard_low
 kanboard_stop
 
-z rm --delete-data $CONSUMER >/dev/null 2>&1
-for id in "${installed[@]}"; do z rm --delete-data "$id" >/dev/null 2>&1; done
+z uninstall --delete-data $CONSUMER >/dev/null 2>&1
+for id in "${installed[@]}"; do z uninstall --delete-data "$id" >/dev/null 2>&1; done
 rm -rf "$work"
 echo
 echo "$failures check(s) failed."

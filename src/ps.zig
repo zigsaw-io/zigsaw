@@ -11,7 +11,7 @@
 //! started from inside another, as a command of `--share=commands` is, is in
 //! the other's job too; `ps` lists its processes under it, and not twice.
 //!
-//! A `zigsaw exec` keeps a record too, of the command it started in a run
+//! A `zigsaw enter` keeps a record too, of the command it started in a run
 //! (see exec.zig). Its zigsaw isn't in the run's job, so the record says
 //! which run it's in; its command is in both jobs, and `ps` lists it under
 //! the exec's line, not the run's.
@@ -49,7 +49,7 @@ pub const Record = struct {
     started: i64,
     /// Its job's name; null if it has none, as between a build's commands.
     job: ?[]const u8 = null,
-    /// The name of the event `zigsaw stop` sets to ask it to end (see
+    /// The name of the event `zigsaw kill` sets to ask it to end (see
     /// stop.zig); null if it can't be asked.
     stop: ?[]const u8 = null,
     /// Runs and execs: soft, low or appcontainer, and all, none or list.
@@ -111,7 +111,7 @@ pub fn stoppingPath(arena: Allocator, lock_path: []const u8) ![]const u8 {
 }
 
 /// running\<pid>.spec, next to a run's lock: how it starts programs, for
-/// `zigsaw exec` (see exec.zig). Not .json, which `live` takes for records.
+/// `zigsaw enter` (see exec.zig). Not .json, which `live` takes for records.
 pub fn specPath(arena: Allocator, lock_path: []const u8) ![]const u8 {
     return std.fmt.allocPrint(arena, "{s}.spec", .{lock_path[0 .. lock_path.len - ".lock".len]});
 }
@@ -495,7 +495,7 @@ pub fn ps(ctx: *Context, opts: Options) !void {
             .{ memory_text, .right },
             .{ if (s.job) |j| try std.fmt.allocPrint(arena, "{f}", .{Cpu{ .t = j.cpu }}) else "-", .right },
             .{ try std.fmt.allocPrint(arena, "{f}", .{Age{ .t = time - r.started }}), .right },
-            .{ if (s.inside) |p| try std.fmt.allocPrint(arena, "{s}  ({s}in run {d})", .{ command, if (r.kind == .exec) "exec " else "", p }) else command, .left },
+            .{ if (s.inside) |p| try std.fmt.allocPrint(arena, "{s}  ({s}in run {d})", .{ command, if (r.kind == .exec) "enter " else "", p }) else command, .left },
         };
     }
     var widths: [columns]usize = undefined;

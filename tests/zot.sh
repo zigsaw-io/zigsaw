@@ -94,8 +94,8 @@ wait 2>/dev/null
 for _ in $(seq 20); do rm -rf "$dir" 2>/dev/null && break; sleep 0.5; done
 [ ! -e "$dir" ] || rm -rf "$dir"
 if $own_store; then
-    for id in $ZOT org.golang.go net.frippery.busybox; do z rm --delete-data $id >/dev/null 2>&1; done
-    z prune --downloads >/dev/null 2>&1
+    for id in $ZOT org.golang.go net.frippery.busybox; do z uninstall --delete-data $id >/dev/null 2>&1; done
+    z uninstall --unused --downloads >/dev/null 2>&1
     rm -rf "$store"
 fi
 exit $code

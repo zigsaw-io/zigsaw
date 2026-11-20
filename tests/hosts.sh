@@ -215,7 +215,7 @@ check "a host on the internet, by name" internet
 
 for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done
 wait 2>/dev/null
-z rm --delete-data $APP >/dev/null 2>&1
+z uninstall --delete-data $APP >/dev/null 2>&1
 reg delete "HKCU\\$suite_key" /f >/dev/null 2>&1
 rm -rf "$work"
 echo "$failures check(s) failed."

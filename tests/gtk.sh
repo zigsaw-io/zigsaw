@@ -89,7 +89,7 @@ install_again() {
     [ -f "$ZIGSAW_HOME\\refs\\$1.json" ] && source=$(grep -o '"source": *"[^"]*"' "$ZIGSAW_HOME\\refs\\$1.json" | cut -d'"' -f4)
     case $source in
     "" | *.json) z build "$root\\recipes\\$2" ;;
-    *) z pull --yes "$source" ;;
+    *) z install --yes "$source" ;;
     esac
 }
 
@@ -302,7 +302,7 @@ icon() {
 check "an icon an extension has is in GTK's icon theme, beside the runtime's" icon
 check "with --sandbox=soft" icon --sandbox=soft
 check "with --sandbox=appcontainer" icon --sandbox=appcontainer
-z rm --delete-data test.gtk.icons >/dev/null 2>&1
+z uninstall --delete-data test.gtk.icons >/dev/null 2>&1
 check "removed, it isn't" sh -c "timeout 60 \"\$0\" run --command=bin/icon.exe $APP test-gtk-icon 2>&1 | tr -d '\r' | grep -q '^icon test-gtk-icon missing$'" "$zigsaw"
 
 # Building without a recipe: the SDK's exports, from the store's bin, as
@@ -597,13 +597,13 @@ cd "$root" || exit 1
 reg delete "HKCU\\$classes" /f >/dev/null 2>&1
 reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1
 rm -rf "$docs"
-$installed_pinta && z rm --delete-data $PINTA >/dev/null 2>&1
-$installed_dotnet && { z rm --delete-data com.microsoft.dotnet >/dev/null 2>&1; z rm --delete-data com.microsoft.dotnet.Sdk >/dev/null 2>&1; }
-$installed_rnote && z rm --delete-data $RNOTE >/dev/null 2>&1
-$installed_editor && z rm --delete-data $EDITOR >/dev/null 2>&1
-$installed_gaphor && z rm --delete-data $GAPHOR >/dev/null 2>&1
-$installed_dicts && { z rm --delete-data org.gtk.Gtk4.Hunspell.fr_FR >/dev/null 2>&1; z rm --delete-data org.gtk.Gtk4.Hunspell.vi_VN >/dev/null 2>&1; }
-z rm --delete-data $APP >/dev/null 2>&1
+$installed_pinta && z uninstall --delete-data $PINTA >/dev/null 2>&1
+$installed_dotnet && { z uninstall --delete-data com.microsoft.dotnet >/dev/null 2>&1; z uninstall --delete-data com.microsoft.dotnet.Sdk >/dev/null 2>&1; }
+$installed_rnote && z uninstall --delete-data $RNOTE >/dev/null 2>&1
+$installed_editor && z uninstall --delete-data $EDITOR >/dev/null 2>&1
+$installed_gaphor && z uninstall --delete-data $GAPHOR >/dev/null 2>&1
+$installed_dicts && { z uninstall --delete-data org.gtk.Gtk4.Hunspell.fr_FR >/dev/null 2>&1; z uninstall --delete-data org.gtk.Gtk4.Hunspell.vi_VN >/dev/null 2>&1; }
+z uninstall --delete-data $APP >/dev/null 2>&1
 rm -rf "$work"
 echo
 echo "$failures check(s) failed."

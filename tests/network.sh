@@ -384,8 +384,8 @@ echo "On $(cmd /c ver | tr -d '\r' | grep -v '^$') (tests/netprobe.zig):"
 sed 's/^/  /' <<<"$report"
 if [ -n "${LOG_DIR:-}" ]; then echo "$report" >"$LOG_DIR\\netprobe.txt"; fi
 
-z rm --delete-data $APP >/dev/null 2>&1
-z rm --delete-data $RACE >/dev/null 2>&1
+z uninstall --delete-data $APP >/dev/null 2>&1
+z uninstall --delete-data $RACE >/dev/null 2>&1
 rm -rf "$work"
 echo "$failures check(s) failed."
 [ $failures = 0 ]

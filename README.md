@@ -12,17 +12,17 @@ In PowerShell, as yourself (no administrator):
 
 ```powershell
 irm https://github.com/zigsaw-io/zigsaw/releases/latest/download/install.ps1 | iex
-zigsaw pull org.nodejs.node
+zigsaw install org.nodejs.node
 node -e "console.log(process.version)"
 ```
 
 The first line installs zigsaw in `%LOCALAPPDATA%\zigsaw\bin` and adds that
 directory to your PATH (see [Installing zigsaw](#installing-zigsaw)).
-`pull org.nodejs.node` installs the published image of Node (see
-[Published apps](#published-apps)), and its commands, here `node`, `npm` and
+`install org.nodejs.node` installs the published image of Node from the
+remote `zigsaw` (see [Published apps](#published-apps)), and its commands, here `node`, `npm` and
 `npx`, in that same directory, so they run through zigsaw by name.
 `zigsaw build recipes\node.json` builds the same image, with the same
-digest, from its recipe. `zigsaw search` finds the others, and `zigsaw info`
+digest, from its recipe. `zigsaw search` finds the others, and `zigsaw remote-info`
 shows what one is and may reach before you install it (see
 [Finding apps](#finding-apps)).
 
@@ -33,7 +33,7 @@ To build zigsaw yourself instead, with Zig 0.17:
 
 ```powershell
 zig build                # ReleaseSafe by default; -Doptimize=Debug for a quicker compile
-.\zig-out\bin\zigsaw.exe pull org.nodejs.node
+.\zig-out\bin\zigsaw.exe install org.nodejs.node
 ```
 
 ## Installing zigsaw
@@ -67,196 +67,257 @@ With parameters (`-Version`, `-Dir`, `-NoPath`, `-NoUpdateCheck`, `-Uninstall`):
 ```
 
 `-Uninstall` removes zigsaw and its PATH entry once no app is installed
-(`zigsaw rm` undoes what zigsaw changed for each app, which deleting its
+(`zigsaw uninstall` undoes what zigsaw changed for each app, which deleting its
 files wouldn't). The rest of `%LOCALAPPDATA%\zigsaw`, downloads and apps'
 data, stays until you delete it. Windows won't let anyone delete an installed
-app's files by hand, as they're kept read-only: `zigsaw rm` them first. If a
+app's files by hand, as they're kept read-only: `zigsaw uninstall` them first. If a
 store has gone that way regardless, `zigsaw repair` from any other takes back
 what it changed ([what zigsaw changed](#what-zigsaw-changed-outside-its-stores)).
 
-Releases are published by the [Release workflow](.github/workflows/release.yml)
-when a `v<version>` tag is pushed. Their programs are built with
-`zig build -Dstrip`, which leaves out the debug information that would name
-the directory they were built in, for the x86-64 baseline, whatever CPU
-builds them (`build.zig`'s default target), so a build of the same tag with
-its Zig (0.17.0 from 0.58.0, 0.16.0 before) gives the same bytes anywhere,
-and runs on any x64 CPU; the
-release notes list their SHA-256. (0.18.0's were built for the CPU of
-GitHub's runner, and need AVX2, BMI2 and the SHA instructions.) A build
-of 0.19.0, 0.20.0 and 0.21.0 here gave their releases' bytes. From 0.22.0
-the programs carry version information, which Explorer's Properties show,
-and an application manifest ([`src/windows/`](src/windows/)); they have no
-Authenticode signature, so SmartScreen and Defender know nothing of them, though
-each release from 0.74.0 has [one of its own](#signatures).
-[`scripts/package.sh`](scripts/package.sh) makes the release's files.
-Up to v0.69.0, the manifest's line endings followed the checkout's: those
-releases were built with CRLF, so a build gives their bytes only on a checkout
-with `core.autocrlf=true`. From 0.70.0 they're pinned.
-
-Microsoft Defender's machine learning has flagged some builds of zigsaw by their
-exact bytes, as `Trojan:Win32/Bearfoos.A!ml` ([findings](docs/findings.md#defender-and-exact-bytes)).
-So the Release workflow scans the programs before publishing them, and
-[`scripts/defender-scan.sh`](scripts/defender-scan.sh) does the same here.
-
 ## Commands
 
+zigsaw's commands are Flatpak's, where Flatpak has one: `install`,
+`uninstall`, `update`, `list`, `info`, `run`, `override`, `ps`, `kill`,
+`enter`, `mask`, `permissions`, `search`, `remotes` and `remote-*`, `repair`,
+and `build-*` for publishing. A remote is a registry and a path in it, such as
+`ghcr.io/zigsaw-io`, which a store has as `zigsaw` until told otherwise; an app
+named by id alone comes from the first remote (see
+[Remotes](#remotes)). What Flatpak has no command for, zigsaw's own, comes
+last: running in the background, projects of several apps, volumes, rollback,
+`doctor`, and updating zigsaw itself.
+
+Before 0.105 the commands were Docker's. The old names fail, saying the new:
+
+| Before 0.105 | Now |
+|---|---|
+| `pull` | `install` |
+| `rm` | `uninstall` |
+| `prune` | `uninstall --unused` |
+| `info <image>`, `ls`, `cat` | `remote-info`, `remote-info --show-files`, `remote-info --file=<path>`; `info <app-id>` is an installed app's |
+| `stop`, `kill` | `kill`, `kill --now` |
+| `exec` | `enter` |
+| `hold`, `unhold` | `mask`, `mask --remove` |
+| `grants`, `grants --take-back` | `permissions`, `permission-remove` |
+| `login`, `logout` | `remote-modify --login`, `remote-modify --logout` |
+| `trust`, `trust add`, `trust rm` | `remotes`, `remote-modify --sign-key` or `--keyless`, `remote-modify --no-sign-key` |
+| `push`, `push --catalog` | `build-export`, `build-update-repo` |
+| `signature payload`, `push`, `push-bundle`, `check` | `build-sign --print-payload`, `build-sign`, `build-sign --bundle`, `build-sign --check` |
+
 ```
-zigsaw build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir]
-             [--memory=<size>] [--cpus=<n>] [--sandbox=auto|appcontainer|soft]
-             [<recipe.json> | <dir>]
-                                       build an app from a recipe, or from the zigsaw.json of a
-                                       project's directory (the current one by default), install
-                                       it and its commands; or each app a zigsaw.json lists as
-                                       "apps", after those it names. It goes on from the recipe's
-                                       last build: modules whose inputs are the same are skipped,
-                                       and one that stopped goes on at its command. --clean deletes
-                                       what that build left; --clean=<module> starts that module
-                                       and those after it afresh; --rebuild and --no-resume build
-                                       every module in a new directory. Kept builds may take
-                                       10 GB together (ZIGSAW_KEPT_BUILDS_SIZE); a build deletes
-                                       the least recently used others past that, and says so.
-                                       --memory and --cpus hold each of its commands to that
-                                       much memory and that many processors (see Limits). A
-                                       recipe that says "contained" has its commands run in a
-                                       container without the network, where Windows can;
-                                       --sandbox=appcontainer runs any recipe's so, soft none
-zigsaw search [<words>...]             find apps in the default registry's catalog
-zigsaw info <image>                    show what an app in a registry is, needs and may reach
-zigsaw ls <image>                      list the files of an app in a registry without pulling
-                                       it, as far as its layers' format allows (eStargz)
-zigsaw cat <image> <path>              write a file of an app in a registry to stdout, the
-                                       same way
-zigsaw pull [--yes] [--lazy] <image>   install an app and its commands from a registry, once
-                                       you agree to what it may reach; --yes agrees without
-                                       asking; --lazy installs it before its large eStargz
-                                       layers are downloaded, their files fetched as they're
-                                       first used while the rest downloads
-zigsaw push [--sources] <app-id> [<image>]
-                                       publish an installed app to a registry; --sources
-                                       also pushes the files it was built from
-zigsaw push --catalog <app-id>...      make the default registry's catalog list these apps
-zigsaw login [--username=<user>] [--password-stdin] <registry>
-                                       check and save a login for a registry
-zigsaw logout <registry>               delete a registry's saved login
-zigsaw run [options] <app-id> [args]   run an installed app; -d (--detach) runs it in the
-                                       background, its output in a log, and prints the
-                                       number `ps` lists it by
-zigsaw logs [-f] [--tail=<n>] [<app-id>|<run>]
-                                       print a detached run's log, as it goes or after it
-                                       ended; -f (--follow) goes on until the run ends; with
-                                       no app or run, in a project's directory, the logs of
-                                       the apps it lists as "run", each line after its app
-zigsaw up [-d] [--build] [--yes] [<dir>]
-                                       start the apps a project's zigsaw.json lists as "run",
-                                       building those not installed from it and pulling those
-                                       pinned there, each once the one before serves, then
-                                       follow their logs; Ctrl+C stops them. -d (--detach)
-                                       returns once they're up; --build builds all first
-zigsaw down [--time=<seconds>] [<dir>] stop the apps `up` started, the last started first
-zigsaw list                            list installed apps, their commands and shortcuts,
-                                       and the kinds of file they open
-zigsaw ps [--processes] [<app-id>|<run>...]
-                                       list the runs and builds going, each by its zigsaw's
-                                       process id: its sandbox, processes, memory, processor
-                                       time and command; --processes lists its processes
-                                       too, each under the one that started it
-zigsaw stop [--time=<seconds>] <app-id>|<run>...
-                                       ask runs and builds to end: their windows to close,
-                                       and Ctrl+C if nothing else is on their console; what
-                                       hasn't ended after 10 seconds, or --time, is killed
-zigsaw kill <app-id>|<run>...          end runs and builds now; a run's zigsaw still cleans
-                                       up after it, and a build goes on from there next time
-zigsaw override [options] <app-id>     save run options that every run of the app gets;
-                                       --show shows them, --reset removes them; also
-                                       --nosnapshot has updates keep no copy of its data
-                                       for rollback, --snapshot has them keep one again
-zigsaw override [options] --global     the same for every app, below each app's own; also
-                                       --real-folders lets the apps of a store that isn't your
-                                       default one use your real folders, --noreal-folders
-                                       stops them
-zigsaw grants [<app-id>]               list what zigsaw changed outside its store for apps, in
-                                       this store and others, what stores since deleted left,
-                                       and low labels on your folders no record explains
-zigsaw grants --take-back <path>       remove a low label that no record explains
-zigsaw update [--yes] [--lazy] [<app-id>...]
-                                       rebuild or re-pull apps from where they came from;
-                                       one pulled again that may reach more asks first,
-                                       unless given --yes; --lazy as for pull
-zigsaw updates                         say what the last check found waiting, and whether a
-                                       daily check is on; neither installs anything
-zigsaw updates check                   look for updates of apps and zigsaw now
-zigsaw updates on|off                  start or stop the daily check; off is remembered, so that
-                                       installing or upgrading zigsaw leaves it off
-zigsaw upgrade [--yes]                 install zigsaw's latest release over this one, once you
-                                       agree; --yes agrees without asking
-zigsaw update --check [<app-id>...]    list the apps a new image waits for, and what it may
-                                       reach beyond theirs, installing nothing
-zigsaw rollback [--yes] <app-id>       go back to the version the installed one replaced, with
-                                       no network; updates then pass over the version left,
-                                       though not a newer one. Asks whether its data is to
-                                       go back too, to the copy kept of it as that version
-                                       left it: --data says yes, --keep-data no
-zigsaw rollback --data-only <app-id>   take the data back after a rollback that left it
-zigsaw hold <app-id>...                have updates, and the daily check, leave the apps alone
-zigsaw unhold <app-id>...              let updates reach them again
-zigsaw trust                           list whose signatures images and releases are checked for
-zigsaw trust add <registry/path> <key> check images under that path against a public key, as
-                                       `cosign generate-key-pair` makes in cosign.pub
-zigsaw trust add <registry/path> --keyless <identity> [--issuer <url>]
-                                       check them for a keyless signature, by a certificate
-                                       Sigstore's Fulcio gave <identity> (a workflow's URI, as
-                                       cosign's --certificate-identity takes it); the issuer is
-                                       GitHub Actions' unless given
-zigsaw trust rm <registry/path> [<fingerprint or identity>]
-                                       stop checking them for signatures added there
-zigsaw signature payload <image>       print what to sign for an image, for `cosign sign-blob`
-zigsaw signature push <image> <payload file> <signature file>
-                                       put a key's signature beside the image, where pull looks
-zigsaw signature push-bundle <image> <payload file> <bundle file>
-                                       put a keyless one, as `cosign sign-blob --bundle` writes
-                                       it, beside the image, once it's checked
-zigsaw signature check <image>         say whether an image has a good signature
-zigsaw volume create [--path=<dir>] <name>
-                                       make a volume in the store, or keep one in a folder of
-                                       yours; a run's --volume makes one it doesn't find
-zigsaw volume ls                       list the volumes, each app's own (its data, named by
-                                       its id) too, where each is, and what mounts it
-zigsaw volume inspect <name>           show a volume's size, mounts, use and grants
-zigsaw volume export [--all] <name> <file>
-                                       write a volume's files to a tar, .tar.gz by its name,
-                                       or - for stdout; an app's data by the app's id,
-                                       without its temporary files and cache unless --all
-zigsaw volume import [--replace] <name> <file>
-                                       make a tar's files (- for stdin) a volume's, a new
-                                       one or one with no files; --replace puts them in the
-                                       place of the files it has, which are deleted
-zigsaw volume rm <name>...             delete volumes in the store, or forget ones kept
-                                       elsewhere, leaving their files; not one an override
-                                       mounts, nor the data of an installed app
-zigsaw volume prune [--dry-run]        delete the volumes in the store that nothing mounts:
-                                       those no override names, and uninstalled apps' data
-zigsaw rm [--delete-data] <app-id>     uninstall an app and its commands; --delete-data also
-                                       deletes its own volume; the others it mounted stay
-zigsaw prune [--dry-run] [--downloads] [--volumes] [--previous]
-                                       delete what no installed app needs; --volumes also the
-                                       volumes nothing mounts, --previous the versions kept
-                                       for rollback with the copies of their data
-zigsaw repair                          write every app's commands, shortcuts and file
-                                       associations again, as after installing a new zigsaw,
-                                       and take back what apps may no longer reach, and what
-                                       stores since deleted left
-zigsaw doctor [--offline] [<app-id>]   look for what would make zigsaw fail here, in this
-                                       zigsaw, its store, its apps and the network, and say
-                                       what fixes each; changes nothing. --offline leaves out
-                                       the network; an app's id tells about that app at length
-zigsaw version                         print zigsaw's version
+Manage installed apps:
+  install [-y] [--lazy] [<remote>] <image>
+                                  install an app and its commands from a remote, once
+                                  you agree to what it may reach; -y (--yes) agrees
+                                  without asking; --lazy installs it before its large
+                                  eStargz layers are downloaded, their files fetched as
+                                  they're first used while the rest downloads
+  update [-y] [--lazy] [<app-id>...]
+                                  rebuild or reinstall apps from where they came from;
+                                  one installed again that may reach more asks first,
+                                  unless given -y; --lazy as for install
+  update --check [<app-id>...]    list the apps a new image waits for, and what it may
+                                  reach beyond theirs, installing nothing
+  uninstall [--delete-data] <app-id>
+                                  uninstall an app and its commands; --delete-data also
+                                  deletes its own volume; the others it mounted stay
+  uninstall --unused [--dry-run] [--downloads] [--volumes] [--previous]
+                                  delete what no installed app needs; also cached
+                                  downloads and tool caches, the volumes nothing
+                                  mounts, and the versions kept for rollback with
+                                  the copies of their data
+  mask [--remove] [<app-id>...]   have updates, and the daily check, leave the apps
+                                  alone; --remove lets updates reach them again; with
+                                  no app, list those masked
+  list                            list installed apps, their commands and shortcuts,
+                                  and the kinds of file they open
+  info <app-id>                   show what an installed app is and may reach, where it
+                                  came from, and where its files and data are
+  repair                          write every app's commands, shortcuts and file
+                                  associations again, as after installing a new zigsaw,
+                                  and take back what apps may no longer reach, and what
+                                  stores since deleted left
+
+Find apps:
+  search [<words>...]             find apps in the remotes' catalogs
+  remote-ls [<remote>]            list the apps in a remote's catalog, or every remote's
+  remote-info [<remote>] <image>  show what an app in a remote is, needs and may reach
+  remote-info --show-files [<remote>] <image>
+                                  list its files without installing it, as far as its
+                                  layers' format allows (eStargz)
+  remote-info --file=<path> [<remote>] <image>
+                                  write one of its files to stdout, the same way
+
+Run apps:
+  run [options] <app-id> [args]   run an installed app (options below)
+  override [options] <app-id>     save run options that every run of the app gets;
+                                  --show shows them, --reset removes them; also
+                                  --nosnapshot has updates keep no copy of its data
+                                  for rollback, --snapshot has them keep one again
+  override [options] --global     the same for every app, below each app's own; also
+                                  --real-folders lets the apps of a store that isn't your
+                                  default one use your real folders, --noreal-folders
+                                  stops them
+  ps [--processes] [<app-id>|<run>...]
+                                  list the runs and builds going, each by its zigsaw's
+                                  process id: its sandbox, processes, memory, processor
+                                  time and command; --processes lists its processes
+                                  too, each under the one that started it
+  kill [--time=<seconds>] <app-id>|<run>...
+                                  ask runs and builds to end: their windows to close,
+                                  and Ctrl+C if nothing else is on their console; what
+                                  hasn't ended after 10 seconds, or --time, is killed
+  kill --now <app-id>|<run>...    end runs and builds now; a run's zigsaw still cleans
+                                  up after it, and a build goes on from there next time
+  enter [--env=NAME=VALUE]... [-d|--detach] <app-id>|<run> <command> [<arg>...]
+                                  run a command in a run that's going, in its sandbox,
+                                  job, variables and working directory, on this
+                                  terminal; the command is found as --command finds
+                                  one. It ends with the run, and with this zigsaw.
+                                  --detach starts it with no console and prints the
+                                  PID `ps` lists it by
+
+Manage permissions:
+  permissions [<app-id>]          list what zigsaw changed outside its store for apps, in
+                                  this store and others, what stores since deleted left,
+                                  and low labels on your folders no record explains
+  permission-remove <path>        remove a low label that no record explains
+
+Manage remotes:
+  remotes                         list the remotes, in order, whose signatures count for
+                                  each one's images, and its login; and for zigsaw's
+                                  releases
+  remote-add [--if-not-exists] [<changes>] <name> <location>
+                                  add a remote: a name (letters, digits, - and _) for a
+                                  registry and a path in it, such as ghcr.io/me, or
+                                  oci+https://ghcr.io/me as Flatpak writes it
+  remote-modify <changes> <name>  change a remote:
+    --url=<location>              move it
+    --sign-key=<file>             check its images against a public key, as `cosign
+                                  generate-key-pair` makes in cosign.pub
+    --keyless=<identity> [--issuer=<url>]
+                                  check them for a keyless signature, by a certificate
+                                  Sigstore's Fulcio gave <identity> (a workflow's URI, as
+                                  cosign's --certificate-identity takes it); the issuer is
+                                  GitHub Actions' unless given
+    --no-sign-key[=<fingerprint or identity>]
+                                  stop checking them for that one, or all added
+    --login [--username=<user>] [--password-stdin]
+                                  check and save a login for its registry
+    --logout                      delete its registry's saved login
+                                  (remote-add takes them too, but --url, --no-sign-key
+                                  and --logout)
+  remote-delete [--force] <name>  delete a remote, whose signatures counted for it, and
+                                  its registry's login when no other remote is there;
+                                  --force even if apps were installed from it
+
+Build and publish apps:
+  build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir]
+        [--memory=<size>] [--cpus=<n>] [--sandbox=auto|appcontainer|soft]
+        [<recipe.json> | <dir>]   build an app from a recipe, or from the zigsaw.json of a
+                                  project's directory (by default the current one), and
+                                  install it and its commands. A zigsaw.json that lists
+                                  "apps" builds and installs each of them, after those it
+                                  names by id, unpinned; one of them built alone builds
+                                  those first, without installing them. A build goes on
+                                  from the recipe's last one: modules whose inputs are the
+                                  same are skipped, and one that stopped goes on at its
+                                  command.
+                                  --clean deletes what that build left first, and
+                                  --clean=<module> starts that module and those after it
+                                  afresh; --rebuild builds every module in a new directory,
+                                  even if an earlier build had the same inputs; --no-resume
+                                  does too, unless such a build made the image already.
+                                  The builds kept may take 10 GB together; set
+                                  ZIGSAW_KEPT_BUILDS_SIZE (20GB, 500MB, 0) to change that.
+                                  --memory and --cpus hold each of the build's commands,
+                                  with all it starts, to that much memory and that many
+                                  processors, as they do a run (see below).
+                                  A recipe that says "contained": true has its build
+                                  commands run in a container without the network, where
+                                  Windows can (not Server 2025); --sandbox=appcontainer
+                                  runs any recipe's so, or fails, and soft none
+  build-export [--sources] <app-id> [<remote> | <image>]
+                                  publish an installed app to a remote, the first unless
+                                  given one, or as an image; --sources also keeps the
+                                  files it was built from next to it
+  build-update-repo [<remote>] <app-id>...
+                                  make a remote's catalog, the first's unless given one,
+                                  list these apps, as it has them
+  build-sign --print-payload <image>
+                                  print what to sign for an image, for `cosign sign-blob`
+  build-sign <image> <payload file> <signature file>
+                                  put a key's signature beside the image, where install
+                                  looks
+  build-sign --bundle <image> <payload file> <bundle file>
+                                  put a keyless one, as `cosign sign-blob --bundle` writes
+                                  it, beside the image, once it's checked
+  build-sign --check <image>      say whether an image has a good signature
+
+zigsaw's own, which Flatpak has no command for:
+  run -d [options] <app-id> [args]
+                                  run an installed app in the background, its output in
+                                  a log, and print the number `ps` lists it by
+  logs [-f] [--tail=<n>] [<app-id>|<run>]
+                                  print a detached run's log, as it goes or after it
+                                  ended; -f (--follow) goes on until the run ends; with
+                                  no app or run, in a project's directory, the logs of
+                                  the apps it lists as "run", each line after its app
+  up [-d] [--build] [-y] [<dir>]  start the apps a project's zigsaw.json lists as "run",
+                                  building those not installed from it and installing
+                                  those pinned there, each once the one before serves,
+                                  then follow their logs; Ctrl+C stops them. -d
+                                  (--detach) returns once they're up; --build builds all
+                                  first
+  down [--time=<seconds>] [<dir>] stop the apps `up` started, the last started first
+  volume create [--path=<dir>] <name>
+                                  make a volume in the store, or keep one in a folder of
+                                  yours; a run's --volume makes one it doesn't find
+  volume ls                       list the volumes, each app's own (its data, named by
+                                  its id) too, where each is, and what mounts it
+  volume inspect <name>           show a volume's size, mounts, use and grants
+  volume export [--all] <name> <file>
+                                  write a volume's files to a tar, .tar.gz by its name,
+                                  or - for stdout; an app's data by the app's id,
+                                  without its temporary files and cache unless --all
+  volume import [--replace] <name> <file>
+                                  make a tar's files (- for stdin) a volume's, a new
+                                  one or one with no files; --replace puts them in the
+                                  place of the files it has, which are deleted
+  volume rm <name>...             delete volumes in the store, or forget ones kept
+                                  elsewhere, leaving their files; not one an override
+                                  mounts, nor the data of an installed app
+  volume prune [--dry-run]        delete the volumes in the store that nothing mounts:
+                                  those no override names, and uninstalled apps' data
+  rollback [-y] <app-id>          go back to the version the installed one replaced, with
+                                  no network; updates then pass over the version left,
+                                  though not a newer one. Asks whether its data is to
+                                  go back too, to the copy kept of it as that version
+                                  left it: --data says yes, --keep-data no
+  rollback --data-only <app-id>   take the data back after a rollback that left it
+  doctor [--offline] [<app-id>]   look for what would make zigsaw fail here, in this
+                                  zigsaw, its store, its apps and the network, and say
+                                  what fixes each; changes nothing. --offline leaves out
+                                  the network; an app's id tells about that app at length
+  updates                         say what the last check found waiting, and whether a
+                                  daily check is on; neither installs anything
+  updates check                   look for updates of apps and zigsaw now
+  updates on|off                  start or stop the daily check; off is remembered, so
+                                  that installing or upgrading zigsaw leaves it off
+  upgrade [-y]                    install zigsaw's latest release over this one, once you
+                                  agree; -y (--yes) agrees without asking
+  version                         print zigsaw's version
 ```
+
+`zigsaw help` prints the same, with the run options (see
+[Changing an app's options](#changing-an-apps-options)).
 
 ## Finding apps
 
-`zigsaw search` lists the apps in the default registry's catalog, and finds
-the ones that have every word you give it (ignoring case) in their id, name,
-summary, commands, shortcuts or the kinds of file they open:
+`zigsaw search` lists the apps in the remotes' catalogs, and finds the ones
+that have every word you give it (ignoring case) in their id, name, summary,
+commands, shortcuts or the kinds of file they open. With more than one
+remote, it says which each app is in; `zigsaw remote-ls [<remote>]` lists a
+remote's whole catalog, or every remote's.
 
 ```
 > zigsaw search pdf
@@ -264,29 +325,32 @@ ID                              VERSION DESCRIPTION
 org.sumatrapdfreader.SumatraPDF 3.6.1   SumatraPDF: A reader for PDF, EPUB, MOBI, XPS, DjVu, CHM and comic books
 ```
 
-`zigsaw info <app-id>` shows what an app is before you install it, from its
-image in the registry: its name, homepage and licence, how much a pull
-downloads, its runtimes, commands, shortcuts and kinds of file, what it may
-reach, and how it was built. It takes any image, in the catalog or not
-(`zigsaw info ghcr.io/you/app:1.0`). `pull` says what the app may reach
-before it downloads it, and `update` says so when a new version may reach
-something else.
+`zigsaw remote-info [<remote>] <app-id>` shows what an app is before you
+install it, from its image in the remote: its name, homepage and licence, how
+much installing it downloads, its runtimes, commands, shortcuts and kinds of
+file, what it may reach, and how it was built. It takes any image, in a
+catalog or not (`zigsaw remote-info ghcr.io/you/app:1.0`). `install` says what
+the app may reach before it downloads it, and `update` says so when a new
+version may reach something else. Once it's installed, `zigsaw info <app-id>`
+says the same from the store, with no network, and where the app came from,
+where its files are and where its data is.
 
-`zigsaw ls <app-id>` lists an app's files, and `zigsaw cat <app-id> <path>`
-writes one of them, a licence say, to stdout, without pulling the app: for
-layers in eStargz, a layer format whose files can be found and read one by
-one, they take a few ranged requests, and check what they read against the
-layer's index. Layers in gzip, the default, can't be read that way.
+`zigsaw remote-info --show-files <app-id>` lists an app's files, and
+`zigsaw remote-info --file=<path> <app-id>` writes one of them, a licence say,
+to stdout, without installing the app: for layers in eStargz, a layer format
+whose files can be found and read one by one, they take a few ranged
+requests, and check what they read against the layer's index. Layers in gzip,
+the default, can't be read that way.
 
-The catalog is an artifact next to the images, `<registry>/catalog:latest`
-(`ghcr.io/zigsaw-io/catalog`), so `ZIGSAW_REGISTRY` changes it too. It lists
-each app as the registry has it at its `latest` tag, as its image describes
-it. A recipe's `name`, `summary`, `homepage` and `license` (an SPDX
-expression) go into its image, and into the standard annotations that ghcr.io
-shows on a package's page. Images without them are listed with their
-commands. `zigsaw push --catalog <app-id>...` makes the catalog, from what
-the registry has; [`scripts/publish.sh`](scripts/publish.sh) does it for
-every published app. zigsaw keeps the last catalog it read in
+A remote's catalog is an artifact next to its images, `<remote>/catalog:latest`
+(`ghcr.io/zigsaw-io/catalog`). It lists each app as the remote has it at its
+`latest` tag, as its image describes it. A recipe's `name`, `summary`,
+`homepage` and `license` (an SPDX expression) go into its image, and into the
+standard annotations that ghcr.io shows on a package's page. Images without
+them are listed with their commands. `zigsaw build-update-repo [<remote>]
+<app-id>...` makes the catalog, from what the remote has, as `flatpak
+build-update-repo` makes a repository's summary;
+[`scripts/publish.sh`](scripts/publish.sh) does it for every published app. zigsaw keeps the last catalog it read in
 `cache\catalog\`, and uses it when the registry can't be reached, saying
 from when it is.
 
@@ -395,7 +459,7 @@ zigsaw down      # stop them, web first
 
 - **`zigsaw up` builds the apps it runs that aren't installed from the project** (all
   of them with `--build`), and pulls the apps from registries it pins that aren't
-  installed, asking as `pull` asks (not with `--yes`).
+  installed, asking as `install` asks (not with `--yes`).
 - **It starts each app as `run -d` would, in the order listed.** One that serves
   something, as PostgreSQL serves its port, is up once its services answer, and only
   then does the next start.
@@ -413,31 +477,63 @@ See [several apps](docs/recipes.md#several-apps) for the details.
 zigsaw images are standard OCI images, so any OCI registry can hold them:
 ghcr.io, Docker Hub, a self-hosted zot or distribution. An image is named
 `<registry>/<repository>[:tag][@digest]`, or just by app id for the app's
-image in the default registry:
+image in a remote (see [Remotes](#remotes)):
 
 ```powershell
-zigsaw pull org.nodejs.node                           # ghcr.io/zigsaw-io/org.nodejs.node:latest
-zigsaw pull org.nodejs.node:24.22.2                   # a version
-zigsaw push org.nodejs.node ghcr.io/you/node          # tagged 24.22.2, the app's version
-zigsaw pull ghcr.io/you/node:24.22.2                  # on another machine
-zigsaw pull ghcr.io/you/node@sha256:f25237a3...       # exactly this build
+zigsaw install org.nodejs.node                           # ghcr.io/zigsaw-io/org.nodejs.node:latest
+zigsaw install org.nodejs.node:24.22.2                   # a version
+zigsaw remote-add mine ghcr.io/you
+zigsaw build-export org.nodejs.node mine                 # ghcr.io/you/org.nodejs.node:24.22.2, the app's version
+zigsaw install mine org.nodejs.node:24.22.2              # on another machine, with the remote added there
+zigsaw install ghcr.io/you/org.nodejs.node@sha256:f25237a3...   # exactly this build, no remote needed
 ```
 
-An app id stands for `<default registry>/<app id in lower case>`, and the
-image must hold that app. The default registry is `ghcr.io/zigsaw-io`; set
-`ZIGSAW_REGISTRY` to use another, such as your own:
-`ZIGSAW_REGISTRY=ghcr.io/you`. Then `zigsaw push <app-id>` publishes an app to
-its image there. Installed apps remember the full reference they came from,
-so `zigsaw update` keeps using it.
+An app id stands for `<remote>/<app id in lower case>`, and the image must
+hold that app. Installed apps remember the full reference they came from, so
+`zigsaw update` keeps using it, whatever becomes of the remote.
+
+### Remotes
+
+A remote, as in Flatpak, is a name for where apps' images are: a registry and
+a path in it. A store has one until told otherwise, `zigsaw`, which is
+`ghcr.io/zigsaw-io`, where the [published apps](#published-apps) are.
+
+```powershell
+zigsaw remotes                                   # each, in order, who signs its images, its login
+zigsaw remote-add mine ghcr.io/you               # or oci+https://ghcr.io/you, as Flatpak writes it
+zigsaw remote-add --sign-key=cosign.pub --login work registry.example.com/apps
+zigsaw remote-modify --url=ghcr.io/you2 mine     # it moves, with who signs its images
+zigsaw remote-delete mine
+```
+
+An app named by id alone comes from the first remote, and so does what
+`build-export` and `build-update-repo` publish; any other is named before the
+app: `zigsaw install mine org.example.App`, `zigsaw remote-info mine
+org.example.App`, `zigsaw build-export org.example.App mine`. `search` looks
+in every remote's catalog. A remote's name is letters, digits, `-` and `_`,
+never an app's id or an image's name.
+
+What a remote has besides its place: whose signatures count for its images
+(see [Signatures](#signatures)), and the login for its registry (see
+[Logging in](#logging-in)). `remote-delete` takes the signers with it, and
+refuses a remote apps were installed from, as their updates are checked for
+its signatures, unless given `--force`. Logins are Windows', for the user,
+and every store uses them: one stays when its remote goes.
+
+`ZIGSAW_REGISTRY` moves the first remote for as long as it's set, for CI and
+scripts (`ZIGSAW_REGISTRY=localhost:5000/test`); nothing saves it. A store
+keeps its remotes in `remotes.json`. The places a zigsaw before 0.105 was told
+to check signatures for with `trust add` become remotes of their own, named
+after their last part, the first time a newer zigsaw reads the store.
 
 The manifest travels byte for byte, so an image has the same digest in every
-store and registry. `pull` downloads only blobs the store doesn't have, checks
+store and registry. `install` downloads only blobs the store doesn't have, checks
 each one against its digest, and refuses images that aren't zigsaw apps
 (such as Docker container images). An image's layers, its runtimes' among
 them, download several at a time.
 
-Before it downloads an app's layers, `pull` says what the app is, what it
-brings and what it may reach, as `info` does, and asks:
+Before it downloads an app's layers, `install` says what the app is, what it
+brings and what it may reach, as `remote-info` does, and asks:
 
 ```
 test.example.notes 1.2: Notes
@@ -450,28 +546,28 @@ Install it? [Y/n]
 ```
 
 Without a console to ask on, the answer is the next line on stdin
-(`echo y | zigsaw pull ...`), and nothing there means no: scripts and CI add
-`--yes`, which agrees without asking. A pull over an installed version of the
+(`echo y | zigsaw install ...`), and nothing there means no: scripts and CI add
+`-y` (`--yes`), which agrees without asking. An install over an installed version of the
 app, and `zigsaw update`, ask only when the new version may reach more: the
 network where it couldn't, a location it couldn't use, or could only read, or
 a registry key it didn't keep; and then say only what's new. `build` doesn't
 ask: the recipe is yours, and so are the images it pins.
 
 A reference may name a multi-platform index, as tools built for several
-platforms publish: then `pull`, `update` and `info` take the index's image
+platforms publish: then `install`, `update` and `remote-info` take the index's image
 for Windows on x64 (`windows/amd64`), and the app records that image's
 digest. An index without one is refused, with the platforms it has. A
 recipe pins the image, not the index.
 
-`push` uploads only blobs the repository doesn't have. A blob the registry
+`build-export` uploads only blobs the repository doesn't have. A blob the registry
 already holds in another repository is mounted from there, which uploads
 nothing:
 
 - an app's runtime layers, from the runtime's own repository next to the
-  app's, where `zigsaw push <runtime id>` puts it: pushing
+  app's, where `zigsaw build-export <runtime id>` puts it: pushing
   `io.prettier.prettier` by app id mounts Node's layer from
   `org.nodejs.node`;
-- all of an app pulled from another repository on the same registry, from
+- all of an app installed from another repository on the same registry, from
   that one.
 
 Registries that can't mount, or won't, get the blob uploaded instead.
@@ -488,14 +584,14 @@ in one request), and `-v` says how each chunk went.
 
 Registries on `localhost` are reached over plain HTTP; all others over HTTPS.
 
-### Pulling lazily
+### Installing lazily
 
-`zigsaw pull --lazy` installs an app before its large layers are downloaded,
+`zigsaw install --lazy` installs an app before its large layers are downloaded,
 so that it starts sooner. Each of their files is fetched the first time
 something reads it, while the rest downloads in the background:
 
 ```powershell
-zigsaw pull --lazy org.tug.texlive         # 236 MB of TeX Live; a document reads some 18
+zigsaw install --lazy org.tug.texlive         # 236 MB of TeX Live; a document reads some 18
 zigsaw list                                # org.tug.texlive ...  (downloading 37%)
 ```
 
@@ -554,7 +650,7 @@ has the table.
 The list is this machine's, one for each image, an app's or a runtime's:
 `learned\<id>.txt` in the store, paths and nothing else. A file that nothing
 has read during the last three versions pulled lazily drops off it. `zigsaw
-rm` leaves it for the app's next pull, `zigsaw prune` deletes the lists of
+rm` leaves it for the app's next pull, `zigsaw uninstall --unused` deletes the lists of
 images that nothing installed uses, and deleting the file forgets it. It does
 nothing for an image's first pull, and sees only reads made before the
 download finished.
@@ -565,7 +661,7 @@ which is zigsaw itself, gives Windows a file's bytes when a program first
 opens it. It reads them from the registry, a file's chunks in parallel
 requests, keeps what it fetched for the download, and checks
 each chunk against the layer's TOC, which it checks against the image's
-manifest, whose signature `pull` checked. So nothing unchecked reaches an
+manifest, whose signature `install` checked. So nothing unchecked reaches an
 app, in any sandbox. Once the whole layer is downloaded and checked against
 its digest, and no run of the app is going, the helper unpacks it as a plain
 pull would, puts that where the placeholders were, and ends. From then on
@@ -578,7 +674,7 @@ Until then:
   often with a "bad image" error. zigsaw then says which file it couldn't
   fetch, and why.
 - **The helper lasts as long as it has work.** Any run of the app starts it
-  again if it's gone, after a reboot say, and `zigsaw rm` stops it. Its log is
+  again if it's gone, after a reboot say, and `zigsaw uninstall` stops it. Its log is
   in the store's `lazy` folder. Started where everything a program starts ends
   with it, as in some terminals, the helper ends then too, and says so first;
   the app's next run starts it again.
@@ -587,7 +683,7 @@ Until then:
   looking at it).
 - **Placeholders need NTFS.** On a Dev Drive (ReFS), a network share or FAT,
   `--lazy` downloads the layer whole, and says so.
-- **`push` waits for the download**: it refuses an app still downloading.
+- **`build-export` waits for the download**: it refuses an app still downloading.
 
 - **The layer unpacks once no run is using it**, so that the unpack doesn't
   slow the run down; an app left open stays on placeholders until it's closed.
@@ -605,10 +701,10 @@ everyone. A recipe pins each file by its sha256, which is also the digest an
 OCI registry stores a blob under, so a registry can keep them:
 
 ```powershell
-zigsaw push --sources net.frippery.busybox
+zigsaw build-export --sources net.frippery.busybox
 ```
 
-- **`push --sources`** also pushes the files the app was built from (its
+- **`build-export --sources`** also pushes the files the app was built from (its
   sources and what its [vendor steps](#vendor-steps) made, from the download
   cache) to the image's repository, under a manifest tagged
   `sha256-<image digest>.sources`, which keeps the registry from deleting
@@ -638,7 +734,7 @@ no key is kept anywhere. A certificate names who signed, and zigsaw takes only t
   runner built the tag to the same six programs and Reproduce passed on the commit.
 
 ```
-> zigsaw pull org.nodejs.node
+> zigsaw install org.nodejs.node
 ghcr.io/zigsaw-io/org.nodejs.node: signed, by https://github.com/zigsaw-io/zigsaw/.github/workflows/reproduce.yml@refs/heads/main
 ```
 
@@ -649,7 +745,7 @@ vouches for it. Either way, the log's signed checkpoint and the entry's proof ag
 must show the log holds the signature. The keys of all three are built into zigsaw.
 Images signed before 0.81.0, with a key of zigsaw's, still count.
 
-**What happens to an image from `ghcr.io/zigsaw-io`, on `pull` and `update`**, before
+**What happens to an image from `ghcr.io/zigsaw-io`, on `install` and `update`**, before
 anything of it is downloaded:
 
 - **Signed by someone who counts**: it goes on, and says who.
@@ -663,7 +759,7 @@ anything of it is downloaded:
   stay unsigned on purpose, as many have known vulnerabilities.
 - **A registry that won't answer** is an error, not "not signed".
 
-`zigsaw info` has a line saying which of these an image is. What a recipe pins by digest
+`zigsaw remote-info` has a line saying which of these an image is. What a recipe pins by digest
 isn't checked, as the digest says exactly what it wants, and a signature on the app's
 image covers its runtimes, whose layers its manifest lists.
 
@@ -678,7 +774,7 @@ isn't checked.
 **To check by hand**, with stock [cosign](https://github.com/sigstore/cosign):
 
 ```powershell
-zigsaw signature payload org.nodejs.node > payload.json   # or the payload layer beside it
+zigsaw build-sign --print-payload org.nodejs.node > payload.json   # or the payload layer beside it
 cosign verify-blob --bundle bundle.json payload.json `
   --certificate-identity https://github.com/zigsaw-io/zigsaw/.github/workflows/reproduce.yml@refs/heads/main `
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
@@ -692,22 +788,24 @@ manifest tagged `sha256-<digest>.sigstore` beside it (`oras pull` gets it). That
 zigsaw's, not where `cosign verify` looks: zigsaws before 0.81.0 refuse what they can't
 check where they look, so this is where they don't.
 
-**For your own images**, tell zigsaw whose signature counts, once per store: a workflow
-of yours that signs keyless, or a key.
+**For your own images**, tell zigsaw whose signature counts for their remote, once per
+store: a workflow of yours that signs keyless, or a key, as Flatpak takes a remote's GPG
+key.
 
 ```powershell
-zigsaw trust add ghcr.io/me --keyless https://github.com/me/app/.github/workflows/release.yml@refs/heads/main
-zigsaw trust add ghcr.io/me cosign.pub   # images under ghcr.io/me, by whole path components
-zigsaw trust                             # who counts where, built-in ones too
-zigsaw trust rm ghcr.io/me               # and away again
+zigsaw remote-add --keyless=https://github.com/me/app/.github/workflows/release.yml@refs/heads/main me ghcr.io/me
+zigsaw remote-modify --sign-key=cosign.pub me   # images under ghcr.io/me, by whole path components
+zigsaw remotes                                  # who counts where, built-in ones too
+zigsaw remote-modify --no-sign-key me           # and away again, or --no-sign-key=<fingerprint or identity>
 ```
 
-`--issuer` names another identity provider than GitHub Actions'. Keys are ECDSA P-256 only,
-which is what `cosign generate-key-pair` makes. An image under nobody says it wasn't
-checked, and installs. To sign keyless, have `cosign sign-blob --bundle` sign what
-`zigsaw signature payload <image>` prints, and `zigsaw signature push-bundle` puts the
-bundle beside the image with your registry login, once it's checked it as a pull would.
-With a key, `cosign sign-blob` and `zigsaw signature push`, in cosign's classic layout
+`--issuer=<url>` names another identity provider than GitHub Actions'. Keys are ECDSA
+P-256 only, which is what `cosign generate-key-pair` makes. `remote-add` adds nothing
+unless it can add all it's given. An image under nobody says it wasn't checked, and
+installs. To sign keyless, have `cosign sign-blob --bundle` sign what
+`zigsaw build-sign --print-payload <image>` prints, and `zigsaw build-sign --bundle` puts the
+bundle beside the image with your registry login, once it's checked it as an install would.
+With a key, `cosign sign-blob` and `zigsaw build-sign`, in cosign's classic layout
 (a tag named `sha256-<digest>.sig`). [`scripts/sign-images.sh`](scripts/sign-images.sh)
 is what CI runs for the published recipes. No digest changes: a signature is beside its
 image, not in it.
@@ -716,24 +814,28 @@ What this doesn't do is in [the gaps](docs/gaps.md).
 
 ### Logging in
 
-Anonymous pulls of public images work without setup. Pushing, and pulling
-private images, needs a login:
+Installing public images works without setup. Publishing, and installing
+private images, needs a login, which a remote is given:
 
 ```powershell
-zigsaw login ghcr.io                                          # asks for a user name and password
-$env:TOKEN | zigsaw login --username=you --password-stdin ghcr.io
-zigsaw logout ghcr.io
+zigsaw remote-modify --login zigsaw                           # asks for a user name and password
+$env:TOKEN | zigsaw remote-modify --login --username=you --password-stdin mine
+zigsaw remote-add --login work registry.example.com/apps      # a remote with a login, at once
+zigsaw remote-modify --logout mine
 ```
 
-`login` checks the credentials with the registry, then saves them in Windows
-Credential Manager as `zigsaw:<registry>`, for your Windows user only. A
-login is only ever sent to its own registry. For ghcr.io, the user name is
-your GitHub user name, and the password a token with the `write:packages`
-scope (or `read:packages`, to pull private images).
+`--login` checks the credentials with the remote's registry, then saves them
+in Windows Credential Manager as `zigsaw:<registry>`, for your Windows user
+only: every remote on that registry, in every store, uses it, and `zigsaw
+remotes` shows it under each. Logins saved by `zigsaw login` before 0.105 are
+the same, and go on working. A login is only ever sent to its own registry.
+For ghcr.io, the user name is your GitHub user name, and the password a token
+with the `write:packages` scope (or `read:packages`, to install private
+images).
 
 For CI and scripts, `ZIGSAW_REGISTRY_USERNAME` and `ZIGSAW_REGISTRY_PASSWORD`
-work without a login, but only for the default registry: ghcr.io, or the host
-in `ZIGSAW_REGISTRY`. There they take the place of a saved login. `-v` shows
+work without a login, but only for one registry: ghcr.io, or the host in
+`ZIGSAW_REGISTRY`. There they take the place of a saved login. `-v` shows
 which credentials a command uses. zigsaw doesn't send credentials to a token
 service over plain HTTP, unless the registry is on `localhost`.
 
@@ -743,7 +845,7 @@ for it (`credHelpers`) or for every registry (`credsStore`), such as Docker
 Desktop's `docker-credential-desktop.exe` on PATH, or else from the file
 itself (`auths`). The file is `%DOCKER_CONFIG%\config.json`, or
 `%USERPROFILE%\.docker\config.json`. A Docker login the registry refuses
-doesn't stop a pull of a public image: zigsaw pulls without it, and says so.
+doesn't stop an install of a public image: zigsaw goes on without it, and says so.
 Identity tokens, which Docker gets from some registries' web logins, aren't
 used.
 
@@ -770,11 +872,11 @@ Left behind
   warning  run 4120 of org.nodejs.node ended without cleaning up after itself
            `zigsaw ps` clears its record
   warning  D:\Projects is labelled low, which no record explains
-           `zigsaw grants --take-back D:\Projects` removes it
+           `zigsaw permission-remove D:\Projects` removes it
 
 Apps
   problem  org.gnu.make 4.4.1: its config, blob sha256:ab12cd34ef56, is missing
-           `zigsaw rm org.gnu.make`, then `zigsaw build D:\recipes\make.json`, installs it again
+           `zigsaw uninstall org.gnu.make`, then `zigsaw build D:\recipes\make.json`, installs it again
   ok       11 other apps: their images, files and commands are there
 
 Network
@@ -852,7 +954,7 @@ keeps it in is the run's sandbox:
 - **`appcontainer`**: every permission is enforced, reading and the network
   too, in an AppContainer of the app's own.
 
-An image may ask for another sandbox than low, which `pull` and `info`
+An image may ask for another sandbox than low, which `install` and `remote-info`
 show. Kanboard's asks for `soft`, as PHP can't tell it may write its data at
 low integrity. So do toolchains' (zig, Rust, Go, CMake, make, Meson, Node,
 Python, the JDK, Maven, Gradle, and the GTK, Qt and PHP SDKs): Windows
@@ -914,7 +1016,7 @@ Files opened from Explorer come this way (see
 
 An app that other programs connect to, such as PostgreSQL's server or
 Kanboard's web server, declares a service: a name and a port on
-`localhost`. `zigsaw info` lists them. The service is on that port in every
+`localhost`. `zigsaw remote-info` lists them. The service is on that port in every
 sandbox, so a client finds it in the same place whichever sandbox the app
 runs in:
 
@@ -938,11 +1040,11 @@ program does. Under `appcontainer`:
 - A run of an app with the network has its container exempt from loopback
   isolation while the app's runs go, so it reaches them too. Windows lets
   you change that setting without elevation; the app's last run to end
-  takes it back, and so do `zigsaw repair` and `zigsaw rm` after a run that
+  takes it back, and so do `zigsaw repair` and `zigsaw uninstall` after a run that
   was killed. With `ZIGSAW_LOOPBACK_EXEMPTION=0`, zigsaw never exempts one.
 - An app that isn't exempt reaches only the ports it declares it uses, such
   as osm2pgsql's PostgreSQL and Xdebug's debugger client: zigsaw makes those
-  connections outside its container and hands them in. `zigsaw info` lists
+  connections outside its container and hands them in. `zigsaw remote-info` lists
   the ports, and `--port` moves one:
 
 ```powershell
@@ -1030,7 +1132,7 @@ zigsaw override --nofilesystem=documents org.gnome.TextEditor
 - A folder the app made itself in its home before it had the permission,
   with files in it, stays: zigsaw never deletes app data, and says so
   instead of linking.
-- Deleting the app's data (`zigsaw rm --delete-data`, `prune --volumes`,
+- Deleting the app's data (`zigsaw uninstall --delete-data`, `uninstall --unused --volumes`,
   `--ephemeral`) removes the links, never what's in your folders.
 - A store that isn't your default one, `%LOCALAPPDATA%\zigsaw`, leaves your real
   folders out of its apps' runs, and says so, until `zigsaw override --global
@@ -1042,7 +1144,7 @@ zigsaw override --nofilesystem=documents org.gnome.TextEditor
 
 #### What zigsaw changed outside its stores
 
-`zigsaw grants` lists it: for each app, the low labels on your paths and what its
+`zigsaw permissions` lists it: for each app, the low labels on your paths and what its
 container was given, and why each is there and how long it lasts; what other
 stores of yours changed; and what stores since deleted left behind. Windows keeps
 a label until something takes it away, so deleting a store doesn't. A copy of each
@@ -1054,8 +1156,8 @@ thing zigsaw puts in Task Scheduler, which `zigsaw updates off` removes.
 
 It also looks at your six folders and your profile, and lists under **Not
 explained** a low label that no record has, as a program other than zigsaw could
-leave, or a zigsaw before 0.70. `zigsaw grants --take-back <path>` removes one; a
-label a record has goes the way it came, with `zigsaw rm` or an override, as the
+leave, or a zigsaw before 0.70. `zigsaw permission-remove <path>` removes one; a
+label a record has goes the way it came, with `zigsaw uninstall` or an override, as the
 app would only make it again. `zigsaw list` says, in one line, when anything is
 left over or unexplained.
 
@@ -1070,7 +1172,7 @@ later one, is left out of a run with a warning, rather than refused.
 
 A volume, as Docker has them, is a folder that apps keep files in. Every app has
 one of its own, named by its id: its data directory, `volumes\<app-id>` in the
-store, which its first run makes. `zigsaw rm --delete-data` deletes it with the
+store, which its first run makes. `zigsaw uninstall --delete-data` deletes it with the
 app; without that it stays, a volume nothing mounts, until `zigsaw volume prune`
 or the app's return. An `--ephemeral` run has a fresh one instead, deleted as
 the run ends.
@@ -1129,11 +1231,11 @@ pgdata                    store                                    org.postgresq
 - `zigsaw volume inspect <name>` shows a volume's size, what mounts it, and what it was
   granted. `zigsaw volume rm` deletes a volume in the store, and forgets one kept
   elsewhere, leaving its files; it refuses one an override mounts, one a run uses,
-  and the data of an app that's installed (`zigsaw rm --delete-data` deletes that).
+  and the data of an app that's installed (`zigsaw uninstall --delete-data` deletes that).
 - One rule says what's left over: a volume in the store that nothing mounts. No
   override names it, and it isn't the data of an installed app. `zigsaw volume prune`
-  and `zigsaw prune --volumes` delete those, the data of uninstalled apps with the
-  named ones; `zigsaw prune` names them, and `--dry-run` shows what would go. Before
+  and `zigsaw uninstall --unused --volumes` delete those, the data of uninstalled apps with the
+  named ones; `zigsaw uninstall --unused` names them, and `--dry-run` shows what would go. Before
   0.85 that was `prune --data`, for apps' data only: it now says to use `--volumes`.
 - An `--ephemeral` run mounts its volumes too: a fresh app, and the volume's files.
 - A zigsaw before 0.80 can't read overrides that have volumes: `override --reset`
@@ -1313,10 +1415,10 @@ listening on http://localhost:8081
 - `zigsaw logs <app-id>` prints the log of the app's detached run, the one going or else
   the one that started last; `zigsaw logs <run>` that run's, going or ended. `-f`
   (`--follow`) prints what comes until the run ends, and `--tail=<n>` only the last lines.
-- A log stays after its run ends, until a detached run of the same app starts. `zigsaw rm`
-  deletes the app's logs, and `zigsaw prune` those of apps that aren't installed, but
+- A log stays after its run ends, until a detached run of the same app starts. `zigsaw uninstall`
+  deletes the app's logs, and `zigsaw uninstall --unused` those of apps that aren't installed, but
   never one a run is still writing.
-- `zigsaw stop` asks a detached run to end by Ctrl+C to its console, and the log says so;
+- `zigsaw kill` asks a detached run to end by Ctrl+C to its console, and the log says so;
   `kill` ends it now. Closing the terminal it was started from doesn't, unless the job
   that terminal is in keeps what it starts in it, which `run -d` then says.
 
@@ -1351,28 +1453,28 @@ query, which the low and appcontainer sandboxes keep their apps from doing.
 
 ### Stopping a run
 
-`zigsaw stop` ends what `ps` lists, by the same names: an app's id ends every run of it,
+`zigsaw kill` ends what `ps` lists, by the same names: an app's id ends every run of it,
 and a run's number ends that one.
 
 ```
-> zigsaw stop org.nodejs.node
+> zigsaw kill org.nodejs.node
 stopped 18132 (org.nodejs.node)
 stopped 20216 (org.sqlite.sqlite) (in run 18132)
-> zigsaw kill 21364
+> zigsaw kill --now 21364
 killed 21364 (net.frippery.busybox)
 ```
 
-- `stop` asks first. The app's windows are asked to close, as closing them by hand would,
+- `kill` asks first. The app's windows are asked to close, as closing them by hand would,
   and its console gets Ctrl+C, as pressing it there would. What hasn't ended after 10
   seconds, or `--time=<seconds>`, is ended.
-- Windows sends Ctrl+C to everything on a console. So `stop` sends it only when nothing
+- Windows sends Ctrl+C to everything on a console. So `kill` sends it only when nothing
   else is on the run's console but the run itself and what started it: your shell, which
   takes it as if you had pressed Ctrl+C there. When another program shares that terminal,
   the run says which, gets no Ctrl+C, and is ended after `--time`; the other program keeps
-  going. The same goes for a `zigsaw stop` typed in the run's own terminal: Ctrl+C would
+  going. The same goes for a `zigsaw kill` typed in the run's own terminal: Ctrl+C would
   reach the shell it was typed in, and a script that runs it could end with it. Stop a run
   from another terminal, or press Ctrl+C in its own.
-- `kill` ends it now, with exit code 1.
+- `kill --now` ends it now, with exit code 1, as `flatpak kill` does.
 - Either way, the run's zigsaw sees its app end and cleans up after it: an `--ephemeral`
   run's data goes, and the app's keys go back from HKCU into its data. A run inside the
   one you stop ends first, for the same reason.
@@ -1382,16 +1484,16 @@ killed 21364 (net.frippery.busybox)
 
 ### Running a command in a run
 
-`zigsaw exec` starts a command in a run that's going, as the run's own app goes: in its
+`zigsaw enter` starts a command in a run that's going, as the run's own app goes: in its
 sandbox and job, with its variables and working directory. So it sees what the run sees:
 its data (an `--ephemeral` run's too), its volumes, the folders it was granted, its keys
 in HKCU, and the ports and hosts it reaches. `zigsaw run --command=...` would start another
 run instead, with data and options of its own.
 
 ```
-> zigsaw exec org.postgresql.postgresql psql -c "select 1"
-> zigsaw exec --env=DEBUG=1 21364 busybox sh
-> zigsaw exec -d org.nodejs.node node scripts/warm-cache.js
+> zigsaw enter org.postgresql.postgresql psql -c "select 1"
+> zigsaw enter --env=DEBUG=1 21364 busybox sh
+> zigsaw enter -d org.nodejs.node node scripts/warm-cache.js
 20480
 ```
 
@@ -1401,16 +1503,16 @@ run instead, with data and options of its own.
   the run's PATH (the app's and its runtimes'), one in System32, or one of yours by its
   absolute path, which the run's sandbox has to let it read. Everything after it is its
   arguments.
-- It uses the terminal you typed `exec` in, and `exec` ends with its exit code. Ctrl+C
+- It uses the terminal you typed `enter` in, and `enter` ends with its exit code. Ctrl+C
   goes to it, as to a run.
 - `--env=NAME=VALUE` sets a variable for it, over the run's.
 - `--detach` (`-d`) starts it with no console and nothing on its input or output, prints
   the number `ps` lists it by, and returns.
-- `ps` lists it as `(exec in run <n>)`, and `stop` and `kill` take it as they take a run,
+- `ps` lists it as `(enter in run <n>)`, and `kill` takes it as it takes a run,
   leaving the run going. The run's numbers count it, as its limits hold it.
-- It ends when the run ends (`exec` says so, and ends with exit code 1), and when its
-  `zigsaw exec` ends.
-- A run writes down how it starts programs in the store's `running` folder, which `exec`
+- It ends when the run ends (`enter` says so, and ends with exit code 1), and when its
+  `zigsaw enter` ends.
+- A run writes down how it starts programs in the store's `running` folder, which `enter`
   reads. Its variables are among that, so it's labelled so that nothing at low integrity,
   such as a low run, can read it. A run that zigsaw 0.98 or older started can't be joined.
 
@@ -1448,7 +1550,7 @@ tsc --version
   app provides is left to it.
 - An `--ephemeral` run's commands get none: they're deleted with its data
   directory.
-- Rebuilding or updating the app keeps them, `zigsaw rm` removes them, and
+- Rebuilding or updating the app keeps them, `zigsaw uninstall` removes them, and
   `zigsaw list` shows them with the exports.
 
 Rust's image keeps cargo's home in its data directory, so what
@@ -1497,7 +1599,7 @@ settings, and zigsaw keeps those with the app's data:
 ```
 
 - **Between runs**, the keys are in a hive file in the app's data directory,
-  `registry\user.dat`, so they go with `rm --delete-data`, an `--ephemeral`
+  `registry\user.dat`, so they go with `uninstall --delete-data`, an `--ephemeral`
   run starts without them, and an update keeps them.
 - **While the app runs**, they're where it looks for them, in HKCU: the
   first run copies them in, the last to end copies them back and deletes
@@ -1514,7 +1616,7 @@ settings, and zigsaw keeps those with the app's data:
   the time the app runs, and put back after.
 - **A run that doesn't end** (zigsaw killed) leaves the keys in HKCU, with a
   record in `HKCU\Software\zigsaw\keys` of where they belong; the next run,
-  `zigsaw repair` or `zigsaw rm` puts them back. While another app's run
+  `zigsaw repair` or `zigsaw uninstall` puts them back. While another app's run
   uses a key, a run of an app that keeps it too fails, saying so.
 
 Only keys below `Software`, and not the ones Windows keeps for everyone
@@ -1552,7 +1654,7 @@ Start menu. It runs the export's shim, from the app's home in its data
 directory, with the icon of `icon` (an `.ico`, or an `.exe` or `.dll` with
 one, in the app or a runtime) or of the export's executable. Updating the
 app rewrites its shortcuts and removes those it no longer declares, and
-`zigsaw rm` removes them; `zigsaw list` shows them.
+`zigsaw uninstall` removes them; `zigsaw list` shows them.
 
 Only the default store (`%LOCALAPPDATA%\zigsaw`) adds to the Start menu, so
 test stores don't. `ZIGSAW_SHORTCUTS_DIR` names a folder to use instead, for
@@ -1595,7 +1697,7 @@ calls such a file what `description` says, and shows it with the icon of
 - Opening a file runs the export with [`--file`](#opening-a-file), through a
   shim of its own in the store's `open` directory. So the app is granted
   that file, and only that file, whatever sandbox its overrides choose.
-- Updating the app registers what it declares then, and `zigsaw rm` removes
+- Updating the app registers what it declares then, and `zigsaw uninstall` removes
   it all. `zigsaw list` shows the extensions.
 - What's registered is a key of zigsaw's own for each extension
   (`Zigsaw.<app id>.<extension>` under `HKCU\Software\Classes`) and its name
@@ -1618,7 +1720,7 @@ A recipe can declare the kinds of link its app opens, as Flatpak apps declare
 ```
 
 Installing the app registers them for your user only, with no administrator, and
-`zigsaw rm` removes them. `zigsaw list` and `zigsaw info` show them with what it
+`zigsaw uninstall` removes them. `zigsaw list` and `zigsaw remote-info` show them with what it
 opens, as `vscodium:`.
 
 - **A scheme nothing else has opens with the app.** One something does have, such
@@ -1639,7 +1741,7 @@ opens, as `vscodium:`.
 An app that registers itself from inside a run, as Electron apps do, gets a key
 that names its program in the store's deployments, and skips zigsaw. Installing an
 image that declares the scheme takes such a key over, and `zigsaw repair` and
-`zigsaw rm` remove one that nothing declares. A recipe should take that call out
+`zigsaw uninstall` remove one that nothing declares. A recipe should take that call out
 ([Chromium and Electron](docs/recipes.md#chromium-and-electron)).
 
 ### Changing an app's options
@@ -1664,7 +1766,7 @@ variable given again replaces its earlier setting, and `--filesystem` and
 setting also replaces the app's own permission for it: `documents:ro` makes
 an app that may write your Documents read it only. Options given to `run`
 still win for that run. Overrides are kept when an app is updated, rebuilt or
-removed, and `zigsaw rm --delete-data` deletes them with the app's data.
+removed, and `zigsaw uninstall --delete-data` deletes them with the app's data.
 `zigsaw list` shows them.
 
 `--global` in place of an app saves options for every app, below each

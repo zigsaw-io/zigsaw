@@ -1,8 +1,9 @@
 //! Whose signatures count for which images and releases: a key's, or, keyless, a
 //! certificate's that Sigstore vouches for, naming who signed (a workflow, say).
-//! zigsaw-io's own are built in; for other registries, `zigsaw trust` keeps them in
-//! the store, each for a prefix of image names. An image under no prefix has nobody's,
-//! and isn't checked.
+//! zigsaw-io's own are built in; for other registries, the store keeps them in
+//! trust.json, each for a prefix of image names: a remote's location, as
+//! `zigsaw remote-modify --sign-key` and `--keyless` add them (see remotes.zig).
+//! An image under no prefix has nobody's, and isn't checked.
 //!
 //! There's no environment variable for an image's signers. ZIGSAW_UPGRADE_KEY names a
 //! key for a release, read only alongside ZIGSAW_UPGRADE_FROM, as tests want a release
@@ -138,7 +139,7 @@ pub fn all(ctx: *Context) ![]const Named {
     const file = try read(ctx);
     for (file.keys) |entry| {
         const key = signature.Key.parse(entry.key) catch
-            return fail("{s} has a key for {s} that isn't one: `zigsaw trust rm {s}` removes it", .{ try path(ctx), entry.prefix, entry.prefix });
+            return fail("{s} has a key for {s} that isn't one: `zigsaw remote-modify --no-sign-key <remote>` removes it, for the remote at {s}", .{ try path(ctx), entry.prefix, entry.prefix });
         try signers.append(arena, .{ .signer = .{ .key = key }, .prefix = entry.prefix, .built_in = false });
     }
     for (file.keyless) |entry|
@@ -169,14 +170,66 @@ pub fn forRelease(ctx: *Context, version: []const u8) ![]const Signer {
     return signers.items;
 }
 
-/// `zigsaw trust add <prefix> <key file>`.
+/// The prefixes trust.json has signers for: places `zigsaw trust add` named
+/// before remotes, and remotes' locations since.
+pub fn addedPrefixes(ctx: *Context) ![]const []const u8 {
+    const arena = ctx.arena;
+    const file = try read(ctx);
+    var out: std.ArrayList([]const u8) = .empty;
+    for (file.keys) |e| try appendNew(arena, &out, e.prefix);
+    for (file.keyless) |e| try appendNew(arena, &out, e.prefix);
+    return out.items;
+}
+
+fn appendNew(arena: Allocator, list: *std.ArrayList([]const u8), prefix: []const u8) !void {
+    const trimmed = std.mem.trimEnd(u8, prefix, "/");
+    for (list.items) |p| if (std.ascii.eqlIgnoreCase(p, trimmed)) return;
+    try list.append(arena, trimmed);
+}
+
+/// Has the signers added for `old` count for `new` instead, as a remote
+/// moves; returns how many.
+pub fn movePrefix(ctx: *Context, old: []const u8, new: []const u8) !usize {
+    const arena = ctx.arena;
+    const file = try read(ctx);
+    const keys = try arena.dupe(Entry, file.keys);
+    const keyless = try arena.dupe(KeylessEntry, file.keyless);
+    var moved: usize = 0;
+    for (keys) |*e| if (samePrefix(e.prefix, old)) {
+        e.prefix = new;
+        moved += 1;
+    };
+    for (keyless) |*e| if (samePrefix(e.prefix, old)) {
+        e.prefix = new;
+        moved += 1;
+    };
+    if (moved > 0) try write(ctx, .{ .keys = keys, .keyless = keyless });
+    return moved;
+}
+
+/// Removes the signers added for `prefix`, saying nothing, as a remote goes;
+/// returns how many.
+pub fn removeAll(ctx: *Context, prefix: []const u8) !usize {
+    const arena = ctx.arena;
+    const file = try read(ctx);
+    var keys: std.ArrayList(Entry) = .empty;
+    var keyless: std.ArrayList(KeylessEntry) = .empty;
+    for (file.keys) |e| if (!samePrefix(e.prefix, prefix)) try keys.append(arena, e);
+    for (file.keyless) |e| if (!samePrefix(e.prefix, prefix)) try keyless.append(arena, e);
+    const removed = file.keys.len + file.keyless.len - keys.items.len - keyless.items.len;
+    if (removed > 0) try write(ctx, .{ .keys = keys.items, .keyless = keyless.items });
+    return removed;
+}
+
+fn samePrefix(a: []const u8, b: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(std.mem.trimEnd(u8, a, "/"), std.mem.trimEnd(u8, b, "/"));
+}
+
+/// `zigsaw remote-modify --sign-key=<key file>`, for the remote's location.
 pub fn add(ctx: *Context, prefix_arg: []const u8, key_file: []const u8) !void {
     const arena = ctx.arena;
     const prefix = try checkPrefix(prefix_arg);
-    const pem = Io.Dir.cwd().readFileAlloc(ctx.io, key_file, arena, .limited(64 << 10)) catch |err|
-        return fail("reading {s}: {t}", .{ key_file, err });
-    const key = signature.Key.parse(pem) catch
-        return fail("{s} isn't a P-256 public key, as `cosign generate-key-pair` makes in cosign.pub", .{key_file});
+    const pem, const key = try readKey(ctx, key_file);
 
     const file = try read(ctx);
     for (file.keys) |entry| if (std.ascii.eqlIgnoreCase(entry.prefix, prefix)) {
@@ -193,13 +246,11 @@ pub fn add(ctx: *Context, prefix_arg: []const u8, key_file: []const u8) !void {
     note("images under {s} are now checked against key {s}", .{ prefix, &key.fingerprint });
 }
 
-/// `zigsaw trust add <prefix> --keyless <identity> [--issuer <url>]`.
+/// `zigsaw remote-modify --keyless=<identity> [--issuer=<url>]`.
 pub fn addKeyless(ctx: *Context, prefix_arg: []const u8, san: []const u8, issuer: []const u8) !void {
     const arena = ctx.arena;
     const prefix = try checkPrefix(prefix_arg);
-    if (san.len == 0 or std.mem.indexOfAny(u8, san, " \t\r\n\"") != null)
-        return fail("\"{s}\" isn't an identity: give what the certificate names, like https://github.com/me/app/.github/workflows/release.yml@refs/heads/main", .{san});
-    if (!std.mem.startsWith(u8, issuer, "https://")) return fail("\"{s}\" isn't an issuer: give its URL, like {s}", .{ issuer, sigstore.github_issuer });
+    try checkKeyless(san, issuer);
 
     const file = try read(ctx);
     const signer: Signer = .{ .keyless = .{ .san = san, .issuer = issuer } };
@@ -214,6 +265,27 @@ pub fn addKeyless(ctx: *Context, prefix_arg: []const u8, san: []const u8, issuer
     note("images under {s} are now checked against {f}, keyless", .{ prefix, signer });
 }
 
+/// Fails as `add` and `addKeyless` would, unless every key file holds a key
+/// and the keyless identity and issuer can be one; changes nothing.
+pub fn check(ctx: *Context, key_files: []const []const u8, san: ?[]const u8, issuer: []const u8) !void {
+    for (key_files) |f| _ = try readKey(ctx, f);
+    if (san) |id| try checkKeyless(id, issuer);
+}
+
+fn readKey(ctx: *Context, key_file: []const u8) !struct { []const u8, signature.Key } {
+    const pem = Io.Dir.cwd().readFileAlloc(ctx.io, key_file, ctx.arena, .limited(64 << 10)) catch |err|
+        return fail("reading {s}: {t}", .{ key_file, err });
+    const key = signature.Key.parse(pem) catch
+        return fail("{s} isn't a P-256 public key, as `cosign generate-key-pair` makes in cosign.pub", .{key_file});
+    return .{ pem, key };
+}
+
+fn checkKeyless(san: []const u8, issuer: []const u8) !void {
+    if (san.len == 0 or std.mem.indexOfAny(u8, san, " \t\r\n\"") != null)
+        return fail("\"{s}\" isn't an identity: give what the certificate names, like https://github.com/me/app/.github/workflows/release.yml@refs/heads/main", .{san});
+    if (!std.mem.startsWith(u8, issuer, "https://")) return fail("\"{s}\" isn't an issuer: give its URL, like {s}", .{ issuer, sigstore.github_issuer });
+}
+
 fn checkPrefix(prefix_arg: []const u8) ![]const u8 {
     const prefix = std.mem.trimEnd(u8, prefix_arg, "/");
     if (!isPrefix(prefix)) return fail("\"{s}\" isn't where images are: give a registry and path, like ghcr.io/me or localhost:5000", .{prefix_arg});
@@ -226,7 +298,7 @@ fn isPrefix(prefix: []const u8) bool {
     return true;
 }
 
-/// `zigsaw trust rm <prefix> [<fingerprint or identity>]`.
+/// `zigsaw remote-modify --no-sign-key[=<fingerprint or identity>]`.
 pub fn remove(ctx: *Context, prefix_arg: []const u8, which: ?[]const u8) !void {
     const arena = ctx.arena;
     const prefix = std.mem.trimEnd(u8, prefix_arg, "/");
@@ -245,25 +317,18 @@ pub fn remove(ctx: *Context, prefix_arg: []const u8, which: ?[]const u8) !void {
         const same = if (which) |w| std.mem.eql(u8, entry.san, w) else true;
         if (named and same) removed += 1 else try kept_keyless.append(arena, entry);
     }
-    if (removed == 0) return fail("nobody was added for {s}", .{prefix});
+    if (removed == 0) return fail("nobody was added for {s}{s}", .{ prefix, if (which != null) " by that" else "" });
     try write(ctx, .{ .keys = kept.items, .keyless = kept_keyless.items });
     note("removed {d} for {s}", .{ removed, prefix });
 }
 
-/// `zigsaw trust`.
-pub fn list(ctx: *Context) !void {
-    var buf: [4096]u8 = undefined;
-    var stdout = Context.stdout().writerStreaming(ctx.io, &buf);
-    const w = &stdout.interface;
-    for (try all(ctx)) |named| try w.print("{s}  {s}{f}{s}\n", .{
-        named.prefix,
-        if (named.signer == .keyless) "keyless " else "",
-        named.signer,
-        if (named.built_in) ", built in" else "",
-    });
-    try w.print("zigsaw's releases  keyless {s}@refs/tags/v<version>, built in\n", .{release_workflow});
-    try w.print("zigsaw's releases  {f}, built in\n", .{Signer{ .key = signature.Key.parse(published_keys[backup_key]) catch unreachable }});
-    try w.flush();
+/// Whose signatures count for zigsaw's releases, as `zigsaw remotes` lists
+/// them: the Release workflow's, for each version's tag, and the backup key.
+pub fn releaseSigners() ![2]Signer {
+    return .{
+        .{ .keyless = .{ .issuer = sigstore.github_issuer, .san = release_workflow ++ "@refs/tags/v<version>" } },
+        .{ .key = signature.Key.parse(published_keys[backup_key]) catch unreachable },
+    };
 }
 
 test underPrefix {

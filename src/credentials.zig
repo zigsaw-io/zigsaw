@@ -1,6 +1,6 @@
 //! Registry credentials, and which registry each may go to.
 //!
-//! `zigsaw login <registry>` saves a login per registry host in Windows
+//! `zigsaw remote-modify --login <remote>` saves a login per registry host in Windows
 //! Credential Manager, as a generic credential named `zigsaw:<host>` (per
 //! user, encrypted by Windows). ZIGSAW_REGISTRY_USERNAME and
 //! ZIGSAW_REGISTRY_PASSWORD, meant for CI and scripts, only go to the default
@@ -36,7 +36,7 @@ pub const Credential = struct {
     pub fn origin(c: Credential) []const u8 {
         return switch (c.source) {
             .environment => "in " ++ username_var ++ " and " ++ password_var,
-            .credential_manager => "saved by `zigsaw login`",
+            .credential_manager => "saved by zigsaw in Windows Credential Manager",
             .docker_config => "in Docker's config.json",
             .docker_helper => c.helper,
         };
@@ -352,7 +352,7 @@ fn save(arena: Allocator, host: []const u8, user: []const u8, secret: []const u8
     const cred: win32.CREDENTIALW = .{
         .Type = win32.CRED_TYPE_GENERIC,
         .TargetName = try targetName(arena, host),
-        .Comment = try win32.wide(arena, "Registry login saved by zigsaw login"),
+        .Comment = try win32.wide(arena, "Registry login saved by zigsaw"),
         .CredentialBlobSize = @intCast(secret.len),
         .CredentialBlob = @constCast(secret.ptr),
         .Persist = win32.CRED_PERSIST_LOCAL_MACHINE,
@@ -371,7 +371,7 @@ fn remove(arena: Allocator, host: []const u8) !bool {
 }
 
 // ---------------------------------------------------------------------------
-// zigsaw login / logout
+// remote-add --login, remote-modify --login and --logout
 
 pub const LoginOptions = struct {
     registry: []const u8,
@@ -379,8 +379,9 @@ pub const LoginOptions = struct {
     password_stdin: bool = false,
 };
 
-/// `zigsaw login`: asks for credentials, checks them with the registry, and
-/// saves them if it accepts them.
+/// `zigsaw remote-add --login` and `remote-modify --login`: asks for
+/// credentials, checks them with the remote's registry, and saves them if it
+/// accepts them.
 pub fn login(ctx: *Context, opts: LoginOptions) !void {
     const arena = ctx.arena;
     const host = try parseHost(arena, opts.registry);
@@ -404,7 +405,8 @@ pub fn login(ctx: *Context, opts: LoginOptions) !void {
         note("while {s} and {s} are set, those go to {s} instead", .{ username_var, password_var, host });
 }
 
-/// `zigsaw logout`: deletes the login saved for a registry.
+/// `zigsaw remote-modify --logout`: deletes the login saved for a remote's
+/// registry.
 pub fn logout(ctx: *Context, registry: []const u8) !void {
     const arena = ctx.arena;
     const host = try parseHost(arena, registry);
@@ -442,7 +444,7 @@ fn prompt(arena: Allocator, label: []const u8, echo: prompts.Echo) ![]const u8 {
         error.EndOfInput => return fail("login cancelled", .{}),
         else => |e| return e,
     };
-    return line orelse fail("zigsaw login asks for the user name and password on a console; without one, use --username=<user> --password-stdin and pipe the password in", .{});
+    return line orelse fail("--login asks for the user name and password on a console; without one, use --username=<user> --password-stdin and pipe the password in", .{});
 }
 
 test normalizeHost {

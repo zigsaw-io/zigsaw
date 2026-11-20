@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end checks for `zigsaw update` and `zigsaw prune`: apps update from
+# End-to-end checks for `zigsaw update` and `zigsaw uninstall --unused`: apps update from
 # their recipe, replaced and removed versions are cleaned up, and nothing a
 # running app uses is deleted.
 #
@@ -42,6 +42,12 @@ check() {
 }
 
 z() { "$zigsaw" "$@"; }
+says() { # <text> <command...>: the command's output, either stream, has the text
+    local text=$1 out
+    shift
+    out=$("$@" 2>&1)
+    grep -qF -- "$text" <<<"$out" || { echo "$out"; return 1; }
+}
 deployments() { find "$ZIGSAW_HOME/deploy" -mindepth 1 -maxdepth 1 -type d | wc -l; }
 blobs() { find "$ZIGSAW_HOME/blobs/sha256" -type f | wc -l; }
 expect_count() { local got; got=$("$1"); [ "$got" -eq "$2" ] || { echo "$1: got $got, want $2"; return 1; }; }
@@ -70,6 +76,38 @@ changed_recipe() {
     z update $BB >/dev/null 2>&1 && [ "$(installed_version)" = test-2 ] && expect_count deployments 1
 }
 check "update: a changed recipe is rebuilt, the old version removed" changed_recipe
+
+# --- Flatpak's names (0.105) -----------------------------------------------------
+
+installed_info() {
+    local out
+    out=$(z info $BB 2>&1) || { echo "$out"; return 1; }
+    grep -q "^$BB test-2" <<<"$out" &&
+        grep -qF "origin     $recipe" <<<"$out" &&
+        grep -qF "location   $ZIGSAW_HOME\\deploy\\" <<<"$out" &&
+        grep -qF "data       $ZIGSAW_HOME\\volumes\\$BB" <<<"$out" &&
+        ! grep -q '^  download' <<<"$out" || { echo "$out"; return 1; }
+}
+check "info shows an installed app, where it came from and where it is" installed_info
+check "info of an app that isn't installed points at remote-info" says "isn't installed; \`zigsaw remote-info no.such.app\`" z info no.such.app
+check "info of an image reference points at remote-info" says "\`zigsaw remote-info ghcr.io/a/b\`" z info ghcr.io/a/b
+moved() { # <old command...> -- <what it says it is now>
+    local args=() out
+    while [ "$1" != -- ]; do args+=("$1"); shift; done
+    out=$(z "${args[@]}" 2>&1) && { echo "it worked: $out"; return 1; }
+    grep -qF "\`zigsaw ${args[0]}\` is \`zigsaw $2\` since zigsaw 0.105" <<<"$out" || { echo "$out"; return 1; }
+}
+check "pull fails, pointing at install" moved pull $BB -- install
+check "rm fails, pointing at uninstall, and uninstalls nothing" moved rm $BB -- uninstall
+check "  (still installed)" test "$(installed_version)" = test-2
+check "prune fails, pointing at uninstall --unused" moved prune -- "uninstall --unused"
+check "exec, stop, hold point at enter, kill, mask" sh -c 'for a in "exec enter" "stop kill" "hold mask"; do set -- $a; "$0" $1 x 2>&1 | grep -qF "is \`zigsaw $2\`" || exit 1; done' "$zigsaw"
+check "grants --take-back points at permission-remove" moved grants --take-back 'C:\x' -- permission-remove
+check "push --catalog points at build-update-repo" moved push --catalog $BB -- build-update-repo
+check "signature check points at build-sign --check" moved signature check $BB -- "build-sign --check"
+check "uninstall takes no --unused options without --unused" says "usage:" z uninstall --dry-run $BB
+check "uninstall --unused takes no app" says "usage:" z uninstall --unused $BB
+check "kill --now takes no --time" says "usage:" z kill --now --time=1 $BB
 check "update: an unknown app fails" sh -c "! \"\$0\" update no.such.app" "$zigsaw"
 
 # --- in-use protection ---------------------------------------------------------
@@ -83,7 +121,7 @@ update_while_running() {
     z update $BB 2>&1 | grep -q 'still running' && [ "$(installed_version)" = test-3 ] && expect_count deployments 2
 }
 check "update: a running version's files are kept" update_while_running
-prune_while_running() { z prune 2>&1 | grep -q 'kept 1 unused deployment' && expect_count deployments 2; }
+prune_while_running() { z uninstall --unused 2>&1 | grep -q 'kept 1 unused deployment' && expect_count deployments 2; }
 check "prune: keeps a deployment in use" prune_while_running
 # `check` runs commands in a subshell, which can't wait for this shell's jobs.
 wait $running
@@ -93,11 +131,11 @@ check "the running app finishes normally" test $status -eq 0
 # The running version is the one test-3 replaced, so its blobs stay, for
 # `rollback`; the earlier prune removed those of the first version. Only its
 # files were in use, and they go.
-dry_run() { z prune --dry-run 2>&1 | grep -q '^would remove 1 deployment' && expect_count deployments 2 && expect_count blobs 6; }
+dry_run() { z uninstall --unused --dry-run 2>&1 | grep -q '^would remove 1 deployment' && expect_count deployments 2 && expect_count blobs 6; }
 check "prune --dry-run deletes nothing" dry_run
-prune_after_exit() { z prune >/dev/null 2>&1 && expect_count deployments 1 && expect_count blobs 6; }
+prune_after_exit() { z uninstall --unused >/dev/null 2>&1 && expect_count deployments 1 && expect_count blobs 6; }
 check "prune: removes it once unused, and keeps the previous version's blobs" prune_after_exit
-prune_previous() { z prune --previous 2>&1 | grep -q 'forgot 1 previous version' && expect_count deployments 1 && expect_count blobs 3; }
+prune_previous() { z uninstall --unused --previous 2>&1 | grep -q 'forgot 1 previous version' && expect_count deployments 1 && expect_count blobs 3; }
 check "prune --previous: removes those too" prune_previous
 
 # --- tmp\ ----------------------------------------------------------------------
@@ -108,7 +146,7 @@ sleep 1
 mkdir "$ZIGSAW_HOME\\tmp\\stale-dir" && echo x >"$ZIGSAW_HOME\\tmp\\stale-dir\\f" && echo x >"$ZIGSAW_HOME\\tmp\\stale-file"
 run_dirs() { find "$ZIGSAW_HOME/tmp" -mindepth 1 -maxdepth 1 -name 'run-*' | wc -l; }
 prune_tmp() {
-    z prune 2>&1 | grep -q 'kept the data of 1 running --ephemeral app' &&
+    z uninstall --unused 2>&1 | grep -q 'kept the data of 1 running --ephemeral app' &&
         [ ! -e "$ZIGSAW_HOME\\tmp\\stale-dir" ] && [ ! -e "$ZIGSAW_HOME\\tmp\\stale-file" ] &&
         expect_count run_dirs 2 # The directory and its lock.
 }
@@ -123,17 +161,17 @@ check "the --ephemeral run cleans up after itself" ephemeral_done
 z run $BB sleep 5 &
 running=$!
 sleep 1
-rm_while_running() { z rm $BB 2>&1 | grep -q 'still in use' && expect_count deployments 1; }
+rm_while_running() { z uninstall $BB 2>&1 | grep -q 'still in use' && expect_count deployments 1; }
 check "rm: keeps the files of a running app" rm_while_running
 wait $running
-orphaned_data() { z prune 2>&1 | grep -q "volume(s) that nothing mounts: $BB (" && expect_count deployments 0; }
+orphaned_data() { z uninstall --unused 2>&1 | grep -q "volume(s) that nothing mounts: $BB (" && expect_count deployments 0; }
 check "prune: removes them afterwards, and names the removed app's own volume, its data" orphaned_data
-check "prune --volumes deletes it" sh -c "\"\$0\" prune --volumes >/dev/null 2>&1 && [ ! -e '$ZIGSAW_HOME\\volumes\\$BB' ]" "$zigsaw"
+check "prune --volumes deletes it" sh -c "\"\$0\" uninstall --unused --volumes >/dev/null 2>&1 && [ ! -e '$ZIGSAW_HOME\\volumes\\$BB' ]" "$zigsaw"
 downloads() { find "$ZIGSAW_HOME/cache/downloads" -type f | wc -l; }
-prune_downloads() { z prune --downloads >/dev/null 2>&1 && expect_count downloads 0; }
+prune_downloads() { z uninstall --unused --downloads >/dev/null 2>&1 && expect_count downloads 0; }
 check "prune --downloads clears the download cache" prune_downloads
 # Files of Windows' roots that earlier runs had (${roots}, src/roots.zig).
-stale_roots() { : >"$ZIGSAW_HOME\\certs\\roots-0000000000000000.pem" && z prune >/dev/null 2>&1 && [ ! -e "$ZIGSAW_HOME\\certs\\roots-0000000000000000.pem" ]; }
+stale_roots() { : >"$ZIGSAW_HOME\\certs\\roots-0000000000000000.pem" && z uninstall --unused >/dev/null 2>&1 && [ ! -e "$ZIGSAW_HOME\\certs\\roots-0000000000000000.pem" ]; }
 check "prune deletes files of Windows' roots that aren't today's" stale_roots
 
 # --- the store lock --------------------------------------------------------------
@@ -144,12 +182,12 @@ holder=$!
 until grep -q locked "$work\\held" 2>/dev/null; do sleep 0.2; done
 waits_for_lock() {
     local start=$SECONDS out
-    out=$(z prune 2>&1) && grep -q 'waiting for another zigsaw' <<<"$out" && [ $((SECONDS - start)) -ge 1 ]
+    out=$(z uninstall --unused 2>&1) && grep -q 'waiting for another zigsaw' <<<"$out" && [ $((SECONDS - start)) -ge 1 ]
 }
 check "prune waits for the store lock" waits_for_lock
 wait $holder
 
-z prune --downloads --volumes >/dev/null 2>&1
+z uninstall --unused --downloads --volumes >/dev/null 2>&1
 rm -rf "$ZIGSAW_HOME" "$work"
 echo
 echo "$failures check(s) failed."

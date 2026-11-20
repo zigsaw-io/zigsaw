@@ -375,10 +375,10 @@ pub const JOBOBJECT_BASIC_PROCESS_ID_LIST = extern struct {
 pub extern "kernel32" fn OpenJobObjectW(access: DWORD, inherit: BOOL, name: LPCWSTR) callconv(.winapi) ?HANDLE;
 
 // ---------------------------------------------------------------------------
-// Asking a run to end, and ending it, for `zigsaw stop` and `zigsaw kill`
+// Asking a run to end, and ending it, for `zigsaw kill` and `zigsaw kill --now`
 
 pub const JOB_OBJECT_TERMINATE: DWORD = 0x0008;
-/// For `zigsaw exec`, which starts a command in a run's job.
+/// For `zigsaw enter`, which starts a command in a run's job.
 pub const JOB_OBJECT_ASSIGN_PROCESS: DWORD = 0x0001;
 pub const CREATE_NEW_PROCESS_GROUP: DWORD = 0x00000200;
 pub const WAIT_FAILED: DWORD = 0xFFFFFFFF;

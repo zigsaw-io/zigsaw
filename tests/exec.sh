@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end checks for `zigsaw exec` (src/exec.zig): a command started in a
+# End-to-end checks for `zigsaw enter` (src/exec.zig): a command started in a
 # run that's going, in each sandbox, with the run's variables, working
 # directory, data and grants; its own `ps` row; stop, kill, the run ending,
 # its zigsaw ending, --detach; and what's refused.
@@ -44,7 +44,7 @@ granted="$w/granted"
 mkdir -p "$work\\hold" "$work\\granted" "$work\\outside"
 echo "not yours" >"$work\\outside\\secret.txt"
 # Whatever happens, nothing here is left running.
-trap 'touch "$work\\hold\\all.stop" 2>/dev/null; "$zigsaw" kill $BB >/dev/null 2>&1; wait; reg delete "HKCU\\$suite_key" /f >/dev/null 2>&1' EXIT
+trap 'touch "$work\\hold\\all.stop" 2>/dev/null; "$zigsaw" kill --now $BB >/dev/null 2>&1; wait; reg delete "HKCU\\$suite_key" /f >/dev/null 2>&1' EXIT
 
 failures=0
 check() {
@@ -102,7 +102,7 @@ started() { # <name>: waits up to 15 s for the hold to start
 release() { touch "$work\\hold\\$1.stop"; }
 # The RUN column of the first line ps lists for <filter>, and an exec's.
 run_of() { z ps "$1" 2>/dev/null | tr -d '\r' | awk 'NR == 2 { print $1 }'; }
-exec_of() { z ps 2>/dev/null | tr -d '\r' | awk '/\(exec in run/ { print $1; exit }'; }
+exec_of() { z ps 2>/dev/null | tr -d '\r' | awk '/\(enter in run/ { print $1; exit }'; }
 procs_of() { z ps "$1" 2>/dev/null | tr -d '\r' | awk -v r="$1" '$1 == r { print $5 }'; }
 records() { ls "$(cygpath -u "$ZIGSAW_HOME")/running" 2>/dev/null | grep -c '\.json$'; }
 declare -A termed
@@ -141,21 +141,21 @@ for sb in soft low appcontainer; do
     hold_run "run-$sb" --sandbox=$sb --env=RUNVAR=from-run --filesystem="$granted"
     [ -n "$run" ] || continue
     check "$sb: exec runs a command in the run, with its variables and --env's" \
-        says "RUNVAR=from-run EXTRA=x" z exec --env=EXTRA=x $BB busybox sh -c 'echo "RUNVAR=$RUNVAR EXTRA=$EXTRA"'
-    check "  in its working directory, its home" says "/volumes/$BB/home" z exec $BB busybox pwd
-    check "  its exit code is exec's" exits 3 z exec $BB busybox sh -c 'exit 3'
+        says "RUNVAR=from-run EXTRA=x" z enter --env=EXTRA=x $BB busybox sh -c 'echo "RUNVAR=$RUNVAR EXTRA=$EXTRA"'
+    check "  in its working directory, its home" says "/volumes/$BB/home" z enter $BB busybox pwd
+    check "  its exit code is exec's" exits 3 z enter $BB busybox sh -c 'exit 3'
     case $sb in
         soft) level=$caller_level ;;
         *) level="S-1-16-4096" ;;
     esac
-    check "  at the run's integrity level" says "$level" z exec $BB cmd /c "whoami /groups"
-    check "  it writes where the run may" z exec $BB busybox sh -c "echo $sb > '$granted/$sb.txt'"
+    check "  at the run's integrity level" says "$level" z enter $BB cmd /c "whoami /groups"
+    check "  it writes where the run may" z enter $BB busybox sh -c "echo $sb > '$granted/$sb.txt'"
     if [ $sb != soft ]; then
-        check "  and nowhere else" refuses "" z exec $BB busybox sh -c "echo x > '$w/outside/$sb.txt'"
+        check "  and nowhere else" refuses "" z enter $BB busybox sh -c "echo x > '$w/outside/$sb.txt'"
     fi
     if [ $sb = appcontainer ]; then
-        check "  it reads nothing the run wasn't granted" refuses "" z exec $BB busybox cat "$w/outside/secret.txt"
-        check "  System32's programs run" exits 4 z exec $BB cmd /c "exit 4"
+        check "  it reads nothing the run wasn't granted" refuses "" z enter $BB busybox cat "$w/outside/secret.txt"
+        check "  System32's programs run" exits 4 z enter $BB cmd /c "exit 4"
     fi
     release "run-$sb"
     wait
@@ -179,11 +179,11 @@ fi
 hold_run find --sandbox=soft --filesystem="$granted"
 if [ -n "$run" ]; then
     printf '@echo batch got %%1\r\n@exit /b %%2\r\n' >"$work\\granted\\hi.cmd"
-    check "a batch file by its path runs through cmd.exe" says "batch got there" z exec $BB "$work\\granted\\hi.cmd" there 0
-    check "  its exit code too" exits 6 z exec $BB "$work\\granted\\hi.cmd" there 6
-    check "an export, with its arguments" says "busybox-export" z exec $BB busybox echo busybox-export
-    check "a command that isn't there is refused" refuses "is not an export of $BB" z exec $BB no-such-command
-    check "a path in the app that isn't there is refused" refuses "is not a file in the app" z exec $BB sub/none.exe
+    check "a batch file by its path runs through cmd.exe" says "batch got there" z enter $BB "$work\\granted\\hi.cmd" there 0
+    check "  its exit code too" exits 6 z enter $BB "$work\\granted\\hi.cmd" there 6
+    check "an export, with its arguments" says "busybox-export" z enter $BB busybox echo busybox-export
+    check "a command that isn't there is refused" refuses "is not an export of $BB" z enter $BB no-such-command
+    check "a path in the app that isn't there is refused" refuses "is not a file in the app" z enter $BB sub/none.exe
     release find
     wait
 fi
@@ -193,27 +193,27 @@ fi
 hold_run ps --sandbox=low
 if [ -n "$run" ]; then
     before=$(procs_of "$run")
-    in_term ex "$zq exec $BB busybox sleep 300"
+    in_term ex "$zq enter $BB busybox sleep 300"
     for i in $(seq 75); do [ -n "$(exec_of)" ] && break; sleep 0.2; done
     ex=$(exec_of)
-    check "ps lists the exec in its run" says "(exec in run $run)" z ps
+    check "ps lists the command entered in its run" says "(enter in run $run)" z ps
     check "  the run's job has its command too" test "$(procs_of "$run")" -gt "$before"
     check "  ps --processes names it under the run" says "-> exec $ex" z ps --processes "$run"
-    check "stop asks the exec alone" says "stopped $ex ($BB)" z stop --time=20 "$ex"
+    check "stop asks the exec alone" says "stopped $ex ($BB)" z kill --time=20 "$ex"
     ended ex
     check "  by Ctrl+C, in its own terminal" test "$(code_of ex)" = 130
     check "  and the run goes on" says "$run" z ps $BB
 
-    "$zigsaw" exec $BB busybox sh -c "$(waits ex2)" </dev/null >/dev/null 2>&1 &
+    "$zigsaw" enter $BB busybox sh -c "$(waits ex2)" </dev/null >/dev/null 2>&1 &
     exec_bg=$!
     started ex2 && ex=$(exec_of)
-    check "kill ends the exec" says "killed $ex ($BB)" z kill "$ex"
+    check "kill ends the exec" says "killed $ex ($BB)" z kill --now "$ex"
     wait $exec_bg
     check "  and the run goes on" says "$run" z ps $BB
 
-    "$zigsaw" exec $BB busybox sh -c "$(waits ex3)" </dev/null >/dev/null 2>&1 &
+    "$zigsaw" enter $BB busybox sh -c "$(waits ex3)" </dev/null >/dev/null 2>&1 &
     started ex3 && ex=$(exec_of)
-    out=$(z kill "$run")
+    out=$(z kill --now "$run")
     check "kill of the run ends its exec first" says "killed $ex ($BB) (in run $run)" echo "$out"
     check "  and the run" says "killed $run ($BB)" echo "$out"
     wait
@@ -224,7 +224,7 @@ fi
 
 hold_run ends --sandbox=low
 if [ -n "$run" ]; then
-    "$zigsaw" exec $BB busybox sh -c "$(waits ends-exec)" </dev/null >"$work\\ends-exec.txt" 2>&1 &
+    "$zigsaw" enter $BB busybox sh -c "$(waits ends-exec)" </dev/null >"$work\\ends-exec.txt" 2>&1 &
     exec_bg=$!
     started ends-exec
     release ends
@@ -239,7 +239,7 @@ fi
 
 hold_run detach --sandbox=low
 if [ -n "$run" ]; then
-    out=$(z exec -d $BB busybox sh -c "echo detached-out; $(waits detached)")
+    out=$(z enter -d $BB busybox sh -c "echo detached-out; $(waits detached)")
     check "--detach prints the exec's PID" test -n "$(grep -ax '[0-9][0-9]*' <<<"$out")"
     check "  and returns once it started" started detached
     check "  ps lists it in the run" says "$out" z ps
@@ -247,7 +247,7 @@ if [ -n "$run" ]; then
     taskkill /F /PID "$out" >/dev/null 2>&1
     sleep 1
     check "the exec's zigsaw ending ends its command" lacks "detached.started" z ps --processes "$run"
-    check "--detach refuses what it can't start, at once" refuses "is not an export of $BB" z exec -d $BB no-such-command
+    check "--detach refuses what it can't start, at once" refuses "is not an export of $BB" z enter -d $BB no-such-command
     release detach
     wait
 fi
@@ -255,34 +255,34 @@ fi
 # An --ephemeral run's data is the exec's too.
 "$zigsaw" run --sandbox=low --ephemeral --filesystem="$hold" $BB sh -c "echo eph > here.txt; $(waits eph)" </dev/null >/dev/null 2>&1 &
 if started eph; then
-    check "exec sees an --ephemeral run's data" says "eph" z exec $BB busybox cat here.txt
+    check "exec sees an --ephemeral run's data" says "eph" z enter $BB busybox cat here.txt
     release eph
     wait
 fi
 
 # --- What's refused ------------------------------------------------------------------
 
-check "exec needs a run and a command" refuses "usage:" z exec $BB
-check "  and knows its options" refuses "unknown exec option --nope" z exec --nope $BB busybox true
-check "nothing running by that name: says so" refuses "nothing running is $BB" z exec $BB busybox true
+check "exec needs a run and a command" refuses "usage:" z enter $BB
+check "  and knows its options" refuses "unknown exec option --nope" z enter --nope $BB busybox true
+check "nothing running by that name: says so" refuses "nothing running is $BB" z enter $BB busybox true
 "$zigsaw" run --sandbox=soft $BB sh -c "$(waits two-a)" </dev/null >/dev/null 2>&1 &
 "$zigsaw" run --sandbox=soft $BB sh -c "$(waits two-b)" </dev/null >/dev/null 2>&1 &
 if started two-a && started two-b; then
-    check "an app with two runs going: name one" refuses "$BB has 2 runs going" z exec $BB busybox true
+    check "an app with two runs going: name one" refuses "$BB has 2 runs going" z enter $BB busybox true
     run=$(run_of $BB)
-    check "  by its PID, which works" says "by-pid" z exec "$run" busybox echo by-pid
-    "$zigsaw" exec "$run" busybox sh -c "$(waits two-exec)" </dev/null >/dev/null 2>&1 &
+    check "  by its PID, which works" says "by-pid" z enter "$run" busybox echo by-pid
+    "$zigsaw" enter "$run" busybox sh -c "$(waits two-exec)" </dev/null >/dev/null 2>&1 &
     started two-exec && ex=$(exec_of)
-    check "an exec's PID is refused" refuses "name the run instead" z exec "$ex" busybox true
+    check "an exec's PID is refused" refuses "name the run instead" z enter "$ex" busybox true
     rm -f "$ZIGSAW_HOME\\running\\$run.spec"
-    check "a run with no spec can't be joined" refuses "can't be joined" z exec "$run" busybox true
+    check "a run with no spec can't be joined" refuses "can't be joined" z enter "$run" busybox true
     touch "$work\\hold\\all.stop"
     wait
 fi
 check "  none is left" says "nothing is running" z ps
 
-z rm --delete-data $BB >/dev/null 2>&1
-z prune --downloads --volumes >/dev/null 2>&1
+z uninstall --delete-data $BB >/dev/null 2>&1
+z uninstall --unused --downloads --volumes >/dev/null 2>&1
 cd /
 rm -rf "$(cygpath -u "$ZIGSAW_HOME")" "$(cygpath -u "$work")"
 echo

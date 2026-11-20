@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end checks for going back: the version an update replaces is kept,
 # `zigsaw rollback` returns to it without the network and has updates pass over
-# the version it left, and `zigsaw hold` keeps updates away. Store a builds a
+# the version it left, and `zigsaw mask` keeps updates away. Store a builds a
 # small app from a recipe and pushes each version under one tag; store b pulls
 # it, as anyone would. Then the app's data: an install over a version keeps a
 # copy of it, which a rollback takes back if told to, in a store of its own.
@@ -54,7 +54,7 @@ recipe() { # <version> [network]
     printf '{ "id": "%s", "version": "%s", "command": "app.cmd", "permissions": { "sandbox": "soft"%s },\n  "exports": { "rbapp": { "command": "app.cmd" } },\n  "modules": [{ "name": "scripts", "sources": [{ "path": "app.cmd" }] }] }\n' "$APP" "$1" "$extra" >"$work\\app.json"
     printf '@echo version %s\r\n' "$1" >"$work\\app.cmd"
 }
-publish() { recipe "$@" && za build "$work\\app.json" >/dev/null 2>&1 && za push $APP "$repo:latest" >/dev/null 2>&1; }
+publish() { recipe "$@" && za build "$work\\app.json" >/dev/null 2>&1 && za build-export $APP "$repo:latest" >/dev/null 2>&1; }
 installed_version() { zb list 2>/dev/null | tr -d '\r' | awk -v id=$APP '$1 == id { print $2 }'; }
 list_line() { zb list 2>/dev/null | tr -d '\r' | grep "^$APP "; }
 runs_version() { [ "$("$store_b\\bin\\rbapp.exe" 2>/dev/null | tr -d '\r')" = "version $1" ]; }
@@ -63,7 +63,7 @@ previous_manifest() { grep -o 'sha256:[0-9a-f]*' "$(versions_file previous.json)
 deployments() { find "$store_b/deploy" -mindepth 1 -maxdepth 1 -type d | wc -l; }
 
 publish 1 || { echo "publishing the fixture failed"; exit 1; }
-zb pull --yes "$repo:latest" >/dev/null 2>&1 || { echo "pulling the fixture failed"; exit 1; }
+zb install --yes "$repo:latest" >/dev/null 2>&1 || { echo "pulling the fixture failed"; exit 1; }
 
 # --- What's kept --------------------------------------------------------------
 nothing_yet() {
@@ -85,7 +85,7 @@ check "an update keeps the version it replaced, and list says so" kept
 prune_keeps_blobs() {
     local out manifest
     manifest=$(previous_manifest)
-    out=$(zb prune 2>&1) || { echo "$out"; return 1; }
+    out=$(zb uninstall --unused 2>&1) || { echo "$out"; return 1; }
     grep -q 'kept 1 previous version(s) (.*) for `zigsaw rollback`; --previous deletes them' <<<"$out" || { echo "$out"; return 1; }
     [ -e "$store_b\\blobs\\sha256\\${manifest#sha256:}" ] || { echo "its manifest went"; return 1; }
     # One layer per version here: only the installed one is unpacked.
@@ -166,62 +166,64 @@ check "  and stays when told no" refused
 agreed() { zb rollback --yes $APP >/dev/null 2>&1 && [ "$(installed_version)" = 3 ] && list_line | grep -q '(skips 4)'; }
 check "  and goes back with --yes" agreed
 
-# --- Holding -------------------------------------------------------------------
+# --- Masking -------------------------------------------------------------------
 held() {
     local out
-    out=$(zb hold $APP 2>&1) || { echo "$out"; return 1; }
-    grep -q "held $APP at 3" <<<"$out" && list_line | grep -q '(held)' && [ -e "$(versions_file held)" ]
+    out=$(zb mask $APP 2>&1) || { echo "$out"; return 1; }
+    grep -q "masked $APP at 3" <<<"$out" && list_line | grep -q '(masked)' && [ -e "$(versions_file held)" ]
 }
-check "hold holds, and list says so" held
-held_again() { zb hold $APP 2>&1 | grep -q 'was held already' && list_line | grep -q '(held)'; }
-check "  holding again says it was" held_again
-check "hold of an app that isn't installed fails" fails zb hold no.such.app
-check "hold without an app is a usage error" fails zb hold
+check "mask masks, and list says so" held
+held_again() { zb mask $APP 2>&1 | grep -q 'was masked already' && list_line | grep -q '(masked)'; }
+check "  masking again says it was" held_again
+check "mask of an app that isn't installed fails" fails zb mask no.such.app
+masked_listed() { [ "$(zb mask 2>/dev/null | tr -d '\r')" = "$APP 3" ]; }
+check "mask without an app lists the masked ones" masked_listed
+check "mask --remove without an app is a usage error" fails zb mask --remove
 
 publish 5
 held_check() {
     local out
     out=$(zb update --check 2>"$work\\err") || { cat "$work\\err"; return 1; }
     [ -z "$out" ] || { echo "stdout: $out"; return 1; }
-    grep -q "$APP 3: held; \`zigsaw unhold $APP\` lets updates in" "$work\\err" || { cat "$work\\err"; return 1; }
+    grep -q "$APP 3: masked; \`zigsaw mask --remove $APP\` lets updates in" "$work\\err" || { cat "$work\\err"; return 1; }
 }
-check "update --check lists nothing for a held app, and says why" held_check
+check "update --check lists nothing for a masked app, and says why" held_check
 held_update() {
     zb update --yes >/dev/null 2>&1 || return 1
     zb update --yes $APP >/dev/null 2>&1 || return 1
     [ "$(installed_version)" = 3 ]
 }
-check "update leaves a held app alone, named or not, and exits 0" held_update
-check "the daily check tells nothing about a held app" not_told
+check "update leaves a masked app alone, named or not, and exits 0" held_update
+check "the daily check tells nothing about a masked app" not_told
 pull_held() {
-    zb pull --yes "$repo:latest" >/dev/null 2>&1 || return 1
-    [ "$(installed_version)" = 5 ] && list_line | grep -q '(held)'
+    zb install --yes "$repo:latest" >/dev/null 2>&1 || return 1
+    [ "$(installed_version)" = 5 ] && list_line | grep -q '(masked)'
 }
-check "pull of a held app installs, and the hold stays" pull_held
+check "install of a masked app installs, and the mask stays" pull_held
 unheld() {
     local out
-    out=$(zb unhold $APP 2>&1) || { echo "$out"; return 1; }
-    grep -q "$APP 5: updates reach it again" <<<"$out" && ! list_line | grep -q held && [ ! -e "$(versions_file held)" ]
+    out=$(zb mask --remove $APP 2>&1) || { echo "$out"; return 1; }
+    grep -q "$APP 5: updates reach it again" <<<"$out" && ! list_line | grep -q masked && [ ! -e "$(versions_file held)" ]
 }
-check "unhold lets updates in again" unheld
-unheld_again() { zb unhold $APP 2>&1 | grep -q "wasn't held"; }
-check "  unholding again says it wasn't held" unheld_again
+check "mask --remove lets updates in again" unheld
+unheld_again() { zb mask --remove $APP 2>&1 | grep -q "wasn't masked"; }
+check "  removing it again says it wasn't masked" unheld_again
 
 publish 6
 found_then_held() {
     zb updates check >/dev/null 2>&1
     zb updates 2>/dev/null | grep -q "$APP 5 -> 6 (" || { echo "the check found nothing"; return 1; }
-    zb hold $APP >/dev/null 2>&1 || return 1
+    zb mask $APP >/dev/null 2>&1 || return 1
     zb updates 2>/dev/null | grep -q 'Nothing is waiting' && ! zb list 2>&1 | grep -q 'waiting'
 }
-check "what a check found isn't waiting once the app is held" found_then_held
-unheld_updates() { zb unhold $APP >/dev/null 2>&1 && zb update --yes >/dev/null 2>&1 && [ "$(installed_version)" = 6 ] && runs_version 6; }
+check "what a check found isn't waiting once the app is masked" found_then_held
+unheld_updates() { zb mask --remove $APP >/dev/null 2>&1 && zb update --yes >/dev/null 2>&1 && [ "$(installed_version)" = 6 ] && runs_version 6; }
 check "  and once it isn't, update installs it" unheld_updates
 
 # --- When the previous version is gone -------------------------------------------
 forget() {
     local out
-    out=$(zb prune --previous 2>&1) || { echo "$out"; return 1; }
+    out=$(zb uninstall --unused --previous 2>&1) || { echo "$out"; return 1; }
     grep -q 'forgot 1 previous version(s)' <<<"$out" || { echo "$out"; return 1; }
     [ ! -e "$(versions_file previous.json)" ] && ! list_line | grep -q previous || return 1
     out=$(zb rollback $APP </dev/null 2>&1) && return 1
@@ -238,8 +240,8 @@ blobs_gone() {
     rm -f "$store_b\\blobs\\sha256\\${manifest#sha256:}"
     out=$(zb rollback $APP </dev/null 2>&1) && return 1
     grep -q "the files of 6 (.*) are gone" <<<"$out" || { echo "$out"; return 1; }
-    grep -qF "\`zigsaw pull $repo@$manifest\` brings it back" <<<"$out" || { echo "$out"; return 1; }
-    zb prune >/dev/null 2>&1 && [ "$(installed_version)" = 7 ] && runs_version 7
+    grep -qF "\`zigsaw install $repo@$manifest\` brings it back" <<<"$out" || { echo "$out"; return 1; }
+    zb uninstall --unused >/dev/null 2>&1 && [ "$(installed_version)" = 7 ] && runs_version 7
 }
 check "a previous version whose blobs are gone: rollback says how to have it back, and prune copes" blobs_gone
 
@@ -256,14 +258,14 @@ check "an app built from a recipe goes back too, and a rebuild that makes the ve
 
 # --- Removing -----------------------------------------------------------------------
 removed() {
-    zb hold $APP >/dev/null 2>&1 && zb rm $APP >/dev/null 2>&1 || return 1
+    zb mask $APP >/dev/null 2>&1 && zb uninstall $APP >/dev/null 2>&1 || return 1
     [ -z "$(ls "$store_b\\versions")" ]
 }
 check "rm forgets what versions\\ had of the app" removed
 strays() {
     : >"$store_b\\versions\\gone.app.held"
     : >"$store_b\\versions\\gone.app.skip.json"
-    zb prune >/dev/null 2>&1 && [ -z "$(ls "$store_b\\versions")" ]
+    zb uninstall --unused >/dev/null 2>&1 && [ -z "$(ls "$store_b\\versions")" ]
 }
 check "prune deletes what versions\\ has of apps that aren't installed" strays
 
@@ -346,7 +348,7 @@ rbdata write two >/dev/null
 check "  the new version reads what it wrote, and the copy stays as the old one left it" eval 'reads 2 two && copy_has 1 one'
 prune_keeps_data() {
     local out
-    out=$(zd prune 2>&1) || { echo "$out"; return 1; }
+    out=$(zd uninstall --unused 2>&1) || { echo "$out"; return 1; }
     grep -q 'kept the data of 1 app(s) as an earlier version left it (.*) for `zigsaw rollback`; --previous deletes it' <<<"$out" || { echo "$out"; return 1; }
     copy_has 1 one
 }
@@ -496,7 +498,7 @@ check "a copy whose record names another version isn't offered, and the rollback
 
 forgotten() {
     local out
-    out=$(zd prune --previous 2>&1) || { echo "$out"; return 1; }
+    out=$(zd uninstall --unused --previous 2>&1) || { echo "$out"; return 1; }
     grep -q "1 copy of an app's data (" <<<"$out" || { echo "$out"; return 1; }
     [ ! -e "$copy" ] && [ ! -e "$record" ]
 }
@@ -505,22 +507,22 @@ data_removed() {
     local out
     data_build 7 >/dev/null && [ -e "$copy" ] || return 1
     mkdir -p "$store_d\\snapshots\\gone.app" && echo x >"$store_d\\snapshots\\gone.app\\f.txt"
-    out=$(zd rm $DATA 2>&1) || { echo "$out"; return 1; }
+    out=$(zd uninstall $DATA 2>&1) || { echo "$out"; return 1; }
     grep -q 'deleted its data as 5 left it (.*), kept for `zigsaw rollback`' <<<"$out" || { echo "$out"; return 1; }
     [ ! -e "$copy" ] && [ ! -e "$record" ] && [ -e "$live\\home\\state.txt" ] || return 1
     # Not a swap's folder, though: that's an app's data on its way.
     mkdir -p "$store_d\\snapshots\\.swap-gone.app" && echo x >"$store_d\\snapshots\\.swap-gone.app\\f.txt"
-    zd prune >/dev/null 2>&1 && [ "$(ls -A "$store_d\\snapshots")" = .swap-gone.app ] || { ls -A "$store_d\\snapshots"; return 1; }
+    zd uninstall --unused >/dev/null 2>&1 && [ "$(ls -A "$store_d\\snapshots")" = .swap-gone.app ] || { ls -A "$store_d\\snapshots"; return 1; }
     rm -rf "$(cygpath -u "$store_d\\snapshots\\.swap-gone.app")"
 }
 check "rm deletes the copy and leaves the data; prune deletes copies no installed app has, and not a swap's folder" data_removed
 zd volume rm rbvol >/dev/null 2>&1
-zd prune --volumes >/dev/null 2>&1
+zd uninstall --unused --volumes >/dev/null 2>&1
 reg delete "HKCU\\$KEY" /f >/dev/null 2>&1
 
 # Installed apps' files aren't for deleting by hand.
 for store in "$store_a" "$store_b"; do
-    [ -e "$store" ] && ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data $APP >/dev/null 2>&1
+    [ -e "$store" ] && ZIGSAW_HOME="$store" "$zigsaw" uninstall --delete-data $APP >/dev/null 2>&1
 done
 reg delete "HKCU\\$ZIGSAW_GRANTS_KEY" /f >/dev/null 2>&1
 reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1

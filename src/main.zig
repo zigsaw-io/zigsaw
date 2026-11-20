@@ -29,6 +29,7 @@ const prune = @import("prune.zig");
 const ps = @import("ps.zig");
 const stop = @import("stop.zig");
 const remote = @import("remote.zig");
+const remotes = @import("remotes.zig");
 const rollback = @import("rollback.zig");
 const snapshot = @import("snapshot.zig");
 const runtime = @import("run.zig");
@@ -49,7 +50,113 @@ const note = Context.note;
 const usage =
     \\usage: zigsaw [-v|--verbose] <command> [options]
     \\
-    \\commands:
+    \\Manage installed apps:
+    \\  install [-y] [--lazy] [<remote>] <image>
+    \\                                  install an app and its commands from a remote, once
+    \\                                  you agree to what it may reach; -y (--yes) agrees
+    \\                                  without asking; --lazy installs it before its large
+    \\                                  eStargz layers are downloaded, their files fetched as
+    \\                                  they're first used while the rest downloads
+    \\  update [-y] [--lazy] [<app-id>...]
+    \\                                  rebuild or reinstall apps from where they came from;
+    \\                                  one installed again that may reach more asks first,
+    \\                                  unless given -y; --lazy as for install
+    \\  update --check [<app-id>...]    list the apps a new image waits for, and what it may
+    \\                                  reach beyond theirs, installing nothing
+    \\  uninstall [--delete-data] <app-id>
+    \\                                  uninstall an app and its commands; --delete-data also
+    \\                                  deletes its own volume; the others it mounted stay
+    \\  uninstall --unused [--dry-run] [--downloads] [--volumes] [--previous]
+    \\                                  delete what no installed app needs; also cached
+    \\                                  downloads and tool caches, the volumes nothing
+    \\                                  mounts, and the versions kept for rollback with
+    \\                                  the copies of their data
+    \\  mask [--remove] [<app-id>...]   have updates, and the daily check, leave the apps
+    \\                                  alone; --remove lets updates reach them again; with
+    \\                                  no app, list those masked
+    \\  list                            list installed apps, their commands and shortcuts,
+    \\                                  and the kinds of file they open
+    \\  info <app-id>                   show what an installed app is and may reach, where it
+    \\                                  came from, and where its files and data are
+    \\  repair                          write every app's commands, shortcuts and file
+    \\                                  associations again, as after installing a new zigsaw,
+    \\                                  and take back what apps may no longer reach, and what
+    \\                                  stores since deleted left
+    \\
+    \\Find apps:
+    \\  search [<words>...]             find apps in the remotes' catalogs
+    \\  remote-ls [<remote>]            list the apps in a remote's catalog, or every remote's
+    \\  remote-info [<remote>] <image>  show what an app in a remote is, needs and may reach
+    \\  remote-info --show-files [<remote>] <image>
+    \\                                  list its files without installing it, as far as its
+    \\                                  layers' format allows (eStargz)
+    \\  remote-info --file=<path> [<remote>] <image>
+    \\                                  write one of its files to stdout, the same way
+    \\
+    \\Run apps:
+    \\  run [options] <app-id> [args]   run an installed app (options below)
+    \\  override [options] <app-id>     save run options that every run of the app gets;
+    \\                                  --show shows them, --reset removes them; also
+    \\                                  --nosnapshot has updates keep no copy of its data
+    \\                                  for rollback, --snapshot has them keep one again
+    \\  override [options] --global     the same for every app, below each app's own; also
+    \\                                  --real-folders lets the apps of a store that isn't your
+    \\                                  default one use your real folders, --noreal-folders
+    \\                                  stops them
+    \\  ps [--processes] [<app-id>|<run>...]
+    \\                                  list the runs and builds going, each by its zigsaw's
+    \\                                  process id: its sandbox, processes, memory, processor
+    \\                                  time and command; --processes lists its processes
+    \\                                  too, each under the one that started it
+    \\  kill [--time=<seconds>] <app-id>|<run>...
+    \\                                  ask runs and builds to end: their windows to close,
+    \\                                  and Ctrl+C if nothing else is on their console; what
+    \\                                  hasn't ended after 10 seconds, or --time, is killed
+    \\  kill --now <app-id>|<run>...    end runs and builds now; a run's zigsaw still cleans
+    \\                                  up after it, and a build goes on from there next time
+    \\  enter [--env=NAME=VALUE]... [-d|--detach] <app-id>|<run> <command> [<arg>...]
+    \\                                  run a command in a run that's going, in its sandbox,
+    \\                                  job, variables and working directory, on this
+    \\                                  terminal; the command is found as --command finds
+    \\                                  one. It ends with the run, and with this zigsaw.
+    \\                                  --detach starts it with no console and prints the
+    \\                                  PID `ps` lists it by
+    \\
+    \\Manage permissions:
+    \\  permissions [<app-id>]          list what zigsaw changed outside its store for apps, in
+    \\                                  this store and others, what stores since deleted left,
+    \\                                  and low labels on your folders no record explains
+    \\  permission-remove <path>        remove a low label that no record explains
+    \\
+    \\Manage remotes:
+    \\  remotes                         list the remotes, in order, whose signatures count for
+    \\                                  each one's images, and its login; and for zigsaw's
+    \\                                  releases
+    \\  remote-add [--if-not-exists] [<changes>] <name> <location>
+    \\                                  add a remote: a name (letters, digits, - and _) for a
+    \\                                  registry and a path in it, such as ghcr.io/me, or
+    \\                                  oci+https://ghcr.io/me as Flatpak writes it
+    \\  remote-modify <changes> <name>  change a remote:
+    \\    --url=<location>              move it
+    \\    --sign-key=<file>             check its images against a public key, as `cosign
+    \\                                  generate-key-pair` makes in cosign.pub
+    \\    --keyless=<identity> [--issuer=<url>]
+    \\                                  check them for a keyless signature, by a certificate
+    \\                                  Sigstore's Fulcio gave <identity> (a workflow's URI, as
+    \\                                  cosign's --certificate-identity takes it); the issuer is
+    \\                                  GitHub Actions' unless given
+    \\    --no-sign-key[=<fingerprint or identity>]
+    \\                                  stop checking them for that one, or all added
+    \\    --login [--username=<user>] [--password-stdin]
+    \\                                  check and save a login for its registry
+    \\    --logout                      delete its registry's saved login
+    \\                                  (remote-add takes them too, but --url, --no-sign-key
+    \\                                  and --logout)
+    \\  remote-delete [--force] <name>  delete a remote, whose signatures counted for it, and
+    \\                                  its registry's login when no other remote is there;
+    \\                                  --force even if apps were installed from it
+    \\
+    \\Build and publish apps:
     \\  build [--clean[=<module>]] [--rebuild] [--no-resume] [--keep-build-dir]
     \\        [--memory=<size>] [--cpus=<n>] [--sandbox=auto|appcontainer|soft]
     \\        [<recipe.json> | <dir>]   build an app from a recipe, or from the zigsaw.json of a
@@ -75,110 +182,39 @@ const usage =
     \\                                  commands run in a container without the network, where
     \\                                  Windows can (not Server 2025); --sandbox=appcontainer
     \\                                  runs any recipe's so, or fails, and soft none
-    \\  search [<words>...]             find apps in the default registry's catalog
-    \\  info <image>                    show what an app in a registry is, needs and may reach
-    \\  ls <image>                      list the files of an app in a registry without pulling
-    \\                                  it, as far as its layers' format allows (eStargz)
-    \\  cat <image> <path>              write a file of an app in a registry to stdout, the
-    \\                                  same way
-    \\  pull [--yes] [--lazy] <image>   install an app and its commands from a registry, once
-    \\                                  you agree to what it may reach; --yes agrees without
-    \\                                  asking; --lazy installs it before its large eStargz
-    \\                                  layers are downloaded, their files fetched as they're
-    \\                                  first used while the rest downloads
-    \\  push [--sources] <app-id> [<image>]
-    \\                                  publish an installed app to a registry; --sources also
-    \\                                  keeps the files it was built from next to it
-    \\  push --catalog <app-id>...      make the default registry's catalog list these apps,
-    \\                                  as it has them
-    \\  login [--username=<user>] [--password-stdin] <registry>
-    \\                                  check and save a login for a registry
-    \\  logout <registry>               delete a registry's saved login
-    \\  run [options] <app-id> [args]   run an installed app; -d (--detach) runs it in the
-    \\                                  background, its output in a log, and prints the
-    \\                                  number `ps` lists it by
+    \\  build-export [--sources] <app-id> [<remote> | <image>]
+    \\                                  publish an installed app to a remote, the first unless
+    \\                                  given one, or as an image; --sources also keeps the
+    \\                                  files it was built from next to it
+    \\  build-update-repo [<remote>] <app-id>...
+    \\                                  make a remote's catalog, the first's unless given one,
+    \\                                  list these apps, as it has them
+    \\  build-sign --print-payload <image>
+    \\                                  print what to sign for an image, for `cosign sign-blob`
+    \\  build-sign <image> <payload file> <signature file>
+    \\                                  put a key's signature beside the image, where install
+    \\                                  looks
+    \\  build-sign --bundle <image> <payload file> <bundle file>
+    \\                                  put a keyless one, as `cosign sign-blob --bundle` writes
+    \\                                  it, beside the image, once it's checked
+    \\  build-sign --check <image>      say whether an image has a good signature
+    \\
+    \\zigsaw's own, which Flatpak has no command for:
+    \\  run -d [options] <app-id> [args]
+    \\                                  run an installed app in the background, its output in
+    \\                                  a log, and print the number `ps` lists it by
     \\  logs [-f] [--tail=<n>] [<app-id>|<run>]
     \\                                  print a detached run's log, as it goes or after it
     \\                                  ended; -f (--follow) goes on until the run ends; with
     \\                                  no app or run, in a project's directory, the logs of
     \\                                  the apps it lists as "run", each line after its app
-    \\  up [-d] [--build] [--yes] [<dir>]
-    \\                                  start the apps a project's zigsaw.json lists as "run",
-    \\                                  building those not installed from it and pulling those
-    \\                                  pinned there, each once the one before serves, then
-    \\                                  follow their logs; Ctrl+C stops them. -d (--detach)
-    \\                                  returns once they're up; --build builds all first
+    \\  up [-d] [--build] [-y] [<dir>]  start the apps a project's zigsaw.json lists as "run",
+    \\                                  building those not installed from it and installing
+    \\                                  those pinned there, each once the one before serves,
+    \\                                  then follow their logs; Ctrl+C stops them. -d
+    \\                                  (--detach) returns once they're up; --build builds all
+    \\                                  first
     \\  down [--time=<seconds>] [<dir>] stop the apps `up` started, the last started first
-    \\  list                            list installed apps, their commands and shortcuts,
-    \\                                  and the kinds of file they open
-    \\  ps [--processes] [<app-id>|<run>...]
-    \\                                  list the runs and builds going, each by its zigsaw's
-    \\                                  process id: its sandbox, processes, memory, processor
-    \\                                  time and command; --processes lists its processes
-    \\                                  too, each under the one that started it
-    \\  stop [--time=<seconds>] <app-id>|<run>...
-    \\                                  ask runs and builds to end: their windows to close,
-    \\                                  and Ctrl+C if nothing else is on their console; what
-    \\                                  hasn't ended after 10 seconds, or --time, is killed
-    \\  kill <app-id>|<run>...          end runs and builds now; a run's zigsaw still cleans
-    \\                                  up after it, and a build goes on from there next time
-    \\  exec [--env=NAME=VALUE]... [-d|--detach] <app-id>|<run> <command> [<arg>...]
-    \\                                  run a command in a run that's going, in its sandbox,
-    \\                                  job, variables and working directory, on this
-    \\                                  terminal; the command is found as --command finds
-    \\                                  one. It ends with the run, and with this zigsaw.
-    \\                                  --detach starts it with no console and prints the
-    \\                                  PID `ps` lists it by
-    \\  override [options] <app-id>     save run options that every run of the app gets;
-    \\                                  --show shows them, --reset removes them; also
-    \\                                  --nosnapshot has updates keep no copy of its data
-    \\                                  for rollback, --snapshot has them keep one again
-    \\  override [options] --global     the same for every app, below each app's own; also
-    \\                                  --real-folders lets the apps of a store that isn't your
-    \\                                  default one use your real folders, --noreal-folders
-    \\                                  stops them
-    \\  grants [<app-id>]               list what zigsaw changed outside its store for apps, in
-    \\                                  this store and others, what stores since deleted left,
-    \\                                  and low labels on your folders no record explains
-    \\  grants --take-back <path>       remove a low label that no record explains
-    \\  update [--yes] [--lazy] [<app-id>...]
-    \\                                  rebuild or re-pull apps from where they came from;
-    \\                                  one pulled again that may reach more asks first,
-    \\                                  unless given --yes; --lazy as for pull
-    \\  update --check [<app-id>...]    list the apps a new image waits for, and what it may
-    \\                                  reach beyond theirs, installing nothing
-    \\  rollback [--yes] <app-id>       go back to the version the installed one replaced, with
-    \\                                  no network; updates then pass over the version left,
-    \\                                  though not a newer one. Asks whether its data is to
-    \\                                  go back too, to the copy kept of it as that version
-    \\                                  left it: --data says yes, --keep-data no
-    \\  rollback --data-only <app-id>   take the data back after a rollback that left it
-    \\  hold <app-id>...                have updates, and the daily check, leave the apps alone
-    \\  unhold <app-id>...              let updates reach them again
-    \\  updates                         say what the last check found waiting, and whether a
-    \\                                  daily check is on; neither installs anything
-    \\  updates check                   look for updates of apps and zigsaw now
-    \\  updates on|off                  start or stop the daily check; off is remembered, so
-    \\                                  that installing or upgrading zigsaw leaves it off
-    \\  upgrade [--yes]                 install zigsaw's latest release over this one, once you
-    \\                                  agree; --yes agrees without asking
-    \\  trust                           list whose signatures images and releases are checked for
-    \\  trust add <registry/path> <key> check images under that path against a public key, as
-    \\                                  `cosign generate-key-pair` makes in cosign.pub
-    \\  trust add <registry/path> --keyless <identity> [--issuer <url>]
-    \\                                  check them for a keyless signature, by a certificate
-    \\                                  Sigstore's Fulcio gave <identity> (a workflow's URI, as
-    \\                                  cosign's --certificate-identity takes it); the issuer is
-    \\                                  GitHub Actions' unless given
-    \\  trust rm <registry/path> [<fingerprint or identity>]
-    \\                                  stop checking them for signatures added there
-    \\  signature payload <image>       print what to sign for an image, for `cosign sign-blob`
-    \\  signature push <image> <payload file> <signature file>
-    \\                                  put a key's signature beside the image, where pull looks
-    \\  signature push-bundle <image> <payload file> <bundle file>
-    \\                                  put a keyless one, as `cosign sign-blob --bundle` writes
-    \\                                  it, beside the image, once it's checked
-    \\  signature check <image>         say whether an image has a good signature
     \\  volume create [--path=<dir>] <name>
     \\                                  make a volume in the store, or keep one in a folder of
     \\                                  yours; a run's --volume makes one it doesn't find
@@ -198,35 +234,44 @@ const usage =
     \\                                  mounts, nor the data of an installed app
     \\  volume prune [--dry-run]        delete the volumes in the store that nothing mounts:
     \\                                  those no override names, and uninstalled apps' data
-    \\  rm [--delete-data] <app-id>     uninstall an app and its commands; --delete-data also
-    \\                                  deletes its own volume; the others it mounted stay
-    \\  prune [--dry-run] [--downloads] [--volumes] [--previous]
-    \\                                  delete what no installed app needs; also cached
-    \\                                  downloads and tool caches, the volumes nothing
-    \\                                  mounts, and the versions kept for rollback with
-    \\                                  the copies of their data
-    \\  repair                          write every app's commands, shortcuts and file
-    \\                                  associations again, as after installing a new zigsaw,
-    \\                                  and take back what apps may no longer reach, and what
-    \\                                  stores since deleted left
+    \\  rollback [-y] <app-id>          go back to the version the installed one replaced, with
+    \\                                  no network; updates then pass over the version left,
+    \\                                  though not a newer one. Asks whether its data is to
+    \\                                  go back too, to the copy kept of it as that version
+    \\                                  left it: --data says yes, --keep-data no
+    \\  rollback --data-only <app-id>   take the data back after a rollback that left it
     \\  doctor [--offline] [<app-id>]   look for what would make zigsaw fail here, in this
     \\                                  zigsaw, its store, its apps and the network, and say
     \\                                  what fixes each; changes nothing. --offline leaves out
     \\                                  the network; an app's id tells about that app at length
+    \\  updates                         say what the last check found waiting, and whether a
+    \\                                  daily check is on; neither installs anything
+    \\  updates check                   look for updates of apps and zigsaw now
+    \\  updates on|off                  start or stop the daily check; off is remembered, so
+    \\                                  that installing or upgrading zigsaw leaves it off
+    \\  upgrade [-y]                    install zigsaw's latest release over this one, once you
+    \\                                  agree; -y (--yes) agrees without asking
     \\  version                         print zigsaw's version
     \\
     \\An image is <registry>/<repository>[:tag][@digest], e.g. ghcr.io/owner/node:24.21.0,
-    \\or <app-id>[:tag][@digest] for the app's image in the default registry, e.g.
-    \\org.nodejs.node for ghcr.io/zigsaw-io/org.nodejs.node. ZIGSAW_REGISTRY changes the
-    \\default registry. push goes to the app's image there unless given one, and tags
-    \\with the app's version unless given a tag.
+    \\or <app-id>[:tag][@digest] for the app's image in a remote: the one named before it,
+    \\or else the first. A store has the remote zigsaw, ghcr.io/zigsaw-io, until told
+    \\otherwise, so org.nodejs.node is ghcr.io/zigsaw-io/org.nodejs.node. ZIGSAW_REGISTRY
+    \\moves the first remote, for this command. build-export goes to the app's image in
+    \\the remote unless given one, and tags with the app's version unless given a tag.
     \\
-    \\Pushing, and pulling private images, needs a login. login saves one per registry in
-    \\Windows Credential Manager; --password-stdin reads the password from stdin. For CI
-    \\and scripts, ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD are used instead,
-    \\but only for the default registry. Without either, the login `docker login` saved is
-    \\used. From a multi-platform index, pull takes the image for windows/amd64. Blobs over
-    \\64 MiB are pushed in chunks of ZIGSAW_UPLOAD_CHUNK_SIZE bytes (0: in one request).
+    \\Publishing, and installing private images, needs a login. --login saves one per
+    \\registry in Windows Credential Manager; --password-stdin reads the password from
+    \\stdin. For CI and scripts, ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD are
+    \\used instead, but only for ZIGSAW_REGISTRY's registry, or ghcr.io. Without either, the
+    \\login `docker login` saved is used. From a multi-platform index, install takes the
+    \\image for windows/amd64. Blobs over 64 MiB are published in chunks of
+    \\ZIGSAW_UPLOAD_CHUNK_SIZE bytes (0: in one request).
+    \\
+    \\Before 0.105, zigsaw's commands were Docker's: pull is now install, rm uninstall, prune
+    \\uninstall --unused, ls and cat remote-info, stop kill, kill kill --now, exec enter,
+    \\hold and unhold mask, grants permissions, push build-export, signature build-sign,
+    \\and login, logout and trust remote-modify; the old names fail, saying the new.
     \\
     \\run options (override takes them too, except -d, --command and --file):
     \\  -d, --detach                    run it in the background: print the run's number and
@@ -353,16 +398,8 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         try stdout.interface.flush();
         return 0;
     }
-    // Logins don't touch the store.
-    if (std.mem.eql(u8, command, "login")) {
-        try credentials.login(ctx, try parseLoginOptions(rest));
-        return 0;
-    }
-    if (std.mem.eql(u8, command, "logout")) {
-        if (rest.len != 1 or std.mem.startsWith(u8, rest[0], "-")) return usageError();
-        try credentials.logout(ctx, rest[0]);
-        return 0;
-    }
+    if (movedCommand(command, rest)) |now|
+        return fail("`zigsaw {s}` is `zigsaw {s}` since zigsaw 0.105, whose commands are Flatpak's; `zigsaw help` lists them", .{ command, now });
     // Before the store is opened, which makes its folders, and before its
     // data is moved: doctor changes nothing (see doctor.zig).
     if (std.mem.eql(u8, command, "doctor")) {
@@ -390,10 +427,12 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         if (rest.len != 2) return usageError();
         try ctx.env.put("ZIGSAW_HOME", rest[0]);
         ctx.store = try .open(ctx.io, ctx.arena, ctx.env);
+        ctx.store_open = true;
         return LazyHelper.main(ctx, rest[1]);
     }
 
     ctx.store = try .open(ctx.io, ctx.arena, ctx.env);
+    ctx.store_open = true;
     ctx.store.verbose = ctx.verbose;
     // A store from before 0.85 keeps apps' data in data\: into their own
     // volumes, the apps' that aren't running (see volumes.zig). `repair`
@@ -439,64 +478,126 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         } else try install.install(ctx, try builder.build(ctx, path, opts));
         return 0;
     }
-    if (std.mem.eql(u8, command, "pull")) {
+    if (std.mem.eql(u8, command, "install")) {
         var consent: remote.Consent = .ask;
-        var image: ?[]const u8 = null;
+        var words: std.ArrayList([]const u8) = .empty;
         var lazily = false;
         for (rest) |arg| {
             if (isFlag(arg, "yes")) {
                 consent = .given;
             } else if (isFlag(arg, "lazy")) {
                 lazily = true;
-            } else if (image == null and !std.mem.startsWith(u8, arg, "-")) {
-                image = arg;
+            } else if (!std.mem.startsWith(u8, arg, "-")) {
+                try words.append(ctx.arena, arg);
             } else return usageError();
         }
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try install.install(ctx, (try remote.fetch(ctx, image orelse return usageError(), .{ .consent = consent, .lazy = lazily })).?);
+        const image = try inRemote(ctx, words.items) orelse return usageError();
+        try install.install(ctx, (try remote.fetch(ctx, image, .{ .consent = consent, .lazy = lazily })).?);
         return 0;
     }
-    if (std.mem.eql(u8, command, "push")) {
+    if (std.mem.eql(u8, command, "build-export")) {
         var opts: remote.PushOptions = .{};
-        var make_catalog = false;
         var names: std.ArrayList([]const u8) = .empty;
         for (rest) |arg| {
             if (isFlag(arg, "sources")) {
                 opts.sources = true;
-            } else if (isFlag(arg, "catalog")) {
-                make_catalog = true;
             } else if (!std.mem.startsWith(u8, arg, "-")) {
                 try names.append(ctx.arena, arg);
             } else return usageError();
         }
-        if (make_catalog) {
-            if (opts.sources or names.items.len == 0) return usageError();
-            _ = try ctx.store.lock(ctx.arena, .shared);
-            try catalog.push(ctx, names.items);
-            return 0;
-        }
         if (names.items.len != 1 and names.items.len != 2) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try remote.push(ctx, names.items[0], if (names.items.len == 2) names.items[1] else null, opts);
+        // A remote by its name, or an image.
+        var image: ?[]const u8 = if (names.items.len == 2) names.items[1] else null;
+        if (image) |name| if (remotes.isName(name)) if (try remotes.find(ctx, name)) |r| {
+            ctx.remote = r.url;
+            image = null;
+        };
+        try remote.push(ctx, names.items[0], image, opts);
         return 0;
     }
+    if (std.mem.eql(u8, command, "build-update-repo")) {
+        if (rest.len == 0) return usageError();
+        for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        var ids: []const []const u8 = @ptrCast(rest);
+        if (remotes.isName(ids[0])) if (try remotes.find(ctx, ids[0])) |r| {
+            ctx.remote = r.url;
+            ids = ids[1..];
+        };
+        if (ids.len == 0) return usageError();
+        try catalog.push(ctx, ids);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "build-sign")) return buildSignCommand(ctx, rest);
     if (std.mem.eql(u8, command, "search")) {
         for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
-        return catalog.search(ctx, @ptrCast(rest));
+        return catalog.search(ctx, @ptrCast(rest), null);
+    }
+    if (std.mem.eql(u8, command, "remote-ls")) {
+        if (rest.len > 1) return usageError();
+        for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        return catalog.search(ctx, &.{}, if (rest.len == 1) try remotes.named(ctx, rest[0]) else null);
+    }
+    if (std.mem.eql(u8, command, "remotes")) {
+        if (rest.len != 0) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try remotes.show(ctx);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "remote-add") or std.mem.eql(u8, command, "remote-modify")) {
+        const adding = std.mem.eql(u8, command, "remote-add");
+        const parsed = try parseRemoteOptions(ctx, rest, adding);
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        if (adding) {
+            if (parsed.words.len != 2) return usageError();
+            try remotes.add(ctx, parsed.words[0], parsed.words[1], parsed.changes, parsed.if_not_exists);
+        } else {
+            if (parsed.words.len != 1) return usageError();
+            try remotes.modify(ctx, parsed.words[0], parsed.changes);
+        }
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "remote-delete")) {
+        var force = false;
+        var name: ?[]const u8 = null;
+        for (rest) |arg| {
+            if (isFlag(arg, "force")) {
+                force = true;
+            } else if (name == null and !std.mem.startsWith(u8, arg, "-")) {
+                name = arg;
+            } else return usageError();
+        }
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try remotes.delete(ctx, name orelse return usageError(), force);
+        return 0;
     }
     if (std.mem.eql(u8, command, "info")) {
         if (rest.len != 1 or std.mem.startsWith(u8, rest[0], "-")) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try info.info(ctx, rest[0]);
+        try info.installedInfo(ctx, rest[0]);
         return 0;
     }
-    if (std.mem.eql(u8, command, "ls") or std.mem.eql(u8, command, "cat")) {
-        const listing = std.mem.eql(u8, command, "ls");
-        if (rest.len != @as(usize, if (listing) 1 else 2)) return usageError();
-        for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
+    if (std.mem.eql(u8, command, "remote-info")) {
+        var words: std.ArrayList([]const u8) = .empty;
+        var files = false;
+        var file: ?[]const u8 = null;
+        for (rest) |arg| {
+            if (isFlag(arg, "show-files")) {
+                files = true;
+            } else if (std.mem.startsWith(u8, arg, "--file=") and arg.len > "--file=".len) {
+                file = arg["--file=".len..];
+            } else if (!std.mem.startsWith(u8, arg, "-")) {
+                try words.append(ctx.arena, arg);
+            } else return usageError();
+        }
+        if (files and file != null) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
-        if (listing) try peek.ls(ctx, rest[0]) else try peek.cat(ctx, rest[0], rest[1]);
+        const name = try inRemote(ctx, words.items) orelse return usageError();
+        if (files) try peek.ls(ctx, name) else if (file) |path| try peek.cat(ctx, name, path) else try info.remoteInfo(ctx, name);
         return 0;
     }
     if (std.mem.eql(u8, command, "run")) return runtime.run(ctx, try parseRunOptions(ctx, rest));
@@ -519,22 +620,26 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         try ps.ps(ctx, opts);
         return 0;
     }
-    if (std.mem.eql(u8, command, "stop") or std.mem.eql(u8, command, "kill")) {
-        var opts: stop.Options = .{ .kill = std.mem.eql(u8, command, "kill") };
+    if (std.mem.eql(u8, command, "kill")) {
+        var opts: stop.Options = .{};
+        var timed = false;
         var filters: std.ArrayList([]const u8) = .empty;
         for (rest) |arg| {
-            if (!opts.kill and std.mem.startsWith(u8, arg, "--time=")) {
+            if (isFlag(arg, "now")) {
+                opts.kill = true;
+            } else if (std.mem.startsWith(u8, arg, "--time=")) {
                 opts.seconds = std.fmt.parseInt(u32, arg["--time=".len..], 10) catch
                     return fail("--time takes a number of seconds, not {s}", .{arg["--time=".len..]});
+                timed = true;
             } else if (std.mem.startsWith(u8, arg, "-")) {
                 return usageError();
             } else try filters.append(ctx.arena, arg);
         }
-        if (filters.items.len == 0) return usageError();
+        if (filters.items.len == 0 or (opts.kill and timed)) return usageError();
         opts.filters = filters.items;
         return stop.stop(ctx, opts);
     }
-    if (std.mem.eql(u8, command, "exec")) return exec.exec(ctx, try parseExecOptions(ctx, rest));
+    if (std.mem.eql(u8, command, "enter")) return exec.exec(ctx, try parseExecOptions(ctx, rest));
     if (std.mem.eql(u8, command, "logs")) {
         var opts: logs.Options = .{};
         for (rest) |arg| {
@@ -621,16 +726,26 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         try rollback.rollback(ctx, id orelse return usageError(), consent, data orelse .ask);
         return 0;
     }
-    if (std.mem.eql(u8, command, "hold") or std.mem.eql(u8, command, "unhold")) {
-        if (rest.len == 0) return usageError();
-        for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
+    if (std.mem.eql(u8, command, "mask")) {
+        var masking = true;
+        var ids: std.ArrayList([]const u8) = .empty;
+        for (rest) |arg| {
+            if (isFlag(arg, "remove")) {
+                masking = false;
+            } else if (std.mem.startsWith(u8, arg, "-")) {
+                return usageError();
+            } else try ids.append(ctx.arena, arg);
+        }
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try rollback.setHeld(ctx, @ptrCast(rest), std.mem.eql(u8, command, "hold"));
+        if (ids.items.len == 0) {
+            if (!masking) return usageError();
+            try rollback.listHeld(ctx);
+            return 0;
+        }
+        try rollback.setHeld(ctx, ids.items, masking);
         return 0;
     }
     if (std.mem.eql(u8, command, "updates")) return updatesCommand(ctx, rest);
-    if (std.mem.eql(u8, command, "trust")) return trustCommand(ctx, rest);
-    if (std.mem.eql(u8, command, "signature")) return signatureCommand(ctx, rest);
     if (std.mem.eql(u8, command, "volume")) return volumeCommand(ctx, rest);
     if (std.mem.eql(u8, command, "upgrade")) {
         var consent: remote.Consent = .ask;
@@ -640,39 +755,42 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         _ = try ctx.store.lock(ctx.arena, .shared);
         return upgrade.upgrade(ctx, consent);
     }
-    if (std.mem.eql(u8, command, "rm")) {
+    if (std.mem.eql(u8, command, "uninstall")) {
         var delete_data = false;
+        var unused = false;
+        var opts: prune.Options = .{};
         var id: ?[]const u8 = null;
         for (rest) |arg| {
             if (isFlag(arg, "delete-data")) {
                 delete_data = true;
-            } else if (id == null and !std.mem.startsWith(u8, arg, "-")) {
-                id = arg;
-            } else return usageError();
-        }
-        _ = try ctx.store.lock(ctx.arena, .shared);
-        try remove(ctx, id orelse return usageError(), delete_data);
-        return 0;
-    }
-    if (std.mem.eql(u8, command, "prune")) {
-        var opts: prune.Options = .{};
-        for (rest) |arg| {
-            if (isFlag(arg, "dry-run")) {
+            } else if (isFlag(arg, "unused")) {
+                unused = true;
+            } else if (isFlag(arg, "dry-run")) {
                 opts.dry_run = true;
             } else if (isFlag(arg, "downloads")) {
                 opts.downloads = true;
             } else if (isFlag(arg, "volumes")) {
                 opts.volumes = true;
+            } else if (isFlag(arg, "previous")) {
+                opts.previous = true;
             } else if (isFlag(arg, "data")) {
                 // What it deleted is a part of what --volumes does: nobody is
                 // to delete more by habit.
-                return fail("--data is --volumes from zigsaw 0.85: an app's data is its own volume, and --volumes deletes every volume nothing mounts, the named ones too; `zigsaw prune --dry-run --volumes` shows which", .{});
-            } else if (isFlag(arg, "previous")) {
-                opts.previous = true;
+                return fail("--data is --volumes from zigsaw 0.85: an app's data is its own volume, and --volumes deletes every volume nothing mounts, the named ones too; `zigsaw uninstall --unused --dry-run --volumes` shows which", .{});
+            } else if (id == null and !std.mem.startsWith(u8, arg, "-")) {
+                id = arg;
             } else return usageError();
         }
-        _ = try ctx.store.lock(ctx.arena, .exclusive);
-        try prune.prune(ctx, opts);
+        if (unused) {
+            // Nothing of one app's: what no installed app needs.
+            if (id != null or delete_data) return usageError();
+            _ = try ctx.store.lock(ctx.arena, .exclusive);
+            try prune.prune(ctx, opts);
+            return 0;
+        }
+        if (opts.dry_run or opts.downloads or opts.volumes or opts.previous) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try remove(ctx, id orelse return usageError(), delete_data);
         return 0;
     }
     if (std.mem.eql(u8, command, "repair")) {
@@ -687,23 +805,17 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         try schedule.repair(ctx);
         return if (unsettled > 0) 1 else code;
     }
-    if (std.mem.eql(u8, command, "grants")) {
-        var id: ?[]const u8 = null;
-        var take_back: ?[]const u8 = null;
-        var i: usize = 0;
-        while (i < rest.len) : (i += 1) {
-            if (!std.mem.startsWith(u8, rest[i], "--")) {
-                if (id != null) return usageError();
-                id = rest[i];
-                continue;
-            }
-            const opt = try Option.read(rest, &i, &.{});
-            if (!std.mem.eql(u8, opt.name, "take-back")) return usageError();
-            take_back = opt.value;
-        }
-        if (id != null and take_back != null) return usageError();
+    if (std.mem.eql(u8, command, "permissions")) {
+        if (rest.len > 1) return usageError();
+        for (rest) |arg| if (std.mem.startsWith(u8, arg, "-")) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
-        if (take_back) |p| try grants.takeBackLabel(ctx, p) else try grants.show(ctx, id);
+        try grants.show(ctx, if (rest.len == 1) rest[0] else null);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "permission-remove")) {
+        if (rest.len != 1 or std.mem.startsWith(u8, rest[0], "-")) return usageError();
+        _ = try ctx.store.lock(ctx.arena, .shared);
+        try grants.takeBackLabel(ctx, rest[0]);
         return 0;
     }
     return usageError();
@@ -819,84 +931,188 @@ fn volumeCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
     return usageError();
 }
 
-/// `zigsaw trust`: whose signatures count for which images.
-fn trustCommand(ctx: *Context, rest: []const []const u8) !u32 {
-    _ = try ctx.store.lock(ctx.arena, .shared);
-    if (rest.len == 0) {
-        try trust.list(ctx);
-        return 0;
+/// `[<remote>] <image>`, as install and remote-info take it: the image, with
+/// the remote named made where its app id is. Null if that isn't what's given.
+fn inRemote(ctx: *Context, words: []const []const u8) !?[]const u8 {
+    switch (words.len) {
+        1 => return words[0],
+        2 => {
+            if (std.mem.indexOfScalar(u8, words[1], '/') != null)
+                return fail("{s} is an image's full name, which needs no remote: give it alone, or the app's id after {s}", .{ words[1], words[0] });
+            try remotes.use(ctx, words[0]);
+            return words[1];
+        },
+        else => return null,
     }
-    if (std.mem.eql(u8, rest[0], "add") and rest.len >= 4 and isFlag(rest[2], "keyless")) {
-        const issuer = switch (rest.len) {
-            4 => @import("sigstore.zig").github_issuer,
-            6 => if (isFlag(rest[4], "issuer")) rest[5] else return usageError(),
-            else => return usageError(),
-        };
-        try trust.addKeyless(ctx, rest[1], rest[3], issuer);
-        return 0;
-    }
-    if (std.mem.eql(u8, rest[0], "add") and rest.len == 3) {
-        try trust.add(ctx, rest[1], rest[2]);
-        return 0;
-    }
-    if (std.mem.eql(u8, rest[0], "rm") and (rest.len == 2 or rest.len == 3)) {
-        try trust.remove(ctx, rest[1], if (rest.len == 3) rest[2] else null);
-        return 0;
-    }
-    return usageError();
 }
 
-/// `zigsaw signature`: what scripts/sign-images.sh needs, on either side of cosign's
-/// `sign-blob`, which is what signs.
-fn signatureCommand(ctx: *Context, rest: []const []const u8) !u32 {
-    if (rest.len < 2) return usageError();
+const RemoteOptions = struct {
+    words: []const []const u8,
+    changes: remotes.Changes,
+    if_not_exists: bool = false,
+};
+
+/// The options of `remote-add` (`adding`) and `remote-modify`.
+fn parseRemoteOptions(ctx: *Context, args: []const [:0]const u8, adding: bool) !RemoteOptions {
+    var words: std.ArrayList([]const u8) = .empty;
+    var keys: std.ArrayList([]const u8) = .empty;
+    var out: RemoteOptions = .{ .words = &.{}, .changes = .{} };
+    const flags = [_][]const u8{ "if-not-exists", "login", "logout", "password-stdin", "no-sign-key" };
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (!std.mem.startsWith(u8, args[i], "--")) {
+            try words.append(ctx.arena, args[i]);
+            continue;
+        }
+        const opt = try Option.read(args, &i, &flags);
+        const eql = std.mem.eql;
+        const v = opt.value;
+        if (eql(u8, opt.name, "sign-key") and v != null) {
+            try keys.append(ctx.arena, v.?);
+        } else if (eql(u8, opt.name, "keyless") and v != null) {
+            out.changes.keyless = v;
+        } else if (eql(u8, opt.name, "issuer") and v != null) {
+            out.changes.issuer = v;
+        } else if (eql(u8, opt.name, "login") and v == null) {
+            out.changes.login = true;
+        } else if (eql(u8, opt.name, "username") and v != null) {
+            out.changes.username = v;
+        } else if (eql(u8, opt.name, "password-stdin") and v == null) {
+            out.changes.password_stdin = true;
+        } else if (adding and eql(u8, opt.name, "if-not-exists") and v == null) {
+            out.if_not_exists = true;
+        } else if (!adding and eql(u8, opt.name, "url") and v != null) {
+            out.changes.url = v;
+        } else if (!adding and eql(u8, opt.name, "logout") and v == null) {
+            out.changes.logout = true;
+        } else if (!adding and eql(u8, opt.name, "no-sign-key")) {
+            out.changes.no_sign_key = if (v) |w| .{ .one = w } else .all;
+        } else {
+            return fail("--{s} isn't an option of {s}", .{ opt.name, if (adding) "remote-add" else "remote-modify" });
+        }
+    }
+    const c = out.changes;
+    if (c.issuer != null and c.keyless == null) return fail("--issuer goes with --keyless", .{});
+    if ((c.username != null or c.password_stdin) and !c.login) return fail("--username and --password-stdin go with --login", .{});
+    if (c.login and c.logout) return fail("--login and --logout each say what becomes of the login: give one", .{});
+    out.changes.sign_keys = keys.items;
+    out.words = words.items;
+    return out;
+}
+
+/// `zigsaw build-sign`: what scripts/sign-images.sh needs, on either side of
+/// cosign's `sign-blob`, which is what signs: the payload to sign, a key's
+/// signature or a keyless bundle put beside the image, and a check of it.
+fn buildSignCommand(ctx: *Context, args: []const []const u8) !u32 {
+    const Mode = enum { push, print_payload, bundle, check };
+    var mode: Mode = .push;
+    var words: std.ArrayList([]const u8) = .empty;
+    for (args) |arg| {
+        const chosen: ?Mode = if (isFlag(arg, "print-payload")) .print_payload else if (isFlag(arg, "bundle")) .bundle else if (isFlag(arg, "check")) .check else null;
+        if (chosen) |m| {
+            if (mode != .push) return usageError();
+            mode = m;
+        } else if (std.mem.startsWith(u8, arg, "-")) {
+            return usageError();
+        } else try words.append(ctx.arena, arg);
+    }
+    const want: usize = switch (mode) {
+        .print_payload, .check => 1,
+        .push, .bundle => 3,
+    };
+    if (words.items.len != want) return usageError();
     _ = try ctx.store.lock(ctx.arena, .shared);
-    const what = rest[0];
-    const image = rest[1];
-    if (std.mem.startsWith(u8, image, "-")) return usageError();
-    if (std.mem.eql(u8, what, "payload") and rest.len == 2) {
-        const payload = try remote.signaturePayload(ctx, image);
-        var buf: [4096]u8 = undefined;
-        var stdout = Context.stdout().writerStreaming(ctx.io, &buf);
-        try stdout.interface.writeAll(payload);
-        try stdout.interface.flush();
-        return 0;
+    const image = words.items[0];
+    switch (mode) {
+        .print_payload => {
+            const payload = try remote.signaturePayload(ctx, image);
+            var buf: [4096]u8 = undefined;
+            var stdout = Context.stdout().writerStreaming(ctx.io, &buf);
+            try stdout.interface.writeAll(payload);
+            try stdout.interface.flush();
+            return 0;
+        },
+        .push, .bundle => {
+            const cwd = std.Io.Dir.cwd();
+            const payload = cwd.readFileAlloc(ctx.io, words.items[1], ctx.arena, .limited(signature.max_payload_size)) catch |err|
+                return fail("reading {s}: {t}", .{ words.items[1], err });
+            const limit: usize = if (mode == .bundle) @import("sigstore.zig").max_bundle_size else 4096;
+            const text = cwd.readFileAlloc(ctx.io, words.items[2], ctx.arena, .limited(limit)) catch |err|
+                return fail("reading {s}: {t}", .{ words.items[2], err });
+            if (mode == .bundle) try remote.pushBundle(ctx, image, payload, text) else try remote.pushSignature(ctx, image, payload, text);
+            return 0;
+        },
+        .check => {
+            const target = try remote.resolve(ctx, image);
+            var registry: @import("Registry.zig") = undefined;
+            try registry.init(ctx, target.ref, "pull");
+            defer registry.deinit();
+            const digest = try remote.manifestDigest(ctx, image);
+            return switch (try remote.checkSignature(ctx, &registry, target.ref, null, digest)) {
+                .no_key => fail("{s}: no key here for its registry", .{image}),
+                .missing => fail("{s}: not signed", .{image}),
+                .wrong => |why| fail("{s}: {s}", .{ image, why }),
+                .signed => |by| signed: {
+                    note("{s}: signed, by {s}", .{ image, by });
+                    break :signed 0;
+                },
+            };
+        },
     }
-    if (std.mem.eql(u8, what, "push") and rest.len == 4) {
-        const cwd = std.Io.Dir.cwd();
-        const payload = cwd.readFileAlloc(ctx.io, rest[2], ctx.arena, .limited(signature.max_payload_size)) catch |err|
-            return fail("reading {s}: {t}", .{ rest[2], err });
-        const text = cwd.readFileAlloc(ctx.io, rest[3], ctx.arena, .limited(4096)) catch |err|
-            return fail("reading {s}: {t}", .{ rest[3], err });
-        try remote.pushSignature(ctx, image, payload, text);
-        return 0;
+}
+
+/// The commands zigsaw had before 0.105, when they were Docker's, and what
+/// each is now: they fail, saying so, rather than go on working under two
+/// names.
+fn movedCommand(command: []const u8, rest: []const []const u8) ?[]const u8 {
+    const has = struct {
+        fn flag(args: []const []const u8, name: []const u8) bool {
+            for (args) |a| if (isFlag(a, name) or (std.mem.startsWith(u8, a, "--") and std.mem.startsWith(u8, a[2..], name) and a.len > name.len + 2 and a[name.len + 2] == '=')) return true;
+            return false;
+        }
+    }.flag;
+    const eql = std.mem.eql;
+    if (eql(u8, command, "pull")) return "install";
+    if (eql(u8, command, "push")) return if (has(rest, "catalog")) "build-update-repo" else "build-export";
+    if (eql(u8, command, "rm")) return "uninstall";
+    if (eql(u8, command, "prune")) return "uninstall --unused";
+    if (eql(u8, command, "ls")) return "remote-info --show-files";
+    if (eql(u8, command, "cat")) return "remote-info --file=<path>";
+    if (eql(u8, command, "stop")) return "kill";
+    if (eql(u8, command, "exec")) return "enter";
+    if (eql(u8, command, "hold")) return "mask";
+    if (eql(u8, command, "unhold")) return "mask --remove";
+    if (eql(u8, command, "grants")) return if (has(rest, "take-back")) "permission-remove" else "permissions";
+    if (eql(u8, command, "login")) return "remote-modify --login";
+    if (eql(u8, command, "logout")) return "remote-modify --logout";
+    if (eql(u8, command, "trust")) {
+        const what = if (rest.len > 0) rest[0] else "";
+        if (eql(u8, what, "add")) return if (has(rest, "keyless")) "remote-modify --keyless=<identity>" else "remote-modify --sign-key=<file>";
+        if (eql(u8, what, "rm")) return "remote-modify --no-sign-key";
+        return "remotes";
     }
-    if (std.mem.eql(u8, what, "push-bundle") and rest.len == 4) {
-        const cwd = std.Io.Dir.cwd();
-        const payload = cwd.readFileAlloc(ctx.io, rest[2], ctx.arena, .limited(signature.max_payload_size)) catch |err|
-            return fail("reading {s}: {t}", .{ rest[2], err });
-        const bundle = cwd.readFileAlloc(ctx.io, rest[3], ctx.arena, .limited(@import("sigstore.zig").max_bundle_size)) catch |err|
-            return fail("reading {s}: {t}", .{ rest[3], err });
-        try remote.pushBundle(ctx, image, payload, bundle);
-        return 0;
+    if (eql(u8, command, "signature")) {
+        const what = if (rest.len > 0) rest[0] else "";
+        if (eql(u8, what, "payload")) return "build-sign --print-payload";
+        if (eql(u8, what, "push-bundle")) return "build-sign --bundle";
+        if (eql(u8, what, "check")) return "build-sign --check";
+        return "build-sign";
     }
-    if (std.mem.eql(u8, what, "check") and rest.len == 2) {
-        const target = try remote.resolve(ctx, image);
-        var registry: @import("Registry.zig") = undefined;
-        try registry.init(ctx, target.ref, "pull");
-        defer registry.deinit();
-        const digest = try remote.manifestDigest(ctx, image);
-        return switch (try remote.checkSignature(ctx, &registry, target.ref, null, digest)) {
-            .no_key => fail("{s}: no key here for its registry", .{image}),
-            .missing => fail("{s}: not signed", .{image}),
-            .wrong => |why| fail("{s}: {s}", .{ image, why }),
-            .signed => |by| signed: {
-                note("{s}: signed, by {s}", .{ image, by });
-                break :signed 0;
-            },
-        };
-    }
-    return usageError();
+    return null;
+}
+
+test movedCommand {
+    try std.testing.expectEqualStrings("install", movedCommand("pull", &.{"org.nodejs.node"}).?);
+    try std.testing.expectEqualStrings("build-update-repo", movedCommand("push", &.{ "--catalog", "a.b" }).?);
+    try std.testing.expectEqualStrings("permission-remove", movedCommand("grants", &.{ "--take-back", "C:\\x" }).?);
+    try std.testing.expectEqualStrings("permission-remove", movedCommand("grants", &.{"--take-back=C:\\x"}).?);
+    try std.testing.expectEqualStrings("permissions", movedCommand("grants", &.{"org.a.b"}).?);
+    try std.testing.expectEqualStrings("build-sign --bundle", movedCommand("signature", &.{ "push-bundle", "x", "p", "b" }).?);
+    try std.testing.expectEqualStrings("remote-modify --login", movedCommand("login", &.{"ghcr.io"}).?);
+    try std.testing.expectEqualStrings("remote-modify --keyless=<identity>", movedCommand("trust", &.{ "add", "ghcr.io/me", "--keyless", "x" }).?);
+    try std.testing.expectEqualStrings("remotes", movedCommand("trust", &.{}).?);
+    try std.testing.expect(movedCommand("run", &.{}) == null);
+    try std.testing.expect(movedCommand("kill", &.{}) == null);
 }
 
 fn usageError() error{Failed} {
@@ -906,6 +1122,8 @@ fn usageError() error{Failed} {
 
 fn isFlag(arg: []const u8, name: []const u8) bool {
     if (std.mem.eql(u8, name, "verbose") and std.mem.eql(u8, arg, "-v")) return true;
+    // Flatpak's way of agreeing ahead.
+    if (std.mem.eql(u8, name, "yes") and std.mem.eql(u8, arg, "-y")) return true;
     return arg.len == name.len + 2 and std.mem.startsWith(u8, arg, "--") and std.mem.eql(u8, arg[2..], name);
 }
 
@@ -1135,29 +1353,6 @@ fn parseExecOptions(ctx: *Context, args: []const [:0]const u8) !exec.Options {
     };
 }
 
-fn parseLoginOptions(args: []const [:0]const u8) !credentials.LoginOptions {
-    var opts: credentials.LoginOptions = .{ .registry = undefined };
-    var registry: ?[]const u8 = null;
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        if (!std.mem.startsWith(u8, args[i], "--")) {
-            if (registry != null) return usageError();
-            registry = args[i];
-            continue;
-        }
-        const opt = try Option.read(args, &i, &.{"password-stdin"});
-        if (std.mem.eql(u8, opt.name, "password-stdin") and opt.value == null) {
-            opts.password_stdin = true;
-        } else if (std.mem.eql(u8, opt.name, "username") and opt.value != null) {
-            opts.username = opt.value;
-        } else {
-            return fail("unknown login option --{s}", .{opt.name});
-        }
-    }
-    opts.registry = registry orelse return usageError();
-    return opts;
-}
-
 /// `zigsaw override [options] <app-id>`: saves run options that every run of
 /// the app gets; with `--global` instead of an app, every app's runs, below
 /// each app's own. New options are added to the saved ones; `--reset`
@@ -1273,7 +1468,7 @@ fn list(ctx: *Context) !void {
         const saved = try override.load(ctx.store, arena, ref.id);
         if (!saved.isEmpty()) try w.print("  (override {f})", .{saved});
         if (try lazy.describe(ctx.store, arena, image.manifest)) |state| try w.print("  {s}", .{state});
-        if (try ctx.store.isHeld(arena, ref.id)) try w.writeAll("  (held)");
+        if (try ctx.store.isHeld(arena, ref.id)) try w.writeAll("  (masked)");
         if (try ctx.store.readPrevious(arena, ref.id)) |p| if (!std.mem.eql(u8, p.manifest, ref.manifest)) {
             const with_data = if (try ctx.store.readKeptData(arena, ref.id)) |k| std.mem.eql(u8, k.manifest, p.manifest) else false;
             try w.print("  (previous {s}{s})", .{ p.version, if (with_data) ", with data" else "" });
@@ -1326,15 +1521,15 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
         const aliases_lock = try store.lockAliases(arena, id);
         defer aliases_lock.release(io);
         Store.deleteTree(io, arena, try store.aliasDir(arena, id)) catch
-            note("kept {s}'s alias shims, which are in use; `zigsaw prune` removes them later", .{id});
+            note("kept {s}'s alias shims, which are in use; `zigsaw uninstall --unused` removes them later", .{id});
     }
     // An app whose manifest is gone (`zigsaw doctor` says so) doesn't say
     // which files are its own: prune finds them, now nothing uses them.
     const manifest_there = if (oci.digestHex(ref.manifest)) |hex| try Store.exists(io, try store.blobPath(arena, hex)) else false;
     if (!manifest_there) {
-        note("its manifest is gone, so its files stay until `zigsaw prune`", .{});
+        note("its manifest is gone, so its files stay until `zigsaw uninstall --unused`", .{});
     } else if (try store.deleteUnusedDeployments(arena, ref.manifest)) {
-        note("kept {s}'s files, which are still in use; `zigsaw prune` removes them later", .{id});
+        note("kept {s}'s files, which are still in use; `zigsaw uninstall --unused` removes them later", .{id});
     }
     // Its own volume, its data, goes only if asked. Deleting it stops at the
     // junctions of the volumes it mounted (see volumes.zig), which stay.
@@ -1395,6 +1590,7 @@ test {
     _ = @import("regkey.zig");
     _ = @import("Registry.zig");
     _ = @import("remote.zig");
+    _ = @import("remotes.zig");
     _ = @import("roots.zig");
     _ = @import("rollback.zig");
     _ = @import("snapshot.zig");

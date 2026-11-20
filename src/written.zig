@@ -12,7 +12,7 @@
 //! When the app's last run ends (grants.settle), each gets a medium label of
 //! its own (acl.labelProgram), which its folder's doesn't replace; the
 //! app's next low or AppContainer run labels them low again while it goes,
-//! so that the app may write them. `zigsaw rm` forgets them: they stay
+//! so that the app may write them. `zigsaw uninstall` forgets them: they stay
 //! medium.
 
 const std = @import("std");

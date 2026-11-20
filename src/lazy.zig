@@ -1,4 +1,4 @@
-//! Lazy pulling: `zigsaw pull --lazy` installs an app before its indexed
+//! Lazy pulling: `zigsaw install --lazy` installs an app before its indexed
 //! (eStargz) layers are downloaded. Each such layer's deployment starts as a
 //! Cloud Files sync root: a placeholder for each of its files, which Windows
 //! asks a helper process for as something first reads it. The helper
@@ -423,7 +423,7 @@ pub fn ensureServed(ctx: *Context, layers: []const oci.Descriptor) !void {
         if (try helperAlive(ctx.store, ctx.arena, hex)) continue;
         switch (try startHelper(ctx, hex)) {
             .serving => {},
-            .unsupported => |why| return fail("layer {s} is still being fetched, and can't be any more: {s}; `zigsaw rm` the app and pull it again", .{ oci.shortDigest(l.digest), why }),
+            .unsupported => |why| return fail("layer {s} is still being fetched, and can't be any more: {s}; `zigsaw uninstall` the app and install it again", .{ oci.shortDigest(l.digest), why }),
         }
     }
 }
@@ -560,7 +560,7 @@ pub fn stop(store: Store, arena: Allocator, hex: []const u8) void {
         }
     }
     Store.deleteTree(io, arena, dir) catch |err|
-        note("warning: couldn't delete all of {s} ({t}); `zigsaw prune` will retry", .{ dir, err });
+        note("warning: couldn't delete all of {s} ({t}); `zigsaw uninstall --unused` will retry", .{ dir, err });
 }
 
 /// The copy of this zigsaw that helpers run, in lazy\, named by its contents

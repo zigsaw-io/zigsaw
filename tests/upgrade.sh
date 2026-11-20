@@ -90,8 +90,8 @@ BUSYBOX_SHA256=07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075
 if [ -z "${SEED_DOWNLOADS:-}" ] || [ ! -f "$SEED_DOWNLOADS\\$BUSYBOX_SHA256" ]; then
     ZIGSAW_HOME="$work\\seed" ZIGSAW_USER_FOLDERS="$work\\seed-folders" "$root\\zig-out\\bin\\zigsaw.exe" build "$root\\recipes\\busybox.json" </dev/null >"$work\\seed.log" 2>&1 ||
         { echo "getting busybox failed: $(tail -1 "$work\\seed.log")"; exit 1; }
-    ZIGSAW_HOME="$work\\seed" ZIGSAW_USER_FOLDERS="$work\\seed-folders" "$root\\zig-out\\bin\\zigsaw.exe" rm net.frippery.busybox </dev/null >/dev/null 2>&1
-    ZIGSAW_HOME="$work\\seed" ZIGSAW_USER_FOLDERS="$work\\seed-folders" "$root\\zig-out\\bin\\zigsaw.exe" prune </dev/null >/dev/null 2>&1
+    ZIGSAW_HOME="$work\\seed" ZIGSAW_USER_FOLDERS="$work\\seed-folders" "$root\\zig-out\\bin\\zigsaw.exe" uninstall net.frippery.busybox </dev/null >/dev/null 2>&1
+    ZIGSAW_HOME="$work\\seed" ZIGSAW_USER_FOLDERS="$work\\seed-folders" "$root\\zig-out\\bin\\zigsaw.exe" uninstall --unused </dev/null >/dev/null 2>&1
     SEED_DOWNLOADS="$work\\seed\\cache\\downloads"
 fi
 next="$work\\next"
@@ -225,7 +225,7 @@ from_release() {
 
     # --- Taking it away --------------------------------------------------
     removes() {
-        z rm --delete-data $APP >/dev/null 2>&1 || return 1
+        z uninstall --delete-data $APP >/dev/null 2>&1 || return 1
         absent "$data_new" && test -f "$ZIGSAW_HOME\\volumes\\keep\\named.txt" && absent "$bin\\upgrade-tool.exe" && absent "$lnk"
     }
     check "  rm --delete-data takes the app, its volume, command and shortcut, and keeps the named volume" removes
@@ -236,8 +236,8 @@ for v in $RELEASES; do
     from_release "$v"
     # Whatever failed: what the store deployed is read-only until zigsaw takes it away.
     if [ -n "${bin:-}" ] && [ -x "$bin\\zigsaw.exe" ]; then
-        "$bin\\zigsaw.exe" rm --delete-data $APP </dev/null >/dev/null 2>&1
-        "$bin\\zigsaw.exe" prune --volumes </dev/null >/dev/null 2>&1
+        "$bin\\zigsaw.exe" uninstall --delete-data $APP </dev/null >/dev/null 2>&1
+        "$bin\\zigsaw.exe" uninstall --unused --volumes </dev/null >/dev/null 2>&1
     fi
     reg delete "$KEY" /f >/dev/null 2>&1
     rm -rf "$(cygpath -u "$work\\$v")"

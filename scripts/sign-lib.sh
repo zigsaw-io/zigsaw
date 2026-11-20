@@ -10,7 +10,7 @@ find_cosign() {
     [ -z "${COSIGN:-}" ] || { printf '%s\n' "$COSIGN"; return; }
     local store=${ZIGSAW_HOME:-$LOCALAPPDATA\\zigsaw} found
     found=$(find "$(cygpath -u "$store\\deploy")" -maxdepth 2 -iname cosign.exe 2>/dev/null | head -1)
-    [ -n "$found" ] || { echo "error: no cosign in $store: run \`zigsaw pull dev.sigstore.cosign\` first, or set COSIGN" >&2; return 1; }
+    [ -n "$found" ] || { echo "error: no cosign in $store: run \`zigsaw install dev.sigstore.cosign\` first, or set COSIGN" >&2; return 1; }
     printf '%s\n' "$found"
 }
 

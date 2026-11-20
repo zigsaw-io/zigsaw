@@ -156,7 +156,7 @@ pub const SpawnSpec = struct {
     /// `newJob`).
     job_name: ?[]const u8 = null,
     /// Jobs the child joins besides its own, each of which its own job then
-    /// nests in: a run's, for `zigsaw exec` (see exec.zig). Their limits
+    /// nests in: a run's, for `zigsaw enter` (see exec.zig). Their limits
     /// hold it too, and ending one ends it.
     outer_jobs: []const win32.HANDLE = &.{},
 };
@@ -262,11 +262,11 @@ pub const Report = struct {
     peak_memory: u64 = 0,
     /// The limit its processes asked for memory past, if they did.
     memory_limit_reached: ?u64 = null,
-    /// Whether `zigsaw stop` asked it to end (see `Child.stop`).
+    /// Whether `zigsaw kill` asked it to end (see `Child.stop`).
     stopped: bool = false,
 };
 
-/// What `zigsaw stop` signals a run or a build's command by, and what asks
+/// What `zigsaw kill` signals a run or a build's command by, and what asks
 /// its tree to end then (stop.zig's `Asker`): passed in, so that the shims,
 /// which wait here too, don't carry it.
 pub const Stop = struct {

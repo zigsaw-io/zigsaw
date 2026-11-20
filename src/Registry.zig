@@ -11,6 +11,7 @@ const http = std.http;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const credentials = @import("credentials.zig");
+const remotes = @import("remotes.zig");
 const win32 = @import("win32.zig");
 const oci = @import("oci.zig");
 const fail = Context.fail;
@@ -952,7 +953,7 @@ fn authenticate(r: *Registry, challenge_text: []const u8) !void {
 
 pub const LoginCheck = enum { accepted, refused, not_asked };
 
-/// Checks credentials for a registry `host` (normalized), as `zigsaw login`
+/// Checks credentials for a registry `host` (normalized), as `--login`
 /// does before saving them: asks for the API root, answers the registry's
 /// challenge with them, and asks again. A token is requested without a
 /// scope, which proves the credentials without naming a repository.
@@ -1071,16 +1072,16 @@ fn failNeedsLogin(r: *Registry) error{Failed} {
     // one, so as not to reveal which exist.
     const maybe_missing = if (std.mem.eql(u8, r.actions, "pull")) " doesn't exist, or" else "";
     const github = if (std.mem.eql(u8, r.host, "ghcr.io")) " with a GitHub token that has the right package scopes" else "";
-    return fail("{f}{s} needs credentials for {s}: run `zigsaw login {s}`{s}{s}", .{
-        r.ref, maybe_missing, r.actions, r.host, github, r.envNote(),
+    return fail("{f}{s} needs credentials for {s}: run {s}{s}{s}", .{
+        r.ref, maybe_missing, r.actions, remotes.loginHint(r.ctx, r.host), github, r.envNote(),
     });
 }
 
 fn failRefused(r: *Registry, c: credentials.Credential) error{Failed} {
     return switch (c.source) {
         .environment => fail("{s} refused the credentials {s}", .{ r.ref.host, c.origin() }),
-        .credential_manager => fail("{s} refused the credentials {s}; run `zigsaw login {s}` again", .{ r.ref.host, c.origin(), r.host }),
-        .docker_config, .docker_helper => fail("{s} refused the credentials {s}; run `docker login {s}` again, or `zigsaw login {s}`", .{ r.ref.host, c.origin(), r.host, r.host }),
+        .credential_manager => fail("{s} refused the credentials {s}; run {s} again", .{ r.ref.host, c.origin(), remotes.loginHint(r.ctx, r.host) }),
+        .docker_config, .docker_helper => fail("{s} refused the credentials {s}; run `docker login {s}` again, or {s}", .{ r.ref.host, c.origin(), r.host, remotes.loginHint(r.ctx, r.host) }),
     };
 }
 
@@ -1141,8 +1142,8 @@ fn failStatus(r: *Registry, res: Response, what: []const u8) error{Failed} {
                 what, r.ref, code, c.origin(), r.actions,
             })
         else
-            fail("{s} for {f}: access denied (HTTP {d}); for private images and pushing, run `zigsaw login {s}`{s}", .{
-                what, r.ref, code, r.host, r.envNote(),
+            fail("{s} for {f}: access denied (HTTP {d}); for private images and publishing, run {s}{s}", .{
+                what, r.ref, code, remotes.loginHint(r.ctx, r.host), r.envNote(),
             }),
         .not_found => return fail("{s} for {f}: not found", .{ what, r.ref }),
         else => {},

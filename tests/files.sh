@@ -168,8 +168,8 @@ check "it keeps its settings in its data directory, and its registry values in a
 
 cd "$root" || exit 1
 end_files
-$installed_files && z rm --delete-data $FILES >/dev/null 2>&1
-$installed_dotnet && { z rm --delete-data com.microsoft.dotnet >/dev/null 2>&1; z rm --delete-data com.microsoft.dotnet.Sdk >/dev/null 2>&1; }
+$installed_files && z uninstall --delete-data $FILES >/dev/null 2>&1
+$installed_dotnet && { z uninstall --delete-data com.microsoft.dotnet >/dev/null 2>&1; z uninstall --delete-data com.microsoft.dotnet.Sdk >/dev/null 2>&1; }
 rm -rf "$work"
 echo
 echo "$failures check(s) failed."

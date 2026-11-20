@@ -69,15 +69,15 @@ export ZIGSAW_SHORTCUTS_DIR="$work\\links" ZIGSAW_USER_FOLDERS="$work\\folders"
 
 app=
 cleanup() {
-    [ -n "$app" ] && "$zigsaw" rm --delete-data "$app" >/dev/null 2>&1
+    [ -n "$app" ] && "$zigsaw" uninstall --delete-data "$app" >/dev/null 2>&1
     rm -f "$(cygpath -u "$gate")"
-    "$zigsaw" prune >/dev/null 2>&1
+    "$zigsaw" uninstall --unused >/dev/null 2>&1
     reg delete "HKCU\\Software\\ZigsawRecord\\$$" /f >/dev/null 2>&1
     rm -rf "$(cygpath -u "$work")" 2>/dev/null
 }
 trap cleanup EXIT
 
-"$zigsaw" pull --yes --lazy "$ref" >"$work\\pull.txt" 2>&1 || { echo "pulling $ref failed:"; tail -3 "$work\\pull.txt"; exit 1; }
+"$zigsaw" install --yes --lazy "$ref" >"$work\\pull.txt" 2>&1 || { echo "pulling $ref failed:"; tail -3 "$work\\pull.txt"; exit 1; }
 app=$(grep -o '^installed [^ ]*' "$work\\pull.txt" | head -1 | cut -d' ' -f2)
 [ -n "$app" ] || { echo "the pull didn't say what it installed:"; tail -3 "$work\\pull.txt"; exit 1; }
 lazy="$store\\lazy"

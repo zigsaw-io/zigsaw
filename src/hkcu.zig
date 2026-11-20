@@ -115,7 +115,7 @@ pub fn enter(ctx: *Context, id: []const u8, keys: ?[]const []const u8, data_dir:
 /// Ends a run's use of the keys: the last run takes them back. A failure
 /// leaves them in HKCU, for the next run, `repair` or `rm` to settle.
 pub fn leave(ctx: *Context, s: Session) void {
-    leaveOrFail(ctx, s) catch note("warning: {s}'s registry keys stay in HKCU until its next run, `zigsaw repair` or `zigsaw rm`", .{s.id});
+    leaveOrFail(ctx, s) catch note("warning: {s}'s registry keys stay in HKCU until its next run, `zigsaw repair` or `zigsaw uninstall`", .{s.id});
 }
 
 fn leaveOrFail(ctx: *Context, s: Session) !void {

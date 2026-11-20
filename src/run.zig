@@ -404,13 +404,13 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
     const nul = if (opts.detached_child) try detach.openNul(arena) else null;
     // Whoever started `run -d` may have had Ctrl+C turned off, as Git Bash
     // has for what it starts, and processes inherit that: the app would
-    // ignore the Ctrl+C `zigsaw stop` sends it, its only one.
+    // ignore the Ctrl+C `zigsaw kill` sends it, its only one.
     if (opts.detached_child) _ = win32.SetConsoleCtrlHandler(null, win32.FALSE);
     // Named, so that `zigsaw ps` may look into it.
     const job = try process.newJob(arena, limits, try ps.jobName(io, arena));
     if (relay_exe) |r| startRelay(ctx, cfg.id, job.handle, r, published, forwards, security, token, env_block);
     const watcher = written.Watcher.start(arena, ctx.io, try watchedDirs(arena, sandbox, host_grants.items, host_cwd, data_dir, data_root, ctx.env.get("USERPROFILE"), own));
-    // What `zigsaw stop` sets to ask the app to end (see stop.zig).
+    // What `zigsaw kill` sets to ask the app to end (see stop.zig).
     const asker = stop.Asker.create(ctx, cfg.id);
     const started = ps.now();
     var child: process.Child = .in(job, try process.startIn(arena, job.handle, .{
@@ -423,7 +423,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         // Set by a shim that a shortcut started (see shim.zig).
         .shortcut = ctx.env.get("ZIGSAW_SHORTCUT"),
         // A console app gets a console of its own, with no window, which
-        // `zigsaw stop` sends Ctrl+C to (see stop.zig).
+        // `zigsaw kill` sends Ctrl+C to (see stop.zig).
         .creation_flags = if (log != null) win32.CREATE_NO_WINDOW else 0,
         .stdio = if (log) |l| .{ nul.?, l.handle, l.handle } else null,
     }));
@@ -451,7 +451,7 @@ pub fn run(ctx: *Context, opts: Options) !u32 {
         .ports = try servedPorts(arena, cfg, service_ports, opts.command),
     });
     defer if (listed) |l| l.end(io);
-    // How it starts programs, for `zigsaw exec` (see exec.zig): with the
+    // How it starts programs, for `zigsaw enter` (see exec.zig): with the
     // record, which is what names it, and the job, which is what it joins.
     // The app is going: nothing here may fail the run. An AppContainer
     // spec without its capabilities is one exec refuses.
@@ -1217,7 +1217,7 @@ pub fn commandLine(arena: Allocator, command: Command, args: []const []const u8,
     return .{ cmd, line };
 }
 
-/// The app's exports as the run would start them, for `zigsaw exec`.
+/// The app's exports as the run would start them, for `zigsaw enter`.
 fn exportsOf(arena: Allocator, placeholders: oci.Placeholders, cfg: oci.AppConfig) ![]const exec.Export {
     var out: std.ArrayList(exec.Export) = .empty;
     var it = cfg.exports.map.iterator();

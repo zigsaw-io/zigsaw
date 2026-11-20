@@ -205,10 +205,10 @@ release build
 check "  gone once it's built" says "nothing is running" z ps
 check "no record is left" test "$(records)" = 0
 
-z rm --delete-data $BUILT >/dev/null 2>&1
-z rm --delete-data $OTHER >/dev/null 2>&1
-z rm --delete-data $BB >/dev/null 2>&1
-z prune --downloads --volumes >/dev/null 2>&1
+z uninstall --delete-data $BUILT >/dev/null 2>&1
+z uninstall --delete-data $OTHER >/dev/null 2>&1
+z uninstall --delete-data $BB >/dev/null 2>&1
+z uninstall --unused --downloads --volumes >/dev/null 2>&1
 cd /
 rm -rf "$(cygpath -u "$ZIGSAW_HOME")" "$(cygpath -u "$work")"
 echo

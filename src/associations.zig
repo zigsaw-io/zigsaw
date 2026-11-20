@@ -236,7 +236,7 @@ pub fn removeAll(ctx: *Context, app: []const u8) ![]const []const u8 {
         try removeStale(ctx, classes);
         if (removed.items.len > 0) changed(classes_path);
     }
-    // One that's running stays, for `zigsaw prune`.
+    // One that's running stays, for `zigsaw uninstall --unused`.
     Store.deleteTree(ctx.io, arena, try ctx.store.openDir(arena, app)) catch {};
     return removed.items;
 }
@@ -245,7 +245,7 @@ pub fn removeAll(ctx: *Context, app: []const u8) ![]const []const u8 {
 /// deployments, which an app wrote for itself from inside a run (see the top
 /// of this file) and none of the installed apps declares: those that do have
 /// taken theirs over by now. For `zigsaw repair`, after every app's `sync`,
-/// and `zigsaw rm`.
+/// and `zigsaw uninstall`.
 pub fn removeStale(ctx: *Context, classes: Key) !void {
     const arena = ctx.arena;
     for (try staleIn(ctx, classes)) |name| {

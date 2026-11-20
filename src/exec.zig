@@ -1,4 +1,4 @@
-//! `zigsaw exec`: a command in a run that's going, as the run's own app
+//! `zigsaw enter`: a command in a run that's going, as the run's own app
 //! goes: in its job, with its token or AppContainer identity, its variables
 //! and its working directory. So it has what the run has: its data
 //! directory (an --ephemeral one too), its volumes and grants, its keys in
@@ -13,10 +13,10 @@
 //! zigsaw.
 //!
 //! An exec keeps a record of its own (kind exec), which names the run it's
-//! in: `zigsaw ps` lists it under that run, and `zigsaw stop` asks it, and
+//! in: `zigsaw ps` lists it under that run, and `zigsaw kill` asks it, and
 //! ends it by its own job, as it does a run.
 //!
-//! `--detach` starts a zigsaw of its own (`exec --detached-child`) to start
+//! `--detach` starts a zigsaw of its own (`enter --detached-child`) to start
 //! the command and wait for it, with no console; that one says on a pipe
 //! whether the command started, then goes on alone.
 
@@ -71,7 +71,7 @@ pub const Spec = struct {
 /// `exec` can't join the run, and says so.
 pub fn writeSpec(ctx: *const Context, entry: ps.Entry, spec: Spec) void {
     writeSpecIn(ctx.store, ctx.arena, entry.lock_path, spec) catch |err| {
-        if (ctx.verbose) note("note: `zigsaw exec` can't join this run: its spec couldn't be written ({t})", .{err});
+        if (ctx.verbose) note("note: `zigsaw enter` can't join this run: its spec couldn't be written ({t})", .{err});
     };
 }
 
@@ -349,14 +349,14 @@ fn resolve(io: Io, arena: Allocator, spec: Spec, name: []const u8) !runtime.Comm
 // ---------------------------------------------------------------------------
 // --detach
 
-/// Starts `zigsaw exec --detached-child` with the same options, which starts
+/// Starts `zigsaw enter --detached-child` with the same options, which starts
 /// the command and waits for it (see detach.zig), then prints the PID `ps`
 /// lists it by.
 fn startDetached(ctx: *Context, opts: Options) !u32 {
     const arena = ctx.arena;
     var args: std.ArrayList([]const u8) = .empty;
     if (ctx.verbose) try args.append(arena, "--verbose");
-    try args.appendSlice(arena, &.{ "exec", "--detached-child" });
+    try args.appendSlice(arena, &.{ "enter", "--detached-child" });
     for (opts.env) |e| try args.append(arena, try std.fmt.allocPrint(arena, "--env={s}", .{e}));
     try args.appendSlice(arena, &.{ "--", opts.target, opts.command });
     try args.appendSlice(arena, opts.args);

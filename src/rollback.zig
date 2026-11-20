@@ -1,7 +1,7 @@
 //! Going back: `zigsaw rollback` returns an app to the version an update (or a
 //! pull or build over it) replaced, from the blobs the store kept of it, with
 //! no network. Updates then pass over the version it left (see update.zig),
-//! though not a newer one. `zigsaw hold` and `unhold` keep updates away from
+//! though not a newer one. `zigsaw mask` and `mask --remove` keep updates away from
 //! an app, or let them in again.
 //!
 //! The store keeps one previous version per app: install.zig writes it, and
@@ -50,7 +50,7 @@ pub fn rollback(ctx: *Context, id: []const u8, consent: remote.Consent, data: Da
         return fail("{s} {s}: nothing to go back to; its previous version is this one", .{ current.id, current.version });
 
     const image = try store.readCompleteImage(arena, previous.manifest) orelse
-        return fail("{s}: the files of {s} ({s}) are gone, as `zigsaw prune --previous` or a zigsaw before 0.76 deletes them. {s}", .{
+        return fail("{s}: the files of {s} ({s}) are gone, as `zigsaw uninstall --unused --previous` or a zigsaw before 0.76 deletes them. {s}", .{
             current.id, previous.version, oci.shortDigest(previous.manifest), try howToGetBack(arena, previous),
         });
     if (!std.mem.eql(u8, image.config.id, current.id))
@@ -155,12 +155,12 @@ fn howToGetBack(arena: std.mem.Allocator, previous: Store.Ref) ![]const u8 {
     if (std.fs.path.isAbsoluteWindows(source))
         return std.fmt.allocPrint(arena, "Rebuilding it from its recipe as it was then brings it back; the recipe was {s}.", .{source});
     const reference = Registry.Reference.parse(source) catch return "";
-    return std.fmt.allocPrint(arena, "`zigsaw pull {s}/{s}@{s}` brings it back, while its registry has it.", .{
+    return std.fmt.allocPrint(arena, "`zigsaw install {s}/{s}@{s}` brings it back, while its registry has it.", .{
         reference.host, reference.repository, previous.manifest,
     });
 }
 
-/// `zigsaw hold` and `unhold`: keeps updates away from the apps, or lets them in.
+/// `zigsaw mask` and `mask --remove`: keeps updates away from the apps, or lets them in.
 pub fn setHeld(ctx: *Context, ids: []const []const u8, held: bool) !void {
     const arena = ctx.arena;
     var refs: std.ArrayList(Store.Ref) = .empty;
@@ -168,9 +168,19 @@ pub fn setHeld(ctx: *Context, ids: []const []const u8, held: bool) !void {
     for (refs.items) |ref| {
         const changed = try ctx.store.setHeld(arena, ref.id, held);
         if (held) {
-            if (changed) note("held {s} at {s}: updates leave it alone until `zigsaw unhold {s}`", .{ ref.id, ref.version, ref.id }) else note("{s} was held already", .{ref.id});
+            if (changed) note("masked {s} at {s}: updates leave it alone until `zigsaw mask --remove {s}`", .{ ref.id, ref.version, ref.id }) else note("{s} was masked already", .{ref.id});
         } else {
-            if (changed) note("{s} {s}: updates reach it again", .{ ref.id, ref.version }) else note("{s} wasn't held", .{ref.id});
+            if (changed) note("{s} {s}: updates reach it again", .{ ref.id, ref.version }) else note("{s} wasn't masked", .{ref.id});
         }
     }
+}
+
+/// `zigsaw mask` alone: the installed apps updates leave alone, one a line.
+pub fn listHeld(ctx: *Context) !void {
+    const arena = ctx.arena;
+    var buf: [1024]u8 = undefined;
+    var stdout = std.Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const w = &stdout.interface;
+    for (try ctx.store.listRefs(arena)) |ref| if (try ctx.store.isHeld(arena, ref.id)) try w.print("{s} {s}\n", .{ ref.id, ref.version });
+    try w.flush();
 }

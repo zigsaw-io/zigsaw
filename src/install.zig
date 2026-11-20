@@ -61,7 +61,7 @@ pub fn install(ctx: *Context, image: Image) !void {
         try ctx.store.deleteSkip(arena, cfg.id);
         const p = previous.?;
         if (try ctx.store.deleteUnusedDeployments(arena, p.manifest))
-            note("  kept     {s} {s}, which is still running; `zigsaw prune` removes it later", .{ cfg.id, p.version });
+            note("  kept     {s} {s}, which is still running; `zigsaw uninstall --unused` removes it later", .{ cfg.id, p.version });
     }
 
     note("installed {s} {s}\n  manifest {s}", .{ cfg.id, cfg.version, image.manifest_digest });
@@ -90,7 +90,7 @@ pub fn install(ctx: *Context, image: Image) !void {
     // What its earlier version's runs were granted and this one doesn't
     // permit goes now, unless a run is going, whose end takes it back.
     _ = grants.settleUnlessRunning(ctx, cfg.id) catch |err| switch (err) {
-        error.Failed => note("warning: what {s}'s earlier runs were granted stays until its next run ends, `zigsaw repair` or `zigsaw rm`", .{cfg.id}),
+        error.Failed => note("warning: what {s}'s earlier runs were granted stays until its next run ends, `zigsaw repair` or `zigsaw uninstall`", .{cfg.id}),
         else => |e| return e,
     };
 }

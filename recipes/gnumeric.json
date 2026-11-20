@@ -167,7 +167,7 @@
         "sed -i '/g_option_context_set_delocalize/d' src/main-application.c",
         "! grep -q set_delocalize src/main-application.c",
         "sdk=$(pkg-config --variable=prefix glib-2.0) && sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --disable-static --disable-dependency-tracking --disable-introspection --disable-gtk-doc --without-python --without-perl --with-gda=no --without-psiconv --without-paradox --with-libiconv-prefix=\"$sdk\" --with-libintl-prefix=\"$sdk\" CPPFLAGS=\"-I$sdk/include\" LDFLAGS=\"$LDFLAGS -L$sdk/lib\" ac_executable_extensions=.exe lt_cv_deplibs_check_method=pass_all > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
-        "make -j\"$(nproc)\"",
+        "make org.gnumeric.gnumeric.desktop && make -j\"$(nproc)\"",
         "make install",
         "mkdir -p \"$PREFIX/share/icons\" && cp icons/win32-gnumeric.ico \"$PREFIX/share/icons/gnumeric.ico\""
       ]

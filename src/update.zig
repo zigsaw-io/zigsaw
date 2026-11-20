@@ -1,7 +1,7 @@
 //! `zigsaw update`: brings installed apps up to date with the source their ref
 //! records. An app built from a recipe is rebuilt from it; one pulled by tag
 //! is pulled again if the tag has moved. One pulled by digest is pinned, and
-//! one held (`zigsaw hold`) is left alone too. The version a rollback left is
+//! one held (`zigsaw mask`) is left alone too. The version a rollback left is
 //! passed over, and a newer one isn't (see rollback.zig).
 
 const std = @import("std");
@@ -92,7 +92,7 @@ pub const Waiting = struct {
 /// Whether the app is held, which updates leave alone, after a note saying so.
 fn held(ctx: *Context, ref: Store.Ref) !bool {
     if (!try ctx.store.isHeld(ctx.arena, ref.id)) return false;
-    note("{s} {s}: held; `zigsaw unhold {s}` lets updates in", .{ ref.id, ref.version, ref.id });
+    note("{s} {s}: masked; `zigsaw mask --remove {s}` lets updates in", .{ ref.id, ref.version, ref.id });
     return true;
 }
 
@@ -116,7 +116,7 @@ pub fn newImage(ctx: *Context, ref: Store.Ref) !?Waiting {
     const arena = ctx.arena;
     if (try held(ctx, ref)) return null;
     const source = ref.source orelse {
-        note("{s}: doesn't record where it came from; build or pull it again to update it", .{ref.id});
+        note("{s}: doesn't record where it came from; build or install it again to update it", .{ref.id});
         return null;
     };
     if (std.fs.path.isAbsoluteWindows(source)) {
@@ -136,7 +136,7 @@ pub fn newImage(ctx: *Context, ref: Store.Ref) !?Waiting {
     };
     if (try skipped(ctx, ref, new.manifest_digest)) return null;
     if (!std.mem.eql(u8, new.config.id, ref.id))
-        return fail("{s}: {s} now provides {s}; build or pull that explicitly", .{ ref.id, source, new.config.id });
+        return fail("{s}: {s} now provides {s}; build or install that explicitly", .{ ref.id, source, new.config.id });
     const installed = try ctx.store.readImage(arena, ref.id, ref.manifest);
     const added = try oci.addedAccess(arena, try .of(arena, installed.config), try .of(arena, new.config));
     var lines: std.Io.Writer.Allocating = .init(arena);
@@ -154,7 +154,7 @@ pub fn newImage(ctx: *Context, ref: Store.Ref) !?Waiting {
 fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent, lazily: bool) !void {
     if (try held(ctx, ref)) return;
     const source = ref.source orelse {
-        note("{s}: doesn't record where it came from; build or pull it again to update it", .{ref.id});
+        note("{s}: doesn't record where it came from; build or install it again to update it", .{ref.id});
         return;
     };
     const newer = if (std.fs.path.isAbsoluteWindows(source)) newer: {
@@ -190,7 +190,7 @@ fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent, lazily: boo
         return;
     };
     if (!std.mem.eql(u8, image.config.id, ref.id))
-        return fail("{s}: {s} now provides {s}; build or pull that explicitly", .{ ref.id, source, image.config.id });
+        return fail("{s}: {s} now provides {s}; build or install that explicitly", .{ ref.id, source, image.config.id });
     try install.install(ctx, image);
     note("updated {s} {s} -> {s} ({s} -> {s})", .{
         ref.id,                        ref.version,                            image.config.version,

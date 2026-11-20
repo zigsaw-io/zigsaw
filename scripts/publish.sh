@@ -28,7 +28,7 @@
 # recipes, so publish first, then push; until then, pulls warn that it isn't signed.
 #
 # Needs Git Bash, a built zigsaw (zig build), and credentials for the
-# registry: a login saved with `zigsaw login ghcr.io`, or
+# registry: a login saved with `zigsaw remote-modify --login zigsaw`, or
 # ZIGSAW_REGISTRY_USERNAME and ZIGSAW_REGISTRY_PASSWORD. For ghcr.io, that's a
 # GitHub user and a token with the write:packages scope, and new packages
 # start out private: make each one public in its package settings on GitHub.
@@ -36,7 +36,7 @@
 # Builds happen in a temporary store, unless ZIGSAW_HOME points at one (to
 # reuse its downloads). Either way, each image is built from its recipe right
 # before it's pushed, so what's published is exactly what the recipe produces.
-# The files each image was built from are pushed next to it (push --sources),
+# The files each image was built from are pushed next to it (build-export --sources),
 # so its recipe still builds if they're gone from where they came from.
 
 set -eu
@@ -117,8 +117,8 @@ for recipe in "${todo[@]}"; do
     # An image that a build of every module made, not one that went on from
     # the recipe's last build.
     "$zigsaw" build --no-resume "$recipe"
-    "$zigsaw" push --sources "$id"
-    "$zigsaw" push "$id" "$id:latest"
+    "$zigsaw" build-export --sources "$id"
+    "$zigsaw" build-export "$id" "$id:latest"
     version=$("$zigsaw" list | awk -v id="$id" '$1 == id { print $2 }')
     digest=$(grep -o 'sha256:[0-9a-f]*' "$ZIGSAW_HOME\\refs\\$id.json")
     published+=("$id $version $digest")
@@ -131,12 +131,12 @@ for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); 
     catalog_ids+=("$(grep -o '"id": *"[^"]*"' "$root/recipes/$name" | head -1 | cut -d'"' -f4)")
 done
 echo "== catalog"
-"$zigsaw" push --catalog "${catalog_ids[@]}"
+"$zigsaw" build-update-repo "${catalog_ids[@]}"
 
 if $own_store; then
     # Installed apps are protected against deletion, so remove them through zigsaw.
-    for line in "${published[@]}"; do "$zigsaw" rm --delete-data "${line%% *}" >/dev/null 2>&1 || true; done
-    "$zigsaw" prune --downloads >/dev/null 2>&1 || true
+    for line in "${published[@]}"; do "$zigsaw" uninstall --delete-data "${line%% *}" >/dev/null 2>&1 || true; done
+    "$zigsaw" uninstall --unused --downloads >/dev/null 2>&1 || true
     rm -rf "$ZIGSAW_HOME"
 fi
 

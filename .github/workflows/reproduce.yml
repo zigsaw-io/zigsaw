@@ -460,7 +460,7 @@ jobs:
         env:
           ZIGSAW_HOME: ${{ runner.temp }}\store
         run: |
-          zig-out/bin/zigsaw.exe grants | tee "$(cygpath -u "$LOG_DIR")/grants.txt"
+          zig-out/bin/zigsaw.exe permissions | tee "$(cygpath -u "$LOG_DIR")/grants.txt"
           ! grep -q 'Not explained' "$(cygpath -u "$LOG_DIR")/grants.txt"
 
       - name: Upload the logs

@@ -152,12 +152,12 @@ check "  and puts it on this user's PATH" on_path
 # (Nothing here has a desktop, so nothing starts it: see tests/updates.sh.)
 daily_check_on() {
     local out
-    out=$(z grants) || { echo "$out"; return 1; }
+    out=$(z permissions) || { echo "$out"; return 1; }
     grep -qF "scheduled task \"$task\", for " <<<"$out" || { echo "grants says: $out"; return 1; }
     "$sch" /query /tn "$task" >/dev/null
 }
 check "  and starts its daily check, as a scheduled task of this user's" daily_check_on
-pulls() { z pull --yes $BB; }
+pulls() { z install --yes $BB; }
 check "pull gets an app from ghcr.io" pulls
 for sb in soft low appcontainer; do
     runs_in() { [ "$(z run --sandbox="$1" $BB sh -c 'echo hello; true' | tr -d '\r')" = hello ]; }
@@ -189,22 +189,23 @@ gets_shortcut() {
 }
 check "an app from a recipe gets a Start menu shortcut and a kind of file" gets_shortcut
 loses_shortcut() {
-    z rm --delete-data test.shims.gui && [ ! -e "$links\\Zigsaw GUI Test.lnk" ] &&
+    z uninstall --delete-data test.shims.gui && [ ! -e "$links\\Zigsaw GUI Test.lnk" ] &&
         ! reg query 'HKCU\Software\Classes\.zigsawtest\OpenWithProgids' 2>/dev/null | grep -q 'Zigsaw.test.shims.gui'
 }
 check "  and rm takes them away" loses_shortcut
 logs_in() {
     # Nothing answers there: the login fails, and Credential Manager has to be
-    # reached to save or delete. logout needs nothing but it.
-    z logout zigsaw-test.invalid 2>&1 | grep -qv 'error 1312'
+    # reached to save or delete. --logout needs nothing but it.
+    z remote-add --if-not-exists invalid zigsaw-test.invalid/x >/dev/null 2>&1 || return 1
+    z remote-modify --logout invalid 2>&1 | grep -qv 'error 1312'
 }
-check "Credential Manager can be reached (a logout)" logs_in
+check "Credential Manager can be reached (a --logout)" logs_in
 
 # --- Your folders, for real, as this account's are throwaway ------------------------
 
 mkdir -p "$docs"
 # A label an earlier run of this left, if it stopped halfway.
-z grants --take-back "$docs" >/dev/null 2>&1
+z permission-remove "$docs" >/dev/null 2>&1
 real_docs_for_a_run() {
     z run --filesystem=documents $BB sh -c 'echo one > "$USERPROFILE/Documents/su-one.txt"; true' &&
         [ -f "$docs\\su-one.txt" ] && no_label "$docs"
@@ -215,7 +216,7 @@ real_docs_kept() {
         [ -f "$docs\\su-two.txt" ] && low_label "$docs"
 }
 check "with an override, the label stays" real_docs_kept
-listed() { z grants | grep -qF "low label on $docs: its permissions name it"; }
+listed() { z permissions | grep -qF "low label on $docs: its permissions name it"; }
 check "  and grants says so, and why" listed
 in_the_record() { reg query 'HKCU\Software\Zigsaw\Grants' | grep -qF "|$BB|low $docs"; }
 check "  and the record outside the store has it" in_the_record
@@ -225,7 +226,7 @@ check "taking the override back takes the label back" override_back
 other="$stage\\tmp\\other-store"
 zo() { ZIGSAW_HOME="$other" "$zigsaw" "$@" </dev/null; }
 guard_leaves_out() {
-    zo pull --yes $BB >/dev/null 2>&1 || return 1
+    zo install --yes $BB >/dev/null 2>&1 || return 1
     local out
     out=$(zo run --filesystem=documents $BB sh -c '[ ! -e "$USERPROFILE/Documents/su-one.txt" ]; echo left $?' 2>&1 | tr -d '\r')
     grep -q 'left 0' <<<"$out" && grep -q "isn't your default one" <<<"$out" && no_label "$docs"
@@ -246,15 +247,15 @@ deleted_store() {
     rm -rf "$other" 2>/dev/null
     [ ! -e "$other\\grants" ] || { echo "its grants are still there"; return 1; }
     low_label "$docs" || { echo "the label went with the store"; return 1; }
-    z grants | grep -q 'Stores since deleted' && z grants | grep -qF "low label on $docs" || return 1
+    z permissions | grep -q 'Stores since deleted' && z permissions | grep -qF "low label on $docs" || return 1
     z list 2>&1 >/dev/null | grep -q 'stores since deleted are still in place'
 }
 check "that store deleted by hand: its label stays, and grants and list say so" deleted_store
-repaired() { z repair >/dev/null 2>&1 && no_label "$docs" && ! z grants | grep -q 'Stores since deleted'; }
+repaired() { z repair >/dev/null 2>&1 && no_label "$docs" && ! z permissions | grep -q 'Stores since deleted'; }
 check "  and repair takes it back" repaired
 unexplained() {
     icacls "$docs" /setintegritylevel '(OI)(CI)L' >/dev/null || return 1
-    z grants | grep -q 'Not explained' && z grants --take-back "$docs" >/dev/null 2>&1 && no_label "$docs"
+    z permissions | grep -q 'Not explained' && z permission-remove "$docs" >/dev/null 2>&1 && no_label "$docs"
 }
 check "a label no record has is Not explained, and --take-back removes it" unexplained
 
@@ -274,7 +275,7 @@ tell "a folder it may modify but doesn't own, on ${stage:0:2}" "$(z run --filesy
 # --- The loopback exemption, which gaps.md said nobody had tried ----------------------
 
 tell "the loopback exemption" "$(z -v run --sandbox=appcontainer --share=network $BB sh -c 'true; true' 2>&1 | grep -iE 'loopback|exempt' | head -3)"
-tell "  what grants lists while none runs" "$(z grants $BB)"
+tell "  what grants lists while none runs" "$(z permissions $BB)"
 
 # --- A build, for B: under this logon --------------------------------------------------
 
@@ -286,14 +287,14 @@ check "a recipe builds, on its own B:" builds
 
 # --- And away again ---------------------------------------------------------------------
 
-removes() { z rm --delete-data $BB; }
+removes() { z uninstall --delete-data $BB; }
 check "rm removes the app" removes
 # Only the daily check is left, which goes with zigsaw.
 real_clean() {
     no_label "$docs" || { echo "$docs is labelled"; return 1; }
     no_label "$USERPROFILE" || { echo "$USERPROFILE is labelled"; return 1; }
     local out
-    out=$(z grants | tr -d '\r' | grep -vE '^Daily checks for updates|^  scheduled task ')
+    out=$(z permissions | tr -d '\r' | grep -vE '^Daily checks for updates|^  scheduled task ')
     [ -z "$out" ] || { echo "grants says: $out"; return 1; }
 }
 check "nothing it changed is left on your folders" real_clean

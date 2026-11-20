@@ -54,7 +54,7 @@ Only one version is kept, the one the installed version replaced, and only its b
 `prune` keeps them, and deletes its unpacked files as before. `prune --previous` forgets
 those versions, and deletes their blobs. A zigsaw before 0.76 doesn't know of them, and
 its `prune` deletes them; `rollback` then says how to have the version back, as
-`zigsaw pull <image>@<digest>` while its registry still has it.
+`zigsaw install <image>@<digest>` while its registry still has it.
 
 **Its data can go back too.** An app that changed how it keeps its data, as
 PostgreSQL's server does from one major version to the next, may not read it any more
@@ -106,8 +106,8 @@ What to know about the copy:
   copy shares its blocks with the data, and takes next to nothing of either.
 - **It's no backup**: it's in the store, beside the data, and gone with the next update.
 
-`zigsaw hold <app-id>...` keeps updates away from apps altogether, until
-`zigsaw unhold <app-id>...`. `update` notes that a held app is held and leaves it, named
+`zigsaw mask <app-id>...` keeps updates away from apps altogether, until
+`zigsaw mask --remove <app-id>...`. `update` notes that a held app is held and leaves it, named
 or not, and nothing contacts its registry: `update --check` and the daily check never
 list it, and what a check found before goes from `zigsaw updates`. `pull`, `build` and
 `rollback` still install what they're asked to, and the app stays held. `zigsaw list`
@@ -121,7 +121,7 @@ starts a daily check, which only tells you:
 
 - **What it is:** a scheduled task of your own, named `Zigsaw update check`, which
   needs no administrator, runs with your rights and only while you're signed in, and
-  starts `zigsaw-notify.exe`, a program with no window. `zigsaw grants` lists it.
+  starts `zigsaw-notify.exe`, a program with no window. `zigsaw permissions` lists it.
 - **What it reaches:** once a day, the registry each of your apps came from, for that
   app's manifest and, if it's new, its config; and `github.com`, for a one-line file
   saying zigsaw's latest version and, if it's new, the signature that says so. No layers,
@@ -168,7 +168,7 @@ build of your own, says how to install one instead, and isn't told about new rel
 ## Removing what's old
 
 Installing a new version deletes the files of the one it replaces, unless
-that version is still running. `zigsaw prune` deletes everything else no
+that version is still running. `zigsaw uninstall --unused` deletes everything else no
 installed app needs: the blobs of old versions, files kept because they were
 running, and whatever an interrupted build left in `tmp\`. It keeps the blobs
 of each app's previous version, and the copy of the app's data as that version

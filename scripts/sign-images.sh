@@ -5,7 +5,7 @@
 # an identity token: cosign trades it with Sigstore's Fulcio for a certificate naming
 # the workflow (.../reproduce.yml@refs/heads/main), signs with that certificate's key,
 # and logs the signature in Sigstore's Rekor. zigsaw then puts the bundle beside the
-# image (`zigsaw signature push-bundle`), having checked it as pull would. Nothing
+# image (`zigsaw build-sign --bundle`), having checked it as pull would. Nothing
 # here holds a key, and nobody's asked anything.
 #
 #   scripts/sign-images.sh <compared.txt>
@@ -38,7 +38,7 @@ cosign=${COSIGN:-}
 if [ -z "$cosign" ]; then
     # Its program as it is in the store, not `zigsaw run`: nothing here needs a sandbox,
     # and the identity token goes through the environment.
-    ZIGSAW_HOME="$work\\store" ZIGSAW_USER_FOLDERS="$work\\no-folders" "$zigsaw" pull --yes dev.sigstore.cosign >/dev/null
+    ZIGSAW_HOME="$work\\store" ZIGSAW_USER_FOLDERS="$work\\no-folders" "$zigsaw" install --yes dev.sigstore.cosign >/dev/null
     cosign=$(find "$(cygpath -u "$work\\store\\deploy")" -maxdepth 2 -iname cosign.exe | head -1)
     [ -n "$cosign" ] || { echo "error: cosign's image has no cosign.exe" >&2; exit 1; }
 fi
@@ -49,13 +49,13 @@ failed=0
 while read -r id version digest; do
     [ -n "$id" ] || continue
     image="$id@$digest"
-    if "$zigsaw" signature check "$image" 2>&1 | grep -qF "signed, by $signer"; then
+    if "$zigsaw" build-sign --check "$image" 2>&1 | grep -qF "signed, by $signer"; then
         already=$((already + 1))
         continue
     fi
     payload="$work\\$id.payload"
     bundle="$work\\$id.bundle.json"
-    if ! "$zigsaw" signature payload "$image" >"$payload"; then
+    if ! "$zigsaw" build-sign --print-payload "$image" >"$payload"; then
         echo "FAIL  $id $version: no payload for $image"
         failed=$((failed + 1))
         continue
@@ -69,7 +69,7 @@ while read -r id version digest; do
         echo "      $id $version: cosign failed (try $try): $(tail -1 "$work\\cosign.log")"
         sleep $((try * 20))
     done
-    if $ok && "$zigsaw" signature push-bundle "$image" "$payload" "$bundle"; then
+    if $ok && "$zigsaw" build-sign --bundle "$image" "$payload" "$bundle"; then
         echo "ok    $id $version: signed $digest"
         signed=$((signed + 1))
     else

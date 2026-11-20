@@ -59,7 +59,7 @@ za() { ZIGSAW_HOME="$store_a" "$zigsaw" "$@"; }
 zb() { ZIGSAW_HOME="$store_b" "$zigsaw" "$@"; }
 
 task_name_of() { # <store>: the name `updates on` gives it, from `grants`
-    ZIGSAW_HOME="$1" "$zigsaw" grants | tr -d '\r' | grep -F "for $1" | sed -n 's/^  scheduled task "\(.*\)", for .*/\1/p'
+    ZIGSAW_HOME="$1" "$zigsaw" permissions | tr -d '\r' | grep -F "for $1" | sed -n 's/^  scheduled task "\(.*\)", for .*/\1/p'
 }
 has_task() { "$sch" /query /tn "$1" >/dev/null 2>&1; }
 
@@ -73,7 +73,7 @@ if curl -sf "http://127.0.0.1:5000/v2/" >/dev/null; then
         printf '{ "id": "test.updates.app", "version": "%s", "command": "app.cmd", "permissions": { "sandbox": "soft"%s }, "exports": {},\n  "modules": [{ "name": "scripts", "sources": [{ "path": "app.cmd" }] }] }\n' "$1" "$extra" >"$work\\app.json"
         printf '@echo version %s\r\n' "$1" >"$work\\app.cmd"
     }
-    publish() { recipe "$@" && za build "$work\\app.json" >/dev/null 2>&1 && za push test.updates.app "$repo:latest" >/dev/null 2>&1; }
+    publish() { recipe "$@" && za build "$work\\app.json" >/dev/null 2>&1 && za build-export test.updates.app "$repo:latest" >/dev/null 2>&1; }
     installed_version() { zb list 2>/dev/null | tr -d '\r' | awk '$1 == "test.updates.app" { print $2 }'; }
     state="$store_b\\updates\\state.json"
     # As if the last notification were long ago: 1970, near enough.
@@ -84,7 +84,7 @@ if curl -sf "http://127.0.0.1:5000/v2/" >/dev/null; then
     check "before any check, it says so, reading nothing" never_checked
 
     publish 1 || { echo "publishing the fixture failed"; exit 1; }
-    zb pull --yes "$repo:latest" >/dev/null 2>&1 || { echo "pulling the fixture failed"; exit 1; }
+    zb install --yes "$repo:latest" >/dev/null 2>&1 || { echo "pulling the fixture failed"; exit 1; }
 
     nothing_new() {
         local out
@@ -150,7 +150,7 @@ if curl -sf "http://127.0.0.1:5000/v2/" >/dev/null; then
     pinned_or_built() {
         local out manifest
         manifest=$(grep -o 'sha256:[0-9a-f]*' "$store_b\\refs\\test.updates.app.json" | head -1)
-        ZIGSAW_HOME="$work\\pinned" "$zigsaw" pull --yes "$repo@$manifest" >/dev/null 2>&1 || return 1
+        ZIGSAW_HOME="$work\\pinned" "$zigsaw" install --yes "$repo@$manifest" >/dev/null 2>&1 || return 1
         publish 5 network || return 1
         # A digest, and a recipe: neither can be told anything by a tag.
         out=$(ZIGSAW_HOME="$work\\pinned" "$zigsaw" updates check 2>/dev/null) || { echo "$out"; return 1; }
@@ -267,8 +267,8 @@ turns_on() {
 check "updates on adds a task for this store, as the user, with no more rights" turns_on
 says_on() { zc updates 2>/dev/null | grep -q 'A daily check is on; it installs nothing'; }
 check "  zigsaw updates says it's on" says_on
-is_listed() { zc grants 2>/dev/null | grep -qF "for $store_c"; }
-check "  zigsaw grants lists it, as something changed outside the store" is_listed
+is_listed() { zc permissions 2>/dev/null | grep -qF "for $store_c"; }
+check "  zigsaw permissions lists it, as something changed outside the store" is_listed
 # The real thing, where it can be: the task only runs while its user has a desktop,
 # which a test as another account, and maybe a runner, hasn't.
 has_desktop() { tasklist /FI "IMAGENAME eq explorer.exe" /FI "USERNAME eq $USERNAME" /NH 2>/dev/null | grep -qi '^explorer'; }
@@ -324,7 +324,7 @@ gone_repair() {
     name=$(task_name_of "$store_gone")
     [ -n "$name" ] || return 1
     rm -rf "$store_gone"
-    zc grants 2>/dev/null | grep -F "$store_gone" | grep -q 'since deleted' || { echo "grants doesn't say"; return 1; }
+    zc permissions 2>/dev/null | grep -F "$store_gone" | grep -q 'since deleted' || { echo "grants doesn't say"; return 1; }
     out=$(zc repair 2>&1)
     grep -qF "as its store $store_gone is gone" <<<"$out" || { echo "$out"; return 1; }
     ! has_task "$name"
@@ -362,7 +362,7 @@ check "the real task, if this machine has one, is as it was" real_same
     while IFS= read -r t; do "$sch" /delete /tn "$t" /f >/dev/null 2>&1; done
 # Installed apps' files aren't for deleting by hand.
 for store in "$store_a" "$store_b" "$work\\pinned"; do
-    [ -e "$store" ] && ZIGSAW_HOME="$store" "$zigsaw" rm --delete-data test.updates.app >/dev/null 2>&1
+    [ -e "$store" ] && ZIGSAW_HOME="$store" "$zigsaw" uninstall --delete-data test.updates.app >/dev/null 2>&1
 done
 reg delete "HKCU\\$ZIGSAW_GRANTS_KEY" /f >/dev/null 2>&1
 reg query 'HKCU\Software\ZigsawTest' 2>/dev/null | grep -q . || reg delete 'HKCU\Software\ZigsawTest' /f >/dev/null 2>&1

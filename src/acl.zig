@@ -211,7 +211,7 @@ pub fn labelProgram(arena: Allocator, path: []const u8, level: enum { low, mediu
 /// Writes `bytes` to a new file at `path` labelled medium integrity with
 /// NO_READ_UP: a process below medium, such as a low run's, can then
 /// neither write it nor read it, though it reads what the user can
-/// otherwise. For what a run writes down for `zigsaw exec` (see exec.zig),
+/// otherwise. For what a run writes down for `zigsaw enter` (see exec.zig),
 /// its environment among it. Labelled as it's made, which takes no right to
 /// change its owner, as a label set afterwards does; renaming it keeps the
 /// label. Fails quietly, with an error and nothing printed.

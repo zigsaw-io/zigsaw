@@ -235,8 +235,8 @@ sed 's/^/  /' <<<"$report"
 if [ -n "${LOG_DIR:-}" ]; then echo "$report" >"$LOG_DIR\\devprobe.txt"; fi
 
 cd / || true
-z rm --delete-data $APP >/dev/null 2>&1
-z rm --delete-data $PLAIN >/dev/null 2>&1
+z uninstall --delete-data $APP >/dev/null 2>&1
+z uninstall --delete-data $PLAIN >/dev/null 2>&1
 reg delete "HKCU\\$suite_key" /f >/dev/null 2>&1
 rm -rf "$work"
 echo "$failures check(s) failed."

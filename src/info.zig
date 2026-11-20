@@ -1,5 +1,6 @@
-//! `zigsaw info`: what an app in a registry is, needs and may reach, before
-//! it's installed, from its image's manifest and config.
+//! `zigsaw remote-info`: what an app in a registry is, needs and may reach,
+//! before it's installed, from its image's manifest and config. And `zigsaw
+//! info`: the same of an installed app, from the store, with where it is.
 
 const std = @import("std");
 const Io = std.Io;
@@ -8,8 +9,41 @@ const Store = @import("Store.zig");
 const format = @import("format.zig");
 const oci = @import("oci.zig");
 const remote = @import("remote.zig");
+const remotes = @import("remotes.zig");
+const fail = Context.fail;
 
-pub fn info(ctx: *Context, image_text: []const u8) !void {
+/// `zigsaw info <app-id>`: an installed app, as the store has it; no network.
+pub fn installedInfo(ctx: *Context, id: []const u8) !void {
+    const arena = ctx.arena;
+    if (!oci.isValidId(id))
+        return fail("\"{s}\" isn't an installed app's id; `zigsaw remote-info {s}` shows an app in a remote", .{ id, id });
+    const ref = try ctx.store.readRef(arena, id) orelse
+        return fail("{s} isn't installed; `zigsaw remote-info {s}` shows what it is in its remote", .{ id, id });
+    const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
+    const cfg = image.config;
+
+    var buf: [4096]u8 = undefined;
+    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+    const w = &stdout.interface;
+    try writeName(w, cfg);
+    try writeLine(w, "homepage", cfg.homepage orelse "");
+    try writeLine(w, "license", cfg.license orelse "");
+    try writeLine(w, "origin", if (ref.source) |source| if (try remotes.of(ctx, source)) |r|
+        try std.fmt.allocPrint(arena, "{s}, in the remote {s}", .{ source, r.name })
+    else
+        source else "");
+    try writeLine(w, "manifest", ref.manifest);
+    try writeContents(ctx, w, image.manifest, cfg);
+    if (cfg.build) |b| try writeLine(w, "built", try describeBuild(arena, b));
+    try writeLine(w, "location", try ctx.store.deployPath(arena, oci.ownLayer(image.manifest).digest));
+    try writeLine(w, "data", try ctx.store.dataDir(arena, ref.id));
+    if (try ctx.store.isHeld(arena, ref.id)) try writeLine(w, "masked", try std.fmt.allocPrint(arena, "updates leave it alone until `zigsaw mask --remove {s}`", .{ref.id}));
+    if (try ctx.store.readPrevious(arena, ref.id)) |p| try writeLine(w, "previous", try std.fmt.allocPrint(arena, "{s} ({s}), which `zigsaw rollback {s}` goes back to", .{ p.version, oci.shortDigest(p.manifest), ref.id }));
+    try w.flush();
+}
+
+/// `zigsaw remote-info <image>`.
+pub fn remoteInfo(ctx: *Context, image_text: []const u8) !void {
     const arena = ctx.arena;
     var registry: @import("Registry.zig") = undefined;
     const app = try remote.fetchInfoOpen(ctx, image_text, &registry);
@@ -19,7 +53,7 @@ pub fn info(ctx: *Context, image_text: []const u8) !void {
         .no_key => "not checked: no key here for its registry",
         .missing => "none: nothing says who made it",
         .signed => |by| try std.fmt.allocPrint(arena, "signed, by {s}", .{by}),
-        .wrong => |why| try std.fmt.allocPrint(arena, "WRONG: {s}, so pull refuses it", .{why}),
+        .wrong => |why| try std.fmt.allocPrint(arena, "WRONG: {s}, so install refuses it", .{why}),
     };
 
     var buf: [4096]u8 = undefined;
@@ -32,6 +66,7 @@ pub fn info(ctx: *Context, image_text: []const u8) !void {
     try writeLine(w, "manifest", app.manifest_digest);
     try writeLine(w, "signature", signature_text);
     if (app.index) |index| try writeLine(w, "index", try std.fmt.allocPrint(arena, "{s}, as its image for windows/amd64", .{index}));
+    try writeDownload(ctx, w, app.manifest);
     try writeContents(ctx, w, app.manifest, cfg);
     if (cfg.build) |b| try writeLine(w, "built", try describeBuild(arena, b));
     const installed = try ctx.store.readRef(arena, cfg.id);
@@ -45,19 +80,17 @@ pub fn info(ctx: *Context, image_text: []const u8) !void {
     try w.flush();
 }
 
-/// What the app is: the first lines of `info`, and of what `pull` shows
-/// before it asks.
+/// What the app is: the first lines of `info` and `remote-info`, and of what
+/// `install` shows before it asks.
 pub fn writeName(w: *Io.Writer, cfg: oci.AppConfig) !void {
     if (cfg.name) |n| try w.print("{s} {s}: {s}\n", .{ cfg.id, cfg.version, n }) else try w.print("{s} {s}\n", .{ cfg.id, cfg.version });
     if (cfg.summary) |s| try w.print("  {s}\n", .{s});
 }
 
-/// What pulling the image downloads, and what the app brings and may reach,
-/// as `info` and `pull` show it.
-pub fn writeContents(ctx: *Context, w: *Io.Writer, manifest: oci.Manifest, cfg: oci.AppConfig) !void {
+/// What installing the image downloads, and how much of that the store has
+/// already (a runtime another app has, say).
+pub fn writeDownload(ctx: *Context, w: *Io.Writer, manifest: oci.Manifest) !void {
     const arena = ctx.arena;
-    // What pulling it downloads, and how much of that the store has already
-    // (a runtime another app has, say).
     var total: u64 = manifest.config.size;
     var missing: u64 = 0;
     for (manifest.layers) |l| {
@@ -70,7 +103,12 @@ pub fn writeContents(ctx: *Context, w: *Io.Writer, manifest: oci.Manifest, cfg: 
         try std.fmt.allocPrint(arena, "{Bi:.1}, all in the store already", .{total})
     else
         try std.fmt.allocPrint(arena, "{Bi:.1}, of which {Bi:.1} isn't in the store yet", .{ total, missing }));
+}
 
+/// What the app brings and may reach, as `info`, `remote-info` and `install`
+/// show it.
+pub fn writeContents(ctx: *Context, w: *Io.Writer, manifest: oci.Manifest, cfg: oci.AppConfig) !void {
+    const arena = ctx.arena;
     var runtimes: std.ArrayList([]const u8) = .empty;
     for (cfg.runtimes.map.values()) |r| try runtimes.append(arena, try std.fmt.allocPrint(arena, "{s} {s}", .{ r.id, r.version }));
     try writeLine(w, "runtimes", try std.mem.join(arena, ", ", runtimes.items));

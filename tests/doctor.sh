@@ -225,13 +225,13 @@ check "  a program before the store's bin on PATH" finds warning "doctor-bb runs
 check "  a grant nothing stands behind" finds warning "$APP's runs were given this, which nothing stands behind now: low label on $work\\granted"
 check "  a deleted store's grant" finds warning "$work\\deleted-store, a store since deleted, left this for test.gone: low label on $work\\orphaned"
 check "  a label no record explains" finds warning "$work\\folders\\Documents is labelled low, which no record explains"
-check "    which grants --take-back removes" said "\`zigsaw grants --take-back $work\\folders\\Documents\` removes it"
+check "    which grants --take-back removes" said "\`zigsaw permission-remove $work\\folders\\Documents\` removes it"
 check "  a key left in HKCU" finds warning "HKCU\\$kept_key is still where a run of $APP that didn't end left it"
 check "  data waiting to move" finds note "the data of 1 app waits in $ZIGSAW_HOME\\data"
 check "  an import that didn't finish" finds note "an import into volume $APP that didn't finish"
 check "  a rollback that stopped" finds warning "a rollback of $APP stopped halfway"
 check "  an image without its config" finds problem "$BROKEN $V: its config, blob sha256:${broken_config:0:12}, is missing"
-check "    which rm and build put right" said "\`zigsaw rm $BROKEN\`, then \`zigsaw build $work\\broken.json\`, installs it again"
+check "    which rm and build put right" said "\`zigsaw uninstall $BROKEN\`, then \`zigsaw build $work\\broken.json\`, installs it again"
 check "  overrides that can't be read" finds problem "$BB $V: its overrides can't be read"
 check "  a recipe moved away" finds note "it was built from $work\\app.json, which isn't there now"
 
@@ -242,7 +242,7 @@ rm "$home_u/overrides/$BB.json"
 mv "$work\\app-moved.json" "$work\\app.json"
 z ps >/dev/null 2>&1
 z repair >/dev/null 2>&1
-z grants --take-back "$work\\folders\\Documents" >/dev/null 2>&1
+z permission-remove "$work\\folders\\Documents" >/dev/null 2>&1
 z run --command=doctor-bb $APP true >/dev/null 2>&1
 rm -rf "$home_u/volumes/$APP/.zigsaw-import-1"
 doc --offline
@@ -382,10 +382,10 @@ check "  and GitHub's release" said "the latest release is"
 for pid in "${servers[@]}"; do kill "$pid" 2>/dev/null; done
 servers=()
 
-z rm --delete-data $APP >/dev/null 2>&1
-z rm --delete-data $BROKEN >/dev/null 2>&1
-z rm --delete-data $BB >/dev/null 2>&1
-z prune --downloads --volumes >/dev/null 2>&1
+z uninstall --delete-data $APP >/dev/null 2>&1
+z uninstall --delete-data $BROKEN >/dev/null 2>&1
+z uninstall --delete-data $BB >/dev/null 2>&1
+z uninstall --unused --downloads --volumes >/dev/null 2>&1
 cd /
 rm -rf "$(cygpath -u "$ZIGSAW_HOME")" "$(cygpath -u "$work")"
 echo

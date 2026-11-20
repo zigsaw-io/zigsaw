@@ -181,7 +181,7 @@ done
 # Which recipes' own versions have a signature beside them: keyless, as the Reproduce
 # workflow signs (scripts/sign-images.sh), or a key's, from before. Pull warns about
 # one that hasn't. Only here, where zigsaw knows whose count, and only that one's
-# there: whether it's good is what `zigsaw signature check` and a pull are for.
+# there: whether it's good is what `zigsaw build-sign --check` and a pull are for.
 unsigned=0
 if [ "$registry" = ghcr.io/zigsaw-io ]; then
     while read -r tid ttag tdigest; do tag_digest[$tid:$ttag]=$tdigest; done < <(

@@ -20,7 +20,7 @@
 //! with `--file`, `--filesystem` or `--sandbox`, goes when the app's last
 //! run ends; so does what its permissions or overrides no longer name, or
 //! at once when `zigsaw override` or an install changes them while no run
-//! of it is going. `zigsaw rm` takes back everything.
+//! of it is going. `zigsaw uninstall` takes back everything.
 //!
 //! Each run holds grants\<id>.txt.lock shared while it goes: the run that
 //! can lock it exclusively at its end is the last, and settles what the
@@ -118,7 +118,7 @@ pub fn end(ctx: *Context, s: Session) void {
     s.lock.release(ctx.io);
     const last = (Store.tryLock(ctx.io, s.lock_path, .exclusive) catch null) orelse return;
     defer last.release(ctx.io);
-    settle(ctx, s.id) catch note("warning: what {s}'s runs were granted stays until its next run ends, `zigsaw repair` or `zigsaw rm`", .{s.id});
+    settle(ctx, s.id) catch note("warning: what {s}'s runs were granted stays until its next run ends, `zigsaw repair` or `zigsaw uninstall`", .{s.id});
 }
 
 /// Settles the app's grants after what it may reach changed (its overrides,
@@ -191,7 +191,7 @@ pub fn settle(ctx: *Context, id: []const u8) !void {
     try store.writeCwdGrants(arena, id, kept_cwds.items);
 }
 
-/// Takes back everything the app's runs were given, for `zigsaw rm`.
+/// Takes back everything the app's runs were given, for `zigsaw uninstall`.
 pub fn undoAll(ctx: *Context, id: []const u8) !void {
     const arena = ctx.arena;
     const changes = try ctx.store.lockGrantChanges(arena);
@@ -289,7 +289,7 @@ fn recordedLow(ctx: *Context, entries: []const ledger.Entry, path: []const u8) !
 
 /// What's left outside the store that no store stands behind: changes by
 /// stores since deleted, which `zigsaw repair` takes back, and low labels on
-/// the user's folders that no record explains, which `zigsaw grants
+/// the user's folders that no record explains, which `zigsaw permissions
 /// --take-back` removes. Only reads.
 pub const Leftovers = struct {
     orphans: []const ledger.Entry,
@@ -330,11 +330,11 @@ pub fn lapsed(ctx: *Context) ![]const Lapsed {
 /// One line on stderr if something's left that no store will take back.
 pub fn noteLeftovers(ctx: *Context) !void {
     const s = try Survey.of(ctx);
-    if (s.orphans.len > 0) note("note: {d} change(s) outside the store by stores since deleted are still in place: `zigsaw grants` lists them, `zigsaw repair` takes them back", .{s.orphans.len});
-    if (s.unexplained.len > 0) note("note: {s} labelled low, which no record explains: `zigsaw grants` says more", .{try std.mem.join(ctx.arena, ", ", s.unexplained)});
+    if (s.orphans.len > 0) note("note: {d} change(s) outside the store by stores since deleted are still in place: `zigsaw permissions` lists them, `zigsaw repair` takes them back", .{s.orphans.len});
+    if (s.unexplained.len > 0) note("note: {s} labelled low, which no record explains: `zigsaw permissions` says more", .{try std.mem.join(ctx.arena, ", ", s.unexplained)});
 }
 
-/// `zigsaw grants`: what's changed outside the store, this store's from its
+/// `zigsaw permissions`: what's changed outside the store, this store's from its
 /// files, the rest from the record.
 pub fn show(ctx: *Context, only: ?[]const u8) !void {
     const arena = ctx.arena;
@@ -361,7 +361,7 @@ pub fn show(ctx: *Context, only: ?[]const u8) !void {
     any = try showEntries(w, "Stores since deleted", " (`zigsaw repair` takes these back)", s.orphans, only) or any;
     if (only == null and s.unexplained.len > 0) {
         any = true;
-        try w.writeAll("Not explained: labelled low, in no store's record (`zigsaw grants --take-back <path>` removes one)\n");
+        try w.writeAll("Not explained: labelled low, in no store's record (`zigsaw permission-remove <path>` removes one)\n");
         for (s.unexplained) |p| try w.print("  {s}\n", .{p});
     }
     if (only == null) {
@@ -389,7 +389,7 @@ fn showEntries(w: *Io.Writer, title: []const u8, hint: []const u8, entries: []co
     return any;
 }
 
-/// A change as `zigsaw grants` says it.
+/// A change as `zigsaw permissions` says it.
 pub const Line = struct {
     grant: Store.Grant,
 
@@ -448,7 +448,7 @@ fn wantedElsewhere(ctx: *Context, entries: []const ledger.Entry, orphan: ledger.
     return false;
 }
 
-/// `zigsaw grants --take-back <path>`: removes a low label that no record
+/// `zigsaw permission-remove <path>`: removes a low label that no record
 /// explains. One that a record has goes the way it's recorded, or the app
 /// would only make it again.
 pub fn takeBackLabel(ctx: *Context, path: []const u8) !void {
@@ -459,7 +459,7 @@ pub fn takeBackLabel(ctx: *Context, path: []const u8) !void {
     const entries = try entriesOf(ctx);
     if (try recordedLow(ctx, entries, path)) |e| switch (try ledger.stateOf(ctx.io, arena, e)) {
         .orphan => return fail("{s} was labelled for {s} by a store since deleted, {s}: `zigsaw repair` takes it back", .{ path, e.id, e.store }),
-        else => return fail("{s} is labelled for {s} in {s}: `zigsaw rm {s}` there takes it back, or an override that takes the permission away", .{ path, e.id, e.store, e.id }),
+        else => return fail("{s} is labelled for {s} in {s}: `zigsaw uninstall {s}` there takes it back, or an override that takes the permission away", .{ path, e.id, e.store, e.id }),
     };
     // Windows' own, for low-integrity programs to write in.
     if (ctx.env.get("USERPROFILE")) |home| {

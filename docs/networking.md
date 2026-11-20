@@ -176,7 +176,7 @@ where Windows lets you.
   whatever its capabilities, so it lasts only while the app's runs go:
   each run with the network makes it, recorded in `grants\<id>.txt` as
   `loopback`, and the app's last run to end takes it back. Making it takes
-  milliseconds. `zigsaw repair` and `zigsaw rm` take back what a killed
+  milliseconds. `zigsaw repair` and `zigsaw uninstall` take back what a killed
   run left. One you made yourself isn't recorded, and stays.
 - It's all or nothing: an exempt app reaches every server on the machine.
   That's what `network` means in principle 1.
@@ -308,7 +308,7 @@ The others (GDAL, TeX Live, ripgrep and the rest) make no TLS connections.
   servers. It reads them itself, outside the run's sandbox, so an
   AppContainer's file has the user's roots too. The file is
   `<store>\certs\roots-<hash>.pem`, named by its contents, so a run that
-  has one open never sees it change; `zigsaw prune` deletes the others. A
+  has one open never sees it change; `zigsaw uninstall --unused` deletes the others. A
   run gets one only if its image, a runtime or an extension names
   `${roots}`, and a build only if a tool's variables do.
 - **Why not OpenSSL's own reading of the store.** OpenSSL 3.5 can read

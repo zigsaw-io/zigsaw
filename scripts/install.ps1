@@ -42,7 +42,7 @@ does. Also $env:ZIGSAW_INSTALL_NO_UPDATE_CHECK.
 
 .PARAMETER Uninstall
 Remove zigsaw and its PATH entry. Apps have to be removed first, with
-zigsaw rm; the store's other files, such as downloads and apps' data, stay.
+zigsaw uninstall; the store's other files, such as downloads and apps' data, stay.
 #>
 param(
     [string]$Version = $env:ZIGSAW_VERSION,
@@ -133,7 +133,7 @@ param(
             # A header line, then a line per app.
             $apps = @(& $zigsaw list | Select-Object -Skip 1 | ForEach-Object { ($_ -split '\s+')[0] } | Where-Object { $_ })
             if ($apps.Count -gt 0) {
-                throw "These apps are still installed: $($apps -join ', '). Remove each with 'zigsaw rm <id>' first: zigsaw undoes what it changed for them, which deleting its files wouldn't."
+                throw "These apps are still installed: $($apps -join ', '). Remove each with 'zigsaw uninstall <id>' first: zigsaw undoes what it changed for them, which deleting its files wouldn't."
             }
             # What stores since deleted left; later, no zigsaw is here to.
             & $zigsaw repair | Out-Null
@@ -239,5 +239,5 @@ param(
             else { Write-Warning "Windows wouldn't add the daily check for updates. 'zigsaw update --check' tells you by hand." }
         }
     }
-    Write-Host "Try: zigsaw pull org.nodejs.node"
+    Write-Host "Try: zigsaw install org.nodejs.node"
 } $Version $Dir $From ($NoPath -or [bool]$env:ZIGSAW_INSTALL_NO_PATH) ($NoUpdateCheck -or [bool]$env:ZIGSAW_INSTALL_NO_UPDATE_CHECK) ([bool]$Uninstall)

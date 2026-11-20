@@ -339,7 +339,7 @@ echo "$mismatches result(s) differ from the intended behaviour, and $gaps known 
 
 acprobe_rm "$zigsaw"
 if $own_store; then
-    for id in $BB $RG $BAT $GIT $NODE $PY $ZIG $GO $FZF $ZOT $CMAKE $ZSTD; do "$zigsaw" rm --delete-data "$id" >/dev/null 2>&1; done
+    for id in $BB $RG $BAT $GIT $NODE $PY $ZIG $GO $FZF $ZOT $CMAKE $ZSTD; do "$zigsaw" uninstall --delete-data "$id" >/dev/null 2>&1; done
     rm -rf "$ZIGSAW_HOME"
 fi
 rm -rf "$work"

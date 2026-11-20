@@ -116,7 +116,7 @@ pub fn hostPathOf(ctx: *Context, folder: oci.UserFolder) !?[]const u8 {
 }
 
 /// The profile and those of the user's folders they have, whether this
-/// store's apps may use them or not: where `zigsaw grants` looks for labels
+/// store's apps may use them or not: where `zigsaw permissions` looks for labels
 /// no record explains. With ZIGSAW_USER_FOLDERS, that directory and the
 /// folders in it.
 pub fn allHostPaths(ctx: *Context) ![]const []const u8 {

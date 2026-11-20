@@ -2,7 +2,7 @@
 //! what a run's app writes on its stdout and stderr, and what the run's
 //! zigsaw says once the run has started, in <store>\logs\<id>.<pid>.log, by
 //! the app's id lowercased and the run's number. A log stays after its run
-//! ends, until a detached run of the same app starts, `zigsaw rm` removes the
+//! ends, until a detached run of the same app starts, `zigsaw uninstall` removes the
 //! app, or `prune` finds it gone. A log that's still being written is never
 //! deleted: its writers don't share writing, so Windows refuses (see
 //! `deleteIfEnded`).
