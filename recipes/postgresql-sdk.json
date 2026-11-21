@@ -18,6 +18,9 @@
     "perl": "org.perl.perl:5.42.3.1@sha256:0a4e1bd6c15cb3d2ff507685d62b3cd5769dbbd71c5e7c68ffe44c8d9b4bca85",
     "python": "org.python.python:3.14.10@sha256:ccd0d0e3ef77fd28cfa787f19405ffe747d47f1483312df00819dce1a356c5b4"
   },
+  "runtimes": {
+    "make": "org.gnu.make:4.4.1@sha256:9add04a45e601e7e5b8e0127184c2faead3783527f4dbbdb3a46ca1118fa9da7"
+  },
   "cleanup": ["/lib/cmake", "/share/doc", "/share/man", "/bin/xml2-config", "/bin/xmllint.exe", "/bin/xmlcatalog.exe", "/bin/test_cloexec.exe"],
   "modules": [
     {
@@ -115,9 +118,7 @@
       ],
       "build": [
         "perl Configure mingw64 no-shared no-asm no-tests no-docs no-apps no-module --prefix=\"$PREFIX\" --libdir=lib",
-        "make build_generated $(sed -n '/^GENERATED=/,/[^\\\\]$/p' Makefile | tr ' ' '\\n' | grep '[.][ch]$')",
-        "make -n build_libs | grep -e ' -c -o ' | tr '\\n' '\\0' | xargs -0 -P \"$(nproc)\" -n 1 sh -c",
-        "make build_sw",
+        "make -j\"$(nproc)\" build_sw",
         "make install_dev",
         "sed -i 's/^Libs: .* -lcrypto$/& -lws2_32 -lgdi32 -lcrypt32/' \"$PREFIX/lib/pkgconfig/libcrypto.pc\"",
         "grep -q '^Libs: .* -lcrypt32$' \"$PREFIX/lib/pkgconfig/libcrypto.pc\"",

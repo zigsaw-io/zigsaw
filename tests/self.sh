@@ -92,9 +92,18 @@ copy_builds() { (cd "$copy" && z build --clean); }
 start=$SECONDS
 check "a copy of it builds, with a kept build of its own" copy_builds
 printf '      (%d s)\n' $((SECONDS - start))
+# The change: a line of zigsaw's help. When the help is reworded, this has
+# to follow it; a sed that matched nothing would show only as a build with
+# no file rewritten, so the line is looked for first.
+help_line="find apps in the remotes' catalogs"
+changed_line="find apps in every remote's catalog"
+main_zig=$(cygpath -u "$copy\\src\\main.zig")
+grep -qF "$help_line" "$main_zig" ||
+    { echo "tests/self.sh changes the help line \"$help_line\", which src/main.zig no longer has; change the script to a line it has"; exit 1; }
 # A POSIX path, so sed writes its temporary file beside it, not in the
 # working directory (which may be on another volume than TMP).
-sed -i 's/find apps in the default registry'"'"'s catalog/find apps in the catalog of the default registry/' "$(cygpath -u "$copy\\src\\main.zig")"
+sed -i "s/$help_line/$changed_line/" "$main_zig"
+grep -qF "$changed_line" "$main_zig" || { echo "sed didn't change the help line"; exit 1; }
 start=$SECONDS
 incremental() { (cd "$copy" && z -v build 2>&1) | grep -q "module zigsaw: goes on in the directory its last build left, 1 file(s) rewritten"; }
 check "changed, it builds again in the directory its last build left" incremental
@@ -106,7 +115,7 @@ own_bin() {
     echo "$ZIGSAW_HOME\\deploy\\$l\\bin"
 }
 mkdir -p "$work\\incremental" && cp "$(own_bin)"/*.exe "$work\\incremental\\"
-grep -q 'catalog of the default registry' "$work\\incremental\\zigsaw.exe" || { echo "the change isn't in what it built"; failures=$((failures + 1)); }
+grep -qF "$changed_line" "$work\\incremental\\zigsaw.exe" || { echo "the change isn't in what it built"; failures=$((failures + 1)); }
 start=$SECONDS
 check "with --clean, it builds the copy afresh" sh -c "cd '$copy' && \"\$0\" build --clean" "$zigsaw"
 printf '      (%d s)\n' $((SECONDS - start))

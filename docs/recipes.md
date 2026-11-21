@@ -1247,10 +1247,12 @@ configure. A build gets `make` (and `gmake`) as an
 [alias](#building-from-source), ahead of BusyBox's applet, in either of two
 ways:
 
-- **From an SDK that brings it.** GTK's SDK has GNU make among its
-  runtimes, and a build gets an SDK's runtimes with their aliases, so a
-  recipe that lists GTK's SDK has GNU make without naming it. It's pinned
-  all the same, by the SDK's digest.
+- **From an SDK that brings it.** GTK's SDK and PostgreSQL's SDK have GNU
+  make among their runtimes, and a build gets an SDK's runtimes with their
+  aliases, so a recipe that lists one of them has GNU make without naming
+  it. It's pinned all the same, by the SDK's digest. A recipe that also
+  pins make itself must pin the same image: a build can't have two
+  versions of one app.
 - **From its own pin**, in `"sdk"`, next to BusyBox's:
 
   ```json
@@ -1272,8 +1274,7 @@ commands run `make` and there's no GNU make:
 note: module plain runs make, which here is BusyBox's: one job at a time (-j does nothing), and no pattern rules or $(shell); for GNU make, add org.gnu.make to "sdk"
 ```
 
-The published recipes all build with GNU make, but for PostgreSQL's SDK
-(OpenSSL), Ghostscript and GDAL's SDK, whose turn is next:
+The published recipes all build with GNU make:
 [`scripts/check-make.sh`](scripts/check-make.sh), in the Reproduce
 workflow, fails a published recipe whose commands run `make` without it.
 
@@ -3249,25 +3250,22 @@ program stops at once: a known gap ([gaps](gaps.md)).
 ### Ghostscript
 
 [`com.artifex.Ghostscript`](recipes/ghostscript.json) is Ghostscript 10.08
-built from its release tarball, with the libraries it bundles, with zig and
-BusyBox: one program, `gswin64c.exe` (the name TeX Live's scripts look for;
-`gs` is exported too), with its PostScript resources and fonts compiled in,
-so it needs no `GS_LIB`. Its configure script supports MinGW; what it needs
-besides:
+built from its release tarball, with the libraries it bundles, with zig,
+[GNU make](#gnu-make) and BusyBox: one program, `gswin64c.exe` (the name TeX
+Live's scripts look for; `gs` is exported too), with its PostScript
+resources and fonts compiled in, so it needs no `GS_LIB`. Its configure
+script supports MinGW, and finds GNU make, so its makefile marks the
+directories it makes as order-only prerequisites (`| directories`), which
+the recipe checks. What it needs besides:
 
-- `ac_cv_prog_MAKE_EXISTS=yes`: it looks for `make` on PATH, which BusyBox's
-  applet isn't, and `LD` set to the [autotools `ld`](#gtk) for libtiff's
-  configure.
-- Its makefile marks the directories it makes as GNU make's order-only
-  prerequisites (`| directories`), which BusyBox's make doesn't know: the
-  build empties `MAKEDIRS` and runs `make directories` first.
+- `LD` set to the [autotools `ld`](#gtk) for libtiff's configure.
 - `-Wp,-w`, for FreeType, becomes `-w`, which zig takes; and a stand-in for
   a Windows function in `mkromfs.c` is for MSVC only, as MinGW builds have
   the Unix one.
 
-It builds in about 16 minutes here, as BusyBox's make compiles one file at
-a time. Its licence is the AGPL 3, which the sources pushed next to its
-image answer.
+It builds in about 7 minutes here with `make -j` (16 with BusyBox's make,
+which compiled one file at a time, until iteration 106). Its licence is the
+AGPL 3, which the sources pushed next to its image answer.
 
 ## PostgreSQL
 
@@ -3279,8 +3277,10 @@ PostgreSQL and keeps what extensions are built with (see
 [Extensions](#postgresql-extensions)); the runtime's cleanup leaves those
 out. Its libraries are modules of the SDK's recipe, built static and linked in:
 zlib, lz4 and zstd with CMake, libxml2 with Meson, and OpenSSL as GTK's SDK
-builds it (with Perl's image and
-[`openssl-unixspec.pm`](recipes/gtk4-sdk/openssl-unixspec.pm)). ICU is
+builds it (with Perl's image,
+[`openssl-unixspec.pm`](recipes/gtk4-sdk/openssl-unixspec.pm) and
+[GNU make](#gnu-make)'s `-j`; GNU make is among the SDK's runtimes, for the
+extensions built with it). ICU is
 Windows' own `icu.dll`: the recipe takes ICU 72.1's headers (what Windows 11
 and Server 2025 ship), with `U_DISABLE_RENAMING` for the unversioned names
 that DLL exports, and links mingw-w64's import library for it (`-licu`),
@@ -3378,14 +3378,14 @@ PostgreSQL 18 finds a control file on that path and loads its
 and install as they do anywhere. `postgres` or `pg_ctl start`, run on their
 own, load no extensions.
 
-Extensions build with pgxs from the SDK, with [GNU make](#gnu-make)'s image,
-as their documentation says, installing into the image's prefix rather
-than the SDK's read-only deployment:
+Extensions build with pgxs from the SDK, with [GNU make](#gnu-make), which
+the SDK brings among its runtimes, as their documentation says, installing
+into the image's prefix rather than the SDK's read-only deployment:
 
 ```json
 "extends": { "point": "org.postgresql.PostgreSQL", "version": "18" },
 "env": { "PG_EXTENSION_DIRS": "${app}" },
-"sdk": { "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:...", "make": "org.gnu.make:4.4.1@sha256:...", "llvm": "...", "busybox": "..." },
+"sdk": { "pgsdk": "org.postgresql.PostgreSQL.Sdk:18.6@sha256:...", "llvm": "...", "busybox": "..." },
 "modules": [
   {
     "name": "pgvector",
@@ -3471,8 +3471,9 @@ other builds link with: headers,
 `gdal-config`, the import library, and static libraries of what GDAL is
 built on, which are modules of its recipe: GEOS 3.15.0, PROJ 9.9.0 (with
 `proj.db`), SQLite (with its R-tree, which GDAL's GeoPackage driver
-needs), json-c 0.19, expat 2.10.0 and libiconv. PostGIS builds against
-them (see [extensions](#postgresql-extensions)).
+needs), json-c 0.19, expat 2.10.0 and libiconv (with its configure script
+and [GNU make](#gnu-make), which the recipe pins in `"sdk"`). PostGIS builds
+against them (see [extensions](#postgresql-extensions)).
 
 - GDAL is one DLL, `libgdal-39.dll`, with those libraries inside, and GDAL's
   own copies of zlib, libtiff, libgeotiff, libjpeg, libpng, giflib, LERC,

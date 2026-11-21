@@ -3,7 +3,8 @@
 # make (org.gnu.make), not BusyBox's: one job at a time, no pattern rules or
 # $(shell), and an empty macro on its command line can come out as garbage.
 # A recipe reaches GNU make by listing it in "sdk" or "runtimes", or by
-# listing an SDK or runtime whose recipe here has it in "runtimes" (GTK's SDK).
+# listing an SDK or runtime whose recipe here has it in "runtimes" (GTK's
+# SDK, PostgreSQL's SDK).
 #
 #   scripts/check-make.sh [recipe.json...]   (default: those in published-recipes.txt)
 #
@@ -14,9 +15,6 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-
-# Still on BusyBox's make until their round (iteration 105).
-later=" postgresql-sdk.json ghostscript.json gdal-sdk.json "
 
 if [ $# -eq 0 ]; then
     for name in $(grep -v '^#' "$root/scripts/published-recipes.txt" | tr -d '\r'); do set -- "$@" "$root/recipes/$name"; done
@@ -45,8 +43,6 @@ for f in "$@"; do
     done <<<"$pins"
     if [ -n "$ok" ]; then
         echo "ok      $name"
-    elif [ "${later#* $name }" != "$later" ]; then
-        echo "later   $name: runs BusyBox's make (its round is next)"
     else
         echo "FAILED  $name: runs make, but neither it nor an SDK or runtime it lists has org.gnu.make"
         failed=$((failed + 1))

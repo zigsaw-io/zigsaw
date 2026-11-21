@@ -393,9 +393,7 @@
 - Builds need `B:` free, and run one at a time.
 - A build that has no GNU make ([recipes](recipes.md#gnu-make)) runs
   BusyBox's, which runs one command at a time: its `-j` isn't implemented.
-  Three published recipes still do, until their turn: PostgreSQL's SDK
-  (whose OpenSSL compiles ahead of make, in parallel), Ghostscript (16
-  minutes, one file at a time) and GDAL's SDK (libiconv). Under BusyBox,
+  No published recipe does since iteration 106. Under BusyBox,
   configure finds no `install` either, and installs each file with a shell
   script, unless a recipe gives it one (gettext's does).
 - Builds with MSVC depend on the machine's Visual Studio, so they don't

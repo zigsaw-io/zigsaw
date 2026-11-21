@@ -3235,6 +3235,31 @@ ghcr.io.
   before GNU make's `sh.exe` forwarder; pgvector and pg_cron, built through the
   forwarder until now, rebuild to their published digests (`f511961e`, `5d080db7`).
 
+## GNU make for the rest (iteration 106)
+
+PostgreSQL's SDK, Ghostscript and GDAL's SDK moved to GNU make 4.4.1, and with them the
+images built on them: TeX Live, GDAL, PostgreSQL, its three extensions and osm2pgsql.
+Built on this machine (Windows 11 26300, 16 logical CPUs, store on D:) twice, the second
+time in another store from the pinned recipes (same ten digests), then compared with
+ghcr.io.
+
+- **The same files again.** Every image keeps the layers it has on ghcr.io: Ghostscript's,
+  built in parallel now, and PostgreSQL's SDK's own layer (`241ebbe3`), whose OpenSSL is
+  `make -j build_sw` instead of `make -n | xargs -P`. The SDK's one new layer is GNU make's
+  image (`c399a41e`), among its runtimes. The digests change only because configs pin
+  new images.
+- **Ghostscript's configure decides by `make --version`.** With GNU make on PATH it says
+  "GNU make" and writes order-only prerequisites (`MAKEDIRS=| directories`) that GNU make
+  runs, and finds `make.exe` (an alias), so `ac_cv_prog_MAKE_EXISTS=yes` isn't needed.
+  With BusyBox's applet it wrote the same `|` while deciding the make wasn't GNU's, which
+  is why the recipe emptied `MAKEDIRS`.
+- **Times** (store `p`, then `p2`): Ghostscript 6.7 and 7.3 min, 16 before; PostgreSQL's
+  SDK 7.5 and 7.2 (7 before: OpenSSL was parallel already); GDAL's SDK 12 and 11
+  (unchanged: libiconv is a small part, and it already ran `make -j`, which BusyBox's
+  make ignored).
+- **TeX Live builds only from cached archives.** It pins 432 archives from tlnet, which
+  replaces one in place when its package changes; iteration 104's store had all of them.
+
 ## Not yet tested
 
 - Ctrl+C during a run. It needs an interactive console.

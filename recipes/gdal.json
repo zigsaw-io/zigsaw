@@ -41,13 +41,13 @@
     "sozip": { "command": "bin/sozip.exe" }
   },
   "sdk": {
-    "gdalsdk": "org.gdal.GDAL.Sdk:3.13.3@sha256:02e58e0b53025b53baf0d1f2805eaf3dddb199fa6cfb7e486173c3661d3e1012"
+    "gdalsdk": "org.gdal.GDAL.Sdk:3.13.3@sha256:e61ad31f422ac3ae69f641e5a5839bd5120c8faf601b1522ef99f7838fc1b5a8"
   },
   "cleanup": ["/include", "/lib", "/bin/gdal-config", "/bin/geos-config", "/bin/sqlite3.exe", "/bin/iconv.exe"],
   "modules": [
     {
       "name": "gdal",
-      "sources": [{ "image": "org.gdal.GDAL.Sdk:3.13.3@sha256:02e58e0b53025b53baf0d1f2805eaf3dddb199fa6cfb7e486173c3661d3e1012" }]
+      "sources": [{ "image": "org.gdal.GDAL.Sdk:3.13.3@sha256:e61ad31f422ac3ae69f641e5a5839bd5120c8faf601b1522ef99f7838fc1b5a8" }]
     }
   ]
 }

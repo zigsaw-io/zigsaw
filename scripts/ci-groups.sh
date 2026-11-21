@@ -57,10 +57,14 @@ qt_paths=(
 )
 texlive_paths=(
     scripts/texlive-pins.sh recipes/gtk4-sdk/autotools-ld.sh
+    # GNU make, which Ghostscript builds with.
+    recipes/make.json recipes/make/
     "${common_paths[@]}"
 )
 gdal_paths=(
     tests/gdal.sh recipes/gtk4-sdk/autotools-mtimes.sh
+    # GNU make, which GDAL's SDK builds libiconv with.
+    recipes/make.json recipes/make/
     "${common_paths[@]}"
 )
 for group in $gtk_groups; do

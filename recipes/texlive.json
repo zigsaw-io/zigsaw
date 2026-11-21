@@ -156,7 +156,7 @@
   "permissions": { "filesystem": ["cwd"] },
   "runtimes": {
     "perl": "org.perl.perl:5.42.3.1@sha256:3bd9e281698960a2cf62cfb8168edfd84f376305af45eb743270672aaca1ca22",
-    "gs": "com.artifex.Ghostscript:10.08.0@sha256:deaacbe917263f355abc4ee700d91c52ca95d322f2b7af4d1719456a78594041"
+    "gs": "com.artifex.Ghostscript:10.08.0@sha256:4849c111ecac5a465d6497068a5853aacab1127914c9d2512227807c7c978d80"
   },
   "exports": {
     "afm2tfm": { "command": "bin/windows/afm2tfm.exe" },

@@ -15,6 +15,7 @@
   "contained": true,
   "sdk": {
     "zig": "org.ziglang.zig:0.17.0@sha256:93ec2b6b36708ae80ffac87872e70dafaee350cd2d49a95dd2fa5847d0a10449",
+    "make": "org.gnu.make:4.4.1@sha256:9add04a45e601e7e5b8e0127184c2faead3783527f4dbbdb3a46ca1118fa9da7",
     "busybox": "net.frippery.busybox:FRP-6075-g169694ebd@sha256:db9d39727bfdd4d176b5878c0a125daa8a2396ea21e0f01a6a372f53d9d97e5d"
   },
   "modules": [
@@ -32,9 +33,10 @@
       "build": [
         "sed -i '/just define a dummy here for Windows/{n;n;s/^#ifdef _WIN32$/#if defined(_WIN32) \\&\\& !defined(__MINGW32__)/}' base/mkromfs.c",
         "grep -q '^#if defined(_WIN32) && !defined(__MINGW32__)$' base/mkromfs.c",
-        "sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --without-tesseract --disable-cups --without-ijs --disable-contrib --without-x --disable-fontconfig --disable-dbus --without-libpaper --without-libidn --disable-gtk ac_executable_extensions=.exe ac_cv_prog_MAKE_EXISTS=yes > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
-        "sed -i 's/^MAKEDIRS=.*/MAKEDIRS=/; s/^MAKEDIRSTOP=.*/MAKEDIRSTOP=/; s/ -Wp,-w / -w /' Makefile",
-        "make directories > make.log 2>&1 && make >> make.log 2>&1 || { tail -80 make.log; exit 1; }",
+        "sh ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 --prefix=\"$PREFIX\" --without-tesseract --disable-cups --without-ijs --disable-contrib --without-x --disable-fontconfig --disable-dbus --without-libpaper --without-libidn --disable-gtk ac_executable_extensions=.exe > configure.log 2>&1 || { tail -60 config.log; exit 1; }",
+        "grep -qx 'MAKEDIRS=| directories' Makefile",
+        "sed -i 's/ -Wp,-w / -w /' Makefile",
+        "make -j\"$(nproc)\" > make.log 2>&1 || { tail -80 make.log; exit 1; }",
         "mkdir -p \"$PREFIX/bin\" && cp bin/gs.exe \"$PREFIX/bin/gswin64c.exe\""
       ]
     }

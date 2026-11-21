@@ -78,7 +78,7 @@ its catalog (`zigsaw search`), so these install with `zigsaw install <id>`
 | Ghostscript (built from source) | `com.artifex.Ghostscript` | 10.08.0 | `gs`, `gswin64c` |
 | TeX Live, its small scheme (on Perl and Ghostscript; packages from tlnet) | `org.tug.texlive` | 2026.80721 | `latexmk`, `pdflatex`, `xelatex`, `lualatex`, `latex`, `tex`, `bibtex`, `biber`, `makeindex`, `mpost`, `kpsewhich`, `dvips`, `dvipdfmx`, `epstopdf`, `ps2pdf` and 116 more |
 | GNU Make (built from source, for builds) | `org.gnu.make` | 4.4.1 | |
-| PostgreSQL SDK: PostgreSQL built from source with Clang (llvm-mingw), with headers, libraries and pgxs | `org.postgresql.PostgreSQL.Sdk` | 18.6 | `pg_config` |
+| PostgreSQL SDK: PostgreSQL built from source with Clang (llvm-mingw), with headers, libraries and pgxs, and GNU make for building extensions | `org.postgresql.PostgreSQL.Sdk` | 18.6 | `pg_config` |
 | PostgreSQL, with PL/Perl and PL/Python (from its SDK; on Perl and Python) | `org.postgresql.PostgreSQL` | 18.6 | `postgresql`, `postgres`, `initdb`, `pg_ctl`, `psql`, `pg_dump`, `pg_dumpall`, `pg_restore`, `pg_basebackup`, `pg_isready`, `createdb`, `dropdb`, `createuser`, `dropuser`, `vacuumdb`, `reindexdb`, `clusterdb`, `pgbench` |
 | pgvector, extending PostgreSQL (built from source with pgxs) | `org.postgresql.PostgreSQL.pgvector` | 0.8.7 | |
 | pg_cron, extending PostgreSQL (built from source with pgxs) | `org.postgresql.PostgreSQL.pg_cron` | 1.6.8 | |
