@@ -128,7 +128,7 @@ pub fn exec(ctx: *Context, opts: Options) !u32 {
     defer _ = win32.CloseHandle(run_zigsaw);
     const spec = try readSpec(ctx, run, run_zigsaw);
     const prepared = try prepare(ctx, spec, opts);
-    if (opts.detach and !opts.detached_child) return startDetached(ctx, opts);
+    if (opts.detach and !opts.detached_child) return startDetached(ctx, opts, run);
 
     // The app, whose end is the run's: it ends the command too.
     const app = if (run.app_pid) |pid| win32.OpenProcess(win32.SYNCHRONIZE | win32.PROCESS_QUERY_LIMITED_INFORMATION, win32.FALSE, pid) else null;
@@ -352,7 +352,7 @@ fn resolve(io: Io, arena: Allocator, spec: Spec, name: []const u8) !runtime.Comm
 /// Starts `zigsaw enter --detached-child` with the same options, which starts
 /// the command and waits for it (see detach.zig), then prints the PID `ps`
 /// lists it by.
-fn startDetached(ctx: *Context, opts: Options) !u32 {
+fn startDetached(ctx: *Context, opts: Options, run: ps.Record) !u32 {
     const arena = ctx.arena;
     var args: std.ArrayList([]const u8) = .empty;
     if (ctx.verbose) try args.append(arena, "--verbose");
@@ -361,6 +361,16 @@ fn startDetached(ctx: *Context, opts: Options) !u32 {
     try args.appendSlice(arena, &.{ "--", opts.target, opts.command });
     try args.appendSlice(arena, opts.args);
     const waiter = try detach.start(ctx, args.items);
+    if (ctx.format == .json) {
+        try @import("output.zig").write(ctx, .{
+            .run = waiter.pid,
+            .inside = run.pid,
+            .id = run.id,
+            .command = opts.command,
+            .in_job = !waiter.broke_away,
+        });
+        return 0;
+    }
     var buf: [64]u8 = undefined;
     var out = Context.stdout().writerStreaming(ctx.io, &buf);
     try out.interface.print("{d}\n", .{waiter.pid});

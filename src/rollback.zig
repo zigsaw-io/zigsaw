@@ -15,6 +15,7 @@ const Registry = @import("Registry.zig");
 const Store = @import("Store.zig");
 const install = @import("install.zig");
 const oci = @import("oci.zig");
+const output = @import("output.zig");
 const prompt = @import("prompt.zig");
 const remote = @import("remote.zig");
 const snapshot = @import("snapshot.zig");
@@ -77,7 +78,7 @@ pub fn rollback(ctx: *Context, id: []const u8, consent: remote.Consent, data: Da
         return fail("{s} stays at {s}: a run of it goes on, and its data can't go back under it. Let it end first, or go back with --keep-data", .{ current.id, current.version });
     const had_data = try snapshot.hasData(ctx, current.id);
 
-    try install.install(ctx, .{
+    _ = try install.install(ctx, .{
         .manifest_digest = previous.manifest,
         .manifest = image.manifest,
         .config = image.config,
@@ -115,7 +116,41 @@ pub fn rollback(ctx: *Context, id: []const u8, consent: remote.Consent, data: Da
     } else if (had_data) {
         note("  its data stays as {s} left it: none is kept as {s} left it", .{ current.version, previous.version });
     }
+    if (ctx.format == .json) try output.write(ctx, WentBack{
+        .id = current.id,
+        .from = current.version,
+        .to = previous.version,
+        .from_manifest = current.manifest,
+        .to_manifest = previous.manifest,
+        .data = if (take) "taken" else if (kept != null) "kept" else "none",
+        .snapshot = if (kept) |k| .of(k) else null,
+    });
 }
+
+/// What `rollback` did, as JSON has it.
+const WentBack = struct {
+    id: []const u8,
+    from: []const u8,
+    to: []const u8,
+    from_manifest: []const u8,
+    to_manifest: []const u8,
+    /// `taken` (its data went back too), `kept` (it stays, and the copy of
+    /// how the version gone back to left it is kept), `none` (no copy) or
+    /// `only` (`--data-only`: the data alone went back).
+    data: []const u8,
+    /// The copy of its data that went back, or is kept.
+    snapshot: ?Snapshot,
+
+    const Snapshot = struct {
+        bytes: u64,
+        files: u64,
+        taken: output.Time,
+
+        fn of(k: snapshot.Kept) Snapshot {
+            return .{ .bytes = k.bytes, .files = k.files, .taken = .{ .seconds = k.taken } };
+        }
+    };
+};
 
 /// Says what data is kept, and asks whether it's to go back with the version.
 fn askForData(ctx: *Context, current: Store.Ref, previous: Store.Ref, kept: snapshot.Kept) !bool {
@@ -147,6 +182,15 @@ fn dataOnly(ctx: *Context, current: Store.Ref) !void {
     note("{s} {s}: its data is back to how this version left it {f}", .{ current.id, current.version, snapshot.ago(ctx, kept.taken) });
     if (try ctx.store.readKeptData(arena, current.id)) |aside|
         note("  what {s} wrote since is set aside, and returns with `zigsaw rollback --data {s}`, until the next update of the app", .{ aside.version, current.id });
+    if (ctx.format == .json) try output.write(ctx, WentBack{
+        .id = current.id,
+        .from = current.version,
+        .to = current.version,
+        .from_manifest = current.manifest,
+        .to_manifest = current.manifest,
+        .data = "only",
+        .snapshot = .of(kept),
+    });
 }
 
 /// How to have the version again once its blobs are gone.
@@ -165,14 +209,18 @@ pub fn setHeld(ctx: *Context, ids: []const []const u8, held: bool) !void {
     const arena = ctx.arena;
     var refs: std.ArrayList(Store.Ref) = .empty;
     for (ids) |id| try refs.append(arena, try ctx.store.readRef(arena, id) orelse return fail("{s} is not installed", .{id}));
+    const Masked = struct { id: []const u8, version: []const u8, masked: bool, changed: bool };
+    var rows: std.ArrayList(Masked) = .empty;
     for (refs.items) |ref| {
         const changed = try ctx.store.setHeld(arena, ref.id, held);
+        try rows.append(arena, .{ .id = ref.id, .version = ref.version, .masked = held, .changed = changed });
         if (held) {
             if (changed) note("masked {s} at {s}: updates leave it alone until `zigsaw mask --remove {s}`", .{ ref.id, ref.version, ref.id }) else note("{s} was masked already", .{ref.id});
         } else {
             if (changed) note("{s} {s}: updates reach it again", .{ ref.id, ref.version }) else note("{s} wasn't masked", .{ref.id});
         }
     }
+    if (ctx.format == .json) try output.write(ctx, rows.items);
 }
 
 /// `zigsaw mask` alone: the installed apps updates leave alone, one a line.
@@ -182,7 +230,7 @@ pub fn listHeld(ctx: *Context) !void {
         const App = struct { id: []const u8, version: []const u8 };
         var held: std.ArrayList(App) = .empty;
         for (try ctx.store.listRefs(arena)) |ref| if (try ctx.store.isHeld(arena, ref.id)) try held.append(arena, .{ .id = ref.id, .version = ref.version });
-        return @import("output.zig").write(ctx, held.items);
+        return output.write(ctx, held.items);
     }
     var buf: [1024]u8 = undefined;
     var stdout = std.Io.File.stdout().writerStreaming(ctx.io, &buf);

@@ -404,7 +404,7 @@ pub fn create(ctx: *Context, name: []const u8, at: ?[]const u8) !void {
     if (try ctx.store.readRef(arena, name) != null) return fail("{s} is an app's id, and its own volume's name: give this one another", .{name});
     const given = at orelse {
         _ = try createInStore(ctx, name);
-        return;
+        return writeCreated(ctx, name);
     };
     if (!isDrivePath(given)) return fail("--path={s}: give a folder by its absolute path on a drive of this machine, such as E:\\volumes\\{s}", .{ given, name });
     const p = try normalPath(arena, given);
@@ -420,6 +420,14 @@ pub fn create(ctx: *Context, name: []const u8, at: ?[]const u8) !void {
     try Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = tmp, .data = try oci.toJson(arena, Record{ .path = p }) });
     try Io.Dir.rename(.cwd(), tmp, .cwd(), try recordPath(ctx.store, arena, name), ctx.io);
     note("created volume {s}, kept in {s}", .{ name, p });
+    try writeCreated(ctx, name);
+}
+
+/// With --format=json, the volume `create` made, as `volume ls` has it.
+fn writeCreated(ctx: *Context, name: []const u8) !void {
+    if (ctx.format != .json) return;
+    const v = try find(ctx.store, ctx.arena, name) orelse return;
+    try output.write(ctx, try listed(ctx, try allSaved(ctx), v));
 }
 
 /// Why a folder of yours can't be a volume's, if it can't: what no run may
@@ -847,15 +855,21 @@ fn jsonMounts(arena: Allocator, users: []const Saved) ![]const JsonMount {
     return out;
 }
 
+/// A volume, as `volume ls --format=json` has it.
+const Listed = struct { name: []const u8, path: []const u8, external: bool, own: bool, mounts: []const JsonMount };
+
+fn listed(ctx: *Context, saved: anytype, v: Volume) !Listed {
+    return .{ .name = v.name, .path = v.path, .external = v.external, .own = v.own, .mounts = try jsonMounts(ctx.arena, try usersOf(ctx, saved, v)) };
+}
+
 /// `zigsaw volume ls`.
 pub fn show(ctx: *Context) !void {
     const arena = ctx.arena;
     const saved = try allSaved(ctx);
     if (ctx.format == .json) {
-        const Listed = struct { name: []const u8, path: []const u8, external: bool, own: bool, mounts: []const JsonMount };
         const all = try list(ctx.store, arena);
         const out = try arena.alloc(Listed, all.len);
-        for (out, all) |*o, v| o.* = .{ .name = v.name, .path = v.path, .external = v.external, .own = v.own, .mounts = try jsonMounts(arena, try usersOf(ctx, saved, v)) };
+        for (out, all) |*o, v| o.* = try listed(ctx, saved, v);
         return output.write(ctx, out);
     }
     var buf: [4096]u8 = undefined;
@@ -944,29 +958,53 @@ fn inspectJson(ctx: *Context, v: Volume) !Inspected {
 pub fn remove(ctx: *Context, names: []const []const u8) !void {
     const arena = ctx.arena;
     const saved = try allSaved(ctx);
-    for (names) |name| {
+    // Every one checked, and held, before any goes: a name that can't go
+    // leaves them all as they are.
+    var found: std.ArrayList(Volume) = .empty;
+    var locks: std.ArrayList(Store.Lock) = .empty;
+    defer for (locks.items) |l| l.release(ctx.io);
+    names: for (names) |name| {
         const v = try find(ctx.store, arena, name) orelse return fail("there's no volume {s}; `zigsaw volume ls` lists them", .{name});
+        for (found.items) |other| if (std.mem.eql(u8, other.name, v.name)) continue :names;
         const users = try usersOf(ctx, saved, v);
         if (users.len > 0 and users[0].own)
             return fail("{s} is the data of an app that's installed: `zigsaw uninstall --delete-data {s}` removes both", .{ name, name });
         if (users.len > 0) return fail("{s} is mounted by {s}: take that away first, with `zigsaw override --novolume={s} {s}`", .{
             name, try describeMounts(arena, users), users[0].mount.target, users[0].id orelse "--global",
         });
-        const lock = try lockUnused(ctx, v) orelse return fail("volume {s} is in use by a run of an app", .{name});
-        defer lock.release(ctx.io);
+        try locks.append(arena, try lockUnused(ctx, v) orelse return fail("volume {s} is in use by a run of an app", .{name}));
+        try found.append(arena, v);
+    }
+    // As --format=json has it: `files_kept` where a volume kept elsewhere
+    // leaves its files.
+    const Removed = struct { name: []const u8, files_kept: ?[]const u8 };
+    var removed: std.ArrayList(Removed) = .empty;
+    for (found.items) |v| {
         if (v.external) {
             try grants.undoPath(ctx, v.path);
-            try Io.Dir.cwd().deleteFile(ctx.io, try recordPath(ctx.store, arena, name));
-            note("forgot volume {s}; its files stay in {s}", .{ name, v.path });
+            try Io.Dir.cwd().deleteFile(ctx.io, try recordPath(ctx.store, arena, v.name));
+            note("forgot volume {s}; its files stay in {s}", .{ v.name, v.path });
         } else {
             try delete(ctx, v);
-            note("removed volume {s}", .{name});
+            note("removed volume {s}", .{v.name});
         }
+        try removed.append(arena, .{ .name = v.name, .files_kept = if (v.external) v.path else null });
     }
+    if (ctx.format == .json) try output.write(ctx, removed.items);
 }
 
 /// What `prune` deleted, or would.
-pub const Pruned = struct { count: usize = 0, bytes: u64 = 0 };
+pub const Pruned = struct {
+    count: usize = 0,
+    bytes: u64 = 0,
+    /// Each volume removed (or that would be), and its size.
+    removed: []const Sized = &.{},
+    /// Those kept, as a run uses them.
+    in_use: []const []const u8 = &.{},
+};
+
+/// A volume, and how much its files take.
+pub const Sized = struct { name: []const u8, bytes: u64 };
 
 /// `zigsaw volume prune [--dry-run]`, and `zigsaw uninstall --unused --volumes`: deletes
 /// the volumes in the store that nothing mounts and no run uses: those no
@@ -976,10 +1014,13 @@ pub fn prune(ctx: *Context, dry_run: bool) !Pruned {
     const arena = ctx.arena;
     const saved = try allSaved(ctx);
     var out: Pruned = .{};
+    var removed: std.ArrayList(Sized) = .empty;
+    var in_use: std.ArrayList([]const u8) = .empty;
     for (try list(ctx.store, arena)) |v| {
         if (v.external or (try usersOf(ctx, saved, v)).len > 0) continue;
         const lock = try lockUnused(ctx, v) orelse {
             note("kept volume {s}, which a run uses", .{v.name});
+            try in_use.append(arena, v.name);
             continue;
         };
         defer lock.release(ctx.io);
@@ -988,28 +1029,29 @@ pub fn prune(ctx: *Context, dry_run: bool) !Pruned {
         out.count += 1;
         if (dry_run) {
             note("would remove volume {s} ({Bi:.1})", .{ v.name, size });
+            try removed.append(arena, .{ .name = v.name, .bytes = size });
             continue;
         }
         try delete(ctx, v);
         note("removed volume {s} ({Bi:.1})", .{ v.name, size });
+        try removed.append(arena, .{ .name = v.name, .bytes = size });
     }
+    out.removed = removed.items;
+    out.in_use = in_use.items;
     return out;
 }
 
 /// The volumes in the store that nothing mounts, with their sizes, for what
 /// `zigsaw uninstall --unused` says it kept.
-pub fn unmounted(ctx: *Context) !struct { names: []const []const u8, bytes: u64 } {
+pub fn unmounted(ctx: *Context) ![]const Sized {
     const arena = ctx.arena;
     const saved = try allSaved(ctx);
-    var names: std.ArrayList([]const u8) = .empty;
-    var bytes: u64 = 0;
+    var out: std.ArrayList(Sized) = .empty;
     for (try list(ctx.store, arena)) |v| {
         if (v.external or (try usersOf(ctx, saved, v)).len > 0) continue;
-        const size = (try measure(ctx.io, arena, v.path)).bytes;
-        try names.append(arena, try std.fmt.allocPrint(arena, "{s} ({Bi:.1})", .{ v.name, size }));
-        bytes += size;
+        try out.append(arena, .{ .name = v.name, .bytes = (try measure(ctx.io, arena, v.path)).bytes });
     }
-    return .{ .names = names.items, .bytes = bytes };
+    return out.items;
 }
 
 // ---------------------------------------------------------------------------
@@ -1104,6 +1146,17 @@ pub fn exportTo(ctx: *Context, name: []const u8, file: []const u8, all: bool) !v
         note("exported volume {s}: {Bi:.1} in {d} file(s), in {f}", .{ name, tally.bytes, tally.files, ctx.since(start) });
     if (leaves_out) note("  without its temporary files and its cache: --all has those too", .{});
     if (tally.links > 0) note("  passed over {d} link(s): a volume mounted in it is exported by its own name", .{tally.links});
+    // Never to `-`, whose stdout is the archive (see output.zig).
+    if (ctx.format == .json) try output.write(ctx, .{
+        .volume = v.name,
+        .file = target,
+        .gzip = gz,
+        .bytes = tally.bytes,
+        .files = tally.files,
+        .links_passed_over = tally.links,
+        .archive_bytes = archive_size,
+        .left_out = if (leaves_out) &snapshot.left_out else &[_][]const u8{},
+    });
 }
 
 /// ".tar.gz" and ".tgz" say gzip; any other name is a plain tar.
@@ -1271,6 +1324,25 @@ pub fn importFrom(ctx: *Context, name: []const u8, file: []const u8, replace: bo
     }
     if (tally.links > 0) note("  passed over {d} link(s) and the like in the archive: only files and folders are imported", .{tally.links});
     if (is_app and try store.readRef(arena, name) == null) note("  it's the data of {s}, for when that app is installed", .{name});
+    if (ctx.format == .json) {
+        const when = if (unpacked.get("ZIGSAW.exported")) |text| std.fmt.parseInt(i64, text, 10) catch null else null;
+        const Exported = struct { volume: []const u8, version: ?[]const u8, at: ?output.Time };
+        try output.write(ctx, .{
+            .volume = v.name,
+            .file = if (from_stdin) null else try snapshot.absolute(io, arena, file),
+            .bytes = tally.bytes,
+            .files = tally.files,
+            .links_passed_over = tally.links,
+            .made = made,
+            .replaced = old.len,
+            // What the archive says of itself: null for one zigsaw didn't make.
+            .exported = if (unpacked.get("ZIGSAW.volume")) |of| Exported{
+                .volume = of,
+                .version = unpacked.get("ZIGSAW.version"),
+                .at = if (when) |t| .{ .seconds = t } else null,
+            } else null,
+        });
+    }
 }
 
 /// Fails if the files unpacked in `import_dir` have any where one of the

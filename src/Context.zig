@@ -49,12 +49,29 @@ pub fn stdout() std.Io.File {
     return f;
 }
 
+/// Standard error as a file, flagged as `stdout` is: for what writes a
+/// stream there, such as a log's last lines under `--format=json`.
+pub fn stderrFile() std.Io.File {
+    var f = std.Io.File.stderr();
+    if (win32.synchronousIo(f.handle) == false) f.flags.nonblocking = true;
+    return f;
+}
+
 /// After a write to stdout failed: quiet if whoever read it stopped, as in
 /// `zigsaw remote-info --file=... | head`.
 pub fn stdoutFailed(out: *const std.Io.File.Writer) error{Failed} {
     const err = out.err orelse return fail("writing to stdout failed", .{});
     if (err == error.BrokenPipe) return error.Failed;
     return fail("writing to stdout: {t}", .{err});
+}
+
+/// The stdio a child of zigsaw's gets whose output is for the user to read,
+/// such as a build's tools: ours, unless zigsaw is printing JSON, when
+/// stdout is the JSON's alone, and the child's stdout goes to stderr.
+pub fn childStdio(ctx: *const Context) ?[3]?win32.HANDLE {
+    if (ctx.format != .json) return null;
+    const err = win32.GetStdHandle(win32.STD_ERROR_HANDLE);
+    return .{ win32.GetStdHandle(win32.STD_INPUT_HANDLE), err, err };
 }
 
 /// Standard input, flagged as `stdout` is, for the same reason.

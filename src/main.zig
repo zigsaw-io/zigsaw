@@ -268,10 +268,11 @@ const usage =
     \\image for windows/amd64. Blobs over 64 MiB are published in chunks of
     \\ZIGSAW_UPLOAD_CHUNK_SIZE bytes (0: in one request).
     \\
-    \\With --format=json, list, info, remote-info (and --show-files), search, remote-ls,
-    \\remotes, ps, mask, update --check, updates, permissions, volume ls, volume inspect,
-    \\doctor and version print one JSON value on stdout in place of their text, with the
-    \\keys docs/json.md lists; --format=text is their text. Exit codes and stderr stay.
+    \\With --format=json, commands print one JSON value on stdout in place of their text,
+    \\with the keys docs/json.md lists: what's there, or what they did, once it's done.
+    \\Exit codes and stderr stay; one that fails prints nothing. run and enter take it
+    \\with -d; logs, up without -d, and what prints a file or archive refuse it.
+    \\--format=text is their text.
     \\
     \\Before 0.105, zigsaw's commands were Docker's: pull is now install, rm uninstall, prune
     \\uninstall --unused, ls and cat remote-info, stop kill, kill kill --now, exec enter,
@@ -483,9 +484,20 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         }
         _ = try ctx.store.lock(ctx.arena, .shared);
         const path = try builder.recipePath(ctx, recipe_path);
-        if (try compose.read(ctx, path)) |p| {
-            try compose.buildAll(ctx, p, opts);
-        } else try install.install(ctx, try builder.build(ctx, path, opts));
+        const apps = if (try compose.read(ctx, path)) |p| try compose.buildAll(ctx, p, opts) else one: {
+            const image = try builder.build(ctx, path, opts);
+            const app: compose.BuiltApp = .{ .installed = try install.install(ctx, image), .reused = image.reused };
+            break :one try ctx.arena.dupe(compose.BuiltApp, &.{app});
+        };
+        if (ctx.format == .json) {
+            const rows = try ctx.arena.alloc(BuiltRow, apps.len);
+            for (rows, apps) |*row, a| row.* = .{ .parts = .{ try info.listed(ctx, a.installed.ref), .{
+                .replaced = a.installed.replaced,
+                .old_kept_running = a.installed.old_kept_running,
+                .reused = a.reused,
+            } } };
+            try output.write(ctx, rows);
+        }
         return 0;
     }
     if (std.mem.eql(u8, command, "install")) {
@@ -503,7 +515,8 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         }
         _ = try ctx.store.lock(ctx.arena, .shared);
         const image = try inRemote(ctx, words.items) orelse return usageError();
-        try install.install(ctx, (try remote.fetch(ctx, image, .{ .consent = consent, .lazy = lazily })).?);
+        const installed = try install.install(ctx, (try remote.fetch(ctx, image, .{ .consent = consent, .lazy = lazily })).?);
+        if (ctx.format == .json) try output.write(ctx, output.merged(.{ try info.listed(ctx, installed.ref), installed.extra() }));
         return 0;
     }
     if (std.mem.eql(u8, command, "build-export")) {
@@ -524,7 +537,8 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
             ctx.remote = r.url;
             image = null;
         };
-        try remote.push(ctx, names.items[0], image, opts);
+        const pushed = try remote.push(ctx, names.items[0], image, opts);
+        if (ctx.format == .json) try output.write(ctx, pushed);
         return 0;
     }
     if (std.mem.eql(u8, command, "build-update-repo")) {
@@ -610,7 +624,11 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         if (files) try peek.ls(ctx, name) else if (file) |path| try peek.cat(ctx, name, path) else try info.remoteInfo(ctx, name);
         return 0;
     }
-    if (std.mem.eql(u8, command, "run")) return runtime.run(ctx, try parseRunOptions(ctx, rest));
+    if (std.mem.eql(u8, command, "run")) {
+        const opts = try parseRunOptions(ctx, rest);
+        try output.checkDetached(ctx, "run", opts.detach and !opts.detached_child);
+        return runtime.run(ctx, opts);
+    }
     if (std.mem.eql(u8, command, "list")) {
         if (rest.len != 0) return usageError();
         try info.list(ctx);
@@ -649,7 +667,11 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         opts.filters = filters.items;
         return stop.stop(ctx, opts);
     }
-    if (std.mem.eql(u8, command, "enter")) return exec.exec(ctx, try parseExecOptions(ctx, rest));
+    if (std.mem.eql(u8, command, "enter")) {
+        const opts = try parseExecOptions(ctx, rest);
+        try output.checkDetached(ctx, "enter", opts.detach and !opts.detached_child);
+        return exec.exec(ctx, opts);
+    }
     if (std.mem.eql(u8, command, "logs")) {
         var opts: logs.Options = .{};
         for (rest) |arg| {
@@ -811,9 +833,15 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
         // were granted and no longer stands, by older zigsaws too.
         try hkcu.settleLeftovers(ctx, null);
         const unsettled = try grants.settleAll(ctx) + try grants.settleOrphans(ctx);
-        const code = try exports.repair(ctx);
+        const repaired = try exports.repair(ctx);
         try schedule.repair(ctx);
-        return if (unsettled > 0) 1 else code;
+        if (ctx.format == .json) try output.write(ctx, .{
+            .apps = repaired.apps,
+            .failed = repaired.failed,
+            // What runs were given that couldn't be taken back yet.
+            .grants_unsettled = unsettled,
+        });
+        return if (unsettled > 0 or repaired.failed.len > 0) 1 else 0;
     }
     if (std.mem.eql(u8, command, "permissions")) {
         if (rest.len > 1) return usageError();
@@ -825,11 +853,19 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     if (std.mem.eql(u8, command, "permission-remove")) {
         if (rest.len != 1 or std.mem.startsWith(u8, rest[0], "-")) return usageError();
         _ = try ctx.store.lock(ctx.arena, .shared);
-        try grants.takeBackLabel(ctx, rest[0]);
+        const outcome = try grants.takeBackLabel(ctx, rest[0]);
+        if (ctx.format == .json) try output.write(ctx, .{ .path = rest[0], .outcome = outcome });
         return 0;
     }
     return usageError();
 }
+
+/// An app `build` built and installed, as `--format=json` has it: its
+/// `list` entry, and what the build and install did.
+const BuiltRow = output.Merged(struct {
+    info.Listed,
+    struct { replaced: ?install.Installed.Replaced, old_kept_running: bool, reused: bool },
+});
 
 fn updatesCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
     if (args.len == 0) {
@@ -855,13 +891,18 @@ fn updatesCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
         // An install or upgrade asks this way: what the user turned off stays off.
         const respect = rest.len == 1 and isFlag(rest[0], "unless-off");
         if (rest.len != @intFromBool(respect)) return usageError();
-        if (respect and try schedule.turnedOff(ctx)) return 0;
+        if (respect and try schedule.turnedOff(ctx)) {
+            if (ctx.format == .json) try output.write(ctx, .{ .daily_check = false });
+            return 0;
+        }
         try schedule.turnOn(ctx);
+        if (ctx.format == .json) try output.write(ctx, .{ .daily_check = true });
         return 0;
     }
     if (std.mem.eql(u8, what, "off")) {
         if (rest.len != 0) return usageError();
         try schedule.turnOff(ctx);
+        if (ctx.format == .json) try output.write(ctx, .{ .daily_check = false });
         return 0;
     }
     return usageError();
@@ -897,6 +938,12 @@ fn volumeCommand(ctx: *Context, args: []const [:0]const u8) !u32 {
             if (isFlag(arg, "dry-run")) dry_run = true else return usageError();
         }
         const pruned = try volumes.prune(ctx, dry_run);
+        if (ctx.format == .json) try output.write(ctx, .{
+            .dry_run = dry_run,
+            .removed = pruned.removed,
+            .in_use = pruned.in_use,
+            .bytes = pruned.bytes,
+        });
         if (pruned.count == 0)
             note("no volume to remove: each is mounted by an app, kept outside the store, or in use", .{})
         else
@@ -1049,7 +1096,8 @@ fn buildSignCommand(ctx: *Context, args: []const []const u8) !u32 {
             const limit: usize = if (mode == .bundle) @import("sigstore.zig").max_bundle_size else 4096;
             const text = cwd.readFileAlloc(ctx.io, words.items[2], ctx.arena, .limited(limit)) catch |err|
                 return fail("reading {s}: {t}", .{ words.items[2], err });
-            if (mode == .bundle) try remote.pushBundle(ctx, image, payload, text) else try remote.pushSignature(ctx, image, payload, text);
+            const signed = if (mode == .bundle) try remote.pushBundle(ctx, image, payload, text) else try remote.pushSignature(ctx, image, payload, text);
+            if (ctx.format == .json) try output.write(ctx, signed);
             return 0;
         },
         .check => {
@@ -1064,6 +1112,7 @@ fn buildSignCommand(ctx: *Context, args: []const []const u8) !u32 {
                 .wrong => |why| fail("{s}: {s}", .{ image, why }),
                 .signed => |by| signed: {
                     note("{s}: signed, by {s}", .{ image, by });
+                    if (ctx.format == .json) try output.write(ctx, .{ .image = target.text, .manifest = digest, .signed_by = by });
                     break :signed 0;
                 },
             };
@@ -1289,6 +1338,11 @@ fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
             opts.detach = true;
             continue;
         }
+        // This zigsaw's, not the detached one's, which prints nothing.
+        if (std.mem.eql(u8, opt.name, "format") and opt.value != null) {
+            ctx.format = try output.parse(opt.value.?);
+            continue;
+        }
         try given.appendSlice(ctx.arena, @ptrCast(args[first .. i + 1]));
         if (std.mem.eql(u8, opt.name, "verbose") and opt.value == null) {
             ctx.verbose = true;
@@ -1320,7 +1374,11 @@ fn parseRunOptions(ctx: *Context, args: []const [:0]const u8) !runtime.Options {
 
 /// For `up`: an entry of a project's "run", checked as `run` would take it.
 fn checkRunOptions(ctx: *Context, args: []const [:0]const u8) anyerror!void {
+    const format = ctx.format;
+    ctx.format = .text;
+    defer ctx.format = format;
     const opts = try parseRunOptions(ctx, args);
+    if (ctx.format != .text) return fail("--format: what `zigsaw up` prints is its own", .{});
     if (opts.detach) return fail("--detach: `zigsaw up` starts every app detached already", .{});
 }
 
@@ -1350,6 +1408,11 @@ fn parseExecOptions(ctx: *Context, args: []const [:0]const u8) !exec.Options {
         } else if (std.mem.eql(u8, arg, "--env") and i + 1 < args.len) {
             i += 1;
             try env.append(ctx.arena, args[i]);
+        } else if (std.mem.startsWith(u8, arg, "--format=")) {
+            ctx.format = try output.parse(arg["--format=".len..]);
+        } else if (std.mem.eql(u8, arg, "--format") and i + 1 < args.len) {
+            i += 1;
+            ctx.format = try output.parse(args[i]);
         } else return fail("unknown exec option {s}", .{arg});
     }
     if (args.len - i < 2) return usageError();
@@ -1414,10 +1477,14 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
         if (!new.isEmpty()) return fail("--reset removes all of {s}'s overrides; add new ones separately", .{whose});
         try override.delete(ctx.store, arena, app);
         if (app) |a| note("{s} has no overrides now", .{a}) else note("there are no store-wide overrides now", .{});
-        return settleGrants(ctx, app);
+        try settleGrants(ctx, app);
+        if (ctx.format == .json) try output.write(ctx, null);
+        return;
     }
     const saved = try override.load(ctx.store, arena, app);
     if (new.isEmpty()) {
+        // What's saved, or null: as `list` has an app's override.
+        if (ctx.format == .json) return output.write(ctx, if (saved.isEmpty()) null else saved);
         if (saved.isEmpty()) {
             if (app) |a| note("{s} has no overrides", .{a}) else note("there are no store-wide overrides", .{});
             return;
@@ -1444,6 +1511,7 @@ fn overrideApp(ctx: *Context, args: []const [:0]const u8) !void {
         note("there are no store-wide overrides now", .{});
     } else note("every app now runs with {f}, unless its own overrides choose otherwise", .{merged});
     try settleGrants(ctx, app);
+    if (ctx.format == .json) try output.write(ctx, if (merged.isEmpty()) null else merged);
 }
 
 /// Takes back what the app's runs were granted that its overrides no longer
@@ -1500,9 +1568,11 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     // An app whose manifest is gone (`zigsaw doctor` says so) doesn't say
     // which files are its own: prune finds them, now nothing uses them.
     const manifest_there = if (oci.digestHex(ref.manifest)) |hex| try Store.exists(io, try store.blobPath(arena, hex)) else false;
+    var files_kept = !manifest_there;
     if (!manifest_there) {
         note("its manifest is gone, so its files stay until `zigsaw uninstall --unused`", .{});
     } else if (try store.deleteUnusedDeployments(arena, ref.manifest)) {
+        files_kept = true;
         note("kept {s}'s files, which are still in use; `zigsaw uninstall --unused` removes them later", .{id});
     }
     // Its own volume, its data, goes only if asked. Deleting it stops at the
@@ -1520,6 +1590,21 @@ fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
 
     note("removed {s} {s}{s}", .{ id, ref.version, if (delete_data) " and its data" else "" });
     for (kept_volumes) |name| note("kept volume {s}, which it mounted; `zigsaw volume rm {s}` deletes it", .{ name, name });
+    if (ctx.format == .json) try output.write(ctx, .{
+        .id = ref.id,
+        .version = ref.version,
+        .manifest = ref.manifest,
+        .data_deleted = delete_data,
+        // Where its data stays, if it does.
+        .data = if (delete_data) null else try store.dataDir(arena, id),
+        .kept_volumes = kept_volumes,
+        .files_kept = files_kept,
+        .removed = .{
+            .commands = removed_exports,
+            .shortcuts = removed_shortcuts,
+            .associations = removed_associations,
+        },
+    });
 }
 
 test {

@@ -24,6 +24,25 @@ pub const Image = struct {
     /// it: a copy is kept (see snapshot.zig), or it's left to the caller, as
     /// a rollback that has that version's data to take back does.
     data: enum { keep, leave } = .keep,
+    /// Whether a build found it built before from the same inputs.
+    reused: bool = false,
+};
+
+/// What `install` did: the app's ref now, and the version it replaced.
+pub const Installed = struct {
+    ref: Store.Ref,
+    /// The version it replaced, which `rollback` goes back to; null for a
+    /// first install, or the same image again.
+    replaced: ?Replaced,
+    /// Whether that version's files stay, as a run of it is going.
+    old_kept_running: bool,
+
+    pub const Replaced = struct { version: []const u8, manifest: []const u8 };
+
+    /// What `--format=json` adds to the app's `list` entry.
+    pub fn extra(i: Installed) struct { replaced: ?Replaced, old_kept_running: bool } {
+        return .{ .replaced = i.replaced, .old_kept_running = i.old_kept_running };
+    }
 };
 
 /// Deploys the image's layers, points the app's ref at it, and syncs its
@@ -31,7 +50,7 @@ pub const Image = struct {
 /// unless they are in use; its blobs are kept, as the app's previous version,
 /// which `rollback` goes back to. Whatever a rollback said to skip is
 /// forgotten: installing another version is asking for it.
-pub fn install(ctx: *Context, image: Image) !void {
+pub fn install(ctx: *Context, image: Image) !Installed {
     const arena = ctx.arena;
     const cfg = image.config;
     const previous = try ctx.store.readRef(arena, cfg.id);
@@ -51,16 +70,19 @@ pub fn install(ctx: *Context, image: Image) !void {
     // Before the ref moves, so that an install that stops between the two
     // still has the replaced version in one of them.
     if (replaced) try ctx.store.writePrevious(arena, previous.?);
-    try ctx.store.writeRef(arena, .{
+    const ref: Store.Ref = .{
         .id = cfg.id,
         .version = cfg.version,
         .manifest = image.manifest_digest,
         .source = image.source,
-    });
+    };
+    try ctx.store.writeRef(arena, ref);
+    var kept_running = false;
     if (replaced) {
         try ctx.store.deleteSkip(arena, cfg.id);
         const p = previous.?;
-        if (try ctx.store.deleteUnusedDeployments(arena, p.manifest))
+        kept_running = try ctx.store.deleteUnusedDeployments(arena, p.manifest);
+        if (kept_running)
             note("  kept     {s} {s}, which is still running; `zigsaw uninstall --unused` removes it later", .{ cfg.id, p.version });
     }
 
@@ -92,5 +114,10 @@ pub fn install(ctx: *Context, image: Image) !void {
     _ = grants.settleUnlessRunning(ctx, cfg.id) catch |err| switch (err) {
         error.Failed => note("warning: what {s}'s earlier runs were granted stays until its next run ends, `zigsaw repair` or `zigsaw uninstall`", .{cfg.id}),
         else => |e| return e,
+    };
+    return .{
+        .ref = ref,
+        .replaced = if (replaced) .{ .version = previous.?.version, .manifest = previous.?.manifest } else null,
+        .old_kept_running = kept_running,
     };
 }

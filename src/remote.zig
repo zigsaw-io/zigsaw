@@ -330,7 +330,19 @@ pub fn signaturePayload(ctx: *Context, image_text: []const u8) ![]const u8 {
 /// classic layout, keeping those already there: during a change of keys, an image has
 /// both. Which image it is comes from the payload, so that the tag can't have moved
 /// since it was signed.
-pub fn pushSignature(ctx: *Context, image_text: []const u8, payload: []const u8, text: []const u8) !void {
+/// What `build-sign` put beside an image, as --format=json has it.
+pub const Signed = struct {
+    image: []const u8,
+    /// The manifest digest it signs.
+    digest: []const u8,
+    tag: []const u8,
+    /// Who signed, for a keyless bundle; null for a key's signature.
+    by: ?[]const u8 = null,
+    /// Whether that signature was there already, so nothing was pushed.
+    already: bool,
+};
+
+pub fn pushSignature(ctx: *Context, image_text: []const u8, payload: []const u8, text: []const u8) !Signed {
     const arena = ctx.arena;
     const target = try resolve(ctx, image_text);
     const named = try payloadFor(ctx, target, payload);
@@ -349,7 +361,7 @@ pub fn pushSignature(ctx: *Context, image_text: []const u8, payload: []const u8,
     for (layers.items) |layer| if (layer.annotations) |a| if (a.map.get(signature.signature_annotation)) |existing|
         if (std.mem.eql(u8, existing, trimmed)) {
             note("{s} has that signature already", .{tag});
-            return;
+            return .{ .image = target.text, .digest = named.digest, .tag = tag, .already = true };
         };
 
     var annotations: std.json.ArrayHashMap([]const u8) = .{};
@@ -360,6 +372,7 @@ pub fn pushSignature(ctx: *Context, image_text: []const u8, payload: []const u8,
     try layers.append(arena, layer);
     try pushSignatureManifest(ctx, &registry, tag, layers.items);
     note("signed {s}, as {s}", .{ named.digest, tag });
+    return .{ .image = target.text, .digest = named.digest, .tag = tag, .already = false };
 }
 
 /// What `payload` names, having checked it's about the image `target` names.
@@ -394,7 +407,7 @@ fn pushSignatureManifest(ctx: *Context, registry: *Registry, tag: []const u8, la
 /// (signature.bundleTagFor), keeping those already there. It's checked first, as
 /// pull would check it: one that isn't good there would have every pull refuse the
 /// image.
-pub fn pushBundle(ctx: *Context, image_text: []const u8, payload_text: []const u8, bundle: []const u8) !void {
+pub fn pushBundle(ctx: *Context, image_text: []const u8, payload_text: []const u8, bundle: []const u8) !Signed {
     const arena = ctx.arena;
     const target = try resolve(ctx, image_text);
     const payload = std.mem.trimEnd(u8, payload_text, "\r\n");
@@ -425,9 +438,10 @@ pub fn pushBundle(ctx: *Context, image_text: []const u8, payload_text: []const u
         .index => return fail("{s} in {f} isn't a signature, so it stays", .{ tag, target.ref }),
     };
     var bundle_layer = try ctx.store.putBlob(arena, bundle, sigstore.bundle_media_type);
+    const by_text = try std.fmt.allocPrint(arena, "{f}", .{by});
     for (layers.items) |layer| if (std.mem.eql(u8, layer.digest, bundle_layer.digest)) {
         note("{s} has that signature already", .{tag});
-        return;
+        return .{ .image = target.text, .digest = named.digest, .tag = tag, .by = by_text, .already = true };
     };
     // The payload too, for whoever checks with cosign's verify-blob.
     const has_payload = for (layers.items) |layer| {
@@ -445,6 +459,7 @@ pub fn pushBundle(ctx: *Context, image_text: []const u8, payload_text: []const u
     try layers.append(arena, bundle_layer);
     try pushSignatureManifest(ctx, &registry, tag, layers.items);
     note("signed {s}, by {f}, as {s}", .{ named.digest, by, tag });
+    return .{ .image = target.text, .digest = named.digest, .tag = tag, .by = by_text, .already = false };
 }
 
 /// An image's manifest and config, as a registry has them.
@@ -791,7 +806,22 @@ pub const PushOptions = struct {
 
 /// Publishes an installed app. Without an image, it goes to its own image in
 /// the default registry. The tag defaults to the app's version.
-pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8, opts: PushOptions) !void {
+/// What `build-export` pushed, as --format=json has it.
+pub const Pushed = struct {
+    id: []const u8,
+    version: []const u8,
+    /// The image, by its tag.
+    image: []const u8,
+    manifest: []const u8,
+    /// With --sources: what went next to it; null without.
+    sources: ?Sources,
+};
+
+/// The sources `build-export --sources` pushed: `tag` null if none could
+/// be (an app not built here, or none in the download cache).
+pub const Sources = struct { tag: ?[]const u8 = null, files: usize = 0, missing: usize = 0 };
+
+pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8, opts: PushOptions) !Pushed {
     const arena = ctx.arena;
     const installed = try ctx.store.readRef(arena, id) orelse return fail("{s} is not installed", .{id});
     const target = try resolve(ctx, image_text orelse id);
@@ -824,7 +854,13 @@ pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8, opts: PushOp
     }
     try registry.pushManifest(ref.tag.?, manifest_bytes);
     note("pushed {s} {s} to {f}\n  manifest {s}", .{ id, installed.version, ref, installed.manifest });
-    if (opts.sources) try pushSources(ctx, &registry, installed);
+    return .{
+        .id = installed.id,
+        .version = installed.version,
+        .image = try std.fmt.allocPrint(arena, "{f}", .{ref}),
+        .manifest = installed.manifest,
+        .sources = if (opts.sources) try pushSources(ctx, &registry, installed) else null,
+    };
 }
 
 /// Keeps the files an app was built from next to its image, so that a build
@@ -834,13 +870,13 @@ pub fn push(ctx: *Context, id: []const u8, image_text: ?[]const u8, opts: PushOp
 /// what its vendor steps made, from the download cache. A registry keeps
 /// blobs a manifest refers to, and serves them by digest, which is their
 /// sha256.
-fn pushSources(ctx: *Context, registry: *Registry, installed: Store.Ref) !void {
+fn pushSources(ctx: *Context, registry: *Registry, installed: Store.Ref) !Sources {
     const io = ctx.io;
     const arena = ctx.arena;
     const image = try ctx.store.readImage(arena, installed.id, installed.manifest);
     const build = image.config.build orelse {
         note("  {s} {s} wasn't built from a recipe here, so it has no sources to push", .{ installed.id, installed.version });
-        return;
+        return .{};
     };
     var hashes: std.ArrayList([]const u8) = .empty;
     for (build.sources) |h| if (!contains(hashes.items, h)) try hashes.append(arena, h);
@@ -861,7 +897,7 @@ fn pushSources(ctx: *Context, registry: *Registry, installed: Store.Ref) !void {
         try layers.append(arena, desc);
     }
     if (missing > 0) note("  {d} of its sources aren't in the download cache (local files, or deleted by uninstall --unused --downloads), so they aren't pushed", .{missing});
-    if (layers.items.len == 0) return;
+    if (layers.items.len == 0) return .{ .missing = missing };
 
     const config: oci.SourcesConfig = .{ .id = installed.id, .version = installed.version, .image = installed.manifest };
     const config_desc = try ctx.store.putBlob(arena, try oci.toJson(arena, config), oci.media_type.sources_config);
@@ -872,6 +908,7 @@ fn pushSources(ctx: *Context, registry: *Registry, installed: Store.Ref) !void {
     const tag = try oci.sourcesTag(arena, installed.manifest);
     try registry.pushManifest(tag, try oci.toJson(arena, manifest));
     note("pushed its {d} source file(s) next to it, as {s}", .{ layers.items.len, tag });
+    return .{ .tag = tag, .files = layers.items.len, .missing = missing };
 }
 
 /// Uploads a blob unless the repository has it, or mounts it from

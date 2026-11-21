@@ -60,6 +60,7 @@ pub fn check(ctx: *Context, root: []const u8, security: *const win32.SECURITY_CA
         .command_line = try process.buildCommandLine(arena, in_root, &.{ "build-check", drive_letter ++ "\\zigsaw-build-check.txt" }),
         .cwd = drive_letter ++ "\\",
         .security = security,
+        .stdio = ctx.childStdio(),
     });
     const code = try child.wait();
     const said = Io.Dir.cwd().readFileAlloc(io, answer, arena, .limited(4096)) catch "";

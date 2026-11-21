@@ -1,8 +1,10 @@
 # zigsaw's JSON output
 
-The commands that print something to read take `--format=json` (or `--format json`).
-They then print one JSON value on stdout in place of their text, for scripts.
-`--format=text`, the default, is their text. Since zigsaw 0.107.
+Commands take `--format=json` (or `--format json`). They then print one JSON value on
+stdout in place of their text, for scripts: what's there, for those that read, and what
+they did, for [those that change something](#commands-that-change-something).
+`--format=text`, the default, is their text. Since zigsaw 0.107 for those that read, and
+0.108 for the rest.
 
 | Command | Prints |
 |---|---|
@@ -22,11 +24,12 @@ They then print one JSON value on stdout in place of their text, for scripts.
 | [`doctor [--offline] [<app-id>]`](#doctor) | an object: the report |
 | [`version`](#version) | an object: zigsaw's version |
 
-Every other command refuses `--format=json`, saying which take it. So do the forms of
-these that print nothing to read: `update` without `--check`, `mask --remove` and
-`mask <app-id>`, `remote-info --file=`, `updates on` and `off`, `updates check --notify`
-and `--quiet`, and `volume create`, `rm`, `prune`, `export` and `import`. `run` and
-`enter` don't look for `--format`: what follows the app is the app's.
+What prints something else on stdout refuses `--format=json`, saying why: `logs`, `up`
+without `-d` (the apps' logs), `remote-info --file=` (the file), `volume export` to `-`
+(the archive), `build-sign --print-payload` (the payload), and `updates check --notify`
+(for zigsaw-notify) and `--quiet` (nothing). `run` and `enter` take it among their own
+options, before the app or the run, and only with `-d`: without, what they print is the
+app's. After the app, `--format` is the app's.
 
 ```bash
 zigsaw list --format=json | jq -r '.[] | select(.id == "org.nodejs.node") | .version'
@@ -251,3 +254,170 @@ The text comes out section by section, as it's found; JSON comes out once it's a
 ## version
 
 An object: `{version}`.
+
+## Commands that change something
+
+Since 0.108. What they print is what they did, **once they're done**: one value, as for
+the rest. What they say as they go (notes, questions, warnings) stays on stderr, as in
+text, and their questions are asked as in text, so `--yes` and the like answer them.
+
+- **A command that stops at a failure prints nothing**, as the others do: `install`,
+  `build`, `rollback`, `volume rm`... What it did before the failure, such as the apps a
+  project's `build` installed before one failed, stderr says.
+- **One that goes on past failures prints what it did, with what failed**, and exits 1:
+  `update` (`failed`), `repair` (`failed`, `grants_unsettled`), and `kill` and `down`
+  (an `outcome` of `cant`).
+- **Nothing but the JSON is on stdout.** A build's tools, and the zigsaw `upgrade`
+  starts, write theirs on stderr.
+- Where what a command did is an installed app, it's the app's [`list`](#list) object,
+  with more keys.
+
+| Command | Prints |
+|---|---|
+| [`install`](#install) | an object: the app |
+| [`build`](#build) | an array: the apps it built and installed |
+| [`update`](#update) | an object: what it updated, left alone, and couldn't |
+| [`rollback`](#rollback) | an object: from and to, and the data |
+| [`uninstall <app-id>`](#uninstall) | an object: what it removed |
+| [`uninstall --unused`](#uninstall---unused) | an object: what it removed, or would, and kept |
+| [`upgrade`](#upgrade) | an object: zigsaw's versions |
+| [`mask <app-id>...`, `mask --remove`](#mask-with-apps) | an array: each app |
+| [`override`](#override) | its saved overrides, or null |
+| [`run -d`, `enter -d`](#run--d-and-enter--d) | an object: the run or exec |
+| [`kill`, `down`](#kill-and-down) | an array: each run, build or exec ended |
+| [`up -d`](#up--d) | an array: each app |
+| [`volume create`, `rm`, `prune`](#volume-create-rm-and-prune) | the volume; an array; an object |
+| [`volume export`, `import`](#volume-export-and-import) | an object: what went into or out of the archive |
+| [`remote-add`, `remote-modify`, `remote-delete`](#remote-add-remote-modify-and-remote-delete) | an object: the remote |
+| [`build-export`, `build-update-repo`, `build-sign`](#build-export-build-update-repo-and-build-sign) | an object: what went to the registry |
+| [`repair`, `permission-remove`, `updates on` and `off`](#repair-permission-remove-updates-on-and-off) | an object |
+
+### install
+
+The app's [`list`](#list) object, with:
+
+| Key | |
+|---|---|
+| `replaced` | `{version, manifest}`: the version it replaced, which `rollback` goes back to; null for a first install, or the same image again |
+| `old_kept_running` | whether that version's files stay, as a run of it goes on |
+
+### build
+
+An array: for each app it built and installed, in the order it did (one for a recipe,
+each of a project's `"apps"`), what [`install`](#install) prints, and `reused`: whether
+the store had it built from the same inputs, so nothing was built.
+
+### update
+
+An object, without `--check` (with it, see [above](#update---check)):
+
+| Key | |
+|---|---|
+| `updated` | `[{id, from, to, from_manifest, to_manifest}]` |
+| `up_to_date` | the ids of the apps that were |
+| `skipped` | `[{id, why}]`: `why` is `masked`, `no_source` (it doesn't record where it came from), `pinned` (installed by digest) or `skips` (the new version is the one a rollback left) |
+| `failed` | the ids of the apps that couldn't be updated, as stderr says; exit 1 if there are some |
+
+### rollback
+
+An object: `{id, from, to, from_manifest, to_manifest, data, snapshot}`. `data` is
+`taken` (its data went back too), `kept` (it stays, and the copy is kept), `none` (no
+copy was kept) or `only` (`--data-only`; `from` and `to` are then the same).
+`snapshot` is `{bytes, files, taken}`, the copy that went back or is kept, or null.
+
+### uninstall
+
+An object: `{id, version, manifest, data_deleted, data, kept_volumes, files_kept,
+removed}`. `data` is where its data stays, null with `--delete-data`; `kept_volumes` the
+volumes it mounted, which stay; `files_kept` whether its files stay until
+`uninstall --unused`, as a run uses them; `removed` `{commands, shortcuts,
+associations}`.
+
+### uninstall --unused
+
+An object: `{dry_run, freed, removed, kept, forgot_previous}`. `freed` is in bytes, or
+what would be, with `--dry-run`.
+
+| Key | |
+|---|---|
+| `removed` | `{blobs, deployments, tmp, downloads, tool_caches, work, volumes, kept_data}`, each `{count, bytes}`, but `volumes`, `[{name, bytes}]`. Null for what wasn't asked for: `downloads`, `tool_caches` and `work` without `--downloads`, `volumes` without `--volumes` |
+| `kept` | `{deployments_in_use, ephemeral, downloads, tool_caches, work, build_images, previous, previous_data, volumes}`: counts of what runs use; `{count, bytes}` of what stays (null where it went); `build_images` a count; `volumes` the names of those nothing mounts, or that runs use |
+| `forgot_previous` | how many previous versions `--previous` forgot |
+
+### upgrade
+
+An object: `{from, to, latest, upgraded}`. Up to date, `to` is `from` and `upgraded` false.
+
+### mask with apps
+
+`mask <app-id>...` and `mask --remove <app-id>...`: an array, `[{id, version, masked,
+changed}]`, `changed` false where it was so already. `mask` alone lists, as
+[above](#mask).
+
+### override
+
+What's saved for the app after the change, in the shape of `list`'s `override`, or null
+for nothing; the same without options, or with `--show`. With `--global`, the store-wide
+ones.
+
+### run -d and enter -d
+
+`run -d`: `{run, id, log, in_job}`. `run` is its number, as `ps`, `kill` and `logs`
+take it; `log` its log; `in_job` whether the job this zigsaw is in kept it, so it ends
+when that job does.
+
+`enter -d`: `{run, inside, id, command, in_job}`. `run` is the exec's number, as `ps`
+lists it, `inside` the run's.
+
+### kill and down
+
+An array: `[{run, id, kind, inside, outcome, why}]`, for each run, build and exec it
+ended or tried to, in `ps`'s order, those inside what was named too. `outcome` is
+`stopped` (it stopped when asked), `ended` (with `--now`, it had ended by then), `gone`
+(it had ended before), `killed`, `cleaning` (killed, its zigsaw still cleaning up) or
+`cant` (`why` says why; exit 1). `down` with nothing of the project running prints `[]`.
+
+### up -d
+
+An array: `[{id, run, log, ports, state}]`, `state` being `started`, `restarted` (its
+run had another image or entry) or `up_already`. Without `-d`, `up` prints the logs, and
+refuses `--format=json`.
+
+### volume create, rm and prune
+
+`volume create`: the volume, as [`volume ls`](#volume-ls) has it. `volume rm`:
+`[{name, files_kept}]`, `files_kept` being where a volume kept elsewhere leaves its
+files, or null. Since 0.108, `rm` checks every name before it removes any, in text too.
+`volume prune`: `{dry_run, removed, in_use, bytes}`, `removed` `[{name, bytes}]` and
+`in_use` the names of those kept as a run uses them.
+
+### volume export and import
+
+`volume export`: `{volume, file, gzip, bytes, files, links_passed_over, archive_bytes,
+left_out}`, `left_out` what an app's own volume leaves out without `--all`.
+`volume import`: `{volume, file, bytes, files, links_passed_over, made, replaced,
+exported}`. `file` is null for `-`; `made` whether the import made the volume;
+`replaced` how many files and folders it had; `exported` `{volume, version, at}` as the
+archive says, or null for one zigsaw didn't make.
+
+### remote-add, remote-modify and remote-delete
+
+`remote-add` and `remote-modify`: the remote, as [`remotes`](#remotes) has it, and
+`changed` (false for `--if-not-exists` on one that's there). `remote-delete`: `{name,
+url, signers_removed, login_kept, remotes_left}`, `login_kept` when a login saved for its
+registry stays, which no remote is for now.
+
+### build-export, build-update-repo and build-sign
+
+`build-export`: `{id, version, image, manifest, sources}`. `image` is where it went, by
+its tag; `sources` with `--sources`: `{tag, files, missing}`, `tag` null if none went.
+`build-update-repo`: `{catalog, registry, apps}`, `apps` `[{id, version, manifest}]`.
+`build-sign` and its `--bundle`: `{image, digest, tag, by, already}`, `by` who signed a
+keyless bundle (null for a key's), `already` when that signature was there, so nothing
+was pushed. `build-sign --check`: `{image, manifest, signed_by}`; not signed, it fails.
+
+### repair, permission-remove, updates on and off
+
+`repair`: `{apps, failed, grants_unsettled}`. `permission-remove`: `{path, outcome}`,
+`outcome` being `removed`, `no_label` (the path has no label of its own) or `not_low`.
+`updates on` and `off`: `{daily_check}`, whether it's on now.

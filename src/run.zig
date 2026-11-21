@@ -88,6 +88,15 @@ pub const Options = struct {
 pub fn run(ctx: *Context, opts: Options) !u32 {
     if (opts.detach and !opts.detached_child) {
         const started = try startDetached(ctx, opts.given, opts.id, opts.args);
+        if (ctx.format == .json) {
+            try @import("output.zig").write(ctx, .{
+                .run = started.pid,
+                .id = opts.id,
+                .log = try logs.pathFor(ctx.store, ctx.arena, opts.id, started.pid),
+                .in_job = !started.broke_away,
+            });
+            return 0;
+        }
         var buf: [64]u8 = undefined;
         var out = Context.stdout().writerStreaming(ctx.io, &buf);
         try out.interface.print("{d}\n", .{started.pid});

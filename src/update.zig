@@ -21,17 +21,55 @@ const note = Context.note;
 /// whose new version may reach more is updated only if you agree, unless
 /// `consent` is `.given` (--yes). `lazily`: `--lazy`, as for `pull`.
 pub fn update(ctx: *Context, ids: []const []const u8, consent: remote.Consent, lazily: bool) !u32 {
-    var failed: usize = 0;
+    const arena = ctx.arena;
+    var updated: std.ArrayList(Updated) = .empty;
+    var up_to_date: std.ArrayList([]const u8) = .empty;
+    var skipped_apps: std.ArrayList(Skipped) = .empty;
+    var failed: std.ArrayList([]const u8) = .empty;
     for (try refsOf(ctx, ids)) |ref| {
-        updateApp(ctx, ref, consent, lazily) catch |err| switch (err) {
-            error.Failed => failed += 1, // Already reported.
+        const outcome = updateApp(ctx, ref, consent, lazily) catch |err| switch (err) {
+            error.Failed => {
+                try failed.append(arena, ref.id); // Already reported.
+                continue;
+            },
             else => |e| return e,
         };
+        switch (outcome) {
+            .updated => |u| try updated.append(arena, u),
+            .up_to_date => try up_to_date.append(arena, ref.id),
+            .skipped => |why| try skipped_apps.append(arena, .{ .id = ref.id, .why = why }),
+        }
     }
-    if (failed == 0) return 0;
-    note("{d} app(s) couldn't be updated", .{failed});
+    if (ctx.format == .json) try output.write(ctx, .{
+        .updated = updated.items,
+        .up_to_date = up_to_date.items,
+        .skipped = skipped_apps.items,
+        .failed = failed.items,
+    });
+    if (failed.items.len == 0) return 0;
+    note("{d} app(s) couldn't be updated", .{failed.items.len});
     return 1;
 }
+
+/// An app `update` updated, as JSON has it.
+pub const Updated = struct {
+    id: []const u8,
+    from: []const u8,
+    to: []const u8,
+    from_manifest: []const u8,
+    to_manifest: []const u8,
+};
+
+/// An app `update` left alone, and why: `masked`, `no_source` (it doesn't
+/// record where it came from), `pinned` (installed by digest) or `skips`
+/// (the new version is the one a rollback left).
+const Skipped = struct { id: []const u8, why: []const u8 };
+
+const Outcome = union(enum) {
+    updated: Updated,
+    up_to_date,
+    skipped: []const u8,
+};
 
 /// `update --check`: what `update` would do for the given apps, or every
 /// installed app, without doing it. An app a new image waits for gets its
@@ -197,30 +235,30 @@ pub fn newImage(ctx: *Context, ref: Store.Ref) !?Waiting {
     };
 }
 
-fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent, lazily: bool) !void {
-    if (try held(ctx, ref)) return;
+fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent, lazily: bool) !Outcome {
+    if (try held(ctx, ref)) return .{ .skipped = "masked" };
     const source = ref.source orelse {
         note("{s}: doesn't record where it came from; build or install it again to update it", .{ref.id});
-        return;
+        return .{ .skipped = "no_source" };
     };
     const newer = if (std.fs.path.isAbsoluteWindows(source)) newer: {
         if (!try Store.exists(ctx.io, source)) return fail("{s}: its recipe {s} is gone", .{ ref.id, source });
         const image = try builder.build(ctx, source, .{});
-        if (!std.mem.eql(u8, image.manifest_digest, ref.manifest) and try skipped(ctx, ref, image.manifest_digest)) return;
+        if (!std.mem.eql(u8, image.manifest_digest, ref.manifest) and try skipped(ctx, ref, image.manifest_digest)) return .{ .skipped = "skips" };
         break :newer if (std.mem.eql(u8, image.manifest_digest, ref.manifest)) null else image;
     } else newer: {
         const reference = Registry.Reference.parse(source) catch
             return fail("{s}: its source \"{s}\" isn't a recipe path or an image reference", .{ ref.id, source });
         if (reference.digest != null) {
             note("{s} {s}: pinned to {s}", .{ ref.id, ref.version, source });
-            return;
+            return .{ .skipped = "pinned" };
         }
         // With a version to pass over, what the tag names first, so that
         // nothing of that version is downloaded, or asked about.
         if (try ctx.store.readSkip(ctx.arena, ref.id) != null) {
             const digest = try remote.manifestDigest(ctx, source);
             if (std.mem.eql(u8, digest, ref.manifest)) break :newer null;
-            if (try skipped(ctx, ref, digest)) return;
+            if (try skipped(ctx, ref, digest)) return .{ .skipped = "skips" };
         }
         const installed = try ctx.store.readImage(ctx.arena, ref.id, ref.manifest);
         break :newer try remote.fetch(ctx, source, .{
@@ -233,15 +271,22 @@ fn updateApp(ctx: *Context, ref: Store.Ref, consent: remote.Consent, lazily: boo
 
     const image = newer orelse {
         note("{s} {s}: up to date", .{ ref.id, ref.version });
-        return;
+        return .up_to_date;
     };
     if (!std.mem.eql(u8, image.config.id, ref.id))
         return fail("{s}: {s} now provides {s}; build or install that explicitly", .{ ref.id, source, image.config.id });
-    try install.install(ctx, image);
+    _ = try install.install(ctx, image);
     note("updated {s} {s} -> {s} ({s} -> {s})", .{
         ref.id,                        ref.version,                            image.config.version,
         oci.shortDigest(ref.manifest), oci.shortDigest(image.manifest_digest),
     });
+    return .{ .updated = .{
+        .id = ref.id,
+        .from = ref.version,
+        .to = image.config.version,
+        .from_manifest = ref.manifest,
+        .to_manifest = image.manifest_digest,
+    } };
 }
 
 test "passesOver: only the very version a rollback left" {

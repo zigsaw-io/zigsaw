@@ -16,6 +16,7 @@ const lazy = @import("lazy.zig");
 const learned = @import("learned.zig");
 const logs = @import("logs.zig");
 const oci = @import("oci.zig");
+const output = @import("output.zig");
 const roots = @import("roots.zig");
 const services = @import("services.zig");
 const snapshot = @import("snapshot.zig");
@@ -330,10 +331,51 @@ pub fn prune(ctx: *Context, opts: Options) !void {
     if (!kept_previous and previous.items.len > 0)
         note("{s} {d} previous version(s): `zigsaw rollback` has nothing to go back to", .{ if (opts.dry_run) "would forget" else "forgot", previous.items.len });
     // Volumes outlive apps: their own, their data, and the ones they mounted.
+    var kept_volumes: std.ArrayList([]const u8) = .empty;
     if (!opts.volumes) {
         const left = try volumes.unmounted(ctx);
-        if (left.names.len > 0)
-            note("kept {d} volume(s) that nothing mounts: {s}; --volumes deletes them", .{ left.names.len, try std.mem.join(arena, ", ", left.names) });
+        var shown: std.ArrayList([]const u8) = .empty;
+        for (left) |v| {
+            try kept_volumes.append(arena, v.name);
+            try shown.append(arena, try std.fmt.allocPrint(arena, "{s} ({Bi:.1})", .{ v.name, v.bytes }));
+        }
+        if (left.len > 0)
+            note("kept {d} volume(s) that nothing mounts: {s}; --volumes deletes them", .{ left.len, try std.mem.join(arena, ", ", shown.items) });
+    } else try kept_volumes.appendSlice(arena, pruned.in_use);
+
+    if (ctx.format == .json) {
+        const kept_data_total: ?Tally = if (kept_previous) total: {
+            const data = try snapshot.keptTotal(ctx, refs);
+            break :total .{ .count = data.files, .bytes = data.bytes };
+        } else null;
+        try output.write(ctx, .{
+            .dry_run = opts.dry_run,
+            .freed = freed,
+            // Null for what wasn't asked for.
+            .removed = .{
+                .blobs = blobs,
+                .deployments = deployments,
+                .tmp = tmp,
+                .downloads = if (opts.downloads) downloads else null,
+                .tool_caches = if (opts.downloads) tool_caches else null,
+                .work = if (opts.downloads) work else null,
+                .volumes = if (opts.volumes) pruned.removed else null,
+                .kept_data = kept_data,
+            },
+            // Null for what was removed.
+            .kept = .{
+                .deployments_in_use = deployments_in_use,
+                .ephemeral = tmp_in_use,
+                .downloads = if (opts.downloads) null else downloads,
+                .tool_caches = if (opts.downloads) null else tool_caches,
+                .work = if (opts.downloads) null else work,
+                .build_images = if (opts.downloads) null else build_only,
+                .previous = if (kept_previous) previous_only else null,
+                .previous_data = kept_data_total,
+                .volumes = kept_volumes.items,
+            },
+            .forgot_previous = if (kept_previous) 0 else previous.items.len,
+        });
     }
 }
 

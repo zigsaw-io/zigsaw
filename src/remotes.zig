@@ -286,6 +286,24 @@ const JsonRemote = struct {
 
 fn showJson(ctx: *Context, remotes: []const Remote, signers: []const trust.Named, from_env: bool) !void {
     const arena = ctx.arena;
+    const out = try jsonRemotes(ctx, remotes, signers, from_env);
+    var releases: std.ArrayList(JsonSigner) = .empty;
+    for (try trust.releaseSigners()) |s| try releases.append(arena, try .of(arena, s, true));
+    try output.write(ctx, .{ .remotes = out, .releases = .{ .signers = releases.items } });
+}
+
+/// With --format=json, the remote `remote-add` or `remote-modify` left, as
+/// `remotes` has it, and whether anything changed.
+fn writeChanged(ctx: *Context, name: []const u8, changed: bool) !void {
+    if (ctx.format != .json) return;
+    const remotes = try all(ctx);
+    const rows = try jsonRemotes(ctx, remotes, try trust.all(ctx), ctx.env.get(remote.registry_var) != null);
+    for (rows) |row| if (std.mem.eql(u8, row.name, name))
+        return output.write(ctx, output.merged(.{ row, .{ .changed = changed } }));
+}
+
+fn jsonRemotes(ctx: *Context, remotes: []const Remote, signers: []const trust.Named, from_env: bool) ![]JsonRemote {
+    const arena = ctx.arena;
     const out = try arena.alloc(JsonRemote, remotes.len);
     for (out, remotes, 0..) |*o, r, i| {
         var theirs: std.ArrayList(JsonSigner) = .empty;
@@ -300,9 +318,7 @@ fn showJson(ctx: *Context, remotes: []const Remote, signers: []const trust.Named
             .docker_helper => |name| .{ .kind = .docker_helper, .helper = name },
         };
     }
-    var releases: std.ArrayList(JsonSigner) = .empty;
-    for (try trust.releaseSigners()) |s| try releases.append(arena, try .of(arena, s, true));
-    try output.write(ctx, .{ .remotes = out, .releases = .{ .signers = releases.items } });
+    return out;
 }
 
 /// What `remote-add` and `remote-modify` change, in this order: the
@@ -338,7 +354,7 @@ pub fn add(ctx: *Context, name: []const u8, location: []const u8, changes: Chang
     if (indexOfName(list, name)) |i| {
         if (if_not_exists) {
             note("{s} is a remote already, at {s}", .{ name, list[i].url });
-            return;
+            return writeChanged(ctx, name, false);
         }
         return fail("{s} is a remote already, at {s}: `zigsaw remote-modify --url=<location> {s}` moves it", .{ name, list[i].url, name });
     }
@@ -353,6 +369,7 @@ pub fn add(ctx: *Context, name: []const u8, location: []const u8, changes: Chang
     var rest = changes;
     rest.url = null;
     try apply(ctx, .{ .name = name, .url = url }, rest);
+    try writeChanged(ctx, name, true);
 }
 
 /// `zigsaw remote-modify <name>`.
@@ -361,6 +378,7 @@ pub fn modify(ctx: *Context, name: []const u8, changes: Changes) !void {
     const list = try saved(ctx);
     const i = indexOfName(list, name) orelse return fail("no remote is named \"{s}\": `zigsaw remotes` lists them", .{name});
     try apply(ctx, list[i], changes);
+    try writeChanged(ctx, name, true);
 }
 
 fn apply(ctx: *Context, r: Remote, changes: Changes) !void {
@@ -412,12 +430,29 @@ pub fn delete(ctx: *Context, name: []const u8, force: bool) !void {
     const signers = try trust.removeAll(ctx, r.url);
     note("deleted the remote {s}{s}", .{ name, if (signers > 0) ", and whose signatures counted for it" else "" });
     if (out.items.len == 0) note("there's no remote left: apps named by id alone can't be installed until `zigsaw remote-add`", .{});
+    const login_kept = try noteLoginKept(ctx, r, out.items);
+    if (ctx.format == .json) try output.write(ctx, .{
+        .name = r.name,
+        .url = r.url,
+        .signers_removed = signers,
+        // Whether a login saved for its registry stays (see above).
+        .login_kept = login_kept,
+        .remotes_left = out.items.len,
+    });
+}
+
+/// After `r` is deleted: whether a login saved for its registry stays, as
+/// no other remote is there, saying so.
+fn noteLoginKept(ctx: *Context, r: Remote, left: []const Remote) !bool {
     const host = hostOf(r.url);
-    for (out.items) |other| if (std.ascii.eqlIgnoreCase(hostOf(other.url), host)) return;
-    const normal = credentials.normalizeHost(arena, host) catch return;
+    for (left) |other| if (std.ascii.eqlIgnoreCase(hostOf(other.url), host)) return false;
+    const normal = credentials.normalizeHost(ctx.arena, host) catch return false;
     switch (try credentials.savedFor(ctx, normal)) {
-        .credential_manager => note("the login saved for {s} stays, for zigsaw's other stores: with the remote added again, `zigsaw remote-modify --logout {s}` deletes it", .{ normal, name }),
-        else => {},
+        .credential_manager => {
+            note("the login saved for {s} stays, for zigsaw's other stores: with the remote added again, `zigsaw remote-modify --logout {s}` deletes it", .{ normal, r.name });
+            return true;
+        },
+        else => return false,
     }
 }
 

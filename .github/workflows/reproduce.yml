@@ -364,6 +364,12 @@ jobs:
         shell: bash
         run: bash tests/zot.sh bash tests/json.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/json.txt"
 
+      # --format=json on what changes something; its remote side against a registry.
+      - name: tests/json-changes.sh, against a local zot registry
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/zot.sh bash tests/json-changes.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/json-changes.txt"
+
       # Going back to the version an update replaced, and holding, against a registry.
       - name: tests/rollback.sh, against a local zot registry
         if: ${{ !cancelled() }}

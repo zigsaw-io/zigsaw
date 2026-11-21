@@ -520,7 +520,11 @@ fn wantedElsewhere(ctx: *Context, entries: []const ledger.Entry, orphan: ledger.
 /// `zigsaw permission-remove <path>`: removes a low label that no record
 /// explains. One that a record has goes the way it's recorded, or the app
 /// would only make it again.
-pub fn takeBackLabel(ctx: *Context, path: []const u8) !void {
+/// What `permission-remove` did: `removed` the label, or found `no_label`
+/// of the path's own, or one that's `not_low`.
+pub const TakenBack = enum { removed, no_label, not_low };
+
+pub fn takeBackLabel(ctx: *Context, path: []const u8) !TakenBack {
     const arena = ctx.arena;
     if (!std.fs.path.isAbsolute(path)) return fail("--take-back takes an absolute path; got \"{s}\"", .{path});
     const changes = try ctx.store.lockGrantChanges(arena);
@@ -535,11 +539,18 @@ pub fn takeBackLabel(ctx: *Context, path: []const u8) !void {
         if (samePath(path, try std.fs.path.join(arena, &.{ home, "AppData", "LocalLow" })))
             return fail("{s} is labelled low by Windows, for programs at low integrity", .{path});
     }
-    const rid = try acl.ownLabel(arena, path) orelse return note("{s} has no label of its own", .{path});
-    if (rid > win32.SECURITY_MANDATORY_LOW_RID) return note("{s} isn't labelled low", .{path});
+    const rid = try acl.ownLabel(arena, path) orelse {
+        note("{s} has no label of its own", .{path});
+        return .no_label;
+    };
+    if (rid > win32.SECURITY_MANDATORY_LOW_RID) {
+        note("{s} isn't labelled low", .{path});
+        return .not_low;
+    }
     const start = Io.Timestamp.now(ctx.io, .awake);
     try acl.unlabel(arena, path);
     note("removed the low integrity label of {s} ({d} ms)", .{ path, millis(ctx, start) });
+    return .removed;
 }
 
 /// The app's AppContainer identities, whether or not its profile exists.

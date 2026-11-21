@@ -1,10 +1,16 @@
-//! `--format=json`: what the commands that print data print instead of their
-//! text, for scripts. One JSON value on stdout, an array for a listing and an
-//! object for the rest, with the keys docs/json.md lists. Every key is there,
-//! null when there's nothing to say; sizes are bytes, times RFC 3339 in UTC,
-//! durations milliseconds, digests whole. Exit codes and stderr are the
-//! text's: only stdout changes, and where text says on stderr that there's
-//! nothing to list, JSON lists nothing.
+//! `--format=json`: what commands print instead of their text, for scripts.
+//! One JSON value on stdout, an array for a listing and an object for the
+//! rest, with the keys docs/json.md lists. Every key is there, null when
+//! there's nothing to say; sizes are bytes, times RFC 3339 in UTC, durations
+//! milliseconds, digests whole. Exit codes and stderr are the text's: only
+//! stdout changes, and where text says on stderr that there's nothing to
+//! list, JSON lists nothing.
+//!
+//! A command that changes something prints what it did, once it's done; one
+//! that stops at its first failure prints nothing then, and one that goes on
+//! past failures (`update`, `repair`, `kill`, `down`) prints what it did
+//! with what failed. Library functions return what they did, and the
+//! command writes it, so that an install inside an update writes nothing.
 
 const std = @import("std");
 const Io = std.Io;
@@ -13,26 +19,40 @@ const fail = Context.fail;
 
 pub const Format = enum { text, json };
 
-/// The commands that print JSON, for messages.
-pub const commands = "list, info, remote-info, remote-info --show-files, search, remote-ls, remotes, ps, mask, update --check, updates, updates check, permissions, volume ls, volume inspect, doctor and version";
-
 /// Takes `--format=<format>` or `--format <format>` out of a command's
-/// arguments, into `ctx.format`, and refuses json for a command that prints
-/// no JSON. `run` and `enter` keep theirs: what follows the app or the run
-/// is its own, whatever it says.
+/// arguments, into `ctx.format`, and refuses json for what prints no JSON.
+/// `run` and `enter` keep theirs: what follows the app or the run is its
+/// own, whatever it says, so they take `--format` among their own options
+/// (see `parse`).
 pub fn take(ctx: *Context, command: []const u8, args: []const [:0]const u8) ![]const [:0]const u8 {
     if (std.mem.eql(u8, command, "run") or std.mem.eql(u8, command, "enter")) return args;
     const taken = try strip(ctx.arena, args);
     const format = switch (taken.format) {
         .none => return args,
-        .invalid => |value| return fail("--format takes text or json; got \"{s}\"", .{value}),
+        .invalid => |value| return invalid(value),
         .missing => return fail("--format needs a value: text or json", .{}),
         .given => |f| f,
     };
-    if (format == .json) if (refused(command, taken.args)) |what|
-        return fail("{s} prints no JSON; --format=json is for {s}", .{ what, commands });
+    if (format == .json) if (refused(command, taken.args)) |r|
+        return fail("{s} prints no JSON: {s}", .{ r.what, r.why });
     ctx.format = format;
     return taken.args;
+}
+
+/// A value of `--format`, as `run` and `enter` take it among their options.
+pub fn parse(value: []const u8) error{Failed}!Format {
+    return std.meta.stringToEnum(Format, value) orelse invalid(value);
+}
+
+fn invalid(value: []const u8) error{Failed} {
+    return fail("--format takes text or json; got \"{s}\"", .{value});
+}
+
+/// For `run` and `enter`, once their options are read: JSON only detached,
+/// when what they print is the run's number, not the app's output.
+pub fn checkDetached(ctx: *const Context, command: []const u8, detached: bool) error{Failed}!void {
+    if (ctx.format == .json and !detached)
+        return fail("{s} prints no JSON without -d: what it prints is the app's", .{command});
 }
 
 const Taken = struct {
@@ -69,44 +89,42 @@ fn strip(arena: std.mem.Allocator, args: []const [:0]const u8) !Taken {
     return taken;
 }
 
-/// What of the command line prints no JSON, if something doesn't: the
-/// command, or its form.
-fn refused(command: []const u8, args: []const [:0]const u8) ?[]const u8 {
-    const eql = std.mem.eql;
-    const always = [_][]const u8{ "list", "info", "remotes", "search", "remote-ls", "ps", "permissions", "doctor", "version" };
-    for (always) |c| if (eql(u8, command, c)) return null;
-    if (eql(u8, command, "remote-info")) {
-        for (args) |a| if (std.mem.startsWith(u8, a, "--file=")) return "remote-info --file";
-        return null;
-    }
-    if (eql(u8, command, "mask")) {
-        for (args) |a| {
-            if (eql(u8, a, "--remove")) return "mask --remove";
-            if (!std.mem.startsWith(u8, a, "-")) return "mask <app-id>";
-        }
-        return null;
-    }
-    if (eql(u8, command, "update")) {
-        for (args) |a| if (eql(u8, a, "--check")) return null;
-        return "update without --check";
-    }
-    if (eql(u8, command, "updates")) {
-        if (args.len == 0) return null;
-        if (!eql(u8, args[0], "check")) return "updates on and off";
-        for (args[1..]) |a| if (eql(u8, a, "--notify") or eql(u8, a, "--quiet")) return "updates check --notify and --quiet";
-        return null;
-    }
-    if (eql(u8, command, "volume")) {
-        if (args.len > 0 and (eql(u8, args[0], "ls") or eql(u8, args[0], "inspect"))) return null;
-        return if (args.len > 0) volumeForms(args[0]) else "volume";
-    }
-    return command;
-}
+const Refusal = struct { what: []const u8, why: []const u8 };
 
-fn volumeForms(sub: []const u8) []const u8 {
-    inline for (.{ "create", "rm", "prune", "export", "import" }) |s|
-        if (std.mem.eql(u8, sub, s)) return "volume " ++ s;
-    return "volume";
+/// What of the command line prints no JSON, if something doesn't, and why:
+/// what it prints on stdout is something else's, or there is nothing.
+fn refused(command: []const u8, args: []const [:0]const u8) ?Refusal {
+    const eql = std.mem.eql;
+    const has = struct {
+        fn f(list: []const [:0]const u8, name: []const u8) bool {
+            for (list) |a| if (eql(u8, a, name)) return true;
+            return false;
+        }
+    }.f;
+    if (eql(u8, command, "logs"))
+        return .{ .what = "logs", .why = "what it prints is the runs' logs" };
+    if (eql(u8, command, "up") and !has(args, "-d") and !has(args, "--detach"))
+        return .{ .what = "up without -d", .why = "it prints the apps' logs as they come" };
+    if (eql(u8, command, "remote-info")) for (args) |a| if (std.mem.startsWith(u8, a, "--file="))
+        return .{ .what = "remote-info --file", .why = "what it prints is the file" };
+    if (eql(u8, command, "build-sign") and has(args, "--print-payload"))
+        return .{ .what = "build-sign --print-payload", .why = "what it prints is the payload to sign" };
+    if (eql(u8, command, "updates") and args.len > 0 and eql(u8, args[0], "check")) {
+        if (has(args, "--notify")) return .{ .what = "updates check --notify", .why = "what it prints is for zigsaw-notify" };
+        if (has(args, "--quiet")) return .{ .what = "updates check --quiet", .why = "it prints nothing" };
+    }
+    // `volume export <volume> -`: stdout is the archive.
+    if (eql(u8, command, "volume") and args.len > 0 and eql(u8, args[0], "export")) {
+        var words: usize = 0;
+        for (args[1..]) |a| {
+            if (std.mem.startsWith(u8, a, "--")) continue;
+            words += 1;
+            if (words == 2 and eql(u8, a, "-")) return .{ .what = "volume export to -", .why = "what it prints is the archive" };
+        }
+    }
+    if (eql(u8, command, "build-check") or eql(u8, command, "lazy-helper"))
+        return .{ .what = command, .why = "it's zigsaw's own" };
+    return null;
 }
 
 /// An empty list, for `write`: what a listing with nothing in it prints.
@@ -175,8 +193,8 @@ pub const Time = struct {
         const month_day = year_day.calculateMonthDay();
         const day = es.getDaySeconds();
         return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
-            year_day.year,             month_day.month.numeric(),  month_day.day_index + 1,
-            day.getHoursIntoDay(), day.getMinutesIntoHour(), day.getSecondsIntoMinute(),
+            year_day.year,         month_day.month.numeric(), month_day.day_index + 1,
+            day.getHoursIntoDay(), day.getMinutesIntoHour(),  day.getSecondsIntoMinute(),
         }) catch unreachable;
     }
 };
@@ -220,15 +238,23 @@ test take {
         .{ .command = "update", .args = &.{ "--check", "--format=json" }, .format = .json, .rest = &.{"--check"} },
         .{ .command = "mask", .args = &.{"--format=json"}, .format = .json },
         .{ .command = "remote-info", .args = &.{ "--show-files", "--format=json", "x" }, .format = .json, .rest = &.{ "--show-files", "x" } },
+        // What changes something, since 0.108.
+        .{ .command = "install", .args = &.{ "--format=json", "org.a.b" }, .format = .json, .rest = &.{"org.a.b"} },
+        .{ .command = "update", .args = &.{"--format=json"}, .format = .json },
+        .{ .command = "mask", .args = &.{ "--remove", "--format=json", "org.a.b" }, .format = .json, .rest = &.{ "--remove", "org.a.b" } },
+        .{ .command = "updates", .args = &.{ "on", "--format=json" }, .format = .json, .rest = &.{"on"} },
+        .{ .command = "volume", .args = &.{ "rm", "--format=json", "v" }, .format = .json, .rest = &.{ "rm", "v" } },
+        .{ .command = "volume", .args = &.{ "export", "v", "--format=json", "v.tar" }, .format = .json, .rest = &.{ "export", "v", "v.tar" } },
+        .{ .command = "volume", .args = &.{ "import", "v", "-", "--format=json" }, .format = .json, .rest = &.{ "import", "v", "-" } },
+        .{ .command = "up", .args = &.{ "-d", "--format=json" }, .format = .json, .rest = &.{"-d"} },
         // Refused.
-        .{ .command = "install", .args = &.{ "--format=json", "org.a.b" }, .format = null },
-        .{ .command = "update", .args = &.{"--format=json"}, .format = null },
-        .{ .command = "mask", .args = &.{ "--format=json", "org.a.b" }, .format = null },
-        .{ .command = "mask", .args = &.{ "--remove", "--format=json" }, .format = null },
+        .{ .command = "logs", .args = &.{ "--format=json", "1" }, .format = null },
+        .{ .command = "up", .args = &.{"--format=json"}, .format = null },
         .{ .command = "remote-info", .args = &.{ "--file=a", "--format=json", "x" }, .format = null },
-        .{ .command = "updates", .args = &.{ "on", "--format=json" }, .format = null },
+        .{ .command = "build-sign", .args = &.{ "--print-payload", "--format=json", "x" }, .format = null },
         .{ .command = "updates", .args = &.{ "check", "--notify", "--format=json" }, .format = null },
-        .{ .command = "volume", .args = &.{ "rm", "--format=json", "v" }, .format = null },
+        .{ .command = "updates", .args = &.{ "check", "--quiet", "--format=json" }, .format = null },
+        .{ .command = "volume", .args = &.{ "export", "--all", "v", "-", "--format=json" }, .format = null },
         .{ .command = "list", .args = &.{"--format=yaml"}, .format = null },
         .{ .command = "list", .args = &.{"--format"}, .format = null },
     };
@@ -248,4 +274,11 @@ test take {
     const run_args = [_][:0]const u8{ "org.a.b", "--format=json" };
     try testing.expectEqual(@as(usize, 2), (try take(&ctx, "run", &run_args)).len);
     try testing.expectEqual(Format.text, ctx.format);
+    // Which they take among their own options, detached only.
+    try testing.expectEqual(Format.json, try parse("json"));
+    try testing.expectError(error.Failed, parse("yaml"));
+    try checkDetached(&ctx, "run", false);
+    ctx.format = .json;
+    try checkDetached(&ctx, "run", true);
+    try testing.expectError(error.Failed, checkDetached(&ctx, "run", false));
 }

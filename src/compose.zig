@@ -292,13 +292,17 @@ fn pinOne(arena: Allocator, kind: deps.Kind, alias: []const u8, text: []const u8
     return pinned;
 }
 
+/// An app a build built and installed, and whether it was built before
+/// from the same inputs.
+pub const BuiltApp = struct { installed: install.Installed, reused: bool };
+
 /// Builds and installs the project's apps, each after those it uses. What
 /// isn't pinned and isn't one of them fails first, before anything builds.
-pub fn buildAll(ctx: *Context, p: Project, opts: builder.Options) !void {
+pub fn buildAll(ctx: *Context, p: Project, opts: builder.Options) ![]const BuiltApp {
     const arena = ctx.arena;
     if (p.members.len == 0) {
         note("{s} lists no \"apps\" to build, only apps to \"run\"", .{p.file});
-        return;
+        return &.{};
     }
     if (opts.clean_from) |module|
         return fail("--clean={s} starts a module of one app afresh; give that app's directory or recipe, as in: zigsaw build <dir> --clean={s}", .{ module, module });
@@ -315,13 +319,15 @@ pub fn buildAll(ctx: *Context, p: Project, opts: builder.Options) !void {
         note("building {d} apps: {s}", .{ ids.len, try std.mem.join(arena, ", ", ids) });
     }
     var built: Built = .{};
+    var apps: std.ArrayList(BuiltApp) = .empty;
     for (p.order) |i| {
         var member_opts = opts;
         member_opts.siblings = &built;
         const image = try builder.build(ctx, p.members[i].path, member_opts);
-        try install.install(ctx, image);
+        try apps.append(arena, .{ .installed = try install.install(ctx, image), .reused = image.reused });
         try built.put(arena, .{ .id = image.config.id, .version = image.config.version, .digest = image.manifest_digest });
     }
+    return apps.items;
 }
 
 /// For an app built alone whose recipe (`r`, at `source`, absolute) names

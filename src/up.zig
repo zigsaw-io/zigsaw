@@ -27,6 +27,7 @@ const install = @import("install.zig");
 const logs = @import("logs.zig");
 const net = @import("net.zig");
 const oci = @import("oci.zig");
+const output = @import("output.zig");
 const process = @import("process.zig");
 const project = @import("project.zig");
 const ps = @import("ps.zig");
@@ -139,6 +140,8 @@ pub fn up(ctx: *Context, opts: UpOptions, check: CheckRun) !u32 {
 
     var started_now: std.ArrayList(u32) = .empty;
     var follow: std.ArrayList(Followed) = .empty;
+    // What `--format=json` prints: each app, and whether it started now.
+    var states: std.ArrayList(Up) = .empty;
     const going = try runsOf(ctx, p.file);
     for (entries) |e| {
         if (presses.load(.monotonic) > 0) break;
@@ -153,6 +156,7 @@ pub fn up(ctx: *Context, opts: UpOptions, check: CheckRun) !u32 {
             if (why == null) {
                 note("{s} is up already, as run {d}", .{ e.id, r.pid });
                 try follow.append(arena, .{ .id = e.id, .record = r, .from = .end });
+                try states.append(arena, .of(e.id, r, "up_already"));
                 continue;
             }
             note("starting {s} again, as {s}: stopping run {d}", .{ e.id, why.?, r.pid });
@@ -169,6 +173,7 @@ pub fn up(ctx: *Context, opts: UpOptions, check: CheckRun) !u32 {
             rollBack(ctx, started_now.items);
             return err;
         };
+        try states.append(arena, .of(e.id, record, if (findRun(going, e.id) != null) "restarted" else "started"));
     }
     // Runs of the project's whose app it no longer lists stay up.
     for (going) |r| if (for (entries) |e| {
@@ -177,9 +182,27 @@ pub fn up(ctx: *Context, opts: UpOptions, check: CheckRun) !u32 {
         note("note: {s} is up from this project as run {d}, though \"run\" no longer lists it; `zigsaw down` stops it", .{ r.id, r.pid });
     };
 
-    if (opts.detach and presses.load(.monotonic) == 0) return 0;
+    if (opts.detach and presses.load(.monotonic) == 0) {
+        if (ctx.format == .json) try output.write(ctx, states.items);
+        return 0;
+    }
     return followAll(ctx, p, entries, follow.items);
 }
+
+/// An app `up -d` started, or found up, as JSON has it.
+const Up = struct {
+    id: []const u8,
+    run: u32,
+    log: ?[]const u8,
+    ports: []const []const u8,
+    /// `started`, `restarted` (its run had a changed image or entry) or
+    /// `up_already`.
+    state: []const u8,
+
+    fn of(id: []const u8, r: ps.Record, state: []const u8) Up {
+        return .{ .id = id, .run = r.pid, .log = r.log, .ports = r.ports orelse &.{}, .state = state };
+    }
+};
 
 const Followed = struct {
     id: []const u8,
@@ -203,7 +226,7 @@ fn buildMissing(ctx: *Context, p: compose.Project, entries: []const compose.RunE
     }
     if (!always and missing == null) return;
     if (missing) |id| if (!always) note("{s} isn't installed from this project, so it builds first", .{id});
-    try compose.buildAll(ctx, p, .{});
+    _ = try compose.buildAll(ctx, p, .{});
 }
 
 /// Pulls the pinned apps that aren't installed as pinned, and checks that
@@ -227,7 +250,7 @@ fn pullMissing(ctx: *Context, p: compose.Project, entries: []const compose.RunEn
             });
         if (!std.ascii.eqlIgnoreCase(fetched.config.id, e.id))
             return fail("{s}: run {s}: that image is {s}, not {s}", .{ p.file, pinned, fetched.config.id, e.id });
-        try install.install(ctx, fetched);
+        _ = try install.install(ctx, fetched);
     }
 }
 
@@ -301,7 +324,7 @@ fn answers(port: u16) bool {
 /// The last lines of the run's log, for why it failed.
 fn showTail(ctx: *Context, r: ps.Record) void {
     const path = r.log orelse return;
-    var f: logs.Follower = .{ .arena = ctx.arena, .io = ctx.io };
+    var f: logs.Follower = .{ .arena = ctx.arena, .io = ctx.io, .to_stderr = ctx.format == .json };
     f.add(.{ .prefix = "  | ", .path = path, .from = .{ .tail = 15 } }) catch return;
     f.run(null) catch {};
 }
@@ -392,30 +415,37 @@ const Stopping = struct {
     code: u32 = 0,
 
     fn run(s: *Stopping) void {
-        s.code = stopAll(&s.ctx, s.file, s.entries, 10, s.cancel) catch 1;
+        s.code = if (stopAll(&s.ctx, s.file, s.entries, 10, s.cancel)) |e| e.code else |_| 1;
     }
 };
 
 /// Stops the project's runs: those of apps it no longer lists first, then
 /// the rest, last listed first, an app at a time. 1 if one had to be
 /// killed, or couldn't be ended, as `stop` returns.
-fn stopAll(ctx: *Context, file: []const u8, entries: []const compose.RunEntry, seconds: u32, cancel: ?win32.HANDLE) !u32 {
+fn stopAll(ctx: *Context, file: []const u8, entries: []const compose.RunEntry, seconds: u32, cancel: ?win32.HANDLE) !stop.Ended {
     const arena = ctx.arena;
     const runs = try runsOf(ctx, file);
     var code: u32 = 0;
+    var rows: std.ArrayList(stop.Row) = .empty;
     var unlisted: std.ArrayList(u32) = .empty;
     for (runs) |r| if (for (entries) |e| {
         if (std.ascii.eqlIgnoreCase(e.id, r.id)) break false;
     } else true) try unlisted.append(arena, r.pid);
-    if (unlisted.items.len > 0) code |= try stop.end(ctx, .{ .pids = unlisted.items, .seconds = seconds, .cancel = cancel }) orelse 0;
+    if (unlisted.items.len > 0) if (try stop.end(ctx, .{ .pids = unlisted.items, .seconds = seconds, .cancel = cancel })) |e| {
+        code |= e.code;
+        try rows.appendSlice(arena, e.rows);
+    };
     var i = entries.len;
     while (i > 0) {
         i -= 1;
         var pids: std.ArrayList(u32) = .empty;
         for (runs) |r| if (std.ascii.eqlIgnoreCase(r.id, entries[i].id)) try pids.append(arena, r.pid);
-        if (pids.items.len > 0) code |= try stop.end(ctx, .{ .pids = pids.items, .seconds = seconds, .cancel = cancel }) orelse 0;
+        if (pids.items.len > 0) if (try stop.end(ctx, .{ .pids = pids.items, .seconds = seconds, .cancel = cancel })) |e| {
+            code |= e.code;
+            try rows.appendSlice(arena, e.rows);
+        };
     }
-    return code;
+    return .{ .code = code, .rows = rows.items };
 }
 
 // ---------------------------------------------------------------------------
@@ -430,10 +460,12 @@ pub fn down(ctx: *Context, opts: DownOptions) !u32 {
     // Without a list, its runs all go at once.
     const entries = compose.runList(ctx.arena, p) catch &.{};
     if ((try runsOf(ctx, p.file)).len == 0) {
-        note("nothing of {s} is running", .{p.file});
+        if (ctx.format == .json) try output.write(ctx, output.nothing) else note("nothing of {s} is running", .{p.file});
         return 0;
     }
-    return stopAll(ctx, p.file, entries, opts.seconds, null);
+    const ended = try stopAll(ctx, p.file, entries, opts.seconds, null);
+    if (ctx.format == .json) try output.write(ctx, ended.rows);
+    return ended.code;
 }
 
 // ---------------------------------------------------------------------------

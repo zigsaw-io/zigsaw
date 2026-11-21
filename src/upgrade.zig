@@ -18,6 +18,7 @@ const Context = @import("Context.zig");
 const Registry = @import("Registry.zig");
 const Store = @import("Store.zig");
 const options = @import("options");
+const output = @import("output.zig");
 const process = @import("process.zig");
 const prompt = @import("prompt.zig");
 const remote = @import("remote.zig");
@@ -200,6 +201,7 @@ pub fn upgrade(ctx: *Context, consent: remote.Consent) !u32 {
     const latest = try latestVersion(ctx);
     if (!isNewer(latest)) {
         note("zigsaw {s} is up to date (the latest release is {s})", .{ this_version, latest });
+        if (ctx.format == .json) try output.write(ctx, .{ .from = this_version, .to = this_version, .latest = latest, .upgraded = false });
         return 0;
     }
     // Before asking, and before the download: whether there's anything to agree to.
@@ -273,14 +275,17 @@ pub fn upgrade(ctx: *Context, consent: remote.Consent) !u32 {
     const repaired = try process.spawn(arena, .{
         .exe = installed,
         .command_line = try process.buildCommandLine(arena, installed, &.{"repair"}),
+        .stdio = ctx.childStdio(),
     });
     if (repaired != 0) note("warning: some apps' commands are still those of the zigsaw before. Close the apps and run `zigsaw repair`", .{});
     if (@import("shortcuts.zig").isDefaultStore(ctx.env.get("LOCALAPPDATA"), ctx.store.root)) {
         _ = try process.spawn(arena, .{
             .exe = installed,
             .command_line = try process.buildCommandLine(arena, installed, &.{ "updates", "on", "--unless-off" }),
+            .stdio = ctx.childStdio(),
         });
     }
+    if (ctx.format == .json) try output.write(ctx, .{ .from = this_version, .to = latest, .latest = latest, .upgraded = true });
     return 0;
 }
 

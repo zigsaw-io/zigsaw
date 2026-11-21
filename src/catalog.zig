@@ -126,6 +126,16 @@ pub fn push(ctx: *Context, ids: []const []const u8) !void {
     const manifest: oci.Manifest = .{ .config = config_desc, .layers = &.{}, .annotations = annotations };
     try registry.pushManifest("latest", try oci.toJson(arena, manifest));
     note("pushed the catalog of {d} app(s) to {f}", .{ entries.items.len, target.ref });
+    if (ctx.format == .json) {
+        const Listed = struct { id: []const u8, version: []const u8, manifest: []const u8 };
+        const apps = try arena.alloc(Listed, entries.items.len);
+        for (apps, entries.items) |*a, e| a.* = .{ .id = e.id, .version = e.version, .manifest = e.manifest };
+        try output.write(ctx, .{
+            .catalog = try std.fmt.allocPrint(arena, "{f}", .{target.ref}),
+            .registry = catalog.registry,
+            .apps = apps,
+        });
+    }
 }
 
 /// The registry a reference's repository is in: "ghcr.io/zigsaw-io" for

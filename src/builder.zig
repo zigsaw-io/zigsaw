@@ -134,7 +134,7 @@ pub fn build(ctx: *Context, recipe_path: []const u8, opts: Options) !install.Ima
         if (try ctx.store.readBuildCache(arena, h)) |earlier| if (!(opts.no_resume and earlier.resumed)) {
             if (try ctx.store.readCompleteImage(arena, earlier.digest)) |image| {
                 if (ctx.verbose) note("{s} {s}: built before from the same inputs ({s}); --rebuild builds it again", .{ r.id, r.version, oci.shortDigest(earlier.digest) });
-                return .{ .manifest_digest = earlier.digest, .manifest = image.manifest, .config = image.config, .source = source };
+                return .{ .manifest_digest = earlier.digest, .manifest = image.manifest, .config = image.config, .source = source, .reused = true };
             }
         };
     };
@@ -1007,6 +1007,7 @@ const BuildRoot = struct {
                 .limits = b.limits,
                 .job_name = job_name,
                 .security = if (contained) &b.security.? else null,
+                .stdio = ctx.childStdio(),
             });
             if (b.asker) |a| child.stop = a.stop();
             if (b.listed) |l| {

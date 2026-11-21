@@ -83,31 +83,42 @@ fn syncAs(ctx: *Context, manifest: oci.Manifest, config: oci.AppConfig, when: Wh
 /// zigsaw's shims and name its path, so a new zigsaw, or one that moved,
 /// takes them over this way. An app that fails, as one whose shim is running
 /// does, doesn't stop the others. Returns the exit code.
-pub fn repair(ctx: *Context) !u32 {
+pub fn repair(ctx: *Context) !Repaired {
     const arena = ctx.arena;
     const refs = try ctx.store.listRefs(arena);
-    var failed: usize = 0;
+    var repaired: std.ArrayList([]const u8) = .empty;
+    var failed: std.ArrayList([]const u8) = .empty;
     for (refs) |ref| {
         // One whose image can't be read (reported) leaves the others to be
         // repaired: `zigsaw doctor` says how to install it again.
         const image = ctx.store.readImage(arena, ref.id, ref.manifest) catch |err| switch (err) {
             error.Failed => {
-                failed += 1;
+                try failed.append(arena, ref.id);
                 continue;
             },
             else => |e| return e,
         };
         syncAs(ctx, image.manifest, image.config, .repair) catch |err| switch (err) {
-            error.Failed => failed += 1, // Already reported.
+            error.Failed => {
+                try failed.append(arena, ref.id); // Already reported.
+                continue;
+            },
             else => |e| return e,
         };
+        try repaired.append(arena, ref.id);
     }
     if (refs.len == 0) note("no apps are installed", .{});
     try associations.repair(ctx);
-    if (failed == 0) return 0;
-    note("{d} app(s) couldn't be repaired; close them and run `zigsaw repair` again", .{failed});
-    return 1;
+    if (failed.items.len > 0) note("{d} app(s) couldn't be repaired; close them and run `zigsaw repair` again", .{failed.items.len});
+    return .{ .apps = repaired.items, .failed = failed.items };
 }
+
+/// What `repair` did: the apps whose commands, shortcuts and associations it
+/// made right, and those it couldn't.
+pub const Repaired = struct {
+    apps: []const []const u8,
+    failed: []const []const u8,
+};
 
 /// After a run of the app, gives the commands it installed shims, and
 /// removes those of commands it uninstalled. Only reports changes, and only

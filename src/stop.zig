@@ -368,14 +368,16 @@ fn named(opts: Options, r: ps.Record) bool {
 pub fn stop(ctx: *Context, opts: Options) !u32 {
     // Ctrl+C may come to this console too.
     _ = win32.SetConsoleCtrlHandler(&process.ignoreCtrlC, win32.TRUE);
-    return try end(ctx, opts) orelse
-        fail("nothing running is {s}", .{try std.mem.join(ctx.arena, " or ", opts.filters)});
+    const ended = try end(ctx, opts) orelse
+        return fail("nothing running is {s}", .{try std.mem.join(ctx.arena, " or ", opts.filters)});
+    if (ctx.format == .json) try @import("output.zig").write(ctx, ended.rows);
+    return ended.code;
 }
 
 /// Asks what `opts` names to end, and what's inside it, and ends what
 /// doesn't in time (or ends it all, with `kill`), saying how each ended, as
 /// `stop` does. Null if nothing running is that.
-pub fn end(ctx: *Context, opts: Options) !?u32 {
+pub fn end(ctx: *Context, opts: Options) !?Ended {
     const arena = ctx.arena;
     const io = ctx.io;
     const seen = try ps.nest(arena, try ps.live(ctx.store, arena));
@@ -457,10 +459,28 @@ pub fn end(ctx: *Context, opts: Options) !?u32 {
     var buf: [4096]u8 = undefined;
     var out = Context.stdout().writerStreaming(io, &buf);
     const w = &out.interface;
+    const text = ctx.format == .text;
     var all = true;
+    var rows: std.ArrayList(Row) = .empty;
     // In the order `ps` lists them.
     for (seen) |*s| for (targets.items) |t| if (t.seen == s) {
         const r = t.seen.record;
+        try rows.append(arena, .{
+            .run = r.pid,
+            .id = r.id,
+            .kind = r.kind,
+            .inside = s.inside,
+            .outcome = switch (t.outcome) {
+                .stopped => if (opts.kill) "ended" else "stopped",
+                .gone => "gone",
+                .killed => "killed",
+                .cleaning => "cleaning",
+                .cant, .pending => "cant",
+            },
+            .why = if (t.why.len > 0) t.why else null,
+        });
+        if (t.outcome == .cant or t.outcome == .pending) all = false;
+        if (!text) continue;
         const inside: []const u8 = if (t.matched) "" else if (s.inside) |p| try std.fmt.allocPrint(arena, " (in run {d})", .{p}) else "";
         switch (t.outcome) {
             .stopped => if (opts.kill)
@@ -475,15 +495,32 @@ pub fn end(ctx: *Context, opts: Options) !?u32 {
                 if (t.outcome == .cleaning) try w.print("; its zigsaw is still cleaning up", .{});
                 try w.writeAll("\n");
             },
-            .cant, .pending => {
-                all = false;
-                try w.print("{d} ({s}){s} can't be ended: {s}\n", .{ r.pid, r.id, inside, t.why });
-            },
+            .cant, .pending => try w.print("{d} ({s}){s} can't be ended: {s}\n", .{ r.pid, r.id, inside, t.why }),
         }
     };
-    try w.flush();
-    return if (all) 0 else 1;
+    if (text) try w.flush();
+    return .{ .code = if (all) 0 else 1, .rows = rows.items };
 }
+
+/// A run, build or exec `end` ended, or tried to, as JSON has it.
+pub const Row = struct {
+    run: u32,
+    id: []const u8,
+    kind: ps.Kind,
+    inside: ?u32,
+    /// `stopped` (it stopped when asked), `ended` (with `--now`), `gone`
+    /// (it had ended), `killed`, `cleaning` (killed, its zigsaw still
+    /// cleaning up) or `cant`.
+    outcome: []const u8,
+    why: ?[]const u8,
+};
+
+/// What `end` did: its exit code, 1 if something couldn't be ended, and
+/// how each ended.
+pub const Ended = struct {
+    code: u32,
+    rows: []const Row,
+};
 
 fn insideMatched(seen: []const ps.Seen, targets: []const Target, pid: u32) bool {
     for (targets) |o| {

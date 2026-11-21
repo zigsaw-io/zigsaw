@@ -96,11 +96,10 @@ refused() { # <args>...: fails, says so, prints nothing on stdout
     [ -z "$out" ] || { echo "stdout: $out"; return 1; }
     za "$@" 2>&1 >/dev/null | grep -q -e 'prints no JSON' -e '--format takes text or json' -e '--format needs a value'
 }
-check "install --format=json is refused, naming the commands that take it" refused install --format=json $APP
-check "  and update without --check" refused update --format=json
-check "  and mask with an app, and --remove" sh -c "! ZIGSAW_HOME='$store_a' '$zigsaw' mask --format=json $APP 2>/dev/null && ! ZIGSAW_HOME='$store_a' '$zigsaw' mask --remove --format=json 2>/dev/null"
+check "logs --format=json is refused, saying why" refused logs --format=json $APP
 check "  and remote-info --file" refused remote-info --file=app.cmd --format=json $APP
-check "  and volume rm, and updates on" sh -c "! ZIGSAW_HOME='$store_a' '$zigsaw' volume rm --format=json x 2>/dev/null && ! ZIGSAW_HOME='$store_a' '$zigsaw' updates on --format=json 2>/dev/null"
+check "  and run without -d" refused run --format=json $APP
+check "  and updates check --notify" refused updates check --notify --format=json
 check "--format=yaml is refused" refused list --format=yaml
 check "--format without a value is refused" refused list --format
 same_text() { [ "$(za list 2>/dev/null)" = "$(za list --format=text 2>/dev/null)" ]; }

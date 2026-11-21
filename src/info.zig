@@ -56,31 +56,7 @@ pub fn list(ctx: *Context) !void {
     const refs = try ctx.store.listRefs(arena);
     const shims = try exports.list(ctx);
     const apps = try arena.alloc(Listed, refs.len);
-    for (apps, refs) |*app, ref| {
-        var names: std.ArrayList([]const u8) = .empty;
-        for (shims) |s| if (std.mem.eql(u8, s.sidecar.app, ref.id)) try names.append(arena, s.name);
-        const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
-        const cfg = image.config;
-        const saved = try override.load(ctx.store, arena, ref.id);
-        app.* = .{
-            .id = ref.id,
-            .version = ref.version,
-            .manifest = ref.manifest,
-            .source = ref.source,
-            .commands = names.items,
-            .runtimes = try runtimesOf(arena, cfg),
-            .extension_points = try pointsOf(arena, cfg),
-            .extends = cfg.extends,
-            .shortcuts = try shortcuts.names(ctx, ref.id),
-            .opens = try associations.names(ctx, ref.id),
-            .registry = cfg.registry orelse &.{},
-            .override = if (saved.isEmpty()) null else saved,
-            .lazy = try lazy.progress(ctx.store, arena, image.manifest),
-            .masked = try ctx.store.isHeld(arena, ref.id),
-            .previous = try previousOf(ctx, ref),
-            .skips = try ctx.store.readSkip(arena, ref.id),
-        };
-    }
+    for (apps, refs) |*app, ref| app.* = try listedWith(ctx, ref, shims);
     if (ctx.format == .json) {
         try output.write(ctx, apps);
     } else {
@@ -90,6 +66,38 @@ pub fn list(ctx: *Context) !void {
     }
     try grants.noteLeftovers(ctx);
     try updates.noteWaiting(ctx);
+}
+
+/// An installed app, as `list` shows it: for what changed it to say so too.
+pub fn listed(ctx: *Context, ref: Store.Ref) !Listed {
+    return listedWith(ctx, ref, try exports.list(ctx));
+}
+
+fn listedWith(ctx: *Context, ref: Store.Ref, shims: anytype) !Listed {
+    const arena = ctx.arena;
+    var names: std.ArrayList([]const u8) = .empty;
+    for (shims) |s| if (std.mem.eql(u8, s.sidecar.app, ref.id)) try names.append(arena, s.name);
+    const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
+    const cfg = image.config;
+    const saved = try override.load(ctx.store, arena, ref.id);
+    return .{
+        .id = ref.id,
+        .version = ref.version,
+        .manifest = ref.manifest,
+        .source = ref.source,
+        .commands = names.items,
+        .runtimes = try runtimesOf(arena, cfg),
+        .extension_points = try pointsOf(arena, cfg),
+        .extends = cfg.extends,
+        .shortcuts = try shortcuts.names(ctx, ref.id),
+        .opens = try associations.names(ctx, ref.id),
+        .registry = cfg.registry orelse &.{},
+        .override = if (saved.isEmpty()) null else saved,
+        .lazy = try lazy.progress(ctx.store, arena, image.manifest),
+        .masked = try ctx.store.isHeld(arena, ref.id),
+        .previous = try previousOf(ctx, ref),
+        .skips = try ctx.store.readSkip(arena, ref.id),
+    };
 }
 
 fn writeList(arena: std.mem.Allocator, w: *Io.Writer, apps: []const Listed) !void {

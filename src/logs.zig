@@ -255,6 +255,9 @@ pub const Follower = struct {
     arena: Allocator,
     io: Io,
     open: std.ArrayList(Open) = .empty,
+    /// Prints on stderr rather than stdout: why something failed, when
+    /// stdout is for JSON.
+    to_stderr: bool = false,
 
     const Open = struct {
         source: Source,
@@ -288,7 +291,7 @@ pub const Follower = struct {
     /// its end once more, and done.
     pub fn poll(f: *Follower) !void {
         var buf: [16 * 1024]u8 = undefined;
-        var stdout = Context.stdout().writerStreaming(f.io, &buf);
+        var stdout = (if (f.to_stderr) Context.stderrFile() else Context.stdout()).writerStreaming(f.io, &buf);
         const w = &stdout.interface;
         for (f.open.items) |*o| {
             if (o.done) continue;

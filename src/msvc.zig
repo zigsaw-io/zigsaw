@@ -64,7 +64,7 @@ fn runCmd(ctx: *Context, cwd: []const u8, command: []const u8) !void {
     var line: std.ArrayList(u8) = .empty;
     try process.appendQuoted(arena, &line, cmd);
     try line.print(arena, " /d /u /s /c \"{s}\"", .{command});
-    const code = try process.spawn(arena, .{ .exe = cmd, .command_line = line.items, .cwd = cwd });
+    const code = try process.spawn(arena, .{ .exe = cmd, .command_line = line.items, .cwd = cwd, .stdio = ctx.childStdio() });
     if (code != 0) return fail("finding MSVC: `{s}` exited with code {d}", .{ command, code });
 }
 
