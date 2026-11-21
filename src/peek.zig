@@ -72,6 +72,7 @@ pub fn ls(ctx: *Context, image_text: []const u8) !void {
     const app = try remote.fetchInfoOpen(ctx, image_text, &registry);
     defer registry.deinit();
     const all = try layers(ctx, app);
+    if (ctx.format == .json) return @import("output.zig").write(ctx, try listJson(ctx, &registry, app, all));
 
     var buf: [64 * 1024]u8 = undefined;
     var stdout = Context.stdout().writerStreaming(ctx.io, &buf);
@@ -79,6 +80,44 @@ pub fn ls(ctx: *Context, image_text: []const u8) !void {
         error.WriteFailed => return stdoutFailed(&stdout),
         else => |e| return e,
     };
+}
+
+/// A layer and its files, as `remote-info --show-files --format=json` has it.
+const JsonLayer = struct {
+    /// The app or runtime whose layer it is.
+    id: []const u8,
+    version: []const u8,
+    layer: []const u8,
+    format: format.Format,
+    /// By name; null when the layer's format can't be listed without
+    /// downloading it.
+    files: ?[]const JsonFile,
+};
+
+const JsonFile = struct { name: []const u8, size: u64 };
+
+fn listJson(ctx: *Context, registry: *Registry, app: remote.Info, all: []const Layer) ![]const JsonLayer {
+    const out = try ctx.arena.alloc(JsonLayer, all.len);
+    for (out, all) |*o, l| {
+        o.* = .{ .id = l.id, .version = l.version, .layer = l.desc.digest, .format = l.format, .files = null };
+        if (!l.format.indexed()) {
+            if (all.len == 1) return fail("{s}'s layer is {s}, which can't be listed without downloading it", .{ app.target.text, l.format.label() });
+            continue;
+        }
+        const opened = try Opened.open(ctx, registry, l);
+        defer opened.close(ctx);
+        var files: std.ArrayList(JsonFile) = .empty;
+        for (opened.index.files) |f| if (f.entry.type == .reg and format.isLayerFile(f.name)) {
+            try files.append(ctx.arena, .{ .name = try ctx.arena.dupe(u8, f.name), .size = f.size });
+        };
+        std.mem.sort(JsonFile, files.items, {}, struct {
+            fn less(_: void, a: JsonFile, b: JsonFile) bool {
+                return std.mem.lessThan(u8, a.name, b.name);
+            }
+        }.less);
+        o.files = files.items;
+    }
+    return out;
 }
 
 fn listTo(ctx: *Context, registry: *Registry, app: remote.Info, all: []const Layer, w: *Io.Writer) !void {
@@ -153,10 +192,4 @@ pub fn cat(ctx: *Context, image_text: []const u8, path: []const u8) !void {
     return fail("{s} has no file {s}", .{ app.target.text, path });
 }
 
-/// After a write to stdout failed: quiet if whoever read it stopped, as in
-/// `zigsaw remote-info --file=... | head`.
-fn stdoutFailed(stdout: *const Io.File.Writer) error{Failed} {
-    const err = stdout.err orelse return fail("writing to stdout failed", .{});
-    if (err == error.BrokenPipe) return error.Failed;
-    return fail("writing to stdout: {t}", .{err});
-}
+const stdoutFailed = Context.stdoutFailed;

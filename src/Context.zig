@@ -21,6 +21,9 @@ remote: ?[]const u8 = null,
 /// Whether `store` is open: commands that don't touch the store leave it
 /// undefined.
 store_open: bool = false,
+/// What the commands that print data print: text, or JSON with
+/// `--format=json` (see output.zig).
+format: @import("output.zig").Format = .text,
 
 /// Logs an error for the user and returns `error.Failed`, which `main` exits on
 /// without printing anything further.
@@ -44,6 +47,14 @@ pub fn stdout() std.Io.File {
     var f = std.Io.File.stdout();
     if (win32.synchronousIo(f.handle) == false) f.flags.nonblocking = true;
     return f;
+}
+
+/// After a write to stdout failed: quiet if whoever read it stopped, as in
+/// `zigsaw remote-info --file=... | head`.
+pub fn stdoutFailed(out: *const std.Io.File.Writer) error{Failed} {
+    const err = out.err orelse return fail("writing to stdout failed", .{});
+    if (err == error.BrokenPipe) return error.Failed;
+    return fail("writing to stdout: {t}", .{err});
 }
 
 /// Standard input, flagged as `stdout` is, for the same reason.

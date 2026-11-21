@@ -1,16 +1,125 @@
 //! `zigsaw remote-info`: what an app in a registry is, needs and may reach,
 //! before it's installed, from its image's manifest and config. And `zigsaw
-//! info`: the same of an installed app, from the store, with where it is.
+//! info`: the same of an installed app, from the store, with where it is;
+//! and `zigsaw list`, the installed apps.
 
 const std = @import("std");
 const Io = std.Io;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const associations = @import("associations.zig");
+const exports = @import("exports.zig");
 const format = @import("format.zig");
+const grants = @import("grants.zig");
+const lazy = @import("lazy.zig");
 const oci = @import("oci.zig");
+const output = @import("output.zig");
+const override = @import("override.zig");
 const remote = @import("remote.zig");
 const remotes = @import("remotes.zig");
+const shortcuts = @import("shortcuts.zig");
+const updates = @import("updates.zig");
 const fail = Context.fail;
+
+/// An installed app, as `list` shows it.
+pub const Listed = struct {
+    id: []const u8,
+    version: []const u8,
+    manifest: []const u8,
+    source: ?[]const u8,
+    /// Its commands on your PATH: those it exports, and those runs installed.
+    commands: []const []const u8,
+    runtimes: []const RuntimeRef,
+    extension_points: []const Point,
+    extends: ?oci.Extends,
+    shortcuts: []const []const u8,
+    opens: []const []const u8,
+    registry: []const []const u8,
+    override: ?override.Settings,
+    lazy: ?lazy.Progress,
+    masked: bool,
+    previous: ?Previous,
+    skips: ?Store.Skip,
+};
+
+/// The version an installed one replaced, which `rollback` goes back to.
+pub const Previous = struct {
+    version: []const u8,
+    manifest: []const u8,
+    /// Whether the app's data as that version left it is kept too.
+    with_data: bool,
+};
+
+/// `zigsaw list`.
+pub fn list(ctx: *Context) !void {
+    const arena = ctx.arena;
+    const refs = try ctx.store.listRefs(arena);
+    const shims = try exports.list(ctx);
+    const apps = try arena.alloc(Listed, refs.len);
+    for (apps, refs) |*app, ref| {
+        var names: std.ArrayList([]const u8) = .empty;
+        for (shims) |s| if (std.mem.eql(u8, s.sidecar.app, ref.id)) try names.append(arena, s.name);
+        const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
+        const cfg = image.config;
+        const saved = try override.load(ctx.store, arena, ref.id);
+        app.* = .{
+            .id = ref.id,
+            .version = ref.version,
+            .manifest = ref.manifest,
+            .source = ref.source,
+            .commands = names.items,
+            .runtimes = try runtimesOf(arena, cfg),
+            .extension_points = try pointsOf(arena, cfg),
+            .extends = cfg.extends,
+            .shortcuts = try shortcuts.names(ctx, ref.id),
+            .opens = try associations.names(ctx, ref.id),
+            .registry = cfg.registry orelse &.{},
+            .override = if (saved.isEmpty()) null else saved,
+            .lazy = try lazy.progress(ctx.store, arena, image.manifest),
+            .masked = try ctx.store.isHeld(arena, ref.id),
+            .previous = try previousOf(ctx, ref),
+            .skips = try ctx.store.readSkip(arena, ref.id),
+        };
+    }
+    if (ctx.format == .json) {
+        try output.write(ctx, apps);
+    } else {
+        var buf: [4096]u8 = undefined;
+        var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
+        try writeList(arena, &stdout.interface, apps);
+    }
+    try grants.noteLeftovers(ctx);
+    try updates.noteWaiting(ctx);
+}
+
+fn writeList(arena: std.mem.Allocator, w: *Io.Writer, apps: []const Listed) !void {
+    try w.print("{s:<32} {s:<20} {s:<20} {s}\n", .{ "ID", "VERSION", "MANIFEST", "EXPORTS" });
+    for (apps) |app| {
+        try w.print("{s:<32} {s:<20} {s:<20} {s}", .{ app.id, app.version, oci.shortDigest(app.manifest), try std.mem.join(arena, ", ", app.commands) });
+        for (app.runtimes) |r| try w.print("  (runtime {s} {s})", .{ r.id, r.version });
+        for (app.extension_points) |p| try w.print("  (extension point {s})", .{p.name});
+        if (app.extends) |x| try w.print("  (extends {s} {s})", .{ x.point, x.version });
+        for (app.shortcuts) |name| try w.print("  (shortcut \"{s}\")", .{name});
+        if (app.opens.len > 0) try w.print("  (opens {s})", .{try std.mem.join(arena, ", ", app.opens)});
+        for (app.registry) |k| try w.print("  (keeps HKCU\\{s})", .{k});
+        if (app.override) |saved| try w.print("  (override {f})", .{saved});
+        if (app.lazy) |p| try w.print("  {s}", .{try p.text(arena)});
+        if (app.masked) try w.writeAll("  (masked)");
+        if (app.previous) |p| try w.print("  (previous {s}{s})", .{ p.version, if (p.with_data) ", with data" else "" });
+        if (app.skips) |s| try w.print("  (skips {s})", .{s.version});
+        try w.writeByte('\n');
+    }
+    try w.flush();
+}
+
+/// The version `rollback` would go back to, if there's one other than this.
+fn previousOf(ctx: *Context, ref: Store.Ref) !?Previous {
+    const arena = ctx.arena;
+    const p = try ctx.store.readPrevious(arena, ref.id) orelse return null;
+    if (std.mem.eql(u8, p.manifest, ref.manifest)) return null;
+    const with_data = if (try ctx.store.readKeptData(arena, ref.id)) |k| std.mem.eql(u8, k.manifest, p.manifest) else false;
+    return .{ .version = p.version, .manifest = p.manifest, .with_data = with_data };
+}
 
 /// `zigsaw info <app-id>`: an installed app, as the store has it; no network.
 pub fn installedInfo(ctx: *Context, id: []const u8) !void {
@@ -21,6 +130,25 @@ pub fn installedInfo(ctx: *Context, id: []const u8) !void {
         return fail("{s} isn't installed; `zigsaw remote-info {s}` shows what it is in its remote", .{ id, id });
     const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
     const cfg = image.config;
+
+    if (ctx.format == .json) {
+        const remote_name: ?[]const u8 = if (ref.source) |source| if (try remotes.of(ctx, source)) |r| r.name else null else null;
+        return output.write(ctx, output.merged(.{
+            headOf(cfg),
+            struct { source: ?[]const u8, remote: ?[]const u8, manifest: []const u8 }{
+                .source = ref.source,
+                .remote = remote_name,
+                .manifest = ref.manifest,
+            },
+            try contentsOf(arena, image.manifest, cfg),
+            struct { location: []const u8, data: []const u8, masked: bool, previous: ?Previous }{
+                .location = try ctx.store.deployPath(arena, oci.ownLayer(image.manifest).digest),
+                .data = try ctx.store.dataDir(arena, ref.id),
+                .masked = try ctx.store.isHeld(arena, ref.id),
+                .previous = try previousOf(ctx, ref),
+            },
+        }));
+    }
 
     var buf: [4096]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
@@ -49,7 +177,30 @@ pub fn remoteInfo(ctx: *Context, image_text: []const u8) !void {
     const app = try remote.fetchInfoOpen(ctx, image_text, &registry);
     defer registry.deinit();
     const cfg = app.config;
-    const signature_text: []const u8 = switch (try remote.checkSignature(ctx, &registry, app.target.ref, app.index, app.manifest_digest)) {
+    const checked = try remote.checkSignature(ctx, &registry, app.target.ref, app.index, app.manifest_digest);
+    if (ctx.format == .json) {
+        const installed = try ctx.store.readRef(arena, cfg.id);
+        return output.write(ctx, output.merged(.{
+            headOf(cfg),
+            struct { image: []const u8, manifest: []const u8, index: ?[]const u8, signature: Signature, download: Download }{
+                .image = app.target.text,
+                .manifest = app.manifest_digest,
+                .index = app.index,
+                .signature = switch (checked) {
+                    .no_key => .{ .state = .no_key },
+                    .missing => .{ .state = .missing },
+                    .signed => |by| .{ .state = .signed, .by = by },
+                    .wrong => |why| .{ .state = .wrong, .why = why },
+                },
+                .download = try downloadOf(ctx, app.manifest),
+            },
+            try contentsOf(arena, app.manifest, cfg),
+            struct { installed: ?struct { version: []const u8, manifest: []const u8 } }{
+                .installed = if (installed) |ref| .{ .version = ref.version, .manifest = ref.manifest } else null,
+            },
+        }));
+    }
+    const signature_text: []const u8 = switch (checked) {
         .no_key => "not checked: no key here for its registry",
         .missing => "none: nothing says who made it",
         .signed => |by| try std.fmt.allocPrint(arena, "signed, by {s}", .{by}),
@@ -80,6 +231,98 @@ pub fn remoteInfo(ctx: *Context, image_text: []const u8) !void {
     try w.flush();
 }
 
+/// What `info` and `remote-info` say first, as JSON.
+pub const Head = struct {
+    id: []const u8,
+    version: []const u8,
+    name: ?[]const u8,
+    summary: ?[]const u8,
+    homepage: ?[]const u8,
+    license: ?[]const u8,
+};
+
+pub fn headOf(cfg: oci.AppConfig) Head {
+    return .{ .id = cfg.id, .version = cfg.version, .name = cfg.name, .summary = cfg.summary, .homepage = cfg.homepage, .license = cfg.license };
+}
+
+/// A runtime, as JSON names it.
+pub const RuntimeRef = struct {
+    id: []const u8,
+    version: []const u8,
+    /// Its image's manifest digest.
+    image: []const u8,
+};
+
+/// An extension point, as JSON names it.
+pub const Point = struct { name: []const u8, version: []const u8 };
+
+/// A sandbox the app can't work under, and why.
+pub const Unsupported = struct {
+    sandbox: oci.Sandbox,
+    why: []const u8,
+    /// The runtime that can't, or null when it's the app's own reason.
+    runtime: ?[]const u8,
+};
+
+/// What the app brings and may reach, as `info` and `remote-info` say it in
+/// JSON (`writeContents` says it in text).
+pub const Contents = struct {
+    runtimes: []const RuntimeRef,
+    /// Its own layer's: tar, gzip or estargz.
+    layer_format: ?format.Format,
+    extension_points: []const Point,
+    extends: ?oci.Extends,
+    commands: []const []const u8,
+    shortcuts: []const []const u8,
+    /// Kinds of file by extension (".rnote"), and URL schemes ("vscodium:").
+    opens: []const []const u8,
+    unsupported: []const Unsupported,
+    /// As its config has them.
+    permissions: oci.Permissions,
+    /// The ports it connects to: its own and its runtimes'.
+    uses: []const oci.Use,
+    registry: []const []const u8,
+    /// As its config says: null for images made before iteration 4.
+    build: ?oci.Build,
+};
+
+pub fn contentsOf(arena: std.mem.Allocator, manifest: oci.Manifest, cfg: oci.AppConfig) !Contents {
+    var opens: std.ArrayList([]const u8) = .empty;
+    if (cfg.associations) |a| try opens.appendSlice(arena, a.map.keys());
+    if (cfg.schemes) |s| for (s.map.keys()) |name| try opens.append(arena, try std.fmt.allocPrint(arena, "{s}:", .{name}));
+    var unsupported: std.ArrayList(Unsupported) = .empty;
+    for (std.enums.values(oci.Sandbox)) |sandbox| if (oci.unsupportedUnder(cfg, sandbox)) |reason|
+        try unsupported.append(arena, .{ .sandbox = sandbox, .why = reason.why, .runtime = reason.runtime });
+    const access: oci.Access = try .of(arena, cfg);
+    return .{
+        .runtimes = try runtimesOf(arena, cfg),
+        .layer_format = format.Format.ofDescriptor(oci.ownLayer(manifest)),
+        .extension_points = try pointsOf(arena, cfg),
+        .extends = cfg.extends,
+        .commands = cfg.exports.map.keys(),
+        .shortcuts = if (cfg.shortcuts) |s| s.map.keys() else &.{},
+        .opens = opens.items,
+        .unsupported = unsupported.items,
+        .permissions = cfg.permissions,
+        .uses = access.uses,
+        .registry = access.registry,
+        .build = cfg.build,
+    };
+}
+
+fn runtimesOf(arena: std.mem.Allocator, cfg: oci.AppConfig) ![]const RuntimeRef {
+    const out = try arena.alloc(RuntimeRef, cfg.runtimes.map.count());
+    for (out, cfg.runtimes.map.values()) |*o, r| o.* = .{ .id = r.id, .version = r.version, .image = r.image };
+    return out;
+}
+
+fn pointsOf(arena: std.mem.Allocator, cfg: oci.AppConfig) ![]const Point {
+    const e = cfg.extensions orelse return &.{};
+    const out = try arena.alloc(Point, e.map.count());
+    for (out, e.map.keys(), e.map.values()) |*o, name, p| o.* = .{ .name = name, .version = p.version };
+    return out;
+}
+
 /// What the app is: the first lines of `info` and `remote-info`, and of what
 /// `install` shows before it asks.
 pub fn writeName(w: *Io.Writer, cfg: oci.AppConfig) !void {
@@ -87,16 +330,37 @@ pub fn writeName(w: *Io.Writer, cfg: oci.AppConfig) !void {
     if (cfg.summary) |s| try w.print("  {s}\n", .{s});
 }
 
+/// Whether an image is signed, as `remote-info --format=json` says it.
+const Signature = struct {
+    /// signed, missing (nothing says who made it), no_key (not checked: no
+    /// key here for its registry) or wrong (install refuses it).
+    state: enum { signed, missing, no_key, wrong },
+    /// Whose signature it is, when signed.
+    by: ?[]const u8 = null,
+    /// What's wrong with it, when wrong.
+    why: ?[]const u8 = null,
+};
+
+/// What installing an image downloads, in bytes: its config and layers, and
+/// of those layers, what the store hasn't got yet.
+const Download = struct { bytes: u64, missing: u64 };
+
+fn downloadOf(ctx: *Context, manifest: oci.Manifest) !Download {
+    var d: Download = .{ .bytes = manifest.config.size, .missing = 0 };
+    for (manifest.layers) |l| {
+        d.bytes += l.size;
+        if (!try Store.exists(ctx.io, try ctx.store.blobPath(ctx.arena, oci.digestHex(l.digest).?))) d.missing += l.size;
+    }
+    return d;
+}
+
 /// What installing the image downloads, and how much of that the store has
 /// already (a runtime another app has, say).
 pub fn writeDownload(ctx: *Context, w: *Io.Writer, manifest: oci.Manifest) !void {
     const arena = ctx.arena;
-    var total: u64 = manifest.config.size;
-    var missing: u64 = 0;
-    for (manifest.layers) |l| {
-        total += l.size;
-        if (!try Store.exists(ctx.io, try ctx.store.blobPath(arena, oci.digestHex(l.digest).?))) missing += l.size;
-    }
+    const d = try downloadOf(ctx, manifest);
+    const total = d.bytes;
+    const missing = d.missing;
     try writeLine(w, "download", if (missing == total - manifest.config.size)
         try std.fmt.allocPrint(arena, "{Bi:.1}", .{total})
     else if (missing == 0)

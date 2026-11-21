@@ -311,6 +311,19 @@ zigsaw's own, which Flatpak has no command for:
 `zigsaw help` prints the same, with the run options (see
 [Changing an app's options](#changing-an-apps-options)).
 
+For scripts, the commands that print something to read (`list`, `info`, `remote-info`
+and its `--show-files`, `search`, `remote-ls`, `remotes`, `ps`, `mask`,
+`update --check`, `updates`, `permissions`, `volume ls`, `volume inspect`, `doctor` and
+`version`) take `--format=json`. They then print one JSON value on stdout in place of
+their text, with whole digests, sizes in bytes and times in RFC 3339. Exit codes and
+stderr stay the same. [docs/json.md](docs/json.md) lists the keys, which later versions
+add to but don't rename:
+
+```bash
+zigsaw list --format=json | jq -r '.[] | select(.id == "org.nodejs.node") | .version'
+zigsaw ps --format=json | jq '.[] | {run, id, memory}'
+```
+
 ## Finding apps
 
 `zigsaw search` lists the apps in the remotes' catalogs, and finds the ones

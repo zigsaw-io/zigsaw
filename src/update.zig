@@ -11,6 +11,7 @@ const Store = @import("Store.zig");
 const builder = @import("builder.zig");
 const install = @import("install.zig");
 const oci = @import("oci.zig");
+const output = @import("output.zig");
 const remote = @import("remote.zig");
 const fail = Context.fail;
 const note = Context.note;
@@ -37,6 +38,7 @@ pub fn update(ctx: *Context, ids: []const []const u8, consent: remote.Consent, l
 /// lines on stdout, and the others a note. Returns the exit code: 1 if any
 /// couldn't be checked, whatever the others found.
 pub fn check(ctx: *Context, ids: []const []const u8) !u32 {
+    if (ctx.format == .json) return checkJson(ctx, ids);
     var failed: usize = 0;
     var buf: [1024]u8 = undefined;
     var stdout = Context.stdout().writerStreaming(ctx.io, &buf);
@@ -50,6 +52,27 @@ pub fn check(ctx: *Context, ids: []const []const u8) !u32 {
     }
     if (failed == 0) return 0;
     note("{d} app(s) couldn't be checked", .{failed});
+    return 1;
+}
+
+/// `update --check --format=json`: the same, as one object at the end.
+fn checkJson(ctx: *Context, ids: []const []const u8) !u32 {
+    const arena = ctx.arena;
+    var waiting: std.ArrayList(JsonWaiting) = .empty;
+    var failed: std.ArrayList([]const u8) = .empty;
+    for (try refsOf(ctx, ids)) |ref| {
+        const found = newImage(ctx, ref) catch |err| switch (err) {
+            error.Failed => {
+                try failed.append(arena, ref.id); // Already reported.
+                continue;
+            },
+            else => |e| return e,
+        };
+        if (found) |app| try waiting.append(arena, app.json());
+    }
+    try output.write(ctx, .{ .waiting = waiting.items, .failed = failed.items });
+    if (failed.items.len == 0) return 0;
+    note("{d} app(s) couldn't be checked", .{failed.items.len});
     return 1;
 }
 
@@ -79,6 +102,13 @@ pub const Waiting = struct {
     to_digest: []const u8,
     /// What it may reach beyond the installed version, as lines ready to show.
     added: []const u8 = "",
+    /// The same, as JSON says it; null if nothing, or if a zigsaw before
+    /// 0.107 found it.
+    adds: ?oci.Access = null,
+
+    pub fn json(app: Waiting) JsonWaiting {
+        return .{ .id = app.id, .from = app.from, .to = app.to, .from_manifest = app.from_digest, .to_manifest = app.to_digest, .adds = app.adds };
+    }
 
     pub fn write(app: Waiting, w: *std.Io.Writer) !void {
         try w.print("{s} {s} -> {s} ({s} -> {s})\n", .{
@@ -87,6 +117,21 @@ pub const Waiting = struct {
         });
         try w.writeAll(app.added);
     }
+};
+
+/// A new image waiting, as `update --check --format=json` and `updates` say
+/// it.
+pub const JsonWaiting = struct {
+    id: []const u8,
+    /// The installed version and the new one.
+    from: []const u8,
+    to: []const u8,
+    from_manifest: []const u8,
+    to_manifest: []const u8,
+    /// What the new one may reach that the installed one may not: its
+    /// permissions, the ports it uses and the HKCU keys it keeps. Null if
+    /// nothing, or not known: what a zigsaw before 0.107 found.
+    adds: ?oci.Access,
 };
 
 /// Whether the app is held, which updates leave alone, after a note saying so.
@@ -148,6 +193,7 @@ pub fn newImage(ctx: *Context, ref: Store.Ref) !?Waiting {
         .from_digest = ref.manifest,
         .to_digest = new.manifest_digest,
         .added = lines.written(),
+        .adds = if (added.isEmpty()) null else added,
     };
 }
 

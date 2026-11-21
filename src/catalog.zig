@@ -17,6 +17,7 @@ const Context = @import("Context.zig");
 const Registry = @import("Registry.zig");
 const Store = @import("Store.zig");
 const oci = @import("oci.zig");
+const output = @import("output.zig");
 const remote = @import("remote.zig");
 const remotes = @import("remotes.zig");
 const repeat = @import("testing.zig").repeat;
@@ -261,6 +262,10 @@ pub fn search(ctx: *Context, words: []const []const u8, only: ?remotes.Remote) !
         for (loaded.catalog.apps) |e| if (try rankOf(arena, e, words)) |rank| try matches.append(arena, .{ .entry = e, .rank = rank, .remote = r.name });
     }
     if (read == 0) return fail("no remote's catalog could be read", .{});
+    if (matches.items.len == 0 and ctx.format == .json) {
+        try output.write(ctx, output.nothing);
+        return 1;
+    }
     if (matches.items.len == 0) {
         const where = if (all.len == 1) try std.fmt.allocPrint(arena, "{s}'s catalog", .{all[0].name}) else "any remote's catalog";
         if (words.len == 0) note("no app in {s}", .{where}) else note("no app in {s} matches {s}", .{ where, try std.mem.join(arena, " ", words) });
@@ -274,6 +279,16 @@ pub fn search(ctx: *Context, words: []const []const u8, only: ?remotes.Remote) !
             return std.mem.lessThan(u8, a.remote, b.remote);
         }
     }.lessThan);
+
+    if (ctx.format == .json) {
+        // The catalog's entry, after the remote it's in.
+        const InRemote = struct { remote: []const u8 };
+        const Found = output.Merged(struct { InRemote, Entry });
+        const out = try arena.alloc(Found, matches.items.len);
+        for (out, matches.items) |*o, m| o.* = .{ .parts = .{ .{ .remote = m.remote }, m.entry } };
+        try output.write(ctx, out);
+        return 0;
+    }
 
     // Which remote each is in, when there's more than one to say.
     const by_remote = all.len > 1;

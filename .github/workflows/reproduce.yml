@@ -67,6 +67,9 @@ jobs:
       - name: Recipes that run make build with GNU make
         run: bash scripts/check-make.sh
 
+      - name: Scripts call zigsaw by the names it has
+        run: bash scripts/check-commands.sh
+
       - name: The upstream checker, and its table against the recipes
         run: bash tests/upstream.sh
 
@@ -354,6 +357,12 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: bash tests/zot.sh bash tests/updates.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/updates.txt"
+
+      # --format=json on each command that takes it; its remote side against a registry.
+      - name: tests/json.sh, against a local zot registry
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tests/zot.sh bash tests/json.sh 2>&1 | tee "$(cygpath -u "$LOG_DIR")/json.txt"
 
       # Going back to the version an update replaced, and holding, against a registry.
       - name: tests/rollback.sh, against a local zot registry

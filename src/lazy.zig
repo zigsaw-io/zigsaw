@@ -197,16 +197,42 @@ pub fn readMeta(store: Store, arena: Allocator, hex: []const u8) !Meta {
 
 /// What `list` says of an app with a layer that's still lazy: null if none is.
 pub fn describe(store: Store, arena: Allocator, manifest: oci.Manifest) !?[]const u8 {
+    const p = try progress(store, arena, manifest) orelse return null;
+    return try p.text(arena);
+}
+
+/// Where the download of an image's lazy layer is, as `list --format=json`
+/// says it.
+pub const Progress = struct {
+    /// `fetching` until its helper says more.
+    phase: enum { fetching, downloading, paused, unpacking },
+    /// How much of the layer is in, while downloading or paused.
+    percent: ?u64 = null,
+    /// Why it's paused, if something failed.
+    @"error": ?[]const u8 = null,
+
+    /// As `list` says it.
+    pub fn text(p: Progress, arena: Allocator) ![]const u8 {
+        return switch (p.phase) {
+            .fetching => "(fetching)",
+            .unpacking => "(unpacking)",
+            .paused => try std.fmt.allocPrint(arena, "(paused at {d}%{s}{s}; runs go on)", .{ p.percent.?, if (p.@"error" != null) ": " else "", p.@"error" orelse "" }),
+            .downloading => try std.fmt.allocPrint(arena, "(downloading {d}%)", .{p.percent.?}),
+        };
+    }
+};
+
+/// Where the image's first lazy layer is; null if it has none.
+pub fn progress(store: Store, arena: Allocator, manifest: oci.Manifest) !?Progress {
     for (manifest.layers) |l| {
         const hex = oci.digestHex(l.digest) orelse continue;
         if (!try isLazy(store, arena, hex)) continue;
-        const s = readState(store, arena, hex) orelse return "(fetching)";
+        const s = readState(store, arena, hex) orelse return .{ .phase = .fetching };
         const pct = if (s.size == 0) 0 else s.downloaded * 100 / s.size;
         const live = try Store.isLocked(store.io, try lockPath(store, arena, hex, "helper"));
-        if (std.mem.eql(u8, s.phase, "unpacking") or std.mem.eql(u8, s.phase, "swapping")) return "(unpacking)";
-        if (!live or std.mem.eql(u8, s.phase, "paused"))
-            return try std.fmt.allocPrint(arena, "(paused at {d}%{s}{s}; runs go on)", .{ pct, if (s.@"error" != null) ": " else "", s.@"error" orelse "" });
-        return try std.fmt.allocPrint(arena, "(downloading {d}%)", .{pct});
+        if (std.mem.eql(u8, s.phase, "unpacking") or std.mem.eql(u8, s.phase, "swapping")) return .{ .phase = .unpacking };
+        if (!live or std.mem.eql(u8, s.phase, "paused")) return .{ .phase = .paused, .percent = pct, .@"error" = s.@"error" };
+        return .{ .phase = .downloading, .percent = pct };
     }
     return null;
 }

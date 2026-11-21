@@ -178,6 +178,12 @@ pub fn setHeld(ctx: *Context, ids: []const []const u8, held: bool) !void {
 /// `zigsaw mask` alone: the installed apps updates leave alone, one a line.
 pub fn listHeld(ctx: *Context) !void {
     const arena = ctx.arena;
+    if (ctx.format == .json) {
+        const App = struct { id: []const u8, version: []const u8 };
+        var held: std.ArrayList(App) = .empty;
+        for (try ctx.store.listRefs(arena)) |ref| if (try ctx.store.isHeld(arena, ref.id)) try held.append(arena, .{ .id = ref.id, .version = ref.version });
+        return @import("output.zig").write(ctx, held.items);
+    }
     var buf: [1024]u8 = undefined;
     var stdout = std.Io.File.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;

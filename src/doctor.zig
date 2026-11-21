@@ -45,6 +45,7 @@ const updates = @import("updates.zig");
 const upgrade = @import("upgrade.zig");
 const volumes = @import("volumes.zig");
 const win32 = @import("win32.zig");
+const output = @import("output.zig");
 const options = @import("options");
 
 pub const Options = struct {
@@ -62,8 +63,30 @@ pub const Report = struct {
     w: *Io.Writer,
     counts: std.EnumArray(Level, usize) = .initFill(0),
     sections: usize = 0,
+    /// With --format=json: what's found, kept for `finish` to write as one
+    /// object, rather than written as it's found.
+    json: ?Collected = null,
+
+    pub const Collected = struct {
+        arena: Allocator,
+        sections: std.ArrayList(Section) = .empty,
+    };
+
+    const Section = struct { title: []const u8, findings: std.ArrayList(Finding) = .empty };
+
+    pub const Finding = struct {
+        level: Level,
+        text: []const u8,
+        /// What fixes it, if something does: a command, or what to do. A
+        /// fix of several lines has them joined by newlines.
+        fix: ?[]const u8 = null,
+    };
 
     pub fn section(r: *Report, comptime fmt: []const u8, args: anytype) !void {
+        if (r.json) |*j| {
+            try j.sections.append(j.arena, .{ .title = try std.fmt.allocPrint(j.arena, fmt, args) });
+            return;
+        }
         if (r.sections > 0) {
             try r.w.writeAll("\n");
             // What's done shows while the rest is looked at.
@@ -75,12 +98,26 @@ pub const Report = struct {
 
     pub fn add(r: *Report, level: Level, comptime fmt: []const u8, args: anytype) !void {
         r.counts.getPtr(level).* += 1;
+        if (r.json) |*j| {
+            if (j.sections.items.len == 0) try j.sections.append(j.arena, .{ .title = "" });
+            const last = &j.sections.items[j.sections.items.len - 1];
+            try last.findings.append(j.arena, .{ .level = level, .text = try std.fmt.allocPrint(j.arena, fmt, args) });
+            return;
+        }
         try r.w.print("  {s:<9}", .{@tagName(level)});
         try r.w.print(fmt ++ "\n", args);
     }
 
     /// What fixes the finding above it, on a line of its own.
     pub fn fix(r: *Report, comptime fmt: []const u8, args: anytype) !void {
+        if (r.json) |*j| {
+            const findings = if (j.sections.items.len > 0) &j.sections.items[j.sections.items.len - 1].findings else return;
+            if (findings.items.len == 0) return;
+            const last = &findings.items[findings.items.len - 1];
+            const line = try std.fmt.allocPrint(j.arena, fmt, args);
+            last.fix = if (last.fix) |before| try std.fmt.allocPrint(j.arena, "{s}\n{s}", .{ before, line }) else line;
+            return;
+        }
         try r.w.print("           " ++ fmt ++ "\n", args);
     }
 
@@ -88,6 +125,13 @@ pub const Report = struct {
     pub fn finish(r: *Report) !u32 {
         const problems = r.counts.get(.problem);
         const warnings = r.counts.get(.warning);
+        if (r.json) |j| {
+            const Out = struct { title: []const u8, findings: []const Finding };
+            const sections = try j.arena.alloc(Out, j.sections.items.len);
+            for (sections, j.sections.items) |*o, sec| o.* = .{ .title = sec.title, .findings = sec.findings.items };
+            try output.writeTo(r.w, .{ .version = options.version, .sections = sections, .problems = problems, .warnings = warnings });
+            return if (problems > 0) 1 else 0;
+        }
         try r.w.writeAll("\n");
         if (problems == 0 and warnings == 0) {
             try r.w.writeAll("Nothing wrong found.\n");
@@ -110,7 +154,7 @@ fn plural(n: usize) []const u8 {
 pub fn doctor(ctx: *Context, opts: Options) !u32 {
     var buf: [8 * 1024]u8 = undefined;
     var out = Context.stdout().writerStreaming(ctx.io, &buf);
-    var d: Doctor = .{ .ctx = ctx, .opts = opts, .r = .{ .w = &out.interface } };
+    var d: Doctor = .{ .ctx = ctx, .opts = opts, .r = .{ .w = &out.interface, .json = if (ctx.format == .json) .{ .arena = ctx.arena } else null } };
     return d.run() catch |err| switch (err) {
         // Nobody reads the rest, as with `zigsaw doctor | head`.
         error.WriteFailed => 1,
@@ -1481,6 +1525,32 @@ test Report {
         \\1 problem, 1 warning.
         \\
     , w.buffered());
+}
+
+test "a report as JSON" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    var buf: [2048]u8 = undefined;
+    var w: Io.Writer = .fixed(&buf);
+    var r: Report = .{ .w = &w, .json = .{ .arena = arena_state.allocator() } };
+    try r.section("The store", .{});
+    try r.add(.warning, "B: is {s}", .{"D:\\x"});
+    try r.fix("`subst B: /d` frees it", .{});
+    try r.fix("then {s}", .{"again"});
+    try r.add(.ok, "fine", .{});
+    try testing.expectEqual(@as(u32, 0), try r.finish());
+    const parsed = try std.json.parseFromSliceLeaky(struct {
+        version: []const u8,
+        sections: []const struct { title: []const u8, findings: []const Report.Finding },
+        problems: usize,
+        warnings: usize,
+    }, arena_state.allocator(), w.buffered(), .{});
+    try testing.expectEqual(@as(usize, 1), parsed.warnings);
+    try testing.expectEqualStrings("The store", parsed.sections[0].title);
+    try testing.expectEqual(Level.warning, parsed.sections[0].findings[0].level);
+    try testing.expectEqualStrings("B: is D:\\x", parsed.sections[0].findings[0].text);
+    try testing.expectEqualStrings("`subst B: /d` frees it\nthen again", parsed.sections[0].findings[0].fix.?);
+    try testing.expect(parsed.sections[0].findings[1].fix == null);
 }
 
 test "a report with only notes finds nothing wrong" {

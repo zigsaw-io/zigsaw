@@ -19,11 +19,11 @@ const hosts = @import("hosts.zig");
 const info = @import("info.zig");
 const peek = @import("peek.zig");
 const install = @import("install.zig");
-const lazy = @import("lazy.zig");
 const LazyHelper = @import("LazyHelper.zig");
 const logs = @import("logs.zig");
 const up = @import("up.zig");
 const oci = @import("oci.zig");
+const output = @import("output.zig");
 const override = @import("override.zig");
 const prune = @import("prune.zig");
 const ps = @import("ps.zig");
@@ -268,6 +268,11 @@ const usage =
     \\image for windows/amd64. Blobs over 64 MiB are published in chunks of
     \\ZIGSAW_UPLOAD_CHUNK_SIZE bytes (0: in one request).
     \\
+    \\With --format=json, list, info, remote-info (and --show-files), search, remote-ls,
+    \\remotes, ps, mask, update --check, updates, permissions, volume ls, volume inspect,
+    \\doctor and version print one JSON value on stdout in place of their text, with the
+    \\keys docs/json.md lists; --format=text is their text. Exit codes and stderr stay.
+    \\
     \\Before 0.105, zigsaw's commands were Docker's: pull is now install, rm uninstall, prune
     \\uninstall --unused, ls and cat remote-info, stop kill, kill kill --now, exec enter,
     \\hold and unhold mask, grants permissions, push build-export, signature build-sign,
@@ -386,20 +391,25 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     if (args.len == 0) return usageError();
 
     const command = args[0];
-    const rest = args[1..];
     if (std.mem.eql(u8, command, "help") or isFlag(command, "help")) {
         Context.printStderr("{s}", .{usage});
         return 0;
     }
+    if (movedCommand(command, args[1..])) |now|
+        return fail("`zigsaw {s}` is `zigsaw {s}` since zigsaw 0.105, whose commands are Flatpak's; `zigsaw help` lists them", .{ command, now });
+    // --format, wherever it is among the options: out, into ctx.format.
+    const rest = try output.take(ctx, if (isFlag(command, "version")) "version" else command, args[1..]);
     if (std.mem.eql(u8, command, "version") or isFlag(command, "version")) {
+        if (ctx.format == .json) {
+            try output.write(ctx, .{ .version = options.version });
+            return 0;
+        }
         var buf: [64]u8 = undefined;
         var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
         try stdout.interface.print("zigsaw {s}\n", .{options.version});
         try stdout.interface.flush();
         return 0;
     }
-    if (movedCommand(command, rest)) |now|
-        return fail("`zigsaw {s}` is `zigsaw {s}` since zigsaw 0.105, whose commands are Flatpak's; `zigsaw help` lists them", .{ command, now });
     // Before the store is opened, which makes its folders, and before its
     // data is moved: doctor changes nothing (see doctor.zig).
     if (std.mem.eql(u8, command, "doctor")) {
@@ -603,7 +613,7 @@ fn dispatch(ctx: *Context, all_args: []const [:0]const u8) !u32 {
     if (std.mem.eql(u8, command, "run")) return runtime.run(ctx, try parseRunOptions(ctx, rest));
     if (std.mem.eql(u8, command, "list")) {
         if (rest.len != 0) return usageError();
-        try list(ctx);
+        try info.list(ctx);
         return 0;
     }
     if (std.mem.eql(u8, command, "ps")) {
@@ -1445,42 +1455,6 @@ fn settleGrants(ctx: *Context, id: ?[]const u8) !void {
         note("{s} is running: what the change takes back goes when its last run ends", .{a});
 }
 
-fn list(ctx: *Context) !void {
-    const arena = ctx.arena;
-    const refs = try ctx.store.listRefs(arena);
-    const shims = try exports.list(ctx);
-    var buf: [4096]u8 = undefined;
-    var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
-    const w = &stdout.interface;
-    try w.print("{s:<32} {s:<20} {s:<20} {s}\n", .{ "ID", "VERSION", "MANIFEST", "EXPORTS" });
-    for (refs) |ref| {
-        var names: std.ArrayList([]const u8) = .empty;
-        for (shims) |s| if (std.mem.eql(u8, s.sidecar.app, ref.id)) try names.append(arena, s.name);
-        try w.print("{s:<32} {s:<20} {s:<20} {s}", .{ ref.id, ref.version, oci.shortDigest(ref.manifest), try std.mem.join(arena, ", ", names.items) });
-        const image = try ctx.store.readImage(arena, ref.id, ref.manifest);
-        for (image.config.runtimes.map.values()) |r| try w.print("  (runtime {s} {s})", .{ r.id, r.version });
-        if (image.config.extensions) |e| for (e.map.keys()) |name| try w.print("  (extension point {s})", .{name});
-        if (image.config.extends) |x| try w.print("  (extends {s} {s})", .{ x.point, x.version });
-        for (try shortcuts.names(ctx, ref.id)) |name| try w.print("  (shortcut \"{s}\")", .{name});
-        const opens = try associations.names(ctx, ref.id);
-        if (opens.len > 0) try w.print("  (opens {s})", .{try std.mem.join(arena, ", ", opens)});
-        if (image.config.registry) |keys| for (keys) |k| try w.print("  (keeps HKCU\\{s})", .{k});
-        const saved = try override.load(ctx.store, arena, ref.id);
-        if (!saved.isEmpty()) try w.print("  (override {f})", .{saved});
-        if (try lazy.describe(ctx.store, arena, image.manifest)) |state| try w.print("  {s}", .{state});
-        if (try ctx.store.isHeld(arena, ref.id)) try w.writeAll("  (masked)");
-        if (try ctx.store.readPrevious(arena, ref.id)) |p| if (!std.mem.eql(u8, p.manifest, ref.manifest)) {
-            const with_data = if (try ctx.store.readKeptData(arena, ref.id)) |k| std.mem.eql(u8, k.manifest, p.manifest) else false;
-            try w.print("  (previous {s}{s})", .{ p.version, if (with_data) ", with data" else "" });
-        };
-        if (try ctx.store.readSkip(arena, ref.id)) |s| try w.print("  (skips {s})", .{s.version});
-        try w.writeByte('\n');
-    }
-    try w.flush();
-    try grants.noteLeftovers(ctx);
-    try updates.noteWaiting(ctx);
-}
-
 fn remove(ctx: *Context, id: []const u8, delete_data: bool) !void {
     const io = ctx.io;
     const arena = ctx.arena;
@@ -1579,6 +1553,7 @@ test {
     _ = @import("msvc.zig");
     _ = @import("net.zig");
     _ = @import("oci.zig");
+    _ = @import("output.zig");
     _ = @import("override.zig");
     _ = @import("pe.zig");
     _ = @import("process.zig");

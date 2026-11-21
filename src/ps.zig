@@ -26,6 +26,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
+const output = @import("output.zig");
 const override = @import("override.zig");
 const win32 = @import("win32.zig");
 const note = Context.note;
@@ -462,6 +463,7 @@ pub fn ps(ctx: *Context, opts: Options) !void {
 
     var shown: std.ArrayList(*const Seen) = .empty;
     for (seen) |*s| if (matches(s.record, opts.filters)) try shown.append(arena, s);
+    if (ctx.format == .json) return output.write(ctx, try jsonRuns(arena, shown.items, seen, opts.processes));
     if (shown.items.len == 0) {
         if (opts.filters.len == 0)
             note("nothing is running", .{})
@@ -513,6 +515,113 @@ pub fn ps(ctx: *Context, opts: Options) !void {
         if (opts.processes) try printTree(arena, w, s, seen, procs, time);
     }
     try w.flush();
+}
+
+/// A run, build or exec, as `ps --format=json` has it.
+const JsonRun = struct {
+    /// Its zigsaw's PID: what `kill` and `enter` take.
+    run: u32,
+    kind: Kind,
+    id: []const u8,
+    version: ?[]const u8,
+    manifest: ?[]const u8,
+    sandbox: ?[]const u8,
+    network: ?[]const u8,
+    /// The run it's inside, by its zigsaw's PID.
+    inside: ?u32,
+    started: output.Time,
+    /// Null where its job can't be looked into.
+    process_count: ?usize,
+    memory: ?u64,
+    memory_limit: ?u64,
+    cpus: ?u32,
+    cpu_ms: ?u64,
+    ephemeral: bool,
+    /// The whole command line; a build's command.
+    command: []const u8,
+    shortcut: ?[]const u8,
+    log: ?[]const u8,
+    project: ?[]const u8,
+    ports: []const []const u8,
+    module: ?[]const u8,
+    step: ?[]const u8,
+    n: ?u32,
+    of: ?u32,
+    /// With --processes: its own processes, each naming its parent, and the
+    /// zigsaw of each run inside it.
+    processes: ?[]const JsonProc,
+};
+
+const JsonProc = struct {
+    pid: u32,
+    ppid: u32,
+    name: []const u8,
+    command_line: ?[]const u8,
+    memory: ?u64,
+    cpu_ms: ?u64,
+    started: ?output.Time,
+    /// The run inside this one that the process is the zigsaw of.
+    run: ?u32,
+};
+
+fn jsonRuns(arena: Allocator, shown: []const *const Seen, all: []const Seen, processes: bool) ![]const JsonRun {
+    const snap = if (processes) try snapshot(arena) else Snapshot.empty;
+    const out = try arena.alloc(JsonRun, shown.len);
+    for (out, shown) |*o, s| {
+        const r = s.record;
+        const procs = if (s.job) |j| try describeAll(arena, j.pids, &snap) else &.{};
+        var memory: u64 = 0;
+        for (procs) |p| memory += p.private orelse 0;
+        const build = r.kind == .build;
+        o.* = .{
+            .run = r.pid,
+            .kind = r.kind,
+            .id = r.id,
+            .version = if (r.version.len > 0) r.version else null,
+            .manifest = if (r.manifest.len > 0) r.manifest else null,
+            .sandbox = r.sandbox,
+            .network = r.network,
+            .inside = s.inside,
+            .started = .fromFiletime(r.started),
+            .process_count = if (s.job) |j| j.pids.len else null,
+            .memory = if (s.job != null) memory else null,
+            .memory_limit = r.memory_limit,
+            .cpus = r.cpus,
+            .cpu_ms = if (s.job) |j| j.cpu / 10_000 else null,
+            .ephemeral = r.ephemeral,
+            .command = r.command,
+            .shortcut = r.shortcut,
+            .log = r.log,
+            .project = r.project,
+            .ports = r.ports orelse &.{},
+            .module = if (build) r.module else null,
+            .step = if (build) r.step else null,
+            .n = if (build and r.module != null) r.n else null,
+            .of = if (build and r.module != null) r.of else null,
+            .processes = if (processes and s.job != null) try jsonProcs(arena, s, all, procs) else null,
+        };
+    }
+    return out;
+}
+
+fn jsonProcs(arena: Allocator, s: *const Seen, all: []const Seen, procs: []const Proc) ![]const JsonProc {
+    const in: Inside = try .of(arena, s, all);
+    const rows = try treeOrder(arena, procs, in.theirs);
+    const out = try arena.alloc(JsonProc, rows.len);
+    for (out, rows) |*o, row| {
+        const p = row.proc;
+        o.* = .{
+            .pid = p.pid,
+            .ppid = p.ppid,
+            .name = p.name,
+            .command_line = p.command_line,
+            .memory = p.private,
+            .cpu_ms = if (p.cpu) |c| c / 10_000 else null,
+            .started = if (p.created) |c| .fromFiletime(c) else null,
+            .run = row.run,
+        };
+    }
+    return out;
 }
 
 const columns = 9;
@@ -591,6 +700,23 @@ pub fn shortCommand(arena: Allocator, command_line: []const u8) ![]const u8 {
 /// The run's processes as a tree, each under the one that started it. A
 /// run inside it shows as itself, its processes under its own line; an
 /// exec's, under the exec's.
+/// What's inside a run: the processes of runs inside it, by PID to the
+/// run's, which are theirs to show; and its execs.
+const Inside = struct {
+    theirs: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    execs: std.ArrayList(*const Seen) = .empty,
+
+    fn of(arena: Allocator, s: *const Seen, all: []const Seen) !Inside {
+        var in: Inside = .{};
+        for (all) |*o| if (o.inside != null and o.inside.? == s.record.pid) {
+            if (o.record.kind == .exec) try in.execs.append(arena, o);
+            try in.theirs.put(arena, o.record.pid, o.record.pid);
+            if (o.job) |j| for (j.pids) |pid| try in.theirs.put(arena, pid, o.record.pid);
+        };
+        return in;
+    }
+};
+
 fn printTree(arena: Allocator, w: *Io.Writer, s: *const Seen, all: []const Seen, procs: []const Proc, time: i64) !void {
     if (s.job == null) {
         try w.print("        (its processes can't be looked into)\n", .{});
@@ -599,13 +725,9 @@ fn printTree(arena: Allocator, w: *Io.Writer, s: *const Seen, all: []const Seen,
     // The processes of runs inside this one are theirs to show. An exec's
     // zigsaw isn't in the run's job, so isn't among `procs`: its processes
     // are left out, and it's named after them.
-    var theirs: std.AutoHashMapUnmanaged(u32, u32) = .empty;
-    var execs: std.ArrayList(*const Seen) = .empty;
-    for (all) |*o| if (o.inside != null and o.inside.? == s.record.pid) {
-        if (o.record.kind == .exec) try execs.append(arena, o);
-        try theirs.put(arena, o.record.pid, o.record.pid);
-        if (o.job) |j| for (j.pids) |pid| try theirs.put(arena, pid, o.record.pid);
-    };
+    const in: Inside = try .of(arena, s, all);
+    const theirs = in.theirs;
+    const execs = in.execs;
     const rows = try treeOrder(arena, procs, theirs);
     try w.print("        {s:<7} {s:<7} {s:>10} {s:>8}  {s:>7}  {s}\n", .{ "PID", "PPID", "MEMORY", "CPU", "UP", "COMMAND" });
     for (rows) |row| {

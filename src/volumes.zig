@@ -53,6 +53,7 @@ const hkcu = @import("hkcu.zig");
 const junction = @import("junction.zig");
 const layer = @import("layer.zig");
 const oci = @import("oci.zig");
+const output = @import("output.zig");
 const override = @import("override.zig");
 const snapshot = @import("snapshot.zig");
 const Context = @import("Context.zig");
@@ -830,10 +831,33 @@ fn inUse(ctx: *Context, v: Volume) !bool {
     return false;
 }
 
+/// A mount of a volume, as `volume ls --format=json` and `volume inspect`
+/// have it.
+const JsonMount = struct {
+    /// Null for the store-wide overrides': every app's.
+    app: ?[]const u8,
+    /// Where in the app's data directory; "." for all of it.
+    target: []const u8,
+    read_only: bool,
+};
+
+fn jsonMounts(arena: Allocator, users: []const Saved) ![]const JsonMount {
+    const out = try arena.alloc(JsonMount, users.len);
+    for (out, users) |*o, u| o.* = .{ .app = u.id, .target = u.mount.target, .read_only = u.mount.read_only };
+    return out;
+}
+
 /// `zigsaw volume ls`.
 pub fn show(ctx: *Context) !void {
     const arena = ctx.arena;
     const saved = try allSaved(ctx);
+    if (ctx.format == .json) {
+        const Listed = struct { name: []const u8, path: []const u8, external: bool, own: bool, mounts: []const JsonMount };
+        const all = try list(ctx.store, arena);
+        const out = try arena.alloc(Listed, all.len);
+        for (out, all) |*o, v| o.* = .{ .name = v.name, .path = v.path, .external = v.external, .own = v.own, .mounts = try jsonMounts(arena, try usersOf(ctx, saved, v)) };
+        return output.write(ctx, out);
+    }
     var buf: [4096]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;
@@ -852,6 +876,7 @@ pub fn show(ctx: *Context) !void {
 pub fn inspect(ctx: *Context, name: []const u8) !void {
     const arena = ctx.arena;
     const v = try find(ctx.store, arena, name) orelse return fail("there's no volume {s}; `zigsaw volume ls` lists them", .{name});
+    if (ctx.format == .json) return output.write(ctx, try inspectJson(ctx, v));
     var buf: [4096]u8 = undefined;
     var stdout = Io.File.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;
@@ -870,6 +895,47 @@ pub fn inspect(ctx: *Context, name: []const u8) !void {
     };
     try w.print("grants      {s}\n", .{if (lines.items.len == 0) "none" else try std.mem.join(arena, "; ", lines.items)});
     try w.flush();
+}
+
+/// A volume, as `volume inspect --format=json` has it.
+const Inspected = struct {
+    name: []const u8,
+    path: []const u8,
+    external: bool,
+    own: bool,
+    /// Whether its folder is there; its size is null when it isn't.
+    exists: bool,
+    bytes: ?u64,
+    files: ?usize,
+    mounts: []const JsonMount,
+    in_use: bool,
+    /// What apps' runs were given on its folder.
+    grants: []const JsonGrant,
+};
+
+const JsonGrant = struct { app: []const u8, kind: Store.Grant.Kind };
+
+fn inspectJson(ctx: *Context, v: Volume) !Inspected {
+    const arena = ctx.arena;
+    const exists = try isDir(ctx.io, v.path);
+    const size = if (exists) try measure(ctx.io, arena, v.path) else null;
+    var found: std.ArrayList(JsonGrant) = .empty;
+    for (try ctx.store.listGrantIds(arena)) |id| for (try ctx.store.readGrants(arena, id)) |g| {
+        if (g.kind == .loopback or !samePath(g.path, v.path)) continue;
+        try found.append(arena, .{ .app = id, .kind = g.kind });
+    };
+    return .{
+        .name = v.name,
+        .path = v.path,
+        .external = v.external,
+        .own = v.own,
+        .exists = exists,
+        .bytes = if (size) |z| z.bytes else null,
+        .files = if (size) |z| z.files else null,
+        .mounts = try jsonMounts(arena, try usersOf(ctx, try allSaved(ctx), v)),
+        .in_use = try inUse(ctx, v),
+        .grants = found.items,
+    };
 }
 
 /// `zigsaw volume rm <name>...`: deletes a volume in the store, and forgets

@@ -21,6 +21,7 @@ const Allocator = std.mem.Allocator;
 const Context = @import("Context.zig");
 const Registry = @import("Registry.zig");
 const credentials = @import("credentials.zig");
+const output = @import("output.zig");
 const remote = @import("remote.zig");
 const sigstore = @import("sigstore.zig");
 const trust = @import("trust.zig");
@@ -214,6 +215,7 @@ pub fn show(ctx: *Context) !void {
     const remotes = try all(ctx);
     const signers = try trust.all(ctx);
     const env = ctx.env.get(remote.registry_var);
+    if (ctx.format == .json) return showJson(ctx, remotes, signers, env != null);
     var width: usize = 0;
     for (remotes) |r| width = @max(width, r.name.len);
     var buf: [4096]u8 = undefined;
@@ -244,6 +246,63 @@ pub fn show(ctx: *Context) !void {
     try w.print("zigsaw's releases\n", .{});
     for (try trust.releaseSigners()) |s| try w.print("  signed by {s}{f}, built in\n", .{ if (s == .keyless) "keyless " else "", s });
     try w.flush();
+}
+
+/// A signer, as `remotes --format=json` has it.
+const JsonSigner = struct {
+    kind: enum { key, keyless },
+    /// A key's fingerprint.
+    key: ?[]const u8 = null,
+    /// The identity a keyless signature's certificate must name, and who
+    /// gave it.
+    identity: ?[]const u8 = null,
+    issuer: ?[]const u8 = null,
+    built_in: bool,
+
+    fn of(arena: Allocator, s: trust.Signer, built_in: bool) !JsonSigner {
+        return switch (s) {
+            .key => |k| .{ .kind = .key, .key = try arena.dupe(u8, &k.fingerprint), .built_in = built_in },
+            .keyless => |id| .{ .kind = .keyless, .identity = id.san, .issuer = id.issuer, .built_in = built_in },
+        };
+    }
+};
+
+/// A remote, as `remotes --format=json` has it.
+const JsonRemote = struct {
+    name: []const u8,
+    url: []const u8,
+    /// The first: where apps named by id alone come from.
+    default: bool,
+    /// Whether ZIGSAW_REGISTRY moved it, for this command.
+    from_env: bool,
+    signers: []const JsonSigner,
+    /// The login its registry gets; null if none.
+    login: ?struct {
+        kind: enum { environment, credential_manager, docker_config, docker_helper },
+        username: ?[]const u8 = null,
+        helper: ?[]const u8 = null,
+    },
+};
+
+fn showJson(ctx: *Context, remotes: []const Remote, signers: []const trust.Named, from_env: bool) !void {
+    const arena = ctx.arena;
+    const out = try arena.alloc(JsonRemote, remotes.len);
+    for (out, remotes, 0..) |*o, r, i| {
+        var theirs: std.ArrayList(JsonSigner) = .empty;
+        for (signers) |s| if (sameUrl(s.prefix, r.url)) try theirs.append(arena, try .of(arena, s.signer, s.built_in));
+        o.* = .{ .name = r.name, .url = r.url, .default = i == 0, .from_env = i == 0 and from_env, .signers = theirs.items, .login = null };
+        const host = credentials.normalizeHost(arena, hostOf(r.url)) catch continue;
+        o.login = switch (try credentials.savedFor(ctx, host)) {
+            .none, .docker_unreadable => null,
+            .environment => .{ .kind = .environment },
+            .credential_manager => |user| .{ .kind = .credential_manager, .username = user },
+            .docker_config => .{ .kind = .docker_config },
+            .docker_helper => |name| .{ .kind = .docker_helper, .helper = name },
+        };
+    }
+    var releases: std.ArrayList(JsonSigner) = .empty;
+    for (try trust.releaseSigners()) |s| try releases.append(arena, try .of(arena, s, true));
+    try output.write(ctx, .{ .remotes = out, .releases = .{ .signers = releases.items } });
 }
 
 /// What `remote-add` and `remote-modify` change, in this order: the

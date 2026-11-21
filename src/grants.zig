@@ -338,6 +338,7 @@ pub fn noteLeftovers(ctx: *Context) !void {
 /// files, the rest from the record.
 pub fn show(ctx: *Context, only: ?[]const u8) !void {
     const arena = ctx.arena;
+    if (ctx.format == .json) return showJson(ctx, only);
     var buf: [4096]u8 = undefined;
     var stdout = Context.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;
@@ -376,6 +377,74 @@ pub fn show(ctx: *Context, only: ?[]const u8) !void {
     }
     if (!any) try w.writeAll(if (only != null) "Nothing recorded for that app.\n" else "zigsaw has changed nothing outside its stores.\n");
     try w.flush();
+}
+
+/// A change of this store's, as `permissions --format=json` has it.
+const JsonGrant = struct {
+    kind: Store.Grant.Kind,
+    /// Null for a loopback exemption.
+    path: ?[]const u8,
+    /// How long it stays: while the app's runs go (or until `zigsaw repair`),
+    /// while it has cwd for a working directory, or while its permissions
+    /// name the path.
+    lasts: enum { run, working_directory, permissions },
+};
+
+/// A change another store made, or a store since deleted.
+const JsonEntry = struct {
+    store: []const u8,
+    id: []const u8,
+    kind: Store.Grant.Kind,
+    path: ?[]const u8,
+};
+
+fn jsonEntries(arena: std.mem.Allocator, entries: []const ledger.Entry, only: ?[]const u8) ![]const JsonEntry {
+    var out: std.ArrayList(JsonEntry) = .empty;
+    for (entries) |e| {
+        if (only) |o| if (!std.os.windows.eqlIgnoreCaseWtf8(o, e.id)) continue;
+        try out.append(arena, .{ .store = e.store, .id = e.id, .kind = e.grant.kind, .path = pathOf(e.grant) });
+    }
+    return out.items;
+}
+
+fn pathOf(g: Store.Grant) ?[]const u8 {
+    return if (g.kind == .loopback) null else g.path;
+}
+
+fn showJson(ctx: *Context, only: ?[]const u8) !void {
+    const arena = ctx.arena;
+    const App = struct { id: []const u8, grants: []const JsonGrant };
+    var apps: std.ArrayList(App) = .empty;
+    for (try ctx.store.listGrantIds(arena)) |id| {
+        if (only) |o| if (!std.os.windows.eqlIgnoreCaseWtf8(o, id)) continue;
+        const recorded = try ctx.store.readGrants(arena, id);
+        if (recorded.len == 0) continue;
+        const standing = try Standing.of(ctx, id);
+        const cwds = try ctx.store.readCwdGrants(arena, id);
+        const out = try arena.alloc(JsonGrant, recorded.len);
+        for (out, recorded) |*o, g| {
+            const was_cwd = containsPath(cwds, g.path);
+            o.* = .{
+                .kind = g.kind,
+                .path = pathOf(g),
+                .lasts = if (g.kind == .loopback or standing.keeps(g, was_cwd) == null) .run else if (was_cwd) .working_directory else .permissions,
+            };
+        }
+        try apps.append(arena, .{ .id = id, .grants = out });
+    }
+    const s = try Survey.of(ctx);
+    const tasks: []const schedule.Task = if (only == null) try schedule.listTasks(ctx) else &.{};
+    const unexplained: []const []const u8 = if (only == null) s.unexplained else &.{};
+    const Task = struct { name: []const u8, store: ?[]const u8, gone: bool };
+    const daily = try arena.alloc(Task, tasks.len);
+    for (daily, tasks) |*d, t| d.* = .{ .name = t.name, .store = t.store, .gone = t.gone };
+    try @import("output.zig").write(ctx, .{
+        .store = .{ .root = ctx.store.root, .apps = apps.items },
+        .other_stores = try jsonEntries(arena, s.others, only),
+        .deleted_stores = try jsonEntries(arena, s.orphans, only),
+        .unexplained = unexplained,
+        .daily_checks = daily,
+    });
 }
 
 fn showEntries(w: *Io.Writer, title: []const u8, hint: []const u8, entries: []const ledger.Entry, only: ?[]const u8) !bool {

@@ -13,6 +13,7 @@ const Io = std.Io;
 const Context = @import("Context.zig");
 const Store = @import("Store.zig");
 const oci = @import("oci.zig");
+const output = @import("output.zig");
 const schedule = @import("schedule.zig");
 const repeat = @import("testing.zig").repeat;
 const update = @import("update.zig");
@@ -200,6 +201,19 @@ pub fn show(ctx: *Context) !void {
 
 fn writeList(ctx: *Context, state: State, on: bool) !void {
     const arena = ctx.arena;
+    if (ctx.format == .json) {
+        const Zigsaw = struct { latest: []const u8, this: []const u8 };
+        const waiting = try arena.alloc(update.JsonWaiting, state.apps.len);
+        for (waiting, state.apps) |*w, app| w.* = app.json();
+        return output.write(ctx, .{
+            .checked = output.Time.orNull(state.checked),
+            .waiting = waiting,
+            .failed = state.failed,
+            .zigsaw = @as(?Zigsaw, if (state.zigsaw) |v| .{ .latest = v, .this = upgrade.this_version } else null),
+            .zigsaw_failed = state.zigsaw_failed,
+            .daily_check = on,
+        });
+    }
     var buf: [4096]u8 = undefined;
     var stdout = Context.stdout().writerStreaming(ctx.io, &buf);
     const w = &stdout.interface;
@@ -336,4 +350,25 @@ test Ago {
         try out.writer.print("{f}", .{Ago{ .seconds = c.s }});
         try std.testing.expectEqualStrings(c.want, out.written());
     }
+}
+
+test "what a check found reads back, with what it adds or from a zigsaw before 0.107" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const uses = [_]oci.Use{.{ .name = "db", .port = 5432 }};
+    const state: State = .{ .checked = 1, .apps = &.{
+        .{ .id = "a.b.c", .from = "1", .to = "2", .from_digest = "sha256:1", .to_digest = "sha256:2", .added = "  uses ...\n", .adds = .{ .permissions = .{ .network = true }, .uses = &uses } },
+        .{ .id = "a.b.d", .from = "1", .to = "2", .from_digest = "sha256:3", .to_digest = "sha256:4" },
+    } };
+    const back = try std.json.parseFromSliceLeaky(State, arena, try oci.toJson(arena, state), .{ .ignore_unknown_fields = true });
+    try std.testing.expect(back.apps[0].adds.?.permissions.network);
+    try std.testing.expectEqual(@as(u16, 5432), back.apps[0].adds.?.uses[0].port);
+    try std.testing.expect(back.apps[1].adds == null);
+    // As a zigsaw before 0.107 wrote it.
+    const old = try std.json.parseFromSliceLeaky(State, arena,
+        \\{"checked": 1, "apps": [{"id": "a.b.c", "from": "1", "to": "2", "from_digest": "sha256:1", "to_digest": "sha256:2", "added": ""}]}
+    , .{ .ignore_unknown_fields = true });
+    try std.testing.expect(old.apps[0].adds == null);
+    try std.testing.expectEqualStrings("sha256:2", old.apps[0].json().to_manifest);
 }

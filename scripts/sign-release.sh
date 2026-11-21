@@ -116,7 +116,7 @@ if $keyless; then
     if [ -z "$cosign" ]; then
         # By the zigsaw just built, the same bytes as the release's.
         ZIGSAW_HOME=$(cygpath -w "$work/store") ZIGSAW_USER_FOLDERS=$(cygpath -w "$work/no-folders") \
-            "$work/ours/zigsaw.exe" pull --yes dev.sigstore.cosign >/dev/null
+            "$work/ours/zigsaw.exe" install --yes dev.sigstore.cosign >/dev/null
         cosign=$(find "$work/store/deploy" -maxdepth 2 -iname cosign.exe | head -1)
         [ -n "$cosign" ] || { echo "error: cosign's image has no cosign.exe. Nothing was signed" >&2; exit 1; }
     fi
